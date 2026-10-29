@@ -476,6 +476,10 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
         ));
     }
     let report = json!({"plan_sha256":plan_hash,"source":SERVICE,"attribution":"Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community","local_development_only":true,"bbox":bbox,"blocks":all.len(),"tile_count":tile_count,"missing_tiles":missing,"imagery_trees":count,"excluded_road_or_building":conflicts,"excluded_duplicates":duplicates,"excluded_outside_city":outside,"ground_sampling_metres":RES*origin[0].to_radians().cos(),"sizes":"Tree sizes are artistic estimates; candidates inferred by RGB vegetation/texture heuristics.","rights":"Local development pack; redistribution rights have not been established."});
+    // Provenance belongs to the installed pack, not the disposable work cache.
+    for name in ["service.json", "plan.json"] {
+        atomic(&aerial.join(name), &fs::read(work.join(name))?)?;
+    }
     atomic(&aerial.join("tiles.txt"), catalog.as_bytes())?;
     atomic(
         &aerial.join("source.json"),

@@ -57,9 +57,9 @@ It covers latitude 35–36° N and longitude 33–34° E. Keep it compressed.
 To download both example files from a terminal:
 
 ```sh
-curl -fL --create-dirs -o data/downloads/cyprus.osm.pbf \
+curl -fL --create-dirs -o /tmp/city-import/cyprus.osm.pbf \
   https://download.geofabrik.de/europe/cyprus-latest.osm.pbf
-curl -fL --create-dirs -o data/downloads/N35E033.hgt.gz \
+curl -fL --create-dirs -o /tmp/city-import/N35E033.hgt.gz \
   https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz
 ```
 
@@ -90,12 +90,12 @@ For your own city, replace the map path, elevation path, bounds and location nam
 
 ```sh
 ./target/release/nfs5like extract-region \
-  data/downloads/cyprus.osm.pbf \
-  data/city-import/engomi.osm \
+  /tmp/city-import/cyprus.osm.pbf \
+  /tmp/city-import/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328
 ```
 
-This writes `data/city-import/engomi.osm`, the XML map used in the next step.
+This writes `/tmp/city-import/engomi.osm`, the XML map used in the next step.
 Always provide your city's bounds; the extractor otherwise defaults to Nicosia.
 
 Already have a complete `.osm` XML export? Skip this step and use that file as
@@ -106,9 +106,9 @@ Already have a complete `.osm` XML export? Skip this step and use that file as
 
 ```sh
 ./target/release/nfs5like add-location engomi-demo \
-  --source data/city-import/engomi.osm \
+  --source /tmp/city-import/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328 \
-  --elevation data/downloads/N35E033.hgt.gz
+  --elevation /tmp/city-import/N35E033.hgt.gz
 ```
 
 - `engomi-demo` is the name you will select when playing. Choose an unused name.
@@ -173,86 +173,67 @@ See [redistribution limits](#credits-and-distribution) before sharing it.
 
 ## Optional source tools
 
-The city guide covers PBF extraction. Two other tools are included:
+All map tools are part of the game executable. Keep downloads, caches and previews
+in a temporary directory; `data/locations/` holds the playable city packages and
+their rebuild inputs. Imported cities preserve their source XML and elevation tile,
+so temporary input files can be removed after a successful import.
 
 ```sh
-# Combine saved OSM XML snapshots; gzip inputs are also accepted.
-./target/release/nfs5like merge-osm original.osm.gz extension.osm merged.osm
+# Merge saved OSM snapshots; gzip inputs are supported.
+./target/release/nfs5like merge-osm original.osm.gz extension.osm /tmp/merged.osm
 
-# Prepare the saved Engomi image for use in the game.
-./target/release/nfs5like build-aerial-tiles --image data/aerial-preview/engomi-2019.jpg --export data/aerial-preview/export.json --output data/locations/nicosia/aerial
+# Prepare your own saved image and Web Mercator export metadata.
+./target/release/nfs5like build-aerial-tiles --image /path/to/image.jpg --export /path/to/export.json --output /tmp/aerial-tiles
 ```
-
-Merging keeps newer versions and favours the original on ties or when the
-extension has no version metadata. Image preparation requires a saved JPEG/PNG
-and its Web Mercator export metadata.
 
 ### Preview trees from imagery
 
-Generate candidate tree crowns for the saved Engomi image:
-
 ```sh
 ./target/release/nfs5like preview-trees \
-  --image data/aerial-preview/engomi-2019.jpg \
-  --export data/aerial-preview/export.json \
-  --osm data/locations/nicosia/source.osm \
+  --image /path/to/image.jpg \
+  --export /path/to/export.json \
   --city-data data/locations/nicosia \
-  --output data/tree-preview
+  --output /tmp/tree-preview
 ```
 
-Open `data/tree-preview/review.html` in a browser. Candidates on mapped roads or
-buildings are crossed out automatically; the rest are kept. Only crown centres
-are tested, so overhanging branches do not disqualify a tree.
-`kept-candidates.geojson` contains the remaining proposals. Click a crown to
-override a decision, then download the reviewed GeoJSON to save your changes.
-`annotated.png` provides a static overview; `report.json` records the source and
-counts. `--osm` is optional and highlights candidates near existing mapped trees.
-Use `--city-data` with the matching city asset folder to enable road/building
-filtering; without it, candidates remain unreviewed.
+Open `/tmp/tree-preview/review.html` to inspect candidates. Road and building
+conflicts are crossed out automatically. You can override decisions and download
+the reviewed GeoJSON. `--osm FILE.osm` optionally highlights existing mapped trees.
 
-This is an experimental vegetation heuristic, not a trained tree model. Grass,
-shrubs and shadows can mislead it, and some trees will be missed. The circles
-approximate canopy interiors; heights and trunk positions are unknown. Reviewing
-or accepting a candidate does not add it to the game.
-
-To add the kept proposals to a city and rebuild its visuals:
+To replace a city's imagery-tree supplement with accepted proposals:
 
 ```sh
 ./target/release/nfs5like import-imagery-trees \
-  --candidates data/tree-preview/kept-candidates.geojson \
+  --candidates /tmp/tree-preview/kept-candidates.geojson \
   --city-data data/locations/nicosia
 ./target/release/nfs5like bake-city
 ```
 
-The import rechecks roads/buildings and skips trees within 2 m of an existing
-tree. It writes `imagery-trees.txt` beside the city assets, keeping OSM trees
-unchanged. Repeating it replaces that supplement rather than adding duplicates.
-Heights and crown sizes are artistic estimates. The current image covers only
-the 445 × 445 m Engomi patch, not the whole district. Keep the supplement with
-the city package; changing or removing it requires another bake.
+Heights and crown sizes are estimates. Detection can mistake shrubs, grass and
+shadows for trees. The original OSM trees remain unchanged.
 
 ### Prepare imagery and trees for the whole city
 
 ```sh
 ./target/release/nfs5like prepare-city-imagery \
   --city-data data/locations/nicosia \
-  --work-dir data/nicosia-imagery
+  --work-dir /tmp/nicosia-imagery
 ./target/release/nfs5like bake-city
 ```
 
-This explicitly downloads World Imagery covering the city's bounds, prepares
-terrain textures, detects trees, and excludes roads, buildings and duplicates.
-Downloads and processed blocks are cached in the work directory; rerun the same
-command to resume. Allow several gigabytes of disk space and an offline bake.
-`--limit-blocks 2` downloads a sample without changing city assets.
-The previous aerial pack and approved pilot trees are preserved in the work
-directory. The city-wide texture cache is bounded to 64 MiB of GPU memory.
-Gameplay stays offline; keep `aerial/` and `imagery-trees.txt` with the city assets.
+This explicitly downloads World Imagery for the city's bounds, prepares terrain
+textures, detects trees, and excludes roads, buildings and duplicates. Rerun with
+the same work directory to resume. `--limit-blocks 2` downloads a sample without
+changing city assets. Allow several gigabytes of disk space for preparation.
 
-World Imagery supplies the full map, including northern neighbourhoods where the
-DLS source returns blank images. Image dates and sharpness vary. Provider records
-and coverage counts are saved in `data/nicosia-imagery/service.json` and
-`data/nicosia-imagery/report.json`. These are local development assets;
+After a successful preparation and bake, the work directory can be deleted.
+Keep the complete city package, including `aerial/` and `imagery-trees.txt`.
+Provider metadata, preparation settings and coverage counts are retained in
+`aerial/service.json`, `aerial/plan.json` and `aerial/source.json` inside the package.
+Gameplay stays offline; the imagery cache uses at most 64 MiB of GPU memory.
+
+World Imagery covers northern neighbourhoods where the DLS source returns blank
+images. Image dates and sharpness vary. These are local development assets;
 redistribution permission has not been established.
 
 ## Development
