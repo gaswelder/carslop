@@ -24,6 +24,8 @@ mod source_tools;
 mod street_surface;
 mod track;
 mod traffic;
+mod tree_obstacles;
+mod tree_preview;
 mod vehicle;
 
 use cars::CarModel;

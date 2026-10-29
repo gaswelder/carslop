@@ -492,8 +492,8 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
             }
         } else if arg.to_string_lossy().starts_with('-') {
             let key = arg.to_str().ok_or_else(|| invalid("invalid option"))?;
-            if command != "build-aerial-tiles"
-                || ![
+            let valid = match command {
+                "build-aerial-tiles" => [
                     "--image",
                     "--export",
                     "--output",
@@ -501,8 +501,13 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
                     "--gutter",
                     "--preview-output",
                 ]
-                .contains(&key)
-            {
+                .contains(&key),
+                "preview-trees" => {
+                    ["--image", "--export", "--output", "--osm", "--city-data"].contains(&key)
+                }
+                _ => false,
+            };
+            if !valid {
                 return Err(invalid(format!("unexpected option: {key}")));
             }
             let value = values
@@ -520,6 +525,21 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
             merge(&positional[0], &positional[1], &positional[2])
         }
         "extract-region" if positional.len() == 2 => extract(&positional[0], &positional[1], bbox),
+        "preview-trees" if positional.is_empty() => {
+            let path = |key| -> Result<&Path> {
+                options
+                    .get(key)
+                    .map(Path::new)
+                    .ok_or_else(|| invalid(format!("missing {key}")))
+            };
+            crate::tree_preview::run(
+                path("--image")?,
+                path("--export")?,
+                path("--output")?,
+                options.get("--osm").map(Path::new),
+                options.get("--city-data").map(Path::new),
+            )
+        }
         "build-aerial-tiles" if positional.is_empty() => {
             let path = |key| -> Result<&Path> {
                 options

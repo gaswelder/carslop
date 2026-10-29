@@ -189,6 +189,34 @@ Merging keeps newer versions and favours the original on ties or when the
 extension has no version metadata. Image preparation requires a saved JPEG/PNG
 and its Web Mercator export metadata.
 
+### Preview trees from imagery
+
+Generate candidate tree crowns for the saved Engomi image:
+
+```sh
+./target/release/nfs5like preview-trees \
+  --image data/aerial-preview/engomi-2019.jpg \
+  --export data/aerial-preview/export.json \
+  --osm data/engomi/source.osm \
+  --city-data data/engomi \
+  --output data/tree-preview
+```
+
+Open `data/tree-preview/review.html` in a browser. Candidates on mapped roads or
+buildings are crossed out automatically; the rest are kept. Only crown centres
+are tested, so overhanging branches do not disqualify a tree.
+`kept-candidates.geojson` contains the remaining proposals. Click a crown to
+override a decision, then download the reviewed GeoJSON to save your changes.
+`annotated.png` provides a static overview; `report.json` records the source and
+counts. `--osm` is optional and highlights candidates near existing mapped trees.
+Use `--city-data` with the matching city asset folder to enable road/building
+filtering; without it, candidates remain unreviewed.
+
+This is an experimental vegetation heuristic, not a trained tree model. Grass,
+shrubs and shadows can mislead it, and some trees will be missed. The circles
+approximate canopy interiors; heights and trunk positions are unknown. Reviewing
+or accepting a candidate does not add it to the game.
+
 ## Development
 
 Run tests:
