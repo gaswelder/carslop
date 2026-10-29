@@ -7,6 +7,7 @@ A driving game, draw inspiration from NFS5: beautiful cars, pleasant roads, read
 ## Contents
 
 - [Run and import locations](#run-and-import-locations)
+- [Add a city step by step](#add-a-city-step-by-step)
 - [Offline source preparation](#offline-source-preparation)
 - [Nicosia map, rendering and distribution](#nicosia-urban-area-offline-driving-map)
 - [Elevation and attribution](#nicosia-urban-area-elevation)
@@ -57,6 +58,104 @@ also runs in the same executable: `extract-region` reads
 PBF, `merge-osm` merges XML snapshots (including gzip), and `build-aerial-tiles`
 prepares saved JPEG/PNG imagery. See [source tools](#offline-source-preparation).
 Use `--help` for command syntax. `--bake-city` remains a compatibility alias.
+
+## Add a city step by step
+
+Run these commands from the project root. All preparation and importing use the
+same `nfs5like` executable; Python and external conversion tools are unnecessary.
+Map downloads are manual, and the resulting city assets stay outside the binary.
+
+### 1. Build the executable
+
+```sh
+cargo build --release
+```
+
+The game needs the platform's SDL3/OpenGL libraries. Importing and baking run
+without opening a game window.
+
+### 2. Prepare an OSM XML extract
+
+Choose a city-sized bounding box in decimal degrees, ordered **south latitude,
+west longitude, north latitude, east longitude**. Start with a small neighbourhood
+to check the result before importing a whole city.
+
+If you already have a complete `.osm` XML file, use it directly in step 3.
+Otherwise, obtain a regional `.osm.pbf` containing your city and convert the
+selected region with `extract-region`. For example, this uses the saved Cyprus
+PBF to prepare the original Engomi neighbourhood:
+
+```sh
+./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf artifacts/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328
+```
+
+For another city, replace the PBF path and all four bounds. Always supply
+`--bbox` for another region; the extractor's default is the Nicosia urban crop.
+The command writes the XML and a JSON provenance/count report next to it.
+It retains complete ways and supported multipolygon members, including their
+referenced nodes outside the box. The importer applies the final crop in step 3.
+
+`add-location` accepts OSM XML, not PBF or Overpass JSON. An XML export must
+contain the nodes referenced by its ways; an incomplete or timed-out export
+cannot be used as a complete map.
+
+### 3. Import and bake the city
+
+Choose a unique location name, such as `engomi-demo`. Names must start with an
+ASCII letter or digit and contain only ASCII letters, digits, hyphens or
+underscores, up to 64 characters. `nicosia` is reserved for the bundled city.
+
+For a first import, use flat terrain:
+
+```sh
+./target/release/nfs5like add-location engomi-demo --source artifacts/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --flat-terrain --locations-dir artifacts/locations
+```
+
+For real elevation instead, replace `--flat-terrain` with
+`--elevation /path/to/TILE.hgt.gz`. For the Engomi example, the saved tile is
+`data/engomi/elevation/N35E033.hgt.gz`. Uncompressed `.hgt` files also work.
+Exactly one terrain option is required. The single HGT tile must cover the
+entire crop plus 80 metres of padding, with no void samples; multi-tile terrain
+is not supported. Flat terrain explicitly places the city at zero elevation.
+
+Use the same bounds as in step 2. With a direct XML input, provide the desired
+crop here; omitting `--bbox` uses the XML bounds or its full node extent, which
+may be larger than the intended city.
+
+Wait for `Added engomi-demo` before launching it. Importing compiles roads,
+buildings, scenery, collision and elevation data, then bakes `scene.pack`.
+A separate `bake-city` command is unnecessary for the initial import. Whole-city
+imports can take substantial time, memory and disk space. Failed imports clean
+up their temporary directory; an existing location name is never overwritten.
+
+### 4. List the city and drive
+
+```sh
+./target/release/nfs5like list-locations --locations-dir artifacts/locations
+./target/release/nfs5like play --location engomi-demo --locations-dir artifacts/locations
+```
+
+These examples store the package at `artifacts/locations/engomi-demo`. Keep that
+folder: it contains the assets the game loads when you select the city.
+Use the same `--locations-dir` on subsequent commands, from the same working
+directory, or use an absolute path. You can also set `NFS_LOCATIONS_DIR`.
+Omit the directory option throughout to use the default user data directory
+described in [Run and import locations](#run-and-import-locations).
+
+### 5. Rebuild or update later
+
+To rebake render geometry after changing renderer code, use:
+
+```sh
+./target/release/nfs5like bake-city --location engomi-demo --locations-dir artifacts/locations
+```
+
+To change the OSM source, crop or terrain, repeat the import with a new location
+name. Rebaking only updates render geometry; it does not reimport map data.
+New cities use procedural materials. Aerial imagery is optional and is not
+fetched or generated automatically; the current aerial preparation command uses
+the historical Engomi origin, so it is not a general imagery importer for other
+cities. Preserve OSM attribution and source provenance when sharing city assets.
 
 ## Offline source preparation
 
