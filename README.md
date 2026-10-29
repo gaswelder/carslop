@@ -16,7 +16,7 @@ and mechanical personality.
 ## Build and play
 
 Requires Rust and the platform's SDL3/OpenGL libraries. The game and map tools
-are one executable; Python is not required.
+are one executable.
 
 ```sh
 cargo build --release
