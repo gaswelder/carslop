@@ -153,8 +153,9 @@ An absolute storage path avoids this ambiguity. You can also set
 `NFS_LOCATIONS_DIR`; without either setting, Linux uses
 `$XDG_DATA_HOME/nfs5like/locations` or `~/.local/share/nfs5like/locations`.
 
-New cities use generated materials. The optional imagery tool currently supports
-the original Engomi area only.
+New cities use generated materials by default. Use
+[city-wide imagery preparation](#prepare-imagery-and-trees-for-the-whole-city)
+to add imagery and inferred trees.
 
 ## Nicosia map
 
@@ -169,8 +170,9 @@ are drivable; buildings remain solid.
 Bridges, tunnels and some complex buildings are omitted. Some roads remain
 disconnected. One-way rules are not enforced, and city traffic AI is not yet available.
 
-An optional aerial pack covers a 445 × 445 m area of Engomi. It loads from
-`data/engomi/aerial` when present; set `NFS_NO_AERIAL=1` to disable it.
+The aerial pack loads from `data/engomi/aerial` when present; set
+`NFS_NO_AERIAL=1` to disable it. The city-wide preparation command below extends
+coverage beyond the original 445 × 445 m Engomi pilot.
 See [redistribution limits](#credits-and-distribution) before sharing it.
 
 ## Optional source tools
@@ -233,6 +235,30 @@ Heights and crown sizes are artistic estimates. The current image covers only
 the 445 × 445 m Engomi patch, not the whole district. Keep the supplement with
 the city package; changing or removing it requires another bake.
 
+### Prepare imagery and trees for the whole city
+
+```sh
+./target/release/nfs5like prepare-city-imagery \
+  --city-data data/engomi \
+  --work-dir data/nicosia-imagery
+./target/release/nfs5like bake-city
+```
+
+This explicitly downloads World Imagery covering the city's bounds, prepares
+terrain textures, detects trees, and excludes roads, buildings and duplicates.
+Downloads and processed blocks are cached in the work directory; rerun the same
+command to resume. Allow several gigabytes of disk space and an offline bake.
+`--limit-blocks 2` downloads a sample without changing city assets.
+The previous aerial pack and approved pilot trees are preserved in the work
+directory. The city-wide texture cache is bounded to 64 MiB of GPU memory.
+Gameplay stays offline; keep `aerial/` and `imagery-trees.txt` with the city assets.
+
+World Imagery supplies the full map, including northern neighbourhoods where the
+DLS source returns blank images. Image dates and sharpness vary. Provider records
+and coverage counts are saved in `data/nicosia-imagery/service.json` and
+`data/nicosia-imagery/report.json`. These are local development assets;
+redistribution permission has not been established.
+
 ## Development
 
 Run tests:
@@ -250,7 +276,7 @@ Rebuild the bundled city's visuals after renderer changes:
 ## Credits and distribution
 
 Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
-The saved source and derived map databases are distributed under ODbL 1.0;
+Saved OSM sources and OSM-derived map databases are distributed under ODbL 1.0;
 game code and original generated materials are separate. Preserve attribution
 and source provenance when sharing city assets. The bundled map uses the
 [Geofabrik Cyprus extract](https://download.geofabrik.de/europe/cyprus.html);
@@ -263,7 +289,11 @@ and information funded by the European Union (EU-DEM). See the provider's
 [source attribution and licensing](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
 Local source records are in `data/engomi/elevation/heightfield.json`.
 
-Optional imagery: Cyprus Department of Lands and Surveys,
+City-wide imagery: Esri World Imagery — Source: Esri, Vantor, Earthstar
+Geographics, and the GIS User Community. See the
+[provider service](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer).
+
+Original pilot imagery: Cyprus Department of Lands and Surveys,
 [Orthoimagery 2019 WebMercator service](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
 Redistribution permission for the local imagery pack has not been established;
 omit `data/engomi/aerial` from distributions unless authorised.

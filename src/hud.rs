@@ -396,7 +396,7 @@ impl Hud {
             if crate::aerial::source_available() {
                 text(
                     &mut v,
-                    "AERIAL: CYPRUS DLS / 2019",
+                    crate::aerial::attribution_label(),
                     [0.17, -0.793],
                     0.0024,
                     white,
@@ -732,29 +732,29 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
         text(
             v,
             "MAP DATA: OPENSTREETMAP CONTRIBUTORS",
-            [-0.86, -0.15],
+            [-0.86, -0.08],
             0.0029,
             muted,
         );
         text(
             v,
             "OPENSTREETMAP.ORG/COPYRIGHT / ODBL",
-            [-0.86, -0.21],
+            [-0.86, -0.14],
             0.0029,
             muted,
         );
         text(
             v,
             "TERRAIN: MAPZEN / USGS / EU COPERNICUS",
-            [-0.86, -0.27],
+            [-0.86, -0.20],
             0.0027,
             muted,
         );
         if crate::aerial::source_available() {
             text(
                 v,
-                "AERIAL: CYPRUS DLS / 2019",
-                [-0.86, -0.33],
+                crate::aerial::attribution_label(),
+                [-0.86, -0.26],
                 0.0027,
                 muted,
             );

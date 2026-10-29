@@ -49,6 +49,7 @@ impl Surface {
 #[derive(Default)]
 struct Builder {
     vertices: Vec<Vertex>,
+    chunks: Option<crate::chunks::ChunkBuilder>,
 }
 
 impl Builder {
@@ -65,12 +66,17 @@ impl Builder {
             return;
         }
         let normal = n.map(|x| x / length);
-        self.vertices.extend(points.map(|position| Vertex {
+        let vertices = points.map(|position| Vertex {
             position,
             normal,
             color: surface.color,
             material: surface.material,
-        }));
+        });
+        if let Some(chunks) = &mut self.chunks {
+            chunks.push(vertices);
+        } else {
+            self.vertices.extend(vertices);
+        }
     }
 
     fn quad(&mut self, p: [[f32; 3]; 4], surface: Surface) {
@@ -136,13 +142,16 @@ pub fn build(track: &track::Track) -> Geometry {
 
 pub fn city_layers(city: &crate::city::City) -> [Vec<crate::chunks::Chunk>; 3] {
     std::array::from_fn(|layer| {
-        let mut b = Builder::default();
+        let mut b = Builder {
+            chunks: Some(crate::chunks::ChunkBuilder::default()),
+            ..Builder::default()
+        };
         if layer == 0 {
             city_scene::ground_mesh(&mut b, city);
         } else {
             city_scene::buildings(&mut b, city, layer == 1);
         }
-        crate::chunks::partition(b.vertices)
+        b.chunks.unwrap().finish()
     })
 }
 
@@ -712,6 +721,29 @@ fn kestrel_car(b: &mut Builder, paint: Surface, glass: Surface, trim: Surface) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chunked_builder_preserves_triangle_geometry() {
+        let mut regular = super::Builder::default();
+        let mut streamed = super::Builder {
+            chunks: Some(crate::chunks::ChunkBuilder::default()),
+            ..super::Builder::default()
+        };
+        for x in [-300., 0., 300.] {
+            let points = [[x, 0., 0.], [x + 2., 0., 0.], [x, 0., 2.]];
+            let surface = super::Surface::matte([0.2, 0.4, 0.2]);
+            regular.triangle(points, surface);
+            streamed.triangle(points, surface);
+        }
+        assert!(streamed.vertices.is_empty());
+        let got = streamed.chunks.unwrap().finish();
+        let expected = crate::chunks::partition(regular.vertices);
+        assert_eq!(got.len(), expected.len());
+        for (a, b) in got.iter().zip(&expected) {
+            assert_eq!(a.cell, b.cell);
+            assert_eq!(a.bounds, b.bounds);
+            assert_eq!(a.vertices, b.vertices);
+        }
+    }
     use super::*;
 
     #[test]

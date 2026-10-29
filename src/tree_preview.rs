@@ -5,19 +5,19 @@ use serde_json::{json, Value};
 use std::{fs, path::Path};
 
 #[derive(Debug)]
-struct Candidate {
-    x: usize,
-    y: usize,
-    radius: f64,
+pub(crate) struct Candidate {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
+    pub(crate) radius: f64,
 }
 #[derive(Clone, Copy)]
-struct Geo {
-    extent: [f64; 4],
-    width: usize,
-    height: usize,
+pub(crate) struct Geo {
+    pub(crate) extent: [f64; 4],
+    pub(crate) width: usize,
+    pub(crate) height: usize,
 }
 impl Geo {
-    fn lonlat(self, x: f64, y: f64) -> [f64; 2] {
+    pub(crate) fn lonlat(self, x: f64, y: f64) -> [f64; 2] {
         let [west, south, east, north] = self.extent;
         let mx = west + (east - west) * x / self.width as f64;
         let my = north - (north - south) * y / self.height as f64;
@@ -37,7 +37,7 @@ impl Geo {
             (self.extent[3] - my) / (self.extent[3] - self.extent[1]) * self.height as f64,
         ]
     }
-    fn metres_per_pixel(self) -> [f64; 2] {
+    pub(crate) fn metres_per_pixel(self) -> [f64; 2] {
         let lat = self.lonlat(self.width as f64 / 2., self.height as f64 / 2.)[1].to_radians();
         [
             (self.extent[2] - self.extent[0]) * lat.cos() / self.width as f64,
@@ -45,7 +45,7 @@ impl Geo {
         ]
     }
 }
-fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
+pub(crate) fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
     let (w, h) = (im.width() as usize, im.height() as usize);
     if w < 5 || h < 5 {
         return vec![];

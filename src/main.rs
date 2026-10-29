@@ -7,6 +7,7 @@ mod cars;
 mod chunks;
 mod city;
 mod city_assets;
+mod city_imagery;
 mod cli;
 mod elevation;
 mod feedback;
@@ -1150,19 +1151,24 @@ mod tests {
         app.mesh().draw_ground(app.scene_program, &camera, &[]);
         capture_frame(&directory.join("junction.ppm"));
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-        // Review mapped planting and adjacent paving from an unobstructed oblique view.
+        // Choose the mapped planting review from OSM trees only. Inferred trees
+        // are rendered too, but must not turn this small preview query into an
+        // all-pairs scan of the city-wide inferred canopy.
         let city = app.session.track().city().unwrap();
-        let tree = city
+        let mapped: Vec<_> = city
             .landscape
             .trees
             .iter()
+            .filter(|tree| tree.id < (1_u64 << 63))
+            .collect();
+        let tree = mapped
+            .iter()
+            .copied()
             .max_by_key(|tree| {
-                city.landscape
-                    .trees
+                mapped
                     .iter()
                     .filter(|other| {
-                        (tree.point[0] - other.point[0]).hypot(tree.point[1] - other.point[1])
-                            < 45.0
+                        (tree.point[0] - other.point[0]).hypot(tree.point[1] - other.point[1]) < 45.
                     })
                     .count()
             })

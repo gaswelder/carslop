@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -98,6 +98,7 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             | "build-aerial-tiles"
             | "preview-trees"
             | "import-imagery-trees"
+            | "prepare-city-imagery"
     ) {
         args.insert(0, cmd.into());
         return Ok(Args {

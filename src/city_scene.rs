@@ -258,17 +258,25 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
     // Rounded, layered broadleaf crown; ring normals vary with the geometry.
     let shade = (tree.id % 5) as f32 * 0.018;
     let leaf = Surface::matte([0.24 + shade, 0.39 + shade, 0.20 + shade * 0.5]);
-    let rings = [
-        (0.34, 0.0),
-        (0.45, 0.76),
-        (0.66, 1.0),
-        (0.86, 0.74),
-        (1.0, 0.0),
-    ];
+    // Keep the dense inferred canopy practical at city scale. Mapped trees retain
+    // the existing profile; inferred crowns use fewer rings and radial segments.
+    let inferred = tree.id >= (1_u64 << 63);
+    let segments = if inferred { 6 } else { 10 };
+    let rings: &[(f32, f32)] = if inferred {
+        &[(0.34, 0.0), (0.58, 1.0), (0.82, 0.74), (1.0, 0.0)]
+    } else {
+        &[
+            (0.34, 0.0),
+            (0.45, 0.76),
+            (0.66, 1.0),
+            (0.86, 0.74),
+            (1.0, 0.0),
+        ]
+    };
     for pair in rings.windows(2) {
-        for i in 0..10 {
-            let a = i as f32 * std::f32::consts::TAU / 10.0;
-            let c = (i + 1) as f32 * std::f32::consts::TAU / 10.0;
+        for i in 0..segments {
+            let a = i as f32 * std::f32::consts::TAU / segments as f32;
+            let c = (i + 1) as f32 * std::f32::consts::TAU / segments as f32;
             let p = |angle: f32, ring: (f32, f32)| {
                 [
                     x + angle.cos() * r * ring.1,

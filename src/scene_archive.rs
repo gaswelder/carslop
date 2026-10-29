@@ -303,7 +303,14 @@ pub fn bake_default() -> std::io::Result<()> {
     let city = crate::track::TrackId::Engomi.track().city().expect("city");
     let path = crate::city_assets::directory().join("scene.pack");
     let started = std::time::Instant::now();
-    write(&path, crate::scene::city_layers(city), signature())?;
+    println!(
+        "Generating city geometry with {} trees...",
+        city.landscape.trees.len()
+    );
+    let key = signature();
+    let layers = crate::scene::city_layers(city);
+    println!("Writing city render archive...");
+    write(&path, layers, key)?;
     let archive = Archive::open(&path, signature())?;
     let counts: [usize; 3] =
         std::array::from_fn(|layer| archive.entries.iter().map(|e| e.layers[layer].count).sum());

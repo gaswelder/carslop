@@ -53,8 +53,8 @@ uniform float u_signal_time;
 uniform int u_city_reference;
 uniform sampler2DArray u_aerial;
 uniform int u_aerial_count;
-uniform vec4 u_aerial_bounds[32];
-uniform int u_aerial_layers[32];
+uniform vec4 u_aerial_bounds[48];
+uniform int u_aerial_layers[48];
 uniform vec2 u_aerial_uv;
 out vec4 o;
 float contact_visibility() {

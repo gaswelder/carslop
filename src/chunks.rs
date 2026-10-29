@@ -6,28 +6,40 @@ pub struct Chunk {
     pub vertices: Vec<Vertex>,
     pub bounds: [[f32; 3]; 2],
 }
-pub fn partition(vertices: Vec<Vertex>) -> Vec<Chunk> {
-    let mut bins = std::collections::BTreeMap::<(i32, i32), Chunk>::new();
-    assert_eq!(vertices.len() % 3, 0);
-    for tri in vertices.chunks_exact(3) {
-        let x = tri.iter().map(|v| v.position[0]).sum::<f32>() / 3.0;
-        let z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.0;
-        let chunk = bins
-            .entry(((x / SIZE).floor() as i32, (z / SIZE).floor() as i32))
-            .or_insert_with(|| Chunk {
-                cell: [(x / SIZE).floor() as i32, (z / SIZE).floor() as i32],
-                vertices: Vec::new(),
-                bounds: [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]],
-            });
-        for v in tri {
+#[derive(Default)]
+pub struct ChunkBuilder {
+    bins: std::collections::BTreeMap<(i32, i32), Chunk>,
+}
+impl ChunkBuilder {
+    pub fn push(&mut self, tri: [Vertex; 3]) {
+        let x = tri.iter().map(|v| v.position[0]).sum::<f32>() / 3.;
+        let z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.;
+        let cell = ((x / SIZE).floor() as i32, (z / SIZE).floor() as i32);
+        let chunk = self.bins.entry(cell).or_insert_with(|| Chunk {
+            cell: [cell.0, cell.1],
+            vertices: vec![],
+            bounds: [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]],
+        });
+        for v in &tri {
             for axis in 0..3 {
                 chunk.bounds[0][axis] = chunk.bounds[0][axis].min(v.position[axis]);
                 chunk.bounds[1][axis] = chunk.bounds[1][axis].max(v.position[axis]);
             }
         }
-        chunk.vertices.extend_from_slice(tri);
+        chunk.vertices.extend_from_slice(&tri);
     }
-    bins.into_values().collect()
+    pub fn finish(self) -> Vec<Chunk> {
+        self.bins.into_values().collect()
+    }
+}
+#[cfg(test)]
+pub fn partition(vertices: Vec<Vertex>) -> Vec<Chunk> {
+    assert_eq!(vertices.len() % 3, 0);
+    let mut builder = ChunkBuilder::default();
+    for tri in vertices.as_chunks::<3>().0 {
+        builder.push(*tri);
+    }
+    builder.finish()
 }
 pub fn distance_squared(bounds: [[f32; 3]; 2], eye: [f32; 3]) -> f32 {
     [0, 2]

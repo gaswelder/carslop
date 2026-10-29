@@ -6,7 +6,7 @@ use std::{
     io::{Read, Write},
     path::Path,
 };
-fn checksum(path: &Path) -> Result<u32> {
+pub(crate) fn checksum(path: &Path) -> Result<u32> {
     let mut file = fs::File::open(path)?;
     let mut hash = crc32fast::Hasher::new();
     let mut buf = vec![0; 1024 * 1024];
@@ -25,7 +25,7 @@ fn number(v: &Value, key: &str) -> Result<f64> {
         .filter(|x| x.is_finite())
         .ok_or_else(|| invalid(format!("invalid candidate {key}")))
 }
-fn atomic(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn atomic(path: &Path, data: &[u8]) -> Result<()> {
     let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
     file.write_all(data)?;
     file.as_file().sync_all()?;

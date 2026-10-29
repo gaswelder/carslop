@@ -4,8 +4,8 @@ use std::{
     ffi::CString,
     path::{Path, PathBuf},
 };
-const CAPACITY: usize = 32;
-const GPU_BUDGET: usize = 32 * 1024 * 1024;
+const CAPACITY: usize = 48;
+const GPU_BUDGET: usize = 64 * 1024 * 1024;
 fn layer_bytes(mut dimension: usize) -> usize {
     let mut bytes = 0;
     loop {
@@ -125,6 +125,33 @@ pub fn source_available() -> bool {
             .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
             .join("tiles.txt")
             .exists()
+}
+pub fn attribution_label() -> &'static str {
+    static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    LABEL.get_or_init(|| {
+        let path = std::env::var_os("NFS_AERIAL_DATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
+            .join("source.json");
+        let metadata = std::fs::read(path)
+            .ok()
+            .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
+        if metadata
+            .as_ref()
+            .and_then(|v| v["source"].as_str())
+            .is_some_and(|s| s.contains("arcgisonline.com"))
+        {
+            "AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY"
+        } else if metadata
+            .as_ref()
+            .and_then(|v| v["provider"].as_str())
+            .is_some_and(|s| s.contains("Cyprus"))
+        {
+            "AERIAL: CYPRUS DLS / 2019"
+        } else {
+            "AERIAL: LOCAL IMAGERY"
+        }
+    })
 }
 pub struct Aerial {
     directory: PathBuf,
@@ -332,6 +359,34 @@ mod tests {
             Catalog::parse("AERIAL 1\nsize 512 8\ntile NaN 0 100 100 a.rgb 00000000\n").is_err()
         );
         assert!(read_tile(Path::new("/missing-aerial-test"), &c, 0).is_err());
+    }
+    #[test]
+    fn city_tiles_fit_nearby_coverage_within_the_gpu_budget() {
+        let mut text = String::from("AERIAL 1\nsize 512 8\n");
+        for z in -6..=6 {
+            for x in -6..=6 {
+                text.push_str(&format!(
+                    "tile {} {} {} {} {x}_{z}.rgb 00000000\n",
+                    x as f32 * 249.,
+                    z as f32 * 249.,
+                    (x + 1) as f32 * 249.,
+                    (z + 1) as f32 * 249.
+                ));
+            }
+        }
+        let catalog = Catalog::parse(&text).unwrap();
+        let slots = capacity(&catalog);
+        for x in [0., 62., 124., 248.] {
+            for z in [0., 62., 124., 248.] {
+                let all = wanted(&catalog, [x, 0., z], usize::MAX);
+                assert!(
+                    all.len() <= slots,
+                    "nearby city coverage requires {} slots, only {slots} available",
+                    all.len()
+                );
+            }
+        }
+        assert!(slots * layer_bytes(catalog.size + 2 * catalog.gutter) <= GPU_BUDGET);
     }
     #[test]
     fn tile_payload_rejects_corruption_and_truncation() {

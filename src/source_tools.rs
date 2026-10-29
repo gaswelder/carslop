@@ -502,6 +502,9 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
                     "--preview-output",
                 ]
                 .contains(&key),
+                "prepare-city-imagery" => {
+                    ["--city-data", "--work-dir", "--limit-blocks"].contains(&key)
+                }
                 "import-imagery-trees" => ["--candidates", "--city-data"].contains(&key),
                 "preview-trees" => {
                     ["--image", "--export", "--output", "--osm", "--city-data"].contains(&key)
@@ -526,6 +529,23 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
             merge(&positional[0], &positional[1], &positional[2])
         }
         "extract-region" if positional.len() == 2 => extract(&positional[0], &positional[1], bbox),
+        "prepare-city-imagery" if positional.is_empty() => {
+            let path = |key| -> Result<&Path> {
+                options
+                    .get(key)
+                    .map(Path::new)
+                    .ok_or_else(|| invalid(format!("missing {key}")))
+            };
+            let limit = options
+                .get("--limit-blocks")
+                .map(|v| -> Result<usize> {
+                    Ok(v.to_str()
+                        .ok_or_else(|| invalid("invalid block count"))?
+                        .parse()?)
+                })
+                .transpose()?;
+            crate::city_imagery::run(path("--city-data")?, path("--work-dir")?, limit)
+        }
         "import-imagery-trees" if positional.is_empty() => {
             let path = |key| -> Result<&Path> {
                 options
