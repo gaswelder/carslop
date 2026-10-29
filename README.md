@@ -35,61 +35,95 @@ Use `./target/release/nfs5like --help` for command syntax.
 
 ## Add a city
 
-Build the game first, then run these commands from the project root.
+The workflow is **map file → city extract → import with elevation → play**.
+Build the game first (`cargo build --release`) and run the commands below from
+the project root.
 
-### 1. Prepare the map
+### 1. Get the map and elevation files
 
-Obtain a regional `.osm.pbf` file and extract your city. This example uses the
-saved Cyprus map to extract Engomi:
+You need two local files; the game does not download them:
+
+| File | What it provides |
+| --- | --- |
+| Regional OpenStreetMap `.osm.pbf` | Roads, buildings and scenery for your city |
+| Elevation `.hgt` or `.hgt.gz` | Terrain heights for the same area |
+
+Choose a small neighbourhood for your first import. Write down its bounds in
+**south, west, north, east** order: minimum latitude, minimum longitude, maximum
+latitude, maximum longitude, all in decimal degrees.
+
+One elevation tile must cover the whole area plus 80 m of padding, with no missing
+samples. Areas spanning multiple elevation tiles are not supported yet. Keep the
+tile's coordinate filename, such as `N35E033.hgt.gz`, so the importer can locate it.
+
+The example below imports Engomi using files already saved in this project.
+For your own city, replace the map path, elevation path, bounds and location name.
+
+### 2. Extract the city from the regional map
 
 ```sh
-./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328
+./target/release/nfs5like extract-region \
+  data/engomi/sources/cyprus.osm.pbf \
+  data/city-import/engomi.osm \
+  --bbox 35.156 33.312 35.168 33.328
 ```
 
-Replace the input path and bounds for another city. Bounds are decimal degrees
-in **south, west, north, east** order. Start with a small neighbourhood.
-If you already have a complete `.osm` XML export, skip extraction.
-The importer requires XML with complete node references; PBF and Overpass JSON
-cannot be imported directly.
+This writes `data/city-import/engomi.osm`, the XML map used in the next step.
+Always provide your city's bounds; the extractor otherwise defaults to Nicosia.
 
-### 2. Import the city
+Already have a complete `.osm` XML export? Skip this step and use that file as
+`--source` below. It must include all nodes referenced by its roads and buildings.
+`add-location` cannot read PBF or Overpass JSON directly.
 
-Use a unique name (`nicosia` is reserved) and the same bounds as above:
+### 3. Import the map with elevation
 
 ```sh
-./target/release/nfs5like add-location engomi-demo --source data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --elevation data/engomi/elevation/N35E033.hgt.gz --locations-dir data/locations
+./target/release/nfs5like add-location engomi-demo \
+  --source data/city-import/engomi.osm \
+  --bbox 35.156 33.312 35.168 33.328 \
+  --elevation data/engomi/elevation/N35E033.hgt.gz \
+  --locations-dir data/locations
 ```
 
-Names may contain English letters, digits, hyphens and underscores, must start
-with a letter or digit, and can be up to 64 characters.
+- `engomi-demo` is the name you will select when playing. Choose an unused name;
+  `nicosia` is reserved. Use English letters, digits, hyphens or underscores,
+  start with a letter or digit, and keep it under 65 characters.
+- `--source` is the XML file from step 2.
+- `--bbox` is the same crop as in step 2.
+- `--elevation` is the tile covering that crop. Elevation is required.
+- `--locations-dir` is where the playable city package will be saved.
 
-An elevation tile is required. Replace the example tile with one covering your
-city; `.hgt` and `.hgt.gz` are supported. The tile must cover the crop plus 80 m
-of padding and contain no missing elevation samples. Multi-tile terrain is not
-yet supported.
+Wait for **`Added engomi-demo`**. The import also builds the city's visuals;
+no separate bake command is needed. Large cities take more time, memory and disk
+space. Existing locations are never overwritten.
 
-Importing prepares everything needed to play. Wait for `Added engomi-demo`;
-large cities take more time, memory and disk space. Existing names are never
-overwritten. Without `--bbox`, the importer uses the XML bounds or full node extent.
-
-### 3. Drive
+### 4. Launch the city
 
 ```sh
-./target/release/nfs5like list-locations --locations-dir data/locations
 ./target/release/nfs5like play --location engomi-demo --locations-dir data/locations
 ```
 
-Keep `data/locations/engomi-demo` and use the same `--locations-dir` for later
-commands. An absolute path avoids dependence on your working directory.
-You can also set `NFS_LOCATIONS_DIR`. Omitting both uses the user data directory:
-`$XDG_DATA_HOME/nfs5like/locations` or `~/.local/share/nfs5like/locations` on Linux.
+Keep `data/locations/engomi-demo`: the game reads its assets when you play.
+Use the same location name and storage directory as in step 3. To see all imported
+cities in that directory:
 
-To change the map, bounds or terrain, import again under a new name. After
-renderer changes, rebuild an existing city's visuals with:
+```sh
+./target/release/nfs5like list-locations --locations-dir data/locations
+```
+
+### Updating a city
+
+To change the map, bounds or elevation, repeat the import under a new name.
+After renderer changes, rebuild an existing city's visuals with:
 
 ```sh
 ./target/release/nfs5like bake-city --location engomi-demo --locations-dir data/locations
 ```
+
+If a city is not listed, check `--locations-dir` and your working directory.
+An absolute storage path avoids this ambiguity. You can also set
+`NFS_LOCATIONS_DIR`; without either setting, Linux uses
+`$XDG_DATA_HOME/nfs5like/locations` or `~/.local/share/nfs5like/locations`.
 
 New cities use generated materials. The optional imagery tool currently supports
 the original Engomi area only.
