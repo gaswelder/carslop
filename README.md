@@ -41,12 +41,40 @@ the project root.
 
 ### 1. Get the map and elevation files
 
-You need two local files; the game does not download them:
+Download these two files before importing:
 
-| File | What it provides |
-| --- | --- |
-| Regional OpenStreetMap `.osm.pbf` | Roads, buildings and scenery for your city |
-| Elevation `.hgt` or `.hgt.gz` | Terrain heights for the same area |
+**Map:** Open [Geofabrik Downloads](https://download.geofabrik.de/), select your
+continent, then the country or smallest available region containing your city.
+Download the **`.osm.pbf`** file (not the Shapefile or GeoPackage).
+For Engomi, use [Cyprus](https://download.geofabrik.de/europe/cyprus.html) →
+[cyprus-latest.osm.pbf](https://download.geofabrik.de/europe/cyprus-latest.osm.pbf).
+
+**Elevation:** Use the **Skadi `.hgt.gz`** tiles from
+[Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/).
+For Engomi and Nicosia, download
+[N35E033.hgt.gz](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
+It covers latitude 35–36° N and longitude 33–34° E. Keep it compressed.
+
+To download both example files from a terminal:
+
+```sh
+curl -fL --create-dirs -o data/downloads/cyprus.osm.pbf \
+  https://download.geofabrik.de/europe/cyprus-latest.osm.pbf
+curl -fL --create-dirs -o data/downloads/N35E033.hgt.gz \
+  https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz
+```
+
+For another city, choose the elevation tile by its **southwest corner**, rounding
+latitude and longitude down to whole degrees. For example, 35.162° N, 33.320° E
+falls in `N35E033`; −33.9°, −70.7° falls in `S34W071`.
+The download URL follows this pattern (replace both coordinate names):
+
+```text
+https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz
+```
+
+The directory is the latitude part (`N35`); the filename includes latitude and
+longitude (`N35E033.hgt.gz`). See the [Skadi format documentation](https://github.com/tilezen/joerd/blob/master/docs/formats.md#skadi).
 
 Choose a small neighbourhood for your first import. Write down its bounds in
 **south, west, north, east** order: minimum latitude, minimum longitude, maximum
@@ -56,14 +84,14 @@ One elevation tile must cover the whole area plus 80 m of padding, with no missi
 samples. Areas spanning multiple elevation tiles are not supported yet. Keep the
 tile's coordinate filename, such as `N35E033.hgt.gz`, so the importer can locate it.
 
-The example below imports Engomi using files already saved in this project.
+The commands below import Engomi using the two downloads above.
 For your own city, replace the map path, elevation path, bounds and location name.
 
 ### 2. Extract the city from the regional map
 
 ```sh
 ./target/release/nfs5like extract-region \
-  data/engomi/sources/cyprus.osm.pbf \
+  data/downloads/cyprus.osm.pbf \
   data/city-import/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328
 ```
@@ -81,7 +109,7 @@ Already have a complete `.osm` XML export? Skip this step and use that file as
 ./target/release/nfs5like add-location engomi-demo \
   --source data/city-import/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328 \
-  --elevation data/engomi/elevation/N35E033.hgt.gz \
+  --elevation data/downloads/N35E033.hgt.gz \
   --locations-dir data/locations
 ```
 
