@@ -118,7 +118,7 @@ impl Archive {
             || u32::from_le_bytes(header[8..12].try_into().unwrap()) != expected
         {
             return Err(error(
-                "stale city scene archive; run cargo run -- --bake-city",
+                "stale city scene archive; run bake-city --location NAME",
             ));
         }
         if n == 0 || n > 100_000 || 16 + (n * ENTRY_SIZE) as u64 > length {

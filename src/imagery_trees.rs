@@ -148,7 +148,7 @@ pub fn import(candidates: &Path, directory: &Path) -> Result<()> {
         &serde_json::to_vec_pretty(&metadata)?,
     )?;
     atomic(&directory.join("imagery-trees.txt"), output.as_bytes())?;
-    println!("Added {} imagery trees; skipped {conflicts} conflicts, {duplicates} duplicates, {outside} outside map. Rebuild visuals with bake-city.",trees.len());
+    println!("Added {} imagery trees; skipped {conflicts} conflicts, {duplicates} duplicates, {outside} outside map. Rebuild visuals with bake-city --location NAME.",trees.len());
     Ok(())
 }
 

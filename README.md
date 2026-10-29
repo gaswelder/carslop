@@ -23,13 +23,15 @@ cargo build --release
 ./target/release/nfs5like
 ```
 
-Running without arguments opens the menu. To drive in Nicosia:
+Running without arguments opens the built-in track menu without loading city
+assets. Cities appear only when selected with `--location`. To drive in Nicosia:
 
 ```sh
 ./target/release/nfs5like play --location nicosia
 ```
 
-Keep `data/locations/` beside the executable when moving the game. Play works offline.
+Built-in tracks need no city files. For city play, keep its `data/locations/NAME`
+package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 
 ## Add a city
@@ -206,7 +208,7 @@ To replace a city's imagery-tree supplement with accepted proposals:
 ./target/release/nfs5like import-imagery-trees \
   --candidates /tmp/tree-preview/kept-candidates.geojson \
   --city-data data/locations/nicosia
-./target/release/nfs5like bake-city
+./target/release/nfs5like bake-city --location nicosia
 ```
 
 Heights and crown sizes are estimates. Detection can mistake shrubs, grass and
@@ -218,7 +220,7 @@ shadows for trees. The original OSM trees remain unchanged.
 ./target/release/nfs5like prepare-city-imagery \
   --city-data data/locations/nicosia \
   --work-dir /tmp/nicosia-imagery
-./target/release/nfs5like bake-city
+./target/release/nfs5like bake-city --location nicosia
 ```
 
 This explicitly downloads World Imagery for the city's bounds, prepares terrain
@@ -247,7 +249,7 @@ cargo test
 Rebuild the bundled city's visuals after renderer changes:
 
 ```sh
-./target/release/nfs5like bake-city
+./target/release/nfs5like bake-city --location nicosia
 ```
 
 ## Credits and distribution

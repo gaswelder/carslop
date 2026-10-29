@@ -5,6 +5,13 @@ use crate::{
 use std::ffi::CString;
 
 pub const LOCATIONS: [TrackId; 3] = [TrackId::Scenic, TrackId::Compact, TrackId::Engomi];
+pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
+    if city_enabled {
+        &LOCATIONS
+    } else {
+        &LOCATIONS[..2]
+    }
+}
 const LOCATION_BOXES: [[f32; 4]; 3] = [
     [-0.92, 0.42, 0.0, 0.62],
     [-0.92, 0.19, 0.0, 0.39],
@@ -29,6 +36,7 @@ pub struct MainMenu {
     pub car: CarModel,
     pub race: bool,
     pub focus: usize,
+    pub city_enabled: bool,
 }
 pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
     let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
@@ -288,7 +296,7 @@ impl Hud {
             "SHORT CIRCUIT / FREE DRIVE + RACE",
             "NORTH + SOUTH / 289 KM2 / OFFLINE",
         ];
-        for (i, id) in LOCATIONS.into_iter().enumerate() {
+        for (i, &id) in available_locations(menu.city_enabled).iter().enumerate() {
             let r = LOCATION_BOXES[i];
             let selected = menu.location == id;
             menu_button(&mut v, r, selected, menu.focus == 0 && selected);

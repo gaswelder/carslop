@@ -185,13 +185,14 @@ impl Session {
         *self = Self::on_track(self.vehicle.model, mode, id);
         self.state = GameState::Menu;
     }
-    fn cycle_location(&mut self, direction: i32) {
-        let current = hud::LOCATIONS
+    fn cycle_location(&mut self, direction: i32, city_enabled: bool) {
+        let locations = hud::available_locations(city_enabled);
+        let current = locations
             .iter()
             .position(|id| *id == self.track().id)
             .unwrap();
-        let next = (current as i32 + direction).rem_euclid(hud::LOCATIONS.len() as i32) as usize;
-        self.select_location(hud::LOCATIONS[next]);
+        let next = (current as i32 + direction).rem_euclid(locations.len() as i32) as usize;
+        self.select_location(locations[next]);
     }
     fn cycle_car(&mut self, direction: i32) {
         let next = (self.vehicle.model.index() as i32 + direction)
@@ -397,6 +398,7 @@ struct App {
     chase: camera::ChaseCamera,
     preview_angle: f32,
     menu_focus: usize,
+    city_enabled: bool,
     #[cfg(test)]
     capture_path: Option<std::path::PathBuf>,
     keys: HashSet<Keycode>,
@@ -415,10 +417,14 @@ impl Drop for App {
 impl App {
     #[cfg(test)]
     fn new() -> Self {
-        Self::with_location(false)
+        // Existing city fixture tests explicitly enable the city menu.
+        Self::with_options(false, true)
     }
 
     fn with_location(city: bool) -> Self {
+        Self::with_options(city, city)
+    }
+    fn with_options(city: bool, city_enabled: bool) -> Self {
         let sdl_context = sdl3::init().expect("SDL init failed");
         let video = sdl_context.video().expect("failed to get video subsystem");
         let gl_attr = video.gl_attr();
@@ -476,6 +482,7 @@ impl App {
             chase,
             preview_angle: 0.0,
             menu_focus: 0,
+            city_enabled,
             #[cfg(test)]
             capture_path: None,
             keys: HashSet::new(),
@@ -604,6 +611,9 @@ impl App {
         }
         match action {
             hud::MenuAction::Location(id) => {
+                if id == TrackId::Engomi && !self.city_enabled {
+                    return;
+                }
                 self.menu_focus = 0;
                 self.session.select_location(id);
             }
@@ -656,7 +666,7 @@ impl App {
                 Keycode::Left | Keycode::Right | Keycode::Space => {
                     let direction = if key == Keycode::Left { -1 } else { 1 };
                     match self.menu_focus {
-                        0 => self.session.cycle_location(direction),
+                        0 => self.session.cycle_location(direction, self.city_enabled),
                         1 => self.session.cycle_car(direction),
                         2 => self.session.toggle_activity(),
                         _ if key == Keycode::Space => {
@@ -748,7 +758,8 @@ impl App {
                 self.snap_camera();
             }
             Keycode::F7
-                if self.session.state == GameState::Menu
+                if self.city_enabled
+                    && self.session.state == GameState::Menu
                     && self.session.mode == DriveMode::FreeDrive =>
             {
                 self.session = Session::on_track(
@@ -911,6 +922,7 @@ impl App {
                     car: s.vehicle.model,
                     race: s.mode == DriveMode::Race,
                     focus: self.menu_focus,
+                    city_enabled: self.city_enabled,
                 },
             );
         } else {
@@ -2238,12 +2250,38 @@ mod tests {
         }
     }
     #[test]
+    fn location_cycle_excludes_unselected_cities() {
+        let mut session = Session::new(CarModel::Club, DriveMode::FreeDrive);
+        session.state = GameState::Menu;
+        for direction in [1, 1, -1, -1, 1, 1] {
+            session.cycle_location(direction, false);
+            assert_ne!(session.track().id, TrackId::Engomi);
+        }
+    }
+    #[test]
+    #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
+    fn no_city_startup_renderer_smoke() {
+        let mut app = App::with_location(false);
+        assert!(!app.city_enabled);
+        app.render(Duration::ZERO);
+        app.menu_action(hud::MenuAction::Location(TrackId::Engomi));
+        app.key_down(Keycode::F7);
+        for _ in 0..6 {
+            app.menu_focus = 0;
+            app.key_down(Keycode::Right);
+            app.render(Duration::ZERO);
+            assert_ne!(app.session.track().id, TrackId::Engomi);
+        }
+        assert!(app.meshes[TrackId::Engomi.index()].is_none());
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+    #[test]
     fn menu_activity_keeps_the_location_and_city_selection_uses_free_drive() {
         let mut s = Session::new(CarModel::Club, DriveMode::FreeDrive);
         s.state = GameState::Menu;
         s.toggle_activity();
         assert_eq!(s.mode, DriveMode::FreeDrive);
-        s.cycle_location(1);
+        s.cycle_location(1, true);
         assert_eq!(s.track().id, TrackId::Compact);
         s.toggle_activity();
         assert_eq!(s.mode, DriveMode::Race);
@@ -2251,13 +2289,13 @@ mod tests {
         assert_eq!(s.mode, DriveMode::FreeDrive);
         assert_eq!(s.track().id, TrackId::Compact);
         s.toggle_activity();
-        s.cycle_location(1);
+        s.cycle_location(1, true);
         assert_eq!(s.track().id, TrackId::Engomi);
         assert_eq!(s.mode, DriveMode::FreeDrive);
         assert_eq!(s.vehicle.model, CarModel::Club);
-        s.cycle_location(1);
+        s.cycle_location(1, true);
         assert_eq!(s.track().id, TrackId::Scenic);
-        s.cycle_location(-1);
+        s.cycle_location(-1, true);
         assert_eq!(s.track().id, TrackId::Engomi);
         s.cycle_car(1);
         assert_eq!(s.vehicle.model, CarModel::Roadster);

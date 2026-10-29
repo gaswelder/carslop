@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nDefault city: play --location nicosia. No command opens the existing menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city --location NAME             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nCities load only with play --location NAME. Run without a command to open the built-in track menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -16,7 +16,7 @@ enum Command {
         elevation: PathBuf,
     },
     List,
-    Bake(Option<String>),
+    Bake(String),
     Source(Vec<OsString>),
     Help,
     Version,
@@ -160,7 +160,9 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
     let command = match cmd.as_str() {
         "play" => Command::Play(location),
         "list-locations" => Command::List,
-        "bake-city" | "--bake-city" => Command::Bake(location),
+        "bake-city" | "--bake-city" => {
+            Command::Bake(location.ok_or_else(|| invalid("bake-city requires --location NAME"))?)
+        }
         "add-location" => {
             let name = name.ok_or_else(|| invalid("add-location requires NAME"))?;
             Command::Add {
@@ -234,10 +236,8 @@ pub fn run() -> Result<Option<bool>> {
                 }
             }
         }
-        Command::Bake(location) => {
-            if let Some(name) = location {
-                select(&args.root, &name)?;
-            }
+        Command::Bake(name) => {
+            select(&args.root, &name)?;
             crate::scene_archive::bake_default()?;
         }
         Command::Add {
@@ -299,7 +299,14 @@ mod tests {
             args(&["play", "--location", "limassol"]).unwrap().command,
             Command::Play(Some("limassol".into()))
         );
-        assert_eq!(args(&["--bake-city"]).unwrap().command, Command::Bake(None));
+        assert!(args(&["--bake-city"]).is_err());
+        assert!(args(&["bake-city"]).is_err());
+        assert_eq!(
+            args(&["bake-city", "--location", "nicosia"])
+                .unwrap()
+                .command,
+            Command::Bake("nicosia".into())
+        );
         assert!(args(&["unknown"]).is_err());
         assert!(args(&["play", "typo"]).is_err());
     }

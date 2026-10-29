@@ -513,7 +513,7 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
         &serde_json::to_vec_pretty(&report)?,
     )?;
     atomic(&city_dir.join("imagery-trees.txt"), output.as_bytes())?;
-    println!("Installed {tile_count} imagery tiles and {count} trees; {missing} missing imagery tiles. Run bake-city to rebuild the playable scene.");
+    println!("Installed {tile_count} imagery tiles and {count} trees; {missing} missing imagery tiles. Run bake-city --location NAME to rebuild the playable scene.");
     Ok(())
 }
 #[cfg(test)]
