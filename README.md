@@ -6,7 +6,7 @@ and mechanical personality.
 ## Contents
 
 - [Build and play](#build-and-play)
-- [Add a city step by step](#add-a-city-step-by-step)
+- [Add a city](#add-a-city)
 - [Nicosia map](#nicosia-map)
 - [Optional source tools](#optional-source-tools)
 - [Development](#development)
@@ -23,121 +23,95 @@ cargo build --release
 ./target/release/nfs5like
 ```
 
-No arguments opens the menu. To select the bundled city directly:
+Running without arguments opens the menu. To drive in Nicosia:
 
 ```sh
 ./target/release/nfs5like play --location nicosia
 ```
 
-Keep the complete `data/engomi` asset folder beside the executable when moving
-the game. Map assets remain separate from the binary. Play works offline.
+Keep the complete `data/engomi` folder beside the executable when moving the
+game. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 
-## Add a city step by step
+## Add a city
 
-Run these commands from the project root. Map downloads are manual; all other
-preparation uses the game executable.
+Build the game first, then run these commands from the project root.
 
-### 1. Build the executable
+### 1. Prepare the map
 
-```sh
-cargo build --release
-```
-
-### 2. Prepare an OSM XML extract
-
-Choose a city-sized bounding box in decimal degrees, ordered **south latitude,
-west longitude, north latitude, east longitude**. Start with a small neighbourhood
-to check the result before importing a whole city.
-
-If you already have a complete `.osm` XML file, use it directly in step 3.
-Otherwise, obtain a regional `.osm.pbf` containing your city and convert the
-selected region with `extract-region`. For example, this uses the saved Cyprus
-PBF to prepare the original Engomi neighbourhood:
+Obtain a regional `.osm.pbf` file and extract your city. This example uses the
+saved Cyprus map to extract Engomi:
 
 ```sh
 ./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328
 ```
 
-For another city, replace the PBF path and all four bounds. Always supply
-`--bbox` for another region; the extractor's default is the Nicosia urban crop.
-`add-location` accepts OSM XML, not PBF or Overpass JSON. An XML export must
-contain the nodes referenced by its ways; an incomplete or timed-out export
-cannot be used as a complete map.
+Replace the input path and bounds for another city. Bounds are decimal degrees
+in **south, west, north, east** order. Start with a small neighbourhood.
+If you already have a complete `.osm` XML export, skip extraction.
+The importer requires XML with complete node references; PBF and Overpass JSON
+cannot be imported directly.
 
-### 3. Import and bake the city
+### 2. Import the city
 
-Choose a unique location name, such as `engomi-demo`. Names must start with an
-ASCII letter or digit and contain only ASCII letters, digits, hyphens or
-underscores, up to 64 characters. `nicosia` is reserved for the bundled city.
-
-For a first import, use flat terrain:
+Use a unique name (`nicosia` is reserved) and the same bounds as above:
 
 ```sh
 ./target/release/nfs5like add-location engomi-demo --source data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --flat-terrain --locations-dir data/locations
 ```
 
-For real elevation instead, replace `--flat-terrain` with
-`--elevation /path/to/TILE.hgt.gz`. For the Engomi example, the saved tile is
-`data/engomi/elevation/N35E033.hgt.gz`. Uncompressed `.hgt` files also work.
-Exactly one terrain option is required. The single HGT tile must cover the
-entire crop plus 80 metres of padding, with no void samples; multi-tile terrain
-is not supported. Flat terrain explicitly places the city at zero elevation.
+Names may contain English letters, digits, hyphens and underscores, must start
+with a letter or digit, and can be up to 64 characters.
 
-Use the same bounds as in step 2. With a direct XML input, provide the desired
-crop here; omitting `--bbox` uses the XML bounds or its full node extent, which
-may be larger than the intended city.
+Choose one terrain option:
 
-Wait for `Added engomi-demo` before launching it. The import prepares everything
-needed to play. Whole-city imports can take substantial time, memory and disk
-space. Existing locations are never overwritten.
+- `--flat-terrain`: level ground at zero elevation.
+- `--elevation /path/to/TILE.hgt.gz`: real terrain; uncompressed `.hgt` also works.
+  One tile must cover the crop plus 80 m of padding, with no missing elevation
+  samples. For Engomi, use `data/engomi/elevation/N35E033.hgt.gz`.
 
-### 4. List the city and drive
+Importing prepares everything needed to play. Wait for `Added engomi-demo`;
+large cities take more time, memory and disk space. Existing names are never
+overwritten. Without `--bbox`, the importer uses the XML bounds or full node extent.
+
+### 3. Drive
 
 ```sh
 ./target/release/nfs5like list-locations --locations-dir data/locations
 ./target/release/nfs5like play --location engomi-demo --locations-dir data/locations
 ```
 
-These examples store the package at `data/locations/engomi-demo`. Keep that
-folder: it contains the assets the game loads when you select the city.
-Use the same `--locations-dir` on subsequent commands, from the same working
-directory, or use an absolute path. You can also set `NFS_LOCATIONS_DIR`.
-Omit the directory option throughout to use the default user data directory
-(`~/.local/share/nfs5like/locations` on Linux, or
-`$XDG_DATA_HOME/nfs5like/locations` when configured).
+Keep `data/locations/engomi-demo` and use the same `--locations-dir` for later
+commands. An absolute path avoids dependence on your working directory.
+You can also set `NFS_LOCATIONS_DIR`. Omitting both uses the user data directory:
+`$XDG_DATA_HOME/nfs5like/locations` or `~/.local/share/nfs5like/locations` on Linux.
 
-### 5. Rebuild or update later
-
-After renderer changes, rebuild the city’s visuals with:
+To change the map, bounds or terrain, import again under a new name. After
+renderer changes, rebuild an existing city's visuals with:
 
 ```sh
 ./target/release/nfs5like bake-city --location engomi-demo --locations-dir data/locations
 ```
 
-To change the map, crop or terrain, repeat the import with a new location name.
-New cities use generated road and building materials. Aerial imagery is optional;
-the current imagery tool supports the original Engomi area only.
+New cities use generated materials. The optional imagery tool currently supports
+the original Engomi area only.
 
 ## Nicosia map
 
 The bundled map covers about 289 km² of Nicosia, including Engomi, Strovolos,
-Lakatamia, Aglandjia and Gonyeli. Its asset folder keeps the historical name
-`data/engomi`.
+Lakatamia, Aglandjia and Gonyeli. Assets live in `data/engomi`.
 
-Roads, building footprints, green spaces and street furniture come from
-OpenStreetMap. Building heights and architectural details are partly estimated.
-The Engomi starting area has additional balconies, windows and rooftop details
-inspired by local architecture. You can drive across low curbs onto pavements,
-parking and open ground; buildings remain solid.
+OpenStreetMap supplies roads, building footprints, green spaces and street
+furniture. Heights and architectural details are partly estimated, with extra
+detail around the Engomi starting area. Low curbs, pavements and parking areas
+are drivable; buildings remain solid.
 
-The map is an approximation: bridges, tunnels and some complex buildings are
-omitted. Some roads remain disconnected, one-way rules are not enforced, and
-there is no city traffic AI yet.
+Bridges, tunnels and some complex buildings are omitted. Some roads remain
+disconnected. One-way rules are not enforced, and city traffic AI is not yet available.
 
-An optional local aerial pack covers about 445 × 445 m of Engomi. The game
-loads it automatically from `data/engomi/aerial` when available and works without
-it. Set `NFS_NO_AERIAL=1` to disable it. See the redistribution limits below.
+An optional aerial pack covers a 445 × 445 m area of Engomi. It loads from
+`data/engomi/aerial` when present; set `NFS_NO_AERIAL=1` to disable it.
+See [redistribution limits](#credits-and-distribution) before sharing it.
 
 ## Optional source tools
 
@@ -151,19 +125,19 @@ The city guide covers PBF extraction. Two other tools are included:
 ./target/release/nfs5like build-aerial-tiles --image data/aerial-preview/engomi-2019.jpg --export data/aerial-preview/export.json --output data/engomi/aerial
 ```
 
-Merging preserves newer known object versions and favours the original when
-versions tie or the extension has no version metadata. Image preparation needs
-a saved JPEG/PNG and its Web Mercator export metadata; it does not download imagery.
+Merging keeps newer versions and favours the original on ties or when the
+extension has no version metadata. Image preparation requires a saved JPEG/PNG
+and its Web Mercator export metadata.
 
 ## Development
 
-Run the regular tests with:
+Run tests:
 
 ```sh
 cargo test
 ```
 
-After changing city rendering, rebuild the bundled city's visuals with:
+Rebuild the bundled city's visuals after renderer changes:
 
 ```sh
 ./target/release/nfs5like bake-city
