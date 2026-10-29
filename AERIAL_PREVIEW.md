@@ -31,13 +31,13 @@ catalog disables aerial rendering without disabling the city.
 - `NFS_NO_AERIAL=1` disables aerial imagery for comparisons.
 - The optional pack is resolved under the selected `NFS_CITY_DATA` directory.
 
-Rebuild the saved local export into tiles (Python + Pillow, offline):
+Rebuild the saved local export into tiles (native Rust CLI, offline):
 
-This optional developer utility remains separate from the native Rust map
-compiler. Install its dependencies using [tools/README.md](tools/README.md).
+The command runs in the same executable as the map compiler and game.
+See [source-tool options](tools/README.md).
 
 ```sh
-.venv-tools/bin/python tools/build_aerial_tiles.py
+cargo run --release -- build-aerial-tiles --image artifacts/aerial-preview/engomi-2019.jpg --export artifacts/aerial-preview/export.json --output data/engomi/aerial
 ```
 
 No scene-pack rebake is needed when changing only image tiles. The shader reads
@@ -104,23 +104,13 @@ included. Geometry projection preserves shape but cannot fix those image issues.
 
 The existing `image.rgb` is RGB8 data from `engomi-2019.jpg`; `georef.txt`
 contains width, height and the returned Web Mercator bounds. To recreate them
-from the saved JPEG/export response (requires Pillow):
+from the saved JPEG/export response:
 
 ```sh
-.venv-tools/bin/python - <<'PY'
-from PIL import Image
-from pathlib import Path
-import json
-p=Path('artifacts/aerial-preview')
-im=Image.open(p/'engomi-2019.jpg').convert('RGB')
-(p/'image.rgb').write_bytes(im.tobytes())
-e=json.loads((p/'export.json').read_text())['extent']
-(p/'georef.txt').write_text(' '.join(map(str,[im.width,im.height,e['xmin'],e['ymin'],e['xmax'],e['ymax']]))+'\n')
-PY
+cargo run --release -- build-aerial-tiles --image artifacts/aerial-preview/engomi-2019.jpg --export artifacts/aerial-preview/export.json --output data/engomi/aerial --preview-output artifacts/aerial-preview
 NFS_AERIAL_PREVIEW_DIR="$PWD/artifacts/aerial-preview" cargo test aerial_drape_preview -- --ignored --test-threads=1 --nocapture
 ```
 
 The explicit test requires SDL/OpenGL and exports `projected-*.ppm`.
-Set `NFS_AERIAL_RAW=1` on the same command to reproduce the ground-only comparison. Convert them to PNG
-with Pillow for convenient viewing. The capture harness is compiled only for tests; the projection and tile cache
+Set `NFS_AERIAL_RAW=1` on the same command to reproduce the ground-only comparison. The PPM files can be viewed directly in an image viewer. The capture harness is compiled only for tests; the projection and tile cache
 are used by the normal game.

@@ -110,9 +110,9 @@ cargo run --release -- bake-city
 For an imported location, use `cargo run --release -- bake-city --location NAME`.
 For another complete asset folder, use
 `NFS_CITY_DATA=/absolute/output cargo run --release -- bake-city`.
-For a fresh PBF extract, `tools/extract_region.py` streams the selected region
-with complete ways and multipolygon members; `tools/merge_osm.py` merges snapshots.
-Their optional dependencies are documented in [tools/README.md](../../tools/README.md).
+For a fresh PBF extract, `nfs5like extract-region` streams the selected region
+with complete ways and multipolygon members; `nfs5like merge-osm` merges snapshots.
+Their commands are documented in [tools/README.md](../../tools/README.md).
 
 ## Rendering and loading
 

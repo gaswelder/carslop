@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      (--elevation TILE.hgt[.gz] | --flat-terrain)\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      (--elevation TILE.hgt[.gz] | --flat-terrain)\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -18,6 +18,7 @@ enum Command {
     },
     List,
     Bake(Option<String>),
+    Source(Vec<OsString>),
     Help,
     Version,
 }
@@ -91,6 +92,16 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
         });
     }
     let cmd = text(&args.remove(0))?;
+    if matches!(
+        cmd.as_str(),
+        "extract-region" | "merge-osm" | "build-aerial-tiles"
+    ) {
+        args.insert(0, cmd.into());
+        return Ok(Args {
+            command: Command::Source(args),
+            root,
+        });
+    }
     let mut location = None;
     let mut source = None;
     let mut bbox = None;
@@ -221,6 +232,7 @@ impl Drop for Pending {
 pub fn run() -> Result<Option<bool>> {
     let args = parse(std::env::args_os().skip(1).collect(), root()?)?;
     match args.command {
+        Command::Source(values) => crate::source_tools::run(values)?,
         Command::Help => print!("{HELP}"),
         Command::Version => println!("nfs5like {}", env!("CARGO_PKG_VERSION")),
         Command::Play(location) => {

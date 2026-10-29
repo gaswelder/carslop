@@ -43,10 +43,9 @@ The executable still uses the platform's SDL3/OpenGL libraries.
 
 Local imports support OSM **XML**, not PBF or Overpass JSON. Downloading locations,
 multi-tile terrain and aerial-image preparation are not implemented by the native
-CLI. The remaining [optional Python utilities](tools/README.md) prepare PBF/XML
-sources and the saved aerial export; the replaced Python map compiler has been
-retired. Rust geometry uses `geo` buffering/boolean operations and earcut
-triangulation, so derived meshes need not match Shapely's triangle ordering.
+CLI. Source preparation also runs in the same executable: `extract-region` reads
+PBF, `merge-osm` merges XML snapshots (including gzip), and `build-aerial-tiles`
+prepares saved JPEG/PNG imagery. See [source tools](tools/README.md).
 Use `--help` for command syntax. `--bake-city` remains a compatibility alias.
 
 ## Backlog
@@ -111,4 +110,4 @@ Use `--help` for command syntax. `--bake-city` remains a compatibility alias.
 
 [x] Native Rust CLI: play, add-location from local OSM XML, list-locations and bake-city; no Python runtime required for importing and playing locations.
 
-[x] Retire the Python map compiler after transferring regression coverage and validating a full Nicosia import. Optional source-preparation utilities remain in `tools/`.
+[x] Retire the Python map compiler after transferring regression coverage and validating a full Nicosia import. All remaining source-preparation utilities now run in the same Rust binary.

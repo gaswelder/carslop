@@ -20,6 +20,7 @@ mod race;
 mod scene;
 mod scene_archive;
 mod shadows;
+mod source_tools;
 mod street_surface;
 mod track;
 mod traffic;

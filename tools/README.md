@@ -1,27 +1,33 @@
-# Optional source preparation
+# Offline source preparation
 
-The Rust executable owns the playable map pipeline. Use `nfs5like add-location`
-to compile OSM XML, streets, furniture, landscape, elevation and the render archive.
-See the [project README](../README.md) for examples.
-
-Only these optional Python utilities remain:
-
-| Tool | Purpose | Dependency |
-| --- | --- | --- |
-| `extract_region.py` | Convert a regional PBF into reference-complete OSM XML | Osmium |
-| `merge_osm.py` | Merge saved XML snapshots, preserving newer object versions | Python standard library |
-| `build_aerial_tiles.py` | Prepare the optional saved Engomi aerial export | Pillow |
-
-They are developer utilities and are not invoked by the executable. The aerial
-utility currently projects around the historical Engomi origin; it is not an
-arbitrary-location imagery importer.
+All source preparation is built into `nfs5like`; no Python, Osmium, Pillow, or
+external helper executables are required. These commands run before SDL starts.
 
 ```sh
-python3 -m venv .venv-tools
-.venv-tools/bin/pip install -r tools/requirements-optional.txt
-.venv-tools/bin/python -m unittest discover -s tools -p 'test_*.py'
+cargo build --release
+./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf region.osm --bbox 35.10 33.25 35.23 33.47
+./target/release/nfs5like merge-osm original.osm.gz region.osm merged.osm
+./target/release/nfs5like build-aerial-tiles --image artifacts/aerial-preview/engomi-2019.jpg --export artifacts/aerial-preview/export.json --output data/engomi/aerial
 cargo test
 ```
+
+`extract-region` streams multiple passes over a local PBF, retaining nodes in the
+crop, complete touching ways, and non-nested multipolygons touching those ways.
+It completes member ways and referenced nodes, preserves IDs, versions and tags,
+and writes a JSON count/provenance report beside the XML. The default bounds are
+the historical Nicosia crop above. Ways with no node inside the crop are omitted.
+
+`merge-osm` accepts XML or gzip XML. Newer known versions win; the original wins
+ties and wins when the extension lacks version metadata. Overpass error remarks
+and incomplete XML are rejected before writing output. Output is deterministic.
+
+`build-aerial-tiles` accepts JPEG/PNG and a saved Web Mercator export JSON. It
+writes RGB tiles, replicated outer borders, neighbouring internal gutters, CRCs,
+and source-export metadata. Defaults are `--size 512 --gutter 8`; dimensions must
+be exact multiples of size. Projection retains the historical Engomi origin.
+Use `--preview-output DIR` to also generate legacy `image.rgb` and `georef.txt`
+for the graphical preview test. Imagery permission and provenance requirements
+still apply. All commands are offline; map and image assets remain external.
 
 `cargo test` covers the native map compiler, including road filtering, disconnected
 networks, junctions, pavement separation, enclosed blocks, smoothing, signs,
