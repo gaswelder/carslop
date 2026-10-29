@@ -60,7 +60,7 @@ impl Hgt {
         let r = row.floor() as isize;
         let c = col.floor() as isize;
         if r < 1 || c < 1 || r + 2 >= self.size as isize || c + 2 >= self.size as isize {
-            return Err(invalid("crop plus 80 m padding exceeds the HGT tile/filter coverage; use a smaller crop or --flat-terrain"));
+            return Err(invalid("crop plus 80 m padding exceeds the HGT tile/filter coverage; use a smaller crop or a tile covering the requested area"));
         }
         let filtered = |r: isize, c: isize| -> Result<f64> {
             let mut sum = 0_i32;
@@ -84,24 +84,9 @@ impl Hgt {
             + filtered(r + 1, c + 1)? * x * z)
     }
 }
-pub fn build(
-    map: &Map,
-    city: &str,
-    source: Option<&Path>,
-    output: &Path,
-    flat: bool,
-) -> Result<()> {
-    if flat && source.is_some() {
-        return Err(invalid(
-            "--flat-terrain and --elevation are mutually exclusive",
-        ));
-    }
-    let dem = source.map(Hgt::read).transpose()?;
-    let datum = dem
-        .as_ref()
-        .map(|d| d.sample(map.origin))
-        .transpose()?
-        .unwrap_or(0.0);
+pub fn build(map: &Map, city: &str, source: &Path, output: &Path) -> Result<()> {
+    let dem = Hgt::read(source)?;
+    let datum = dem.sample(map.origin)?;
     let step = 20.0;
     let min = [
         ((map.bounds[0] - 80.0) / step).floor() * step,
@@ -136,12 +121,7 @@ pub fn build(
                 map.origin[0] - z.to_degrees() / 6371000.0,
                 map.origin[1] + x.to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
             ];
-            let value = dem
-                .as_ref()
-                .map(|d| d.sample(p))
-                .transpose()?
-                .unwrap_or(0.0)
-                - datum;
+            let value = dem.sample(p)? - datum;
             if !value.is_finite() || value.abs() >= 10000.0 {
                 return Err(invalid(
                     "terrain exceeds the supported relative height range",
@@ -155,22 +135,18 @@ pub fn build(
         writeln!(file)?;
     }
     file.flush()?;
-    let saved_tile = if let Some(source) = source {
-        let name = source
-            .file_name()
-            .ok_or_else(|| invalid("missing HGT filename"))?;
-        fs::copy(source, output.join("elevation").join(name))?;
-        let attribution = source.parent().unwrap_or(Path::new(".")).join("README.md");
-        if attribution.is_file() {
-            fs::copy(attribution, output.join("elevation/source-attribution.md"))?;
-        }
-        Some(name.to_string_lossy().into_owned())
-    } else {
-        None
-    };
+    let name = source
+        .file_name()
+        .ok_or_else(|| invalid("missing HGT filename"))?;
+    fs::copy(source, output.join("elevation").join(name))?;
+    let attribution = source.parent().unwrap_or(Path::new(".")).join("README.md");
+    if attribution.is_file() {
+        fs::copy(attribution, output.join("elevation/source-attribution.md"))?;
+    }
+    let saved_tile = name.to_string_lossy();
     json(
         &output.join("elevation/heightfield.json"),
-        serde_json::json!({"compiler":"native-rust-v1","source_tile":saved_tile,"source_sha256":source.map(sha).transpose()?,"flat_terrain":flat,"grid_dimensions":size,"grid_step_metres":step,"local_datum_metres_egm96":datum,"processing":"3x3 [1,2,1] native-post Gaussian, bilinear resampling; heights relative to location origin. Flat terrain only when explicitly requested."}),
+        serde_json::json!({"compiler":"native-rust-v1","source_tile":saved_tile,"source_sha256":sha(source)?,"grid_dimensions":size,"grid_step_metres":step,"local_datum_metres_egm96":datum,"processing":"3x3 [1,2,1] native-post Gaussian, bilinear resampling; heights relative to location origin."}),
     )
 }
 

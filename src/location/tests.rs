@@ -37,6 +37,14 @@ const FIXTURE: &str = r#"<osm version="0.6" timestamp="2026-01-01T00:00:00Z">
 #[test]
 fn native_import_loads_in_game_and_preserves_topology() {
     let temp = Temp::new();
+    let tile = temp.0.join("N35E033.hgt");
+    fs::write(
+        &tile,
+        (0..65)
+            .flat_map(|row| (0..65).flat_map(move |col| (100_i16 + row * 2 + col).to_be_bytes()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     let source = temp.0.join("fixture.osm");
     fs::write(&source, FIXTURE).unwrap();
     let output = temp.0.join("compiled");
@@ -45,8 +53,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
         output: &output,
         name: "fixture",
         bbox: None,
-        elevation: None,
-        flat: true,
+        elevation: &tile,
     })
     .unwrap();
     let city = fs::read_to_string(output.join("city.txt")).unwrap();
@@ -78,14 +85,14 @@ fn native_import_loads_in_game_and_preserves_topology() {
     )
     .unwrap();
     assert_eq!(elevation.height([0.0, 0.0]), 0.0);
+    assert!(elevation.height([100.0, 0.0]).abs() > 0.01);
     let second = temp.0.join("second");
     compile(Options {
         source: &source,
         output: &second,
         name: "fixture",
         bbox: None,
-        elevation: None,
-        flat: true,
+        elevation: &tile,
     })
     .unwrap();
     for asset in [
@@ -125,6 +132,14 @@ fn incomplete_exports_are_rejected() {
 #[test]
 fn mapped_multipolygon_holes_stay_empty() {
     let temp = Temp::new();
+    let tile = temp.0.join("N35E033.hgt");
+    fs::write(
+        &tile,
+        (0..65)
+            .flat_map(|row| (0..65).flat_map(move |col| (100_i16 + row * 2 + col).to_be_bytes()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     let source = temp.0.join("holes.osm");
     let extra = r#"
 <node id="10" lat="35.16315" lon="33.32115"/>
@@ -141,8 +156,7 @@ fn mapped_multipolygon_holes_stay_empty() {
         output: &output,
         name: "holes",
         bbox: None,
-        elevation: None,
-        flat: true,
+        elevation: &tile,
     })
     .unwrap();
     let city = fs::read_to_string(output.join("city.txt")).unwrap();

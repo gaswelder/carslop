@@ -57,18 +57,16 @@ cannot be imported directly.
 Use a unique name (`nicosia` is reserved) and the same bounds as above:
 
 ```sh
-./target/release/nfs5like add-location engomi-demo --source data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --flat-terrain --locations-dir data/locations
+./target/release/nfs5like add-location engomi-demo --source data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --elevation data/engomi/elevation/N35E033.hgt.gz --locations-dir data/locations
 ```
 
 Names may contain English letters, digits, hyphens and underscores, must start
 with a letter or digit, and can be up to 64 characters.
 
-Choose one terrain option:
-
-- `--flat-terrain`: level ground at zero elevation.
-- `--elevation /path/to/TILE.hgt.gz`: real terrain; uncompressed `.hgt` also works.
-  One tile must cover the crop plus 80 m of padding, with no missing elevation
-  samples. For Engomi, use `data/engomi/elevation/N35E033.hgt.gz`.
+An elevation tile is required. Replace the example tile with one covering your
+city; `.hgt` and `.hgt.gz` are supported. The tile must cover the crop plus 80 m
+of padding and contain no missing elevation samples. Multi-tile terrain is not
+yet supported.
 
 Importing prepares everything needed to play. Wait for `Added engomi-demo`;
 large cities take more time, memory and disk space. Existing names are never

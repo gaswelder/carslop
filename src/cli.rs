@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      (--elevation TILE.hgt[.gz] | --flat-terrain)\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -13,8 +13,7 @@ enum Command {
         name: String,
         source: PathBuf,
         bbox: Option<[f64; 4]>,
-        elevation: Option<PathBuf>,
-        flat: bool,
+        elevation: PathBuf,
     },
     List,
     Bake(Option<String>),
@@ -106,7 +105,6 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
     let mut source = None;
     let mut bbox = None;
     let mut elevation = None;
-    let mut flat = false;
     let mut name = None;
     let mut values = args.into_iter();
     while let Some(arg) = values.next() {
@@ -142,7 +140,6 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
                         .ok_or_else(|| invalid("--elevation needs a file"))?,
                 ));
             }
-            "--flat-terrain" if cmd == "add-location" => flat = true,
             "--bbox" if cmd == "add-location" => {
                 if bbox.is_some() {
                     return Err(invalid("duplicate --bbox"));
@@ -178,17 +175,12 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             if name.eq_ignore_ascii_case("nicosia") {
                 return Err(invalid("nicosia is reserved for the bundled city"));
             }
-            if flat == elevation.is_some() {
-                return Err(invalid(
-                    "choose exactly one of --elevation TILE.hgt[.gz] or --flat-terrain",
-                ));
-            }
             Command::Add {
                 name,
                 source: source.ok_or_else(|| invalid("add-location requires --source FILE.osm"))?,
                 bbox,
-                elevation,
-                flat,
+                elevation: elevation
+                    .ok_or_else(|| invalid("add-location requires --elevation TILE.hgt[.gz]"))?,
             }
         }
         _ => return Err(invalid(format!("unknown command: {cmd}\n\n{HELP}"))),
@@ -269,7 +261,6 @@ pub fn run() -> Result<Option<bool>> {
             source,
             bbox,
             elevation,
-            flat,
         } => {
             let destination = args.root.join(&name);
             if destination.exists() {
@@ -288,8 +279,7 @@ pub fn run() -> Result<Option<bool>> {
                 output: &pending.0,
                 name: &name,
                 bbox,
-                elevation: elevation.as_deref(),
-                flat,
+                elevation: &elevation,
             })?;
             validate(&pending.0)?;
             crate::city_assets::select(pending.0.clone())?;
@@ -330,7 +320,7 @@ mod tests {
         assert!(args(&["play", "typo"]).is_err());
     }
     #[test]
-    fn import_requires_explicit_terrain_and_safe_name() {
+    fn import_requires_elevation_and_safe_name() {
         for a in [
             vec!["add-location", "test", "--source", "a.osm"],
             vec![
@@ -338,14 +328,16 @@ mod tests {
                 "../escape",
                 "--source",
                 "a.osm",
-                "--flat-terrain",
+                "--elevation",
+                "a.hgt",
             ],
             vec![
                 "add-location",
                 "nicosia",
                 "--source",
                 "a.osm",
-                "--flat-terrain",
+                "--elevation",
+                "a.hgt",
             ],
             vec![
                 "add-location",
@@ -364,7 +356,8 @@ mod tests {
             "test",
             "--source",
             "a.osm",
-            "--flat-terrain"
+            "--elevation",
+            "a.hgt"
         ])
         .is_ok());
     }

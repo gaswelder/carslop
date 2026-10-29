@@ -172,15 +172,9 @@ pub struct Options<'a> {
     pub output: &'a Path,
     pub name: &'a str,
     pub bbox: Option<[f64; 4]>,
-    pub elevation: Option<&'a Path>,
-    pub flat: bool,
+    pub elevation: &'a Path,
 }
 pub fn compile(options: Options<'_>) -> Result<()> {
-    if options.elevation.is_none() && !options.flat {
-        return Err(invalid(
-            "supply --elevation TILE.hgt[.gz] or explicitly choose --flat-terrain",
-        ));
-    }
     println!("Reading OSM XML...");
     let source = osm::read(options.source)?;
     let map = osm::compile(&source, options.bbox)?;
@@ -191,7 +185,7 @@ pub fn compile(options: Options<'_>) -> Result<()> {
     println!("Building mapped landscape and roadside controls...");
     scenery::build(&source, &map, &surfaces, &city, options.output)?;
     println!("Building elevation...");
-    terrain::build(&map, &city, options.elevation, options.output, options.flat)?;
+    terrain::build(&map, &city, options.elevation, options.output)?;
     fs::copy(options.source, options.output.join("source.osm"))?;
     let south_west = [
         map.origin[0] - map.bounds[3].to_degrees() / 6371000.0,
@@ -208,7 +202,7 @@ pub fn compile(options: Options<'_>) -> Result<()> {
         "package_sha256":sha(&options.output.join("city.txt"))?,
         "attribution":"© OpenStreetMap contributors","license":"ODbL-1.0",
         "copyright_url":"https://www.openstreetmap.org/copyright","compiler":"native-rust-v1",
-        "flat_terrain":options.flat,"statistics":{"nodes":map.nodes.len(),"road_segments":map.roads.len(),"buildings":map.buildings.len()}
+        "statistics":{"nodes":map.nodes.len(),"road_segments":map.roads.len(),"buildings":map.buildings.len()}
     });
     let provenance = options
         .source
