@@ -49,6 +49,13 @@ pub fn signature() -> u32 {
             .iter()
             .map(|name| crc32(&crate::city_assets::read(name)))
             .collect::<Vec<_>>();
+        let imagery = match std::fs::read_to_string(
+            crate::city_assets::directory().join("imagery-trees.txt"),
+        ) {
+            Ok(text) => crc32(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => panic!("cannot fingerprint imagery trees: {e}"),
+        };
         let sources = [
             include_str!("city_assets.rs"),
             include_str!("scene.rs"),
@@ -69,6 +76,7 @@ pub fn signature() -> u32 {
             .iter()
             .map(|v| format!("{v:08x}"))
             .collect::<String>();
+        sums.push_str(&format!("{imagery:08x}"));
         sums.push_str(
             &sources
                 .iter()

@@ -102,6 +102,22 @@ impl Landscape {
         }
         Ok(result)
     }
+    pub fn append_imagery(&mut self, text: &str, city: &str, streets: &str) -> Result<(), String> {
+        let extra = Self::load(text, city, streets)?;
+        if !extra.ground.is_empty() {
+            return Err("imagery supplement must contain only trees".into());
+        }
+        let mut ids: std::collections::HashSet<_> = self.trees.iter().map(|t| t.id).collect();
+        if extra
+            .trees
+            .iter()
+            .any(|t| t.id < (1_u64 << 63) || !ids.insert(t.id))
+        {
+            return Err("invalid or duplicate imagery tree id".into());
+        }
+        self.trees.extend(extra.trees);
+        Ok(())
+    }
     pub fn style(&self, p: [f32; 2]) -> Option<usize> {
         self.grid
             .get(&((p[0] / 32.0).floor() as i32, (p[1] / 32.0).floor() as i32))?

@@ -12,6 +12,7 @@ mod elevation;
 mod feedback;
 mod gl;
 mod hud;
+mod imagery_trees;
 mod landscape;
 mod location;
 mod particles;

@@ -672,6 +672,7 @@ dependencies = [
 name = "nfs5like"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "env_logger",
  "flate2",
  "geo",

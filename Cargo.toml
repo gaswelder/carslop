@@ -18,6 +18,7 @@ osmpbf = { version = "0.3", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tempfile = "3.27.0"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+crc32fast = "1.5.3"
 
 # Keep development builds practical for city-scale geometry and spatial queries.
 [profile.dev]

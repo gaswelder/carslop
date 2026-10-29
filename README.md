@@ -217,6 +217,22 @@ shrubs and shadows can mislead it, and some trees will be missed. The circles
 approximate canopy interiors; heights and trunk positions are unknown. Reviewing
 or accepting a candidate does not add it to the game.
 
+To add the kept proposals to a city and rebuild its visuals:
+
+```sh
+./target/release/nfs5like import-imagery-trees \
+  --candidates data/tree-preview/kept-candidates.geojson \
+  --city-data data/engomi
+./target/release/nfs5like bake-city
+```
+
+The import rechecks roads/buildings and skips trees within 2 m of an existing
+tree. It writes `imagery-trees.txt` beside the city assets, keeping OSM trees
+unchanged. Repeating it replaces that supplement rather than adding duplicates.
+Heights and crown sizes are artistic estimates. The current image covers only
+the 445 × 445 m Engomi patch, not the whole district. Keep the supplement with
+the city package; changing or removing it requires another bake.
+
 ## Development
 
 Run tests:

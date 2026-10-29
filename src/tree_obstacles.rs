@@ -154,8 +154,13 @@ impl Obstacles {
             index: RTree::bulk_load(objects),
         })
     }
+    pub fn metres(&self, lon: f64, lat: f64) -> [f64; 2] {
+        local(self.origin, lon, lat)
+    }
     pub fn rejection(&self, lon: f64, lat: f64) -> Option<&'static str> {
-        let p = local(self.origin, lon, lat);
+        self.rejection_at(self.metres(lon, lat))
+    }
+    pub fn rejection_at(&self, p: [f64; 2]) -> Option<&'static str> {
         let point = Point::new(p[0], p[1]);
         let mut road = false;
         for o in self

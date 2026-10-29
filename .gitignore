@@ -23,3 +23,6 @@ __pycache__/
 
 # Optional local imagery; redistribution rights are not established
 /data/engomi/aerial/
+
+# Local imagery-derived tree supplement
+/data/engomi/imagery-trees.*

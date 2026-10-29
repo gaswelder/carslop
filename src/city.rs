@@ -160,6 +160,15 @@ impl City {
             &streets,
         )
         .expect("invalid bundled Engomi landscape");
+        let imagery = crate::city_assets::directory().join("imagery-trees.txt");
+        match std::fs::read_to_string(imagery) {
+            Ok(text) => city
+                .landscape
+                .append_imagery(&text, &source, &streets)
+                .expect("invalid imagery trees; regenerate with import-imagery-trees"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("cannot read imagery trees: {e}"),
+        }
         city.elevation = Some(field);
         city.surfaces = Some(surfaces);
         city
