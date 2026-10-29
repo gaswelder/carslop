@@ -1,0 +1,21 @@
+{
+  "city_sha256": "731150286f17086634d96e663609dbe1b8fcb2005fb6713b4793b5d879190f08",
+  "geometry_sha256": "bcb48f1e35afdbbc93f8923bf69e503fa8f85658b4c36115a41e619639d46f38",
+  "shapely_version": "2.2.0",
+  "road_area_m2": 17674308.574,
+  "junction_fillets": 28942,
+  "rounded_degree_two_nodes": 55700,
+  "measured_max_centreline_deviation_metres": 0.6,
+  "surface_triangles": {
+    "0": 419739,
+    "1": 1406984,
+    "2": 450262,
+    "3": 3483191,
+    "5": 522372,
+    "6": 2173856,
+    "7": 714095,
+    "4": 673736
+  },
+  "curb_segments": 1312186,
+  "max_centreline_rounding_metres": 0.6
+}

@@ -1,0 +1,21 @@
+# Rust build output
+/target/
+
+# Local Python environments and bytecode
+/.venv*/
+__pycache__/
+*.py[cod]
+
+# Machine-specific editor settings
+/.vscode/
+
+# Local previews, validation output, backups, and screenshots
+/artifacts/
+/Screenshot From *.png
+
+# Large generated map geometry; rebuild with the map import/bake tools
+/data/engomi/streets.txt
+/data/engomi/scene.pack
+
+# Optional local imagery; redistribution rights are not established
+/data/engomi/aerial/

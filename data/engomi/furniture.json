@@ -1,0 +1,149 @@
+{
+  "source_sha256": "6b0622843cea83f0ffed4b775e9929278b419442796d63e3e37581a63a0a5d63",
+  "city_sha256": "731150286f17086634d96e663609dbe1b8fcb2005fb6713b4793b5d879190f08",
+  "streets_sha256": "bcb48f1e35afdbbc93f8923bf69e503fa8f85658b4c36115a41e619639d46f38",
+  "furniture_sha256": "6a47c89d440cba50c9b1e29b3b8d844f5de8688882b1393ef84b3907c72d83cd",
+  "statistics": {
+    "mapped_signal_nodes": 737,
+    "skipped_no_clear_curb_approaches": 150,
+    "mapped_speed_nodes": 103,
+    "mapped_stop_nodes": 1312,
+    "skipped_nodes_without_clear_approach": 78,
+    "skipped_off_network_nodes": 7,
+    "mapped_yield_nodes": 65,
+    "skipped_ambiguous_stop_approaches": 54,
+    "skipped_unknown_speed_nodes": 25,
+    "deduplicated_heads": 10,
+    "signal_heads": 1193,
+    "estimated_curb_positions": 2619,
+    "inferred_facing_directions": 931,
+    "stop_signs": 1281,
+    "yield_signs": 42,
+    "speed_signs": 111
+  },
+  "elevation_nodes": 6,
+  "skipped_source_nodes": [
+    313045151,
+    1693752635,
+    1699531499,
+    2128157709,
+    2129375462,
+    2129375464,
+    2129449641,
+    2129830261,
+    2172219160,
+    2172220290,
+    4364201044,
+    4700593685,
+    5081196773,
+    5121044816,
+    5133735193,
+    5218779018,
+    5218862774,
+    6238560553,
+    6638943614,
+    6841999632,
+    8930320810,
+    8930320813,
+    8930350021,
+    9121049365,
+    9674997614,
+    10223876410,
+    11503853322,
+    11563890758,
+    11563890759,
+    12040587274,
+    12048266347,
+    12048266361,
+    12048272784,
+    12224037870,
+    12224037871,
+    12343206359,
+    12375635249,
+    12598128663,
+    12633388323,
+    12643738389,
+    12802632888,
+    12848953439,
+    12917525341,
+    12922566154,
+    12922566180,
+    12922566191,
+    12947040252,
+    12950414487,
+    12957401067,
+    13073071902,
+    13290887917,
+    13291065335,
+    13291065369,
+    13291141449,
+    13291141453,
+    13291165664,
+    13297100452,
+    13297186965,
+    13297239176,
+    13302521937,
+    13330574258,
+    13665110783,
+    13676270434,
+    13676270435,
+    13689325685,
+    13718889064,
+    13718889067,
+    13728022811,
+    13731967299,
+    13877909793,
+    14026835619,
+    14249655935,
+    14249655968,
+    14249655969,
+    14249655970,
+    14293949647,
+    14296996322,
+    14316454109
+  ],
+  "deduplicated_sources": [
+    {
+      "retained_source": 324707802,
+      "duplicate_source": 5921123058
+    },
+    {
+      "retained_source": 324707801,
+      "duplicate_source": 5921123059
+    },
+    {
+      "retained_source": 1284047350,
+      "duplicate_source": 3904902556
+    },
+    {
+      "retained_source": 33755183,
+      "duplicate_source": 4215564845
+    },
+    {
+      "retained_source": 4215564824,
+      "duplicate_source": 4215824855
+    },
+    {
+      "retained_source": 58863242,
+      "duplicate_source": 9400848275
+    },
+    {
+      "retained_source": 33756205,
+      "duplicate_source": 11893678702
+    },
+    {
+      "retained_source": 5133567122,
+      "duplicate_source": 12802632895
+    },
+    {
+      "retained_source": 549863259,
+      "duplicate_source": 14175250006
+    },
+    {
+      "retained_source": 10223876402,
+      "duplicate_source": 10223876404
+    }
+  ],
+  "placement": "Mapped control points; left-curb placement reconstructed unless separately mapped.",
+  "signal_program": "Fictional 50-second alternating cycle; no real timing or traffic-rule enforcement."
+}
