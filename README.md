@@ -29,8 +29,7 @@ Running without arguments opens the menu. To drive in Nicosia:
 ./target/release/nfs5like play --location nicosia
 ```
 
-Keep the complete `data/engomi` folder beside the executable when moving the
-game. Play works offline.
+Keep `data/locations/` beside the executable when moving the game. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 
 ## Add a city
@@ -109,17 +108,15 @@ Already have a complete `.osm` XML export? Skip this step and use that file as
 ./target/release/nfs5like add-location engomi-demo \
   --source data/city-import/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328 \
-  --elevation data/downloads/N35E033.hgt.gz \
-  --locations-dir data/locations
+  --elevation data/downloads/N35E033.hgt.gz
 ```
 
-- `engomi-demo` is the name you will select when playing. Choose an unused name;
-  `nicosia` is reserved. Use English letters, digits, hyphens or underscores,
+- `engomi-demo` is the name you will select when playing. Choose an unused name.
+  Use English letters, digits, hyphens or underscores,
   start with a letter or digit, and keep it under 65 characters.
 - `--source` is the XML file from step 2.
 - `--bbox` is the same crop as in step 2.
 - `--elevation` is the tile covering that crop. Elevation is required.
-- `--locations-dir` is where the playable city package will be saved.
 
 Wait for **`Added engomi-demo`**. The import also builds the city's visuals;
 no separate bake command is needed. Large cities take more time, memory and disk
@@ -128,7 +125,7 @@ space. Existing locations are never overwritten.
 ### 4. Launch the city
 
 ```sh
-./target/release/nfs5like play --location engomi-demo --locations-dir data/locations
+./target/release/nfs5like play --location engomi-demo
 ```
 
 Keep `data/locations/engomi-demo`: the game reads its assets when you play.
@@ -136,7 +133,7 @@ Use the same location name and storage directory as in step 3. To see all import
 cities in that directory:
 
 ```sh
-./target/release/nfs5like list-locations --locations-dir data/locations
+./target/release/nfs5like list-locations
 ```
 
 ### Updating a city
@@ -145,13 +142,12 @@ To change the map, bounds or elevation, repeat the import under a new name.
 After renderer changes, rebuild an existing city's visuals with:
 
 ```sh
-./target/release/nfs5like bake-city --location engomi-demo --locations-dir data/locations
+./target/release/nfs5like bake-city --location engomi-demo
 ```
 
 If a city is not listed, check `--locations-dir` and your working directory.
-An absolute storage path avoids this ambiguity. You can also set
-`NFS_LOCATIONS_DIR`; without either setting, Linux uses
-`$XDG_DATA_HOME/nfs5like/locations` or `~/.local/share/nfs5like/locations`.
+An absolute storage path avoids this ambiguity. Locations default to
+`data/locations`; override this with `--locations-dir` or `NFS_LOCATIONS_DIR`.
 
 New cities use generated materials by default. Use
 [city-wide imagery preparation](#prepare-imagery-and-trees-for-the-whole-city)
@@ -160,7 +156,7 @@ to add imagery and inferred trees.
 ## Nicosia map
 
 The bundled map covers about 289 km² of Nicosia, including Engomi, Strovolos,
-Lakatamia, Aglandjia and Gonyeli. Assets live in `data/engomi`.
+Lakatamia, Aglandjia and Gonyeli. Assets live in `data/locations/nicosia`.
 
 OpenStreetMap supplies roads, building footprints, green spaces and street
 furniture. Heights and architectural details are partly estimated, with extra
@@ -170,7 +166,7 @@ are drivable; buildings remain solid.
 Bridges, tunnels and some complex buildings are omitted. Some roads remain
 disconnected. One-way rules are not enforced, and city traffic AI is not yet available.
 
-The aerial pack loads from `data/engomi/aerial` when present; set
+The aerial pack loads from `data/locations/nicosia/aerial` when present; set
 `NFS_NO_AERIAL=1` to disable it. The city-wide preparation command below extends
 coverage beyond the original 445 × 445 m Engomi pilot.
 See [redistribution limits](#credits-and-distribution) before sharing it.
@@ -184,7 +180,7 @@ The city guide covers PBF extraction. Two other tools are included:
 ./target/release/nfs5like merge-osm original.osm.gz extension.osm merged.osm
 
 # Prepare the saved Engomi image for use in the game.
-./target/release/nfs5like build-aerial-tiles --image data/aerial-preview/engomi-2019.jpg --export data/aerial-preview/export.json --output data/engomi/aerial
+./target/release/nfs5like build-aerial-tiles --image data/aerial-preview/engomi-2019.jpg --export data/aerial-preview/export.json --output data/locations/nicosia/aerial
 ```
 
 Merging keeps newer versions and favours the original on ties or when the
@@ -199,8 +195,8 @@ Generate candidate tree crowns for the saved Engomi image:
 ./target/release/nfs5like preview-trees \
   --image data/aerial-preview/engomi-2019.jpg \
   --export data/aerial-preview/export.json \
-  --osm data/engomi/source.osm \
-  --city-data data/engomi \
+  --osm data/locations/nicosia/source.osm \
+  --city-data data/locations/nicosia \
   --output data/tree-preview
 ```
 
@@ -224,7 +220,7 @@ To add the kept proposals to a city and rebuild its visuals:
 ```sh
 ./target/release/nfs5like import-imagery-trees \
   --candidates data/tree-preview/kept-candidates.geojson \
-  --city-data data/engomi
+  --city-data data/locations/nicosia
 ./target/release/nfs5like bake-city
 ```
 
@@ -239,7 +235,7 @@ the city package; changing or removing it requires another bake.
 
 ```sh
 ./target/release/nfs5like prepare-city-imagery \
-  --city-data data/engomi \
+  --city-data data/locations/nicosia \
   --work-dir data/nicosia-imagery
 ./target/release/nfs5like bake-city
 ```
@@ -280,14 +276,14 @@ Saved OSM sources and OSM-derived map databases are distributed under ODbL 1.0;
 game code and original generated materials are separate. Preserve attribution
 and source provenance when sharing city assets. The bundled map uses the
 [Geofabrik Cyprus extract](https://download.geofabrik.de/europe/cyprus.html);
-source records are in `data/engomi/manifest.json` and `data/engomi/sources/manifest.json`.
+source records are in `data/locations/nicosia/manifest.json` and `data/locations/nicosia/sources/manifest.json`.
 
 Elevation: [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/),
 using the [Skadi N35E033 tile](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
 Terrain data courtesy of USGS; European terrain produced using Copernicus data
 and information funded by the European Union (EU-DEM). See the provider's
 [source attribution and licensing](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
-Local source records are in `data/engomi/elevation/heightfield.json`.
+Local source records are in `data/locations/nicosia/elevation/heightfield.json`.
 
 City-wide imagery: Esri World Imagery — Source: Esri, Vantor, Earthstar
 Geographics, and the GIS User Community. See the
@@ -296,7 +292,7 @@ Geographics, and the GIS User Community. See the
 Original pilot imagery: Cyprus Department of Lands and Surveys,
 [Orthoimagery 2019 WebMercator service](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
 Redistribution permission for the local imagery pack has not been established;
-omit `data/engomi/aerial` from distributions unless authorised.
+omit `data/locations/nicosia/aerial` from distributions unless authorised.
 
 Architectural references:
 

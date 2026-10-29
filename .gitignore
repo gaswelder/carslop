@@ -12,17 +12,19 @@ __pycache__/
 # Local previews, validation output, backups, and screenshots
 # Keep local outputs under data alongside the bundled map assets.
 /data/*
-!/data/engomi/
-/data/engomi/*.png
-/data/engomi/*.ppm
+!/data/locations/
+/data/locations/*
+!/data/locations/nicosia/
+/data/locations/nicosia/*.png
+/data/locations/nicosia/*.ppm
 /Screenshot From *.png
 
 # Large generated map geometry; rebuild with the map import/bake tools
-/data/engomi/streets.txt
-/data/engomi/scene.pack
+/data/locations/nicosia/streets.txt
+/data/locations/nicosia/scene.pack
 
 # Optional local imagery; redistribution rights are not established
-/data/engomi/aerial/
+/data/locations/nicosia/aerial/
 
 # Local imagery-derived tree supplement
-/data/engomi/imagery-trees.*
+/data/locations/nicosia/imagery-trees.*

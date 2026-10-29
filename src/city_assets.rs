@@ -19,6 +19,27 @@ pub fn name() -> &'static str {
             .to_ascii_uppercase()
     })
 }
+static LOCATIONS: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// Prefer a portable asset folder beside the executable, then the working tree.
+pub fn default_locations_directory() -> PathBuf {
+    let mut paths = vec![];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            paths.push(parent.join("data/locations"));
+        }
+    }
+    paths.push(PathBuf::from("data/locations"));
+    paths.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/locations"));
+    paths
+        .into_iter()
+        .find(|p| p.is_dir())
+        .unwrap_or_else(|| PathBuf::from("data/locations"))
+}
+pub fn configure_locations(root: &Path) -> std::io::Result<()> {
+    LOCATIONS
+        .set(root.to_path_buf())
+        .map_err(|_| std::io::Error::other("location directory already configured"))
+}
 pub fn directory() -> &'static Path {
     if let Some(path) = SELECTED.get() {
         return path;
@@ -26,20 +47,14 @@ pub fn directory() -> &'static Path {
     static DIRECTORY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIRECTORY.get_or_init(|| {
         if let Some(path) = std::env::var_os("NFS_CITY_DATA") {
-            return PathBuf::from(path);
+            return path.into();
         }
-        let mut paths = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                paths.push(parent.join("data/engomi"));
-            }
-        }
-        paths.push(PathBuf::from("data/engomi"));
-        paths.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/engomi"));
-        paths
-            .into_iter()
-            .find(|p| p.join("city.txt").is_file())
-            .expect("missing city data directory")
+        let root = LOCATIONS
+            .get()
+            .cloned()
+            .or_else(|| std::env::var_os("NFS_LOCATIONS_DIR").map(PathBuf::from))
+            .unwrap_or_else(default_locations_directory);
+        root.join("nicosia")
     })
 }
 pub fn read(name: &str) -> String {

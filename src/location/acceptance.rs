@@ -481,7 +481,7 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
     let imported = std::path::PathBuf::from(
         std::env::var_os("NFS_VALIDATED_CITY").expect("set NFS_VALIDATED_CITY"),
     );
-    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/engomi");
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/locations/nicosia");
     let original = fs::read_to_string(bundled.join("city.txt")).unwrap();
     let rebuilt = fs::read_to_string(imported.join("city.txt")).unwrap();
     let origin = |text: &str| -> P {

@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nImported locations are stored under the user's data directory.\nBundled city: play --location nicosia. No command opens the existing menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city [--location NAME]             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nDefault city: play --location nicosia. No command opens the existing menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -29,23 +29,9 @@ fn root() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("NFS_LOCATIONS_DIR") {
         return Ok(p.into());
     }
-    #[cfg(target_os = "windows")]
-    if let Some(p) = std::env::var_os("LOCALAPPDATA") {
-        return Ok(PathBuf::from(p).join("nfs5like/locations"));
-    }
-    #[cfg(target_os = "macos")]
-    if let Some(p) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(p).join("Library/Application Support/nfs5like/locations"));
-    }
-    if let Some(p) = std::env::var_os("XDG_DATA_HOME").filter(|p| Path::new(p).is_absolute()) {
-        return Ok(PathBuf::from(p).join("nfs5like/locations"));
-    }
-    Ok(PathBuf::from(
-        std::env::var_os("HOME")
-            .ok_or_else(|| invalid("no user data directory; supply --locations-dir"))?,
-    )
-    .join(".local/share/nfs5like/locations"))
+    Ok(crate::city_assets::default_locations_directory())
 }
+
 fn valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -177,9 +163,6 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
         "bake-city" | "--bake-city" => Command::Bake(location),
         "add-location" => {
             let name = name.ok_or_else(|| invalid("add-location requires NAME"))?;
-            if name.eq_ignore_ascii_case("nicosia") {
-                return Err(invalid("nicosia is reserved for the bundled city"));
-            }
             Command::Add {
                 name,
                 source: source.ok_or_else(|| invalid("add-location requires --source FILE.osm"))?,
@@ -193,11 +176,7 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
     Ok(Args { command, root })
 }
 fn select(root: &Path, name: &str) -> Result<()> {
-    let path = if name.eq_ignore_ascii_case("nicosia") {
-        crate::city_assets::directory().to_path_buf()
-    } else {
-        root.join(name)
-    };
+    let path = root.join(name);
     validate(&path)?;
     crate::city_assets::select(path)?;
     Ok(())
@@ -228,6 +207,7 @@ impl Drop for Pending {
 /// Returns true when the game should be opened, after resolving its location.
 pub fn run() -> Result<Option<bool>> {
     let args = parse(std::env::args_os().skip(1).collect(), root()?)?;
+    crate::city_assets::configure_locations(&args.root)?;
     match args.command {
         Command::Source(values) => crate::source_tools::run(values)?,
         Command::Help => print!("{HELP}"),
@@ -240,7 +220,6 @@ pub fn run() -> Result<Option<bool>> {
             return Ok(Some(false));
         }
         Command::List => {
-            println!("nicosia\tBundled city");
             if args.root.exists() {
                 let mut paths = fs::read_dir(&args.root)?.collect::<std::io::Result<Vec<_>>>()?;
                 paths.sort_by_key(|e| e.file_name());
@@ -338,7 +317,7 @@ mod tests {
             ],
             vec![
                 "add-location",
-                "nicosia",
+                "bad.name",
                 "--source",
                 "a.osm",
                 "--elevation",
@@ -359,6 +338,18 @@ mod tests {
         assert!(args(&[
             "add-location",
             "test",
+            "--source",
+            "a.osm",
+            "--elevation",
+            "a.hgt"
+        ])
+        .is_ok());
+    }
+    #[test]
+    fn nicosia_uses_the_same_import_rules_as_other_locations() {
+        assert!(args(&[
+            "add-location",
+            "nicosia",
             "--source",
             "a.osm",
             "--elevation",
