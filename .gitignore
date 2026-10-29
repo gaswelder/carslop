@@ -10,7 +10,11 @@ __pycache__/
 /.vscode/
 
 # Local previews, validation output, backups, and screenshots
-/artifacts/
+# Keep local outputs under data alongside the bundled map assets.
+/data/*
+!/data/engomi/
+/data/engomi/*.png
+/data/engomi/*.ppm
 /Screenshot From *.png
 
 # Large generated map geometry; rebuild with the map import/bake tools

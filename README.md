@@ -56,7 +56,7 @@ selected region with `extract-region`. For example, this uses the saved Cyprus
 PBF to prepare the original Engomi neighbourhood:
 
 ```sh
-./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf artifacts/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328
+./target/release/nfs5like extract-region data/engomi/sources/cyprus.osm.pbf data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328
 ```
 
 For another city, replace the PBF path and all four bounds. Always supply
@@ -74,7 +74,7 @@ underscores, up to 64 characters. `nicosia` is reserved for the bundled city.
 For a first import, use flat terrain:
 
 ```sh
-./target/release/nfs5like add-location engomi-demo --source artifacts/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --flat-terrain --locations-dir artifacts/locations
+./target/release/nfs5like add-location engomi-demo --source data/city-import/engomi.osm --bbox 35.156 33.312 35.168 33.328 --flat-terrain --locations-dir data/locations
 ```
 
 For real elevation instead, replace `--flat-terrain` with
@@ -95,11 +95,11 @@ space. Existing locations are never overwritten.
 ### 4. List the city and drive
 
 ```sh
-./target/release/nfs5like list-locations --locations-dir artifacts/locations
-./target/release/nfs5like play --location engomi-demo --locations-dir artifacts/locations
+./target/release/nfs5like list-locations --locations-dir data/locations
+./target/release/nfs5like play --location engomi-demo --locations-dir data/locations
 ```
 
-These examples store the package at `artifacts/locations/engomi-demo`. Keep that
+These examples store the package at `data/locations/engomi-demo`. Keep that
 folder: it contains the assets the game loads when you select the city.
 Use the same `--locations-dir` on subsequent commands, from the same working
 directory, or use an absolute path. You can also set `NFS_LOCATIONS_DIR`.
@@ -112,7 +112,7 @@ Omit the directory option throughout to use the default user data directory
 After renderer changes, rebuild the city’s visuals with:
 
 ```sh
-./target/release/nfs5like bake-city --location engomi-demo --locations-dir artifacts/locations
+./target/release/nfs5like bake-city --location engomi-demo --locations-dir data/locations
 ```
 
 To change the map, crop or terrain, repeat the import with a new location name.
@@ -148,7 +148,7 @@ The city guide covers PBF extraction. Two other tools are included:
 ./target/release/nfs5like merge-osm original.osm.gz extension.osm merged.osm
 
 # Prepare the saved Engomi image for use in the game.
-./target/release/nfs5like build-aerial-tiles --image artifacts/aerial-preview/engomi-2019.jpg --export artifacts/aerial-preview/export.json --output data/engomi/aerial
+./target/release/nfs5like build-aerial-tiles --image data/aerial-preview/engomi-2019.jpg --export data/aerial-preview/export.json --output data/engomi/aerial
 ```
 
 Merging preserves newer known object versions and favours the original when
