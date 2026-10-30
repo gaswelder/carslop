@@ -1,5 +1,14 @@
 # Cars LOP
 
+--- human info begins ---
+
+Experimental project: have an AI create a decent game and not even read the code.
+Every commit message is an "ask" to the coding agent.
+Everything else, including README.md outside of this section, is generated.
+
+--- human info ends ---
+
+
 A driving game inspired by NFS5: beautiful cars, pleasant roads, readable handling
 and mechanical personality.
 
