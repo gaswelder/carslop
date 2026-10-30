@@ -322,7 +322,14 @@ impl Vehicle {
                 forward[1] * new_longitudinal + right[1] * new_lateral,
             ];
             let blend = 1.0 - (-seconds * 12.0).exp();
-            self.acceleration[0] += (ax - self.acceleration[0]) * blend;
+            // Use the acceleration actually applied after stopping friction has
+            // limited braking. Requested tire force can remain nonzero at rest.
+            let applied_ax = if new_longitudinal == 0.0 {
+                (new_longitudinal - longitudinal) / seconds.max(f32::EPSILON)
+            } else {
+                ax
+            };
+            self.acceleration[0] += (applied_ax - self.acceleration[0]) * blend;
             self.acceleration[1] += (ay - self.acceleration[1]) * blend;
             self.update_body_motion(seconds);
             self.heading =
@@ -1557,6 +1564,33 @@ mod tests {
         assert_eq!(v.model, model);
         assert_eq!(v.wheel_phase, [0.0; 2]);
         assert_eq!(v.tire_scrub, 0.0);
+    }
+
+    #[test]
+    fn holding_brakes_at_rest_does_not_dive_and_settles_after_stopping() {
+        for handbrake in [false, true] {
+            for initial_speed in [0.0, 8.0, -8.0] {
+                let mut v = car();
+                let forward = [v.heading.sin(), v.heading.cos()];
+                v.velocity = forward.map(|component| component * initial_speed);
+                v.refresh_speed();
+                for _ in 0..600 {
+                    v.update(
+                        Duration::from_secs_f64(1.0 / 60.0),
+                        Controls {
+                            brake: if handbrake { 0.0 } else { 1.0 },
+                            handbrake,
+                            ..Controls::default()
+                        },
+                    );
+                    if initial_speed == 0.0 {
+                        assert!(v.body_pitch.abs() < 0.0001);
+                    }
+                }
+                assert!(v.speed.abs() < 0.001);
+                assert!(v.body_pitch.abs() < 0.0001);
+            }
+        }
     }
 
     #[test]
