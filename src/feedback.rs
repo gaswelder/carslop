@@ -1,4 +1,4 @@
-//! Fixed-step cosmetic tire trails. Bounded storage; no influence on race rules.
+//! Fixed-step cosmetic tire trails. Bounded storage; no influence on vehicle physics.
 
 #[cfg(test)]
 use crate::track;

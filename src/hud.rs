@@ -22,19 +22,16 @@ fn car_box(index: usize) -> [f32; 4] {
     let x = -0.92 + index as f32 * width;
     [x, -0.27, x + width - 0.04_f32.min(width * 0.1), -0.16]
 }
-const ACTIVITY_BOX: [f32; 4] = [-0.92, -0.46, 0.0, -0.35];
 const START_BOX: [f32; 4] = [-0.92, -0.68, 0.0, -0.54];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Location(TrackId),
     Car(CarModel),
-    Activity,
     Start,
 }
 pub struct MainMenu {
     pub location: TrackId,
     pub car: CarModel,
-    pub race: bool,
     pub focus: usize,
     pub city_enabled: bool,
 }
@@ -51,9 +48,6 @@ pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
             return Some(MenuAction::Car(crate::cars::ALL[i]));
         }
     }
-    if inside(ACTIVITY_BOX) {
-        return Some(MenuAction::Activity);
-    }
     if inside(START_BOX) {
         return Some(MenuAction::Start);
     }
@@ -63,8 +57,6 @@ pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
 pub struct Map<'a> {
     pub track: &'a Track,
     pub player: [f32; 3],
-    pub rival: Option<[f32; 3]>,
-    pub gate: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Copy)]
@@ -214,17 +206,9 @@ impl Hud {
         }
     }
 
-    pub fn draw(
-        &self,
-        program: u32,
-        map: Map<'_>,
-        gauges: Gauges,
-        pause: Option<PauseMenu<'_>>,
-        overlay: &[String],
-    ) {
+    pub fn draw(&self, program: u32, map: Map<'_>, gauges: Gauges, pause: Option<PauseMenu<'_>>) {
         let mut v = Vec::new();
         let white = [0.9, 0.95, 1.0];
-        let cyan = [0.15, 0.85, 0.95];
         let mut viewport = [0_i32; 4];
         unsafe {
             gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
@@ -250,33 +234,9 @@ impl Hud {
                 line(&mut v, a, b, width, [0.4, 0.49, 0.52]);
             }
         }
-        for (position, color, size) in [
-            (map.gate, [1.0, 0.8, 0.2], 0.009),
-            (map.rival, [0.15, 0.65, 1.0], 0.013),
-            (Some(map.player), [1.0, 0.25, 0.12], 0.013),
-        ] {
-            let Some(p) = position else {
-                continue;
-            };
-            map_marker(&mut v, fit.point(p), size, color);
-        }
+        map_marker(&mut v, fit.point(map.player), 0.013, [1.0, 0.25, 0.12]);
         if map.track.city().is_some() {
             text(&mut v, "N", [0.94, 0.86], 0.0035, white);
-        }
-        if !overlay.is_empty() {
-            quad(&mut v, [-0.65, -0.62], [0.65, 0.57], [0.025, 0.05, 0.075]);
-            quad(&mut v, [-0.65, 0.54], [0.65, 0.57], cyan);
-            for (i, entry) in overlay.iter().enumerate() {
-                let size = if i == 0 { 0.007 } else { 0.005 };
-                let width = entry.len() as f32 * 6.0 * size;
-                text(
-                    &mut v,
-                    entry,
-                    [-width * 0.5, 0.43 - i as f32 * 0.13],
-                    size,
-                    if i == 0 { cyan } else { white },
-                );
-            }
         }
         if let Some(pause) = pause {
             append_pause(&mut v, pause);
@@ -294,7 +254,7 @@ impl Hud {
         text(&mut v, "LOCATION", [-0.92, 0.71], 0.0038, cyan);
         let details = [
             "SCENIC COASTAL ROAD / 2.3 KM",
-            "SHORT CIRCUIT / FREE DRIVE + RACE",
+            "SHORT CIRCUIT / FREE DRIVE",
             "NORTH + SOUTH / 289 KM2 / OFFLINE",
         ];
         for (i, &id) in available_locations(menu.city_enabled).iter().enumerate() {
@@ -329,39 +289,8 @@ impl Hud {
                 if selected { cyan } else { white },
             );
         }
-        menu_button(&mut v, ACTIVITY_BOX, true, menu.focus == 2);
-        text(
-            &mut v,
-            if menu.race {
-                "ACTIVITY: RACE"
-            } else {
-                "ACTIVITY: FREE DRIVE"
-            },
-            [-0.89, -0.385],
-            0.0038,
-            white,
-        );
-        if menu.location != TrackId::Compact {
-            text(
-                &mut v,
-                "RACING AVAILABLE ON COASTAL LOOP",
-                [-0.90, -0.495],
-                0.0027,
-                muted,
-            );
-        }
-        menu_button(&mut v, START_BOX, true, menu.focus == 3);
-        text(
-            &mut v,
-            if menu.race {
-                "START RACE"
-            } else {
-                "START DRIVING"
-            },
-            [-0.87, -0.585],
-            0.005,
-            cyan,
-        );
+        menu_button(&mut v, START_BOX, true, menu.focus == 2);
+        text(&mut v, "START DRIVING", [-0.87, -0.585], 0.005, cyan);
         quad(&mut v, [0.13, 0.58], [0.98, 0.94], [0.025, 0.05, 0.075]);
         quad(&mut v, [0.13, -0.835], [0.98, -0.56], [0.025, 0.05, 0.075]);
         text(&mut v, "CAR PREVIEW", [0.17, 0.86], 0.0035, muted);
@@ -909,7 +838,7 @@ mod tests {
                 Some(MenuAction::Car(car))
             );
         }
-        assert_eq!(menu_hit_test(-0.5, -0.40), Some(MenuAction::Activity));
+        assert_eq!(menu_hit_test(-0.5, -0.40), None);
         assert_eq!(menu_hit_test(-0.5, -0.61), Some(MenuAction::Start));
         assert_eq!(menu_hit_test(0.5, 0.2), None);
         assert_eq!(menu_hit_test(-0.5, -0.8), None);

@@ -23,6 +23,8 @@ cargo build --release
 ./target/release/nfs5like
 ```
 
+Choose a location and car, then start free driving.
+
 Press **Tab** while driving to cycle **Close → Wide → Bonnet** camera views.
 
 Running without arguments opens the built-in track menu without loading city
@@ -185,7 +187,7 @@ detail around the Engomi starting area. Low curbs, pavements and parking areas
 are drivable; buildings remain solid.
 
 Bridges, tunnels and some complex buildings are omitted. Some roads remain
-disconnected. One-way rules are not enforced, and city traffic AI is not yet available.
+disconnected. One-way rules are not enforced, and city traffic is not simulated.
 
 The location package contains the aerial imagery; set
 `NFS_NO_AERIAL=1` to disable it. The city-wide preparation command below extends

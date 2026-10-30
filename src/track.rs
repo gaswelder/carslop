@@ -14,7 +14,7 @@ pub enum TrackId {
 
 pub const ALL: [TrackId; 3] = [TrackId::Compact, TrackId::Scenic, TrackId::Engomi];
 
-// Preserve the original race route and its sampling exactly.
+// Preserve the original compact route and its sampling exactly.
 pub const ROAD_POINTS: [[f32; 3]; 12] = [
     [0.0, 0.0, -35.0],
     [14.0, 1.0, -30.0],
@@ -404,6 +404,12 @@ pub fn project(position: [f32; 3]) -> RoadSample {
     TrackId::Compact.track().project(position)
 }
 
+/// Normalize a heading difference to [-PI, PI).
+#[cfg(test)]
+pub fn angle(value: f32) -> f32 {
+    (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,7 +449,7 @@ mod tests {
             let heading = scenic.tangents[i][0].atan2(scenic.tangents[i][1]);
             let j = (i + 1) % scenic.points.len();
             let next = scenic.tangents[j][0].atan2(scenic.tangents[j][1]);
-            assert!(crate::ai::angle(next - heading).abs() / scenic.lengths[i] < 0.06);
+            assert!(crate::track::angle(next - heading).abs() / scenic.lengths[i] < 0.06);
         }
     }
 

@@ -1,4 +1,4 @@
-//! Render-only chase-camera tuning. Never writes vehicle or race state.
+//! Render-only chase-camera tuning. Never writes vehicle state.
 
 use crate::{track, vehicle::Vehicle};
 use std::{

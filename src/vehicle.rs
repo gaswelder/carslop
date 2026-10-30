@@ -102,7 +102,8 @@ impl Vehicle {
         self.manual = manual;
     }
 
-    /// Reference speed for AI planning; road load and gearing determine actual speed.
+    /// Reference speed for physics checks; road load and gearing determine actual speed.
+    #[cfg(test)]
     pub fn speed_cap(&self) -> f32 {
         let spec = self.model.spec();
         spec.top_speed
@@ -583,6 +584,7 @@ impl Vehicle {
         }
     }
 
+    #[cfg(test)]
     pub fn collide(&mut self, other: &mut Vehicle) -> f32 {
         debug_assert!(
             std::ptr::eq(self.track, other.track),
@@ -963,7 +965,9 @@ mod tests {
                     "a brief tap must not snap the body into a full lean"
                 );
                 steering_run(&mut car, speed, 0.0, 0.4, 120.0);
-                let tap = crate::ai::angle(car.heading - heading).abs().to_degrees();
+                let tap = crate::track::angle(car.heading - heading)
+                    .abs()
+                    .to_degrees();
                 println!("{model:?} {speed} m/s: 100 ms tap {tap:.2} degrees");
                 assert!(
                     tap > 0.01 && tap < 3.0,
@@ -976,7 +980,9 @@ mod tests {
                 assert!(car.yaw_rate.abs() < 0.2, "residual yaw {}", car.yaw_rate);
                 let mut held = route_car(track::TrackId::Scenic, model);
                 steering_run(&mut held, speed, 1.0, 1.0, 120.0);
-                let turn = crate::ai::angle(held.heading - heading).abs().to_degrees();
+                let turn = crate::track::angle(held.heading - heading)
+                    .abs()
+                    .to_degrees();
                 assert!(
                     turn > tap * 3.0,
                     "holding must produce a stronger turn than tapping"
@@ -1024,7 +1030,7 @@ mod tests {
                 {
                     steering_run(&mut car, 25.0, input, seconds, hz);
                 }
-                let error = crate::ai::angle(car.heading - reference.heading)
+                let error = crate::track::angle(car.heading - reference.heading)
                     .abs()
                     .to_degrees();
                 assert!(
@@ -1906,8 +1912,8 @@ mod tests {
         };
         forward.update(Duration::from_millis(16), controls);
         reverse.update(Duration::from_millis(16), controls);
-        assert!(crate::ai::angle(forward.heading - heading) < 0.0);
-        assert!(crate::ai::angle(reverse.heading - heading) > 0.0);
+        assert!(crate::track::angle(forward.heading - heading) < 0.0);
+        assert!(crate::track::angle(reverse.heading - heading) > 0.0);
         assert!(forward.front_wheel_angle() < 0.0 && reverse.front_wheel_angle() < 0.0);
         assert!(forward.wheel_phase[1] > 1.0 && reverse.wheel_phase[1] < 1.0);
     }

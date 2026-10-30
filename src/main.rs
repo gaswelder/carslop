@@ -1,5 +1,4 @@
 mod aerial;
-mod ai;
 mod ambience;
 mod audio;
 mod camera;
@@ -21,7 +20,6 @@ mod location;
 mod package;
 mod particles;
 mod prefetch;
-mod race;
 mod scene;
 mod scene_archive;
 mod shadows;
@@ -35,7 +33,6 @@ mod vehicle;
 
 use cars::CarModel;
 use log::{info, warn};
-use race::{format_time, RaceProgress};
 use sdl3::{
     event::{Event, WindowEvent},
     keyboard::Keycode,
@@ -56,33 +53,11 @@ const WINDOW_HEIGHT: i32 = 720;
 enum GameState {
     Menu,
     Driving,
-    Finishing,
     Paused,
-    Finished,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DriveMode {
-    FreeDrive,
-    Race,
-}
-
-impl DriveMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::FreeDrive => "FREE DRIVE",
-            Self::Race => "RACE",
-        }
-    }
 }
 
 struct Session {
-    mode: DriveMode,
     vehicle: Vehicle,
-    rival: Vehicle,
-    race: RaceProgress,
-    rival_race: RaceProgress,
-    countdown: f32,
     state: GameState,
     recoveries: u32,
     skids: feedback::SkidMarks,
@@ -92,48 +67,20 @@ struct Session {
 }
 
 impl Session {
-    fn new(model: CarModel, mode: DriveMode) -> Self {
-        Self::on_track(
-            model,
-            mode,
-            if mode == DriveMode::Race {
-                TrackId::Compact
-            } else {
-                TrackId::Scenic
-            },
-        )
+    fn new(model: CarModel) -> Self {
+        Self::on_track(model, TrackId::Scenic)
     }
 
-    fn on_track(model: CarModel, mode: DriveMode, id: TrackId) -> Self {
-        // RaceProgress deliberately retains its original compact-route rules.
-        let track = if mode == DriveMode::Race {
-            TrackId::Compact
-        } else {
-            id
-        }
-        .track();
+    fn on_track(model: CarModel, id: TrackId) -> Self {
+        let track = id.track();
         let start = track.spawn();
         Self {
-            mode,
             vehicle: {
-                let mut vehicle = Vehicle::on_track(
-                    start.lane_position(if mode == DriveMode::Race { -1.45 } else { 0.0 }),
-                    start.heading(),
-                    model,
-                    track,
-                );
+                let mut vehicle =
+                    Vehicle::on_track(start.lane_position(0.0), start.heading(), model, track);
                 vehicle.manual = true;
                 vehicle
             },
-            rival: Vehicle::on_track(
-                start.lane_position(1.45),
-                start.heading(),
-                CarModel::Roadster,
-                track,
-            ),
-            race: RaceProgress::new(),
-            rival_race: RaceProgress::new(),
-            countdown: if mode == DriveMode::Race { 3.0 } else { 0.0 },
             state: GameState::Driving,
             recoveries: 0,
             skids: feedback::SkidMarks::default(),
@@ -148,27 +95,19 @@ impl Session {
     }
 
     fn restart(&mut self) {
-        *self = Self::on_track(self.vehicle.model, self.mode, self.track().id);
+        *self = Self::on_track(self.vehicle.model, self.track().id);
     }
 
     fn select_car(&mut self, model: CarModel) {
         if self.state != GameState::Menu {
             return;
         }
-        *self = Self::on_track(model, self.mode, self.track().id);
-        self.state = GameState::Menu;
-    }
-
-    fn select_mode(&mut self, mode: DriveMode) {
-        if self.state != GameState::Menu {
-            return;
-        }
-        *self = Self::new(self.vehicle.model, mode);
+        *self = Self::on_track(model, self.track().id);
         self.state = GameState::Menu;
     }
 
     fn toggle_track(&mut self) {
-        if self.state != GameState::Menu || self.mode != DriveMode::FreeDrive {
+        if self.state != GameState::Menu {
             return;
         }
         let id = match self.track().id {
@@ -176,7 +115,7 @@ impl Session {
             TrackId::Scenic => TrackId::Compact,
             TrackId::Engomi => TrackId::Scenic,
         };
-        *self = Self::on_track(self.vehicle.model, self.mode, id);
+        *self = Self::on_track(self.vehicle.model, id);
         self.state = GameState::Menu;
     }
 
@@ -184,12 +123,7 @@ impl Session {
         if self.state != GameState::Menu {
             return;
         }
-        let mode = if id == TrackId::Compact {
-            self.mode
-        } else {
-            DriveMode::FreeDrive
-        };
-        *self = Self::on_track(self.vehicle.model, mode, id);
+        *self = Self::on_track(self.vehicle.model, id);
         self.state = GameState::Menu;
     }
     fn cycle_location(&mut self, direction: i32, city_enabled: bool) {
@@ -206,117 +140,31 @@ impl Session {
             .rem_euclid(cars::ALL.len() as i32) as usize;
         self.select_car(cars::ALL[next]);
     }
-    fn toggle_activity(&mut self) {
-        if self.state != GameState::Menu || self.track().id != TrackId::Compact {
-            return;
-        }
-        let mode = if self.mode == DriveMode::FreeDrive {
-            DriveMode::Race
-        } else {
-            DriveMode::FreeDrive
-        };
-        *self = Self::on_track(self.vehicle.model, mode, TrackId::Compact);
-        self.state = GameState::Menu;
-    }
-
-    fn has_rival(&self) -> bool {
-        self.mode == DriveMode::Race
-    }
-
     fn update_feedback(&mut self) {
         self.skids.advance(TICK);
         self.skids.record(0, &self.vehicle);
         self.particles.advance(TICK);
         self.particles.record(0, &self.vehicle, TICK);
-        if self.has_rival() {
-            self.skids.record(1, &self.rival);
-            self.particles.record(1, &self.rival, TICK);
-        }
     }
 
     fn tick(&mut self, controls: Controls) {
-        if !matches!(self.state, GameState::Driving | GameState::Finishing) {
-            return;
-        }
-        if self.countdown > 0.0 {
-            self.countdown = (self.countdown - TICK.as_secs_f32()).max(0.0);
+        if self.state != GameState::Driving {
             return;
         }
         self.signal_time =
             (self.signal_time + TICK.as_secs_f32()).rem_euclid(traffic::CYCLE_SECONDS);
-        if self.mode == DriveMode::FreeDrive {
-            self.impact = self.impact.max(self.vehicle.update(TICK, controls));
-            self.update_feedback();
-            return;
-        }
-        let previous = self.vehicle.position;
-        let rival_previous = self.rival.position;
-        let player_controls = if self.race.finish_time.is_some() {
-            Controls {
-                brake: 1.0,
-                ..Controls::default()
-            }
-        } else {
-            controls
-        };
-        self.impact = self.impact.max(self.vehicle.update(TICK, player_controls));
-        let rival_controls = if self.rival_race.finish_time.is_some() {
-            Controls {
-                brake: 1.0,
-                ..Controls::default()
-            }
-        } else {
-            ai::controls(&self.rival, Some(&self.vehicle))
-        };
-        self.rival.update(TICK, rival_controls);
-        self.impact = self.impact.max(self.vehicle.collide(&mut self.rival));
+        self.impact = self.impact.max(self.vehicle.update(TICK, controls));
         self.update_feedback();
-        self.race.update(previous, self.vehicle.position, TICK);
-        self.rival_race
-            .update(rival_previous, self.rival.position, TICK);
-        if let Some(player_time) = self.race.finish_time {
-            // A player who crossed first can still lose on recovery penalties.
-            // Let the rival finish, or exhaust that adjusted time, before
-            // freezing the simulation and awarding a definitive result.
-            self.state = if self.rival_race.finish_time.is_some()
-                || self.rival_race.elapsed >= player_time
-            {
-                GameState::Finished
-            } else {
-                GameState::Finishing
-            };
-        }
-    }
-
-    fn player_leads(&self) -> bool {
-        match (self.race.finish_time, self.rival_race.finish_time) {
-            (Some(player), Some(rival)) => player <= rival,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            _ => {
-                self.race.score(self.vehicle.position) >= self.rival_race.score(self.rival.position)
-            }
-        }
     }
 
     fn recover(&mut self) -> bool {
-        if self.state != GameState::Driving || self.countdown > 0.0 {
+        if self.state != GameState::Driving {
             return false;
         }
-        if self.mode == DriveMode::FreeDrive {
-            let road = self.track().recovery(self.vehicle.position);
-            let backwards = (self.vehicle.heading - road.heading()).cos() < 0.0;
-            let heading = road.heading() + if backwards { std::f32::consts::PI } else { 0.0 };
-            self.vehicle.reset(road.lane_position(0.0), heading);
-        } else {
-            // Race recovery remains behind the next gate and costs five seconds.
-            let distance =
-                self.race.next_gate as f32 * self.track().length() / race::GATES as f32 + 1.0;
-            let point = self.track().at_distance(distance);
-            self.vehicle
-                .reset(point.lane_position(-1.45), point.heading());
-            self.race.elapsed += 5.0;
-        }
+        let road = self.track().recovery(self.vehicle.position);
+        let backwards = (self.vehicle.heading - road.heading()).cos() < 0.0;
+        let heading = road.heading() + if backwards { std::f32::consts::PI } else { 0.0 };
+        self.vehicle.reset(road.lane_position(0.0), heading);
         self.skids.break_trail(0);
         self.particles.reset_car(0);
         self.impact = 0.0;
@@ -333,59 +181,23 @@ impl Session {
             view
         );
         let status = format!("AUDIO {audio}");
-        let mut lines = if self.mode == DriveMode::FreeDrive {
-            vec![
-                format!("{} FREE DRIVE", car.model.spec().name),
-                format!(
-                    "{} {:.2} KM{}",
-                    self.track().name,
-                    self.track().length() / 1000.0,
-                    if self.track().city().is_some() {
-                        " ROADS"
-                    } else {
-                        ""
-                    }
-                ),
-                "NO TIMER / NO RIVAL".into(),
-                "A SHIFT UP / Z SHIFT DOWN".into(),
-                "C NEARBY RECOVERY".into(),
-                speed,
-                status,
-            ]
-        } else {
-            vec![
-                format!(
-                    "{}   POS {}/2",
-                    car.model.spec().name,
-                    if self.player_leads() { 1 } else { 2 }
-                ),
-                format!(
-                    "LAP {}/{}   GATE {}/{}",
-                    (self.race.completed_laps + 1).min(race::LAPS),
-                    race::LAPS,
-                    self.race.next_gate + 1,
-                    race::GATES
-                ),
-                format!("TIME {}", format_time(self.race.elapsed)),
-                format!(
-                    "LAP  {}",
-                    format_time(self.race.elapsed - self.race.lap_started)
-                ),
-                format!(
-                    "BEST {}",
-                    self.race
-                        .best_lap()
-                        .map(format_time)
-                        .unwrap_or_else(|| "--:--.--".into())
-                ),
-                speed,
-                status,
-            ]
-        };
-        if self.mode == DriveMode::Race && self.race.finish_time.is_some() {
-            lines.push("RESULT: WAITING FOR RIVAL".into());
-        }
-        lines
+        vec![
+            format!("{} FREE DRIVE", car.model.spec().name),
+            format!(
+                "{} {:.2} KM{}",
+                self.track().name,
+                self.track().length() / 1000.0,
+                if self.track().city().is_some() {
+                    " ROADS"
+                } else {
+                    ""
+                }
+            ),
+            "A SHIFT UP / Z SHIFT DOWN".into(),
+            "C NEARBY RECOVERY".into(),
+            speed,
+            status,
+        ]
     }
 }
 
@@ -453,9 +265,9 @@ impl App {
         let loaded =
             !city || loading::prepare(TrackId::Engomi, &mut window, &mut events, &sdl_context);
         let mut session = if city && loaded {
-            Session::on_track(CarModel::Roadster, DriveMode::FreeDrive, TrackId::Engomi)
+            Session::on_track(CarModel::Roadster, TrackId::Engomi)
         } else {
-            Session::new(CarModel::Roadster, DriveMode::FreeDrive)
+            Session::new(CarModel::Roadster)
         };
         session.state = GameState::Menu;
         let _ = window.set_title(session.track().name);
@@ -580,10 +392,7 @@ impl App {
                         ..
                     } => {
                         self.keys.clear();
-                        if matches!(
-                            self.session.state,
-                            GameState::Driving | GameState::Finishing
-                        ) {
+                        if matches!(self.session.state, GameState::Driving) {
                             self.session.state = GameState::Paused;
                         }
                     }
@@ -613,10 +422,7 @@ impl App {
                     car,
                     self.chase.pose(),
                     self.keys.contains(&Keycode::Up),
-                    matches!(
-                        self.session.state,
-                        GameState::Driving | GameState::Finishing
-                    ),
+                    matches!(self.session.state, GameState::Driving),
                     impact,
                 ) {
                     warn!("Audio disabled: {error}");
@@ -646,10 +452,6 @@ impl App {
             hud::MenuAction::Car(car) => {
                 self.menu_focus = 1;
                 self.session.select_car(car);
-            }
-            hud::MenuAction::Activity => {
-                self.menu_focus = 2;
-                self.session.toggle_activity();
             }
             hud::MenuAction::Start => {
                 self.restart();
@@ -687,8 +489,8 @@ impl App {
         self.keys.insert(key);
         if self.session.state == GameState::Menu {
             match key {
-                Keycode::Up => self.menu_focus = (self.menu_focus + 3) % 4,
-                Keycode::Down | Keycode::Tab => self.menu_focus = (self.menu_focus + 1) % 4,
+                Keycode::Up => self.menu_focus = (self.menu_focus + 2) % 3,
+                Keycode::Down | Keycode::Tab => self.menu_focus = (self.menu_focus + 1) % 3,
                 Keycode::Left | Keycode::Right | Keycode::Space => {
                     let direction = if key == Keycode::Left { -1 } else { 1 };
                     match self.menu_focus {
@@ -707,7 +509,6 @@ impl App {
                             self.session.cycle_location(direction, self.city_enabled);
                         }
                         1 => self.session.cycle_car(direction),
-                        2 => self.session.toggle_activity(),
                         _ if key == Keycode::Space => {
                             self.restart();
                             return;
@@ -731,23 +532,13 @@ impl App {
         match key {
             Keycode::Escape => {
                 self.session.state = match self.session.state {
-                    GameState::Driving | GameState::Finishing => GameState::Paused,
-                    GameState::Paused => {
-                        if self.session.race.finish_time.is_some() {
-                            GameState::Finishing
-                        } else {
-                            GameState::Driving
-                        }
-                    }
+                    GameState::Driving => GameState::Paused,
+                    GameState::Paused => GameState::Driving,
                     other => other,
                 };
                 self.keys.clear();
             }
-            Keycode::Return
-                if matches!(self.session.state, GameState::Menu | GameState::Finished) =>
-            {
-                self.restart()
-            }
+            Keycode::Return if self.session.state == GameState::Menu => self.restart(),
             Keycode::M => {
                 self.menu_focus = 0;
                 self.session.state = GameState::Menu;
@@ -756,7 +547,7 @@ impl App {
             Keycode::R => self.restart(),
             Keycode::C => {
                 let paused = self.session.state == GameState::Paused;
-                if paused && self.session.race.finish_time.is_none() {
+                if paused {
                     self.session.state = GameState::Driving;
                 }
                 let recovered = self.session.recover();
@@ -779,43 +570,21 @@ impl App {
                 self.session.select_car(model);
                 self.snap_camera();
             }
-            Keycode::F4 | Keycode::F5 if self.session.state == GameState::Menu => {
-                self.session.select_mode(if key == Keycode::F4 {
-                    DriveMode::FreeDrive
-                } else {
-                    DriveMode::Race
-                });
-                self.ensure_mesh();
-                self.snap_camera();
-            }
-            Keycode::F6
-                if self.session.state == GameState::Menu
-                    && self.session.mode == DriveMode::FreeDrive =>
-            {
+            Keycode::F6 if self.session.state == GameState::Menu => {
                 self.session.toggle_track();
                 self.ensure_mesh();
                 self.snap_camera();
             }
-            Keycode::F7
-                if self.city_enabled
-                    && self.session.state == GameState::Menu
-                    && self.session.mode == DriveMode::FreeDrive =>
-            {
+            Keycode::F7 if self.city_enabled && self.session.state == GameState::Menu => {
                 if !self.prepare_location(TrackId::Engomi) {
                     return;
                 }
-                self.session = Session::on_track(
-                    self.session.vehicle.model,
-                    DriveMode::FreeDrive,
-                    TrackId::Engomi,
-                );
+                self.session = Session::on_track(self.session.vehicle.model, TrackId::Engomi);
                 self.session.state = GameState::Menu;
                 self.ensure_mesh();
                 self.snap_camera();
             }
-            Keycode::A | Keycode::Z
-                if self.session.state == GameState::Driving && self.session.countdown <= 0.0 =>
-            {
+            Keycode::A | Keycode::Z if self.session.state == GameState::Driving => {
                 self.session.vehicle.shift(key == Keycode::A);
             }
             Keycode::V => {
@@ -824,10 +593,7 @@ impl App {
                 }
             }
             Keycode::Tab
-                if matches!(
-                    self.session.state,
-                    GameState::Driving | GameState::Finishing | GameState::Paused
-                ) =>
+                if matches!(self.session.state, GameState::Driving | GameState::Paused) =>
             {
                 self.chase.toggle_view();
                 if self.session.state == GameState::Paused {
@@ -843,10 +609,7 @@ impl App {
         gl::clear_screen();
         gl::set_signal_time(self.scene_program, self.session.signal_time);
         let car = &self.session.vehicle;
-        if matches!(
-            self.session.state,
-            GameState::Driving | GameState::Finishing
-        ) {
+        if matches!(self.session.state, GameState::Driving) {
             self.chase.update(car, frame_time);
         }
         let aspect = WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32;
@@ -863,23 +626,15 @@ impl App {
         } else {
             gl::chase_camera(aspect, self.chase.pose())
         };
-        let vehicles = [
-            (&self.session.vehicle, [1.0, 0.18, 0.08]),
-            (&self.session.rival, [0.12, 0.65, 1.0]),
-        ];
-        let visible_count = if in_menu || !self.session.has_rival() {
-            1
-        } else {
-            2
-        };
+        let vehicles = [(&self.session.vehicle, [1.0, 0.18, 0.08])];
         let contacts = vehicles.map(|(car, _)| shadows::ContactShadow::new(car));
         self.mesh()
-            .draw_ground(self.scene_program, &camera, &contacts[..visible_count]);
+            .draw_ground(self.scene_program, &camera, &contacts);
         if !in_menu {
             self.skid_renderer
                 .draw(self.scene_program, &camera, &self.session.skids);
         }
-        for &(vehicle, tint) in &vehicles[..visible_count] {
+        for &(vehicle, tint) in &vehicles {
             let model = gl::vehicle_body_matrix(vehicle);
             self.mesh()
                 .draw(self.scene_program, &camera, &model, tint, vehicle);
@@ -902,40 +657,12 @@ impl App {
         } else {
             Vec::new()
         };
-        let overlay = match s.state {
-            GameState::Menu => Vec::new(),
-            GameState::Paused | GameState::Finishing => Vec::new(),
-            GameState::Finished => {
-                let mut entries = vec![
-                    if s.player_leads() {
-                        "YOU WIN".into()
-                    } else {
-                        "SECOND PLACE".into()
-                    },
-                    format!("TOTAL {}", format_time(s.race.elapsed)),
-                    format!(
-                        "BEST LAP {}",
-                        s.race.best_lap().map(format_time).unwrap_or_default()
-                    ),
-                ];
-                for (i, time) in s.race.lap_times.iter().enumerate() {
-                    entries.push(format!("LAP {}  {}", i + 1, format_time(*time)));
-                }
-                entries.push("ENTER TO RACE AGAIN".into());
-                entries
-            }
-            GameState::Driving if s.countdown > 0.0 => {
-                vec!["GET READY".into(), format!("{}", s.countdown.ceil() as u32)]
-            }
-            _ => Vec::new(),
-        };
         if in_menu {
             self.hud.draw_menu(
                 self.program,
                 hud::MainMenu {
                     location: s.track().id,
                     car: s.vehicle.model,
-                    race: s.mode == DriveMode::Race,
                     focus: self.menu_focus,
                     city_enabled: self.city_enabled,
                 },
@@ -946,8 +673,6 @@ impl App {
                 hud::Map {
                     track: s.track(),
                     player: car.position,
-                    rival: s.has_rival().then_some(s.rival.position),
-                    gate: s.has_rival().then(|| s.race.gate().point),
                 },
                 hud::Gauges {
                     rpm: car.engine_rpm,
@@ -962,7 +687,6 @@ impl App {
                     audio: audio_status,
                     load: car.engine_load,
                 }),
-                &overlay,
             );
         }
         #[cfg(test)]
@@ -974,7 +698,7 @@ impl App {
             "{} | {} | {}",
             s.track().name,
             profile,
-            s.mode.label()
+            "FREE DRIVE"
         ));
     }
 }
@@ -1362,8 +1086,7 @@ mod tests {
         app.key_down(Keycode::F7);
         assert!(std::ptr::eq(app.mesh(), mesh));
         app.key_down(Keycode::F5);
-        app.key_down(Keycode::F7);
-        assert_eq!(app.session.track().id, TrackId::Compact);
+        assert_eq!(app.session.track().id, TrackId::Engomi);
     }
 
     #[test]
@@ -1494,47 +1217,6 @@ mod tests {
             &mut app.events,
             &app.sdl_context
         ));
-    }
-
-    #[test]
-    #[ignore = "requires SDL3/OpenGL; verifies opening menu mouse and keyboard selection"]
-    fn main_menu_renderer_smoke() {
-        let directory = std::path::PathBuf::from(
-            std::env::var("NFS_MENU_PREVIEW_DIR")
-                .unwrap_or_else(|_| "/tmp/main-menu-preview".into()),
-        );
-        std::fs::create_dir_all(&directory).unwrap();
-        let mut app = App::new();
-        assert!(app.session.state == GameState::Menu);
-        app.capture_path = Some(directory.join("startup.ppm"));
-        app.render(Duration::ZERO);
-        app.menu_click(320.0, 338.0);
-        app.menu_click(550.0, 437.0);
-        assert_eq!(app.session.track().id, TrackId::Engomi);
-        assert_eq!(app.session.vehicle.model, CarModel::Club);
-        assert!(app.session.state == GameState::Menu);
-        app.capture_path = Some(directory.join("engomi-club.ppm"));
-        app.render(Duration::ZERO);
-        app.menu_click(350.0, 580.0);
-        assert!(app.session.state == GameState::Driving);
-        assert_eq!(app.session.track().id, TrackId::Engomi);
-        app.capture_path = None;
-        app.key_down(Keycode::M);
-        app.key_down(Keycode::Left);
-        assert_eq!(app.session.track().id, TrackId::Compact);
-        app.key_down(Keycode::Down);
-        app.key_down(Keycode::Right);
-        assert_eq!(app.session.vehicle.model, CarModel::Roadster);
-        app.key_down(Keycode::Down);
-        app.key_down(Keycode::Right);
-        assert_eq!(app.session.mode, DriveMode::Race);
-        app.capture_path = Some(directory.join("loop-race.ppm"));
-        app.render(Duration::ZERO);
-        app.key_down(Keycode::Return);
-        assert!(app.session.state == GameState::Driving);
-        assert_eq!(app.session.track().id, TrackId::Compact);
-        assert_eq!(app.session.countdown, 3.0);
-        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
 
     /// Export repeatable front/rear/side views for reviewing silhouette and shading.
@@ -1807,19 +1489,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires SDL3/OpenGL; run through Check race build and renderer"]
+    #[ignore = "requires SDL/OpenGL"]
     fn feedback_renderer_smoke() {
-        let mut app = App::new();
-        assert_eq!(app.session.mode, DriveMode::FreeDrive);
-        assert_eq!(app.session.track().id, TrackId::Scenic);
-        assert!(app.meshes[TrackId::Scenic.index()].is_some());
-        assert!(app.meshes[TrackId::Compact.index()].is_none());
+        let mut app = App::with_location(false);
+        // Scenic fixtures are sampled from the route, never compact world coordinates.
         for model in cars::ALL {
-            app.session = Session::new(model, DriveMode::Race);
+            app.session = Session::on_track(model, TrackId::Scenic);
             app.ensure_mesh();
-            app.session.countdown = 0.0;
             for distance in [50.0, 50.6] {
-                let road = track::at_distance(distance);
+                let road = app.session.track().at_distance(distance);
                 app.session
                     .vehicle
                     .reset(road.lane_position(0.0), road.heading());
@@ -1837,140 +1515,11 @@ mod tests {
                     ..Controls::default()
                 },
             );
-            let road = track::at_distance(50.6);
-            let mut edge = Vehicle::new(road.lane_position(2.15), road.heading(), model);
-            edge.velocity = road.tangent.map(|v| v * 8.0);
             for _ in 0..20 {
                 app.session.particles.advance(TICK);
                 app.session.particles.record(0, &app.session.vehicle, TICK);
-                app.session.particles.record(1, &edge, TICK);
             }
-            app.snap_camera();
-            assert_contact_pixel_readback(&app);
             assert_particle_pixel_readback(&app);
-            for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                while app.chase.view() != view {
-                    app.key_down(Keycode::Tab);
-                }
-                assert_eq!(app.chase.view(), view);
-                for _ in 0..120 {
-                    app.chase.update(&app.session.vehicle, TICK);
-                }
-                app.render(TICK);
-                assert_eq!(contact_count(app.scene_program), 2);
-                assert_eq!(
-                    unsafe { ::gl::GetError() },
-                    ::gl::NO_ERROR,
-                    "GL errors rendering {model:?} in {view:?}"
-                );
-            }
-            app.session.state = GameState::Paused;
-            let frozen = app.chase.pose();
-            app.render(TICK);
-            assert_eq!(app.chase.view(), camera::FollowView::Close);
-            assert_eq!(app.chase.pose(), frozen);
-            app.restart();
-            assert_eq!(app.chase.view(), camera::FollowView::Close);
-            app.session.state = GameState::Menu;
-            app.key_down(Keycode::Tab);
-            assert_eq!(app.chase.view(), camera::FollowView::Close);
-            app.render(TICK);
-            assert_eq!(
-                contact_count(app.scene_program),
-                1,
-                "hidden rival must not cast a garage shadow"
-            );
-            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-            if let Some(audio) = &mut app.audio {
-                audio.reset_feedback();
-                audio
-                    .update(&app.session.vehicle, app.chase.pose(), true, true, 8.0)
-                    .unwrap();
-                audio.muted = true;
-                audio
-                    .update(&app.session.vehicle, app.chase.pose(), false, false, 0.0)
-                    .unwrap();
-                audio.muted = false;
-            }
-            app.key_down(Keycode::F4);
-            assert_eq!(app.session.mode, DriveMode::FreeDrive);
-            assert_eq!(app.session.track().id, TrackId::Scenic);
-            let scenic_mesh = app.mesh() as *const gl::Mesh;
-            app.key_down(Keycode::F6);
-            assert_eq!(app.session.track().id, TrackId::Compact);
-            let compact_mesh = app.mesh() as *const gl::Mesh;
-            app.key_down(Keycode::F6);
-            assert!(
-                std::ptr::eq(app.mesh(), scenic_mesh),
-                "route switch must reuse Scenic cache"
-            );
-            app.key_down(Keycode::F6);
-            assert!(
-                std::ptr::eq(app.mesh(), compact_mesh),
-                "route switch must reuse Compact cache"
-            );
-            app.key_down(Keycode::Return);
-            app.key_down(Keycode::F6);
-            assert_eq!(
-                app.session.track().id,
-                TrackId::Compact,
-                "F6 is garage-only"
-            );
-            assert!(
-                std::ptr::eq(app.mesh(), compact_mesh),
-                "restart must reuse mesh"
-            );
-            assert_eq!(app.session.countdown, 0.0);
-            app.key_down(Keycode::Z);
-            assert_eq!(app.session.vehicle.gear_label(), "N");
-            app.key_down(Keycode::Z);
-            assert_eq!(app.session.vehicle.gear_label(), "R");
-            for _ in 0..30 {
-                app.session.tick(Controls {
-                    throttle: 1.0,
-                    ..Controls::default()
-                });
-            }
-            assert!(app.session.vehicle.speed < 0.0);
-            for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                while app.chase.view() != view {
-                    app.key_down(Keycode::Tab);
-                }
-                app.render(TICK);
-                assert_eq!(
-                    contact_count(app.scene_program),
-                    1,
-                    "Free Drive has no rival shadow"
-                );
-                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-            }
-            app.key_down(Keycode::R);
-            assert_eq!(app.session.mode, DriveMode::FreeDrive);
-            assert_eq!(app.session.vehicle.gear_label(), "1");
-            assert_eq!(app.session.countdown, 0.0);
-            app.key_down(Keycode::M);
-            app.key_down(Keycode::F5);
-            app.key_down(Keycode::F6);
-            assert_eq!(
-                app.session.track().id,
-                TrackId::Compact,
-                "Race ignores F6 even in garage"
-            );
-            app.key_down(Keycode::Return);
-            assert_eq!(app.session.mode, DriveMode::Race);
-            assert_eq!(app.session.countdown, 3.0);
-            app.key_down(Keycode::Z);
-            assert_eq!(
-                app.session.vehicle.direction,
-                vehicle::Direction::Drive,
-                "no shifting during countdown"
-            );
-        }
-
-        // Scenic fixtures are sampled from the route, never compact world coordinates.
-        for model in cars::ALL {
-            app.session = Session::on_track(model, DriveMode::FreeDrive, TrackId::Scenic);
-            app.ensure_mesh();
             for fraction in [0.0, 0.25, 0.5, 0.75] {
                 let road = app
                     .session
@@ -2007,7 +1556,7 @@ mod tests {
                 assert_eq!(
                     contact_count(app.scene_program),
                     1,
-                    "Scenic garage hides rival"
+                    "Scenic garage has one shadow"
                 );
                 assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
                 app.session.state = GameState::Driving;
@@ -2016,135 +1565,9 @@ mod tests {
     }
 
     #[test]
-    fn route_defaults_and_race_constructor_guard_share_one_track_for_both_cars() {
-        for model in cars::ALL {
-            let free = Session::new(model, DriveMode::FreeDrive);
-            assert_eq!(free.track().id, TrackId::Scenic);
-            let race = Session::new(model, DriveMode::Race);
-            assert_eq!(race.track().id, TrackId::Compact);
-            for id in track::ALL {
-                for mode in [DriveMode::FreeDrive, DriveMode::Race] {
-                    let s = Session::on_track(model, mode, id);
-                    let expected = if mode == DriveMode::Race {
-                        TrackId::Compact
-                    } else {
-                        id
-                    }
-                    .track();
-                    assert!(std::ptr::eq(s.track(), expected));
-                    assert!(std::ptr::eq(s.vehicle.track, s.rival.track));
-                    let spawn = expected.spawn();
-                    assert_eq!(
-                        s.vehicle.position,
-                        spawn.lane_position(if mode == DriveMode::Race { -1.45 } else { 0.0 })
-                    );
-                    assert_eq!(s.rival.position, spawn.lane_position(1.45));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn scenic_reference_drive_completes_a_full_loop_without_recovery() {
-        for model in cars::ALL {
-            let mut s = Session::new(model, DriveMode::FreeDrive);
-            let route = s.track();
-            let mut previous = route.project(s.vehicle.position).distance;
-            let mut travelled = 0.0;
-            let mut seconds = 0.0;
-            let mut hard_contacts = 0;
-            let mut peak_speed: f32 = 0.0;
-            for _ in 0..60 * 300 {
-                s.vehicle.manual = false; // This fixture drives the player with AI.
-                s.tick(ai::controls(&s.vehicle, None));
-                let road = route.project(s.vehicle.position);
-                let mut delta = road.distance - previous;
-                if delta < -route.length() * 0.5 {
-                    delta += route.length();
-                }
-                if delta > route.length() * 0.5 {
-                    delta -= route.length();
-                }
-                travelled += delta;
-                previous = road.distance;
-                seconds += TICK.as_secs_f32();
-                peak_speed = peak_speed.max(s.vehicle.speed.max(0.0));
-                if s.impact > 3.0 {
-                    hard_contacts += 1;
-                }
-                s.impact = 0.0;
-                assert!(s.vehicle.position.iter().all(|p| p.is_finite()));
-                assert!(road.offset.abs() <= route.width * 0.5 - track::CAR_RADIUS + 0.05);
-                if travelled >= route.length() {
-                    break;
-                }
-            }
-            assert!(
-                travelled >= route.length(),
-                "{model:?} reference drive stalled after {travelled:.0} m / {seconds:.1} s"
-            );
-            assert!(
-                peak_speed > 20.0,
-                "{model:?} reference drive did not exercise Highway pace: {:.1} km/h",
-                peak_speed * 3.6
-            );
-            assert!(
-                hard_contacts < 3,
-                "{model:?} reference drive hit barriers {hard_contacts} times"
-            );
-            assert_eq!(s.recoveries, 0);
-            assert_eq!(s.race.elapsed, 0.0);
-            assert!(s.state == GameState::Driving);
-            // This is conservative automated pursuit, not a human pace/feel claim.
-            eprintln!("Scenic {model:?} reference: {:.0} m in {seconds:.1} s; peak {:.0} km/h; {hard_contacts} hard contacts",
-                route.length(), peak_speed * 3.6);
-        }
-    }
-
-    #[test]
-    fn free_route_toggle_is_garage_only_and_race_always_stays_compact() {
-        let mut s = Session::new(CarModel::Club, DriveMode::FreeDrive);
-        for state in [
-            GameState::Driving,
-            GameState::Paused,
-            GameState::Finishing,
-            GameState::Finished,
-        ] {
-            s.state = state;
-            s.toggle_track();
-            assert_eq!(s.track().id, TrackId::Scenic);
-        }
-        s.state = GameState::Menu;
-        for expected in [TrackId::Compact, TrackId::Scenic, TrackId::Compact] {
-            s.toggle_track();
-            assert_eq!(s.track().id, expected);
-            assert_eq!(s.vehicle.model, CarModel::Club);
-            assert!(std::ptr::eq(s.vehicle.track, s.rival.track));
-            assert!(s.state == GameState::Menu);
-        }
-        s.select_mode(DriveMode::Race);
-        s.toggle_track();
-        assert_eq!(s.mode, DriveMode::Race);
-        assert_eq!(s.track().id, TrackId::Compact);
-        s.select_mode(DriveMode::FreeDrive);
-        assert_eq!(
-            s.track().id,
-            TrackId::Scenic,
-            "mode selection restores its default route"
-        );
-        s.toggle_track();
-        s.select_mode(DriveMode::FreeDrive);
-        assert_eq!(
-            s.track().id,
-            TrackId::Scenic,
-            "explicit mode selection resets route choice"
-        );
-    }
-
-    #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
         for id in track::ALL {
-            let mut s = Session::on_track(CarModel::Roadster, DriveMode::FreeDrive, id);
+            let mut s = Session::on_track(CarModel::Roadster, id);
             s.state = GameState::Menu;
             for model in cars::ALL {
                 s.select_car(model);
@@ -2153,15 +1576,11 @@ mod tests {
                 assert!(s.state == GameState::Menu);
                 let road = s.track().at_distance(s.track().length() * 0.5);
                 s.vehicle.reset(road.lane_position(0.0), road.heading());
-                s.race.elapsed = 42.0;
                 s.recoveries = 2;
                 s.restart();
                 assert_eq!(s.track().id, id);
-                assert!(std::ptr::eq(s.vehicle.track, s.rival.track));
                 assert_eq!(s.vehicle.model, model);
                 assert_eq!(s.vehicle.position, s.track().spawn().lane_position(0.0));
-                assert_eq!(s.countdown, 0.0);
-                assert_eq!(s.race.elapsed, 0.0);
                 assert_eq!(s.recoveries, 0);
                 assert!(s.state == GameState::Driving);
                 s.state = GameState::Menu;
@@ -2172,7 +1591,7 @@ mod tests {
     #[test]
     fn free_recovery_and_pause_info_use_selected_route() {
         for id in track::ALL {
-            let mut s = Session::on_track(CarModel::Muscle, DriveMode::FreeDrive, id);
+            let mut s = Session::on_track(CarModel::Muscle, id);
             let road = s.track().at_distance(s.track().length() * 0.5);
             s.vehicle.reset(road.lane_position(1.0), road.heading());
             assert!(s.recover());
@@ -2180,7 +1599,6 @@ mod tests {
             assert!((recovered.distance - road.distance).abs() < 0.1);
             assert!(recovered.offset.abs() < 0.01);
             assert_eq!(s.track().id, id);
-            assert_eq!(s.race.elapsed, 0.0);
             let lines = s.pause_lines("WIDE", "ON");
             assert!(lines.iter().any(|line| line.contains(s.track().name)
                 && line.contains(&format!("{:.2} KM", s.track().length() / 1000.0))));
@@ -2192,7 +1610,7 @@ mod tests {
 
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
-        let mut s = Session::on_track(CarModel::Roadster, DriveMode::FreeDrive, TrackId::Engomi);
+        let mut s = Session::on_track(CarModel::Roadster, TrackId::Engomi);
         let start = s.vehicle.position;
         for _ in 0..40 {
             s.tick(Controls {
@@ -2214,50 +1632,11 @@ mod tests {
         assert!(s.recover());
         assert_eq!(s.track().id, TrackId::Engomi);
         assert!(s.track().city().unwrap().road_clearance(s.vehicle.position) < 0.0);
-        assert_eq!(s.race.elapsed, 0.0);
-        assert!(!s.has_rival());
-    }
-
-    #[test]
-    fn free_drive_never_runs_a_rival_timer_or_finish_logic() {
-        for model in cars::ALL {
-            let mut s = Session::on_track(model, DriveMode::FreeDrive, TrackId::Compact);
-            assert_eq!(s.countdown, 0.0);
-            assert!(!s.has_rival());
-            // Even an overlapping inert rival must not collide with the player.
-            s.rival.position = s.vehicle.position;
-            s.rival.velocity = [10.0, 0.0];
-            let rival_position = s.rival.position;
-            let mut probe = RaceProgress::new();
-            for _ in 0..60 * 180 {
-                let previous = s.vehicle.position;
-                s.vehicle.manual = false; // This fixture drives the player with AI.
-                s.tick(ai::controls(&s.vehicle, None));
-                probe.update(previous, s.vehicle.position, TICK);
-                if probe.finish_time.is_some() {
-                    break;
-                }
-            }
-            assert!(
-                probe.finish_time.is_some(),
-                "free driving failed to complete route with {model:?}"
-            );
-            assert!(
-                s.state == GameState::Driving,
-                "three laps must not end Free Drive"
-            );
-            assert_eq!(s.rival.position, rival_position);
-            assert_eq!(s.rival.velocity, [10.0, 0.0]);
-            assert_eq!(s.race.elapsed, 0.0);
-            assert_eq!(s.rival_race.elapsed, 0.0);
-            assert_eq!(s.race.completed_laps, 0);
-            assert!(s.race.lap_times.is_empty() && s.race.finish_time.is_none());
-        }
     }
 
     #[test]
     fn free_recovery_is_nearby_unpenalized_and_preserves_facing_direction() {
-        let mut s = Session::on_track(CarModel::Muscle, DriveMode::FreeDrive, TrackId::Compact);
+        let mut s = Session::on_track(CarModel::Muscle, TrackId::Compact);
         let road = track::at_distance(120.0);
         s.vehicle.reset(
             road.lane_position(1.4),
@@ -2271,7 +1650,6 @@ mod tests {
         assert!((s.vehicle.heading - road.heading()).cos() < -0.9);
         assert_eq!(s.vehicle.direction, vehicle::Direction::Drive);
         assert_eq!(s.vehicle.model, CarModel::Muscle);
-        assert_eq!(s.race.elapsed, 0.0);
         assert_eq!(s.recoveries, 1);
     }
 
@@ -2279,7 +1657,7 @@ mod tests {
     fn opening_menu_location_and_car_choices_survive_start() {
         for location in hud::LOCATIONS {
             for car in cars::ALL {
-                let mut s = Session::new(CarModel::Roadster, DriveMode::FreeDrive);
+                let mut s = Session::new(CarModel::Roadster);
                 s.state = GameState::Menu;
                 s.select_location(location);
                 s.select_car(car);
@@ -2288,8 +1666,6 @@ mod tests {
                 assert!(s.state == GameState::Driving);
                 assert_eq!(s.track().id, location);
                 assert_eq!(s.vehicle.model, car);
-                assert_eq!(s.mode, DriveMode::FreeDrive);
-                assert_eq!(s.countdown, 0.0);
                 s.select_location(TrackId::Compact);
                 s.cycle_car(1);
                 assert_eq!(s.track().id, location);
@@ -2299,7 +1675,7 @@ mod tests {
     }
     #[test]
     fn location_cycle_excludes_unselected_cities() {
-        let mut session = Session::new(CarModel::Club, DriveMode::FreeDrive);
+        let mut session = Session::new(CarModel::Club);
         session.state = GameState::Menu;
         for direction in [1, 1, -1, -1, 1, 1] {
             session.cycle_location(direction, false);
@@ -2337,65 +1713,10 @@ mod tests {
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
-    #[test]
-    fn menu_activity_keeps_the_location_and_city_selection_uses_free_drive() {
-        let mut s = Session::new(CarModel::Club, DriveMode::FreeDrive);
-        s.state = GameState::Menu;
-        s.toggle_activity();
-        assert_eq!(s.mode, DriveMode::FreeDrive);
-        s.cycle_location(1, true);
-        assert_eq!(s.track().id, TrackId::Compact);
-        s.toggle_activity();
-        assert_eq!(s.mode, DriveMode::Race);
-        s.toggle_activity();
-        assert_eq!(s.mode, DriveMode::FreeDrive);
-        assert_eq!(s.track().id, TrackId::Compact);
-        s.toggle_activity();
-        s.cycle_location(1, true);
-        assert_eq!(s.track().id, TrackId::Engomi);
-        assert_eq!(s.mode, DriveMode::FreeDrive);
-        assert_eq!(s.vehicle.model, CarModel::Club);
-        s.cycle_location(1, true);
-        assert_eq!(s.track().id, TrackId::Scenic);
-        s.cycle_location(-1, true);
-        assert_eq!(s.track().id, TrackId::Engomi);
-        s.cycle_car(1);
-        assert_eq!(
-            s.vehicle.model,
-            cars::ALL[(CarModel::Club.index() + 1) % cars::ALL.len()]
-        );
-    }
-
-    #[test]
-    fn garage_mode_selection_is_guarded_and_preserves_the_car() {
-        let mut s = Session::new(CarModel::Club, DriveMode::FreeDrive);
-        s.select_mode(DriveMode::Race);
-        assert_eq!(s.mode, DriveMode::FreeDrive);
-        s.state = GameState::Menu;
-        s.select_mode(DriveMode::Race);
-        assert_eq!(s.mode, DriveMode::Race);
-        assert_eq!(s.vehicle.model, CarModel::Club);
-        assert_eq!(s.countdown, 3.0);
-        s.select_car(CarModel::Muscle);
-        assert_eq!(s.mode, DriveMode::Race);
-        s.select_mode(DriveMode::FreeDrive);
-        assert_eq!(s.vehicle.model, CarModel::Muscle);
-        assert_eq!(s.countdown, 0.0);
-        for state in [
-            GameState::Driving,
-            GameState::Paused,
-            GameState::Finishing,
-            GameState::Finished,
-        ] {
-            s.state = state;
-            s.select_mode(DriveMode::Race);
-            assert_eq!(s.mode, DriveMode::FreeDrive);
-        }
-    }
 
     #[test]
     fn free_drive_pause_info_and_reverse_have_no_race_statistics() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::FreeDrive);
+        let mut s = Session::new(CarModel::Roadster);
         s.vehicle.toggle_direction();
         for _ in 0..20 {
             s.tick(Controls {
@@ -2421,205 +1742,5 @@ mod tests {
             || s.starts_with("LAP ")
             || s.starts_with("BEST ")
             || s.contains("POS ")));
-    }
-
-    #[test]
-    fn pause_freezes_countdown_vehicles_and_timer() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::Race);
-        s.state = GameState::Paused;
-        let position = s.vehicle.position;
-        for _ in 0..120 {
-            s.tick(Controls {
-                throttle: 1.0,
-                ..Controls::default()
-            });
-        }
-        assert_eq!(s.countdown, 3.0);
-        assert_eq!(s.race.elapsed, 0.0);
-        assert_eq!(s.vehicle.position, position);
-    }
-
-    #[test]
-    fn feedback_freezes_on_pause_and_recovery_clears_transients() {
-        let mut s = Session::new(CarModel::Club, DriveMode::Race);
-        s.countdown = 0.0;
-        let road = track::at_distance(50.0);
-        s.vehicle.reset(road.lane_position(0.0), road.heading());
-        s.vehicle.velocity = road.tangent.map(|x| x * 8.0);
-        for _ in 0..20 {
-            s.tick(Controls {
-                handbrake: true,
-                ..Controls::default()
-            });
-        }
-        let phase = s.vehicle.wheel_phase;
-        let marks = s.skids.vertices();
-        let view = particles::View {
-            eye: [0.0, 5.0, -100.0],
-            right: [1.0, 0.0, 0.0],
-            up: [0.0, 1.0, 0.0],
-            forward: [0.0, 0.0, 1.0],
-        };
-        let puffs = s.particles.vertices(view);
-        assert!(!puffs.is_empty());
-        assert!(!marks.is_empty());
-        s.state = GameState::Paused;
-        for _ in 0..120 {
-            s.tick(Controls::default());
-        }
-        assert_eq!(s.vehicle.wheel_phase, phase);
-        assert_eq!(s.particles.vertices(view), puffs);
-        let after = s.skids.vertices();
-        assert_eq!(marks.len(), after.len());
-        assert_eq!(marks[0].color, after[0].color);
-        s.state = GameState::Driving;
-        s.impact = 9.0;
-        s.recover();
-        assert_eq!(s.impact, 0.0);
-        assert_eq!(s.vehicle.wheel_phase, [0.0; 2]);
-        assert_eq!(s.vehicle.tire_scrub, 0.0);
-        assert!(s.particles.vertices(view).is_empty());
-        s.restart();
-        assert!(s.skids.vertices().is_empty());
-        assert!(s.particles.vertices(view).is_empty());
-        assert_eq!(s.impact, 0.0);
-    }
-
-    #[test]
-    fn restart_resets_both_cars_and_all_timing() {
-        let mut s = Session::new(CarModel::Muscle, DriveMode::Race);
-        s.countdown = 0.0;
-        for _ in 0..60 {
-            s.tick(Controls::default());
-        }
-        s.restart();
-        assert_eq!(s.vehicle.model, CarModel::Muscle);
-        assert_eq!(s.countdown, 3.0);
-        assert_eq!(s.race.elapsed, 0.0);
-        assert_eq!(s.rival_race.elapsed, 0.0);
-        assert_eq!(s.rival.speed, 0.0);
-    }
-
-    #[test]
-    fn recovery_penalizes_without_advancing_checkpoints() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::Race);
-        s.countdown = 0.0;
-        s.race.next_gate = 2;
-        s.recover();
-        assert_eq!(s.race.next_gate, 2);
-        assert_eq!(s.race.elapsed, 5.0);
-        assert_eq!(s.recoveries, 1);
-    }
-
-    #[test]
-    fn recovery_reports_when_camera_and_audio_should_snap() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::Race);
-        assert!(!s.recover()); // countdown
-        s.countdown = 0.0;
-        for state in [
-            GameState::Menu,
-            GameState::Paused,
-            GameState::Finishing,
-            GameState::Finished,
-        ] {
-            s.state = state;
-            assert!(!s.recover());
-        }
-        s.state = GameState::Driving;
-        assert!(s.recover());
-        assert_eq!(s.recoveries, 1);
-    }
-
-    #[test]
-    fn car_selection_is_menu_only_and_identity_survives_recovery_and_restart() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::Race);
-        s.select_car(CarModel::Club);
-        assert_eq!(s.vehicle.model, CarModel::Roadster);
-        s.state = GameState::Menu;
-        for model in cars::ALL {
-            s.select_car(model);
-            assert_eq!(s.vehicle.model, model);
-            assert_eq!(s.rival.model, CarModel::Roadster);
-            assert!(s.state == GameState::Menu);
-        }
-        let selected = s.vehicle.model;
-        s.state = GameState::Driving;
-        s.countdown = 0.0;
-        s.recover();
-        assert_eq!(s.vehicle.model, selected);
-        s.restart();
-        assert_eq!(s.vehicle.model, selected);
-        assert_eq!(s.countdown, 3.0);
-        for state in [
-            GameState::Driving,
-            GameState::Paused,
-            GameState::Finishing,
-            GameState::Finished,
-        ] {
-            s.state = state;
-            s.select_car(CarModel::Muscle);
-            assert_eq!(s.vehicle.model, selected);
-        }
-    }
-
-    #[test]
-    fn complete_two_car_races_and_results_are_repeatable() {
-        for profile in cars::ALL {
-            let run = || {
-                let mut s = Session::new(profile, DriveMode::Race);
-                for _ in 0..60 * 180 {
-                    s.vehicle.manual = false; // This fixture drives both cars with AI.
-                    let controls = ai::controls(&s.vehicle, Some(&s.rival));
-                    s.tick(controls);
-                    if s.state == GameState::Finished {
-                        break;
-                    }
-                }
-                assert!(
-                    s.state == GameState::Finished,
-                    "two-car race did not finish for profile {profile:?}"
-                );
-                assert_eq!(s.race.lap_times.len(), race::LAPS as usize);
-                let time = s.race.elapsed;
-                let position = s.vehicle.position;
-                for _ in 0..120 {
-                    s.tick(Controls::default());
-                }
-                assert_eq!(s.race.elapsed, time);
-                assert_eq!(s.vehicle.position, position);
-                (time, s.player_leads())
-            };
-            assert_eq!(run(), run(), "fixed-step race must be deterministic");
-        }
-    }
-
-    #[test]
-    fn penalty_adjusted_results_wait_for_the_rival() {
-        let mut s = Session::new(CarModel::Roadster, DriveMode::Race);
-        s.countdown = 0.0;
-        s.state = GameState::Finishing;
-        s.race.completed_laps = race::LAPS;
-        s.race.elapsed = 105.0;
-        s.race.finish_time = Some(105.0);
-        s.rival_race.elapsed = 100.0;
-        s.rival_race.completed_laps = race::LAPS - 1;
-        s.rival_race.next_gate = race::GATES - 1;
-        let road = track::at_distance(track::length() - 12.0);
-        s.rival.reset(road.lane_position(0.0), road.heading());
-        s.rival.velocity = [road.tangent[0] * 10.0, road.tangent[1] * 10.0];
-        s.rival.refresh_speed();
-        for _ in 0..600 {
-            s.tick(Controls::default());
-            if s.state == GameState::Finished {
-                break;
-            }
-        }
-        assert!(s.state == GameState::Finished);
-        assert!(s.rival_race.finish_time.unwrap() < 105.0);
-        assert!(
-            !s.player_leads(),
-            "crossing first must not bypass a time penalty"
-        );
-        assert_eq!(s.race.elapsed, 105.0);
     }
 }
