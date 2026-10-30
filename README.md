@@ -328,7 +328,7 @@ distributable game textures.
 ### Cars
 
 - [ ] Let's make gear changes manual: A shifts up, Z shifts down, stop using WASD for movement, keep the arrows. Add a neutral between 1 and R.
-- [ ] Braking feels like a full wheel lock. How does NFS5 solve this?
+- [x] Progressive foot braking with an ABS-like grip cap, retained steering authority, and skid feedback from sliding rather than brake input.
 - [ ] The physics feels off, not entirely realistic. Can you describe the difference from NFS5?
 - [ ] Is handbrake side-sliding realistic?
 - [ ] Let's add Mazda Demio.

@@ -36,6 +36,7 @@ pub struct Vehicle {
     pub engine_load: f32,
     pub wheel_phase: [f32; 2], // rear/front axles; cosmetic, never affects physics
     pub tire_scrub: f32,
+    brake_pressure: f32,
     steering: f32,
     yaw_rate: f32,
     shift_timer: f32,
@@ -68,6 +69,7 @@ impl Vehicle {
             curb_bump: 0.0,
             engine_rpm: IDLE_RPM,
             engine_load: 0.0,
+            brake_pressure: 0.0,
             steering: 0.0,
             yaw_rate: 0.0,
             wheel_phase: [0.0; 2],
@@ -156,6 +158,15 @@ impl Vehicle {
         let mut impact: f32 = 0.0;
         for _ in 0..steps {
             self.update_steering(controls.steering, seconds);
+            // Digital pedals build pressure in 0.2 s and release in 0.08 s.
+            let requested_brake = controls.brake.clamp(0.0, 1.0);
+            let rate = if requested_brake > self.brake_pressure {
+                5.0
+            } else {
+                12.5
+            };
+            self.brake_pressure +=
+                (requested_brake - self.brake_pressure).clamp(-rate * seconds, rate * seconds);
             let forward = [self.heading.sin(), self.heading.cos()];
             let right = [self.heading.cos(), -self.heading.sin()];
             let mut longitudinal = dot(self.velocity, forward);
@@ -173,13 +184,16 @@ impl Vehicle {
                 };
             let engine = controls.throttle.clamp(0.0, 1.0) * available_drive;
             // Brake opposes motion in either gear; it never selects a direction.
-            let braking = controls.brake.clamp(0.0, 1.0) * brake_accel
-                + if controls.handbrake { 4.0 } else { 0.0 };
+            // Approximate ABS: cap foot braking below the tire budget,
+            // retaining at least 60% lateral authority at full pressure.
+            let foot_braking = self.brake_pressure * brake_accel.min(grip * 0.8);
+            let lateral_grip = (grip * grip - foot_braking * foot_braking).max(0.0).sqrt();
+            let braking = foot_braking + if controls.handbrake { 4.0 } else { 0.0 };
             let driven = drive_speed + engine * seconds;
             let resistance = (braking + 0.25 + drag * driven * driven) * seconds;
             longitudinal = driven.signum() * (driven.abs() - resistance).max(0.0) * direction;
             let lateral_accel = (-lateral * if controls.handbrake { 1.7 } else { 9.0 })
-                .clamp(-grip, grip)
+                .clamp(-lateral_grip, lateral_grip)
                 * if controls.handbrake { 0.4 } else { 1.0 };
             let sideways = lateral + lateral_accel * seconds;
             self.velocity = [
@@ -190,7 +204,7 @@ impl Vehicle {
             let requested_yaw = -longitudinal / spec.wheelbase * steer_angle.tan();
             // Available lateral force limits rotation as well as sideways motion.
             // Handbrake retains extra rotation while sacrificing lateral grip.
-            let rotation_grip = grip * if controls.handbrake { 1.25 } else { 1.0 };
+            let rotation_grip = lateral_grip * if controls.handbrake { 1.25 } else { 1.0 };
             let yaw_limit = rotation_grip / longitudinal.abs().max(1.0);
             let target_yaw = (requested_yaw * if controls.handbrake { 1.35 } else { 1.0 })
                 .clamp(-yaw_limit, yaw_limit);
@@ -236,13 +250,7 @@ impl Vehicle {
         self.update_engine_feedback(previous_gear, controls, dt.as_secs_f32());
         let motion = self.velocity[0].hypot(self.velocity[1]);
         let sliding = ((self.slip.abs() - 0.8) / 3.0).clamp(0.0, 1.0);
-        let braking = if controls.handbrake {
-            0.8
-        } else if controls.brake > 0.65 && self.speed.abs() > 5.0 {
-            0.65
-        } else {
-            0.0
-        };
+        let braking = if controls.handbrake { 0.8 } else { 0.0 };
         self.tire_scrub = sliding.max(braking) * ((motion - 1.5) / 2.5).clamp(0.0, 1.0);
         self.update_body_motion(controls, dt.as_secs_f32());
         impact
@@ -251,7 +259,7 @@ impl Vehicle {
     fn update_body_motion(&mut self, controls: Controls, dt: f32) {
         let forward_speed = self.speed.abs();
         let direction = if self.speed < -0.1 { -1.0 } else { 1.0 };
-        let braking = controls.brake.clamp(0.0, 1.0) * (forward_speed / 16.0).clamp(0.0, 1.0);
+        let braking = self.brake_pressure * (forward_speed / 16.0).clamp(0.0, 1.0);
         let throttle = controls.throttle.clamp(0.0, 1.0) * (forward_speed / 10.0).clamp(0.0, 1.0);
         let target_pitch = ((throttle * 0.018 - braking * 0.055) * direction).clamp(-0.065, 0.065);
         // Lean follows the actual turn, so a key tap cannot visually throw the
@@ -780,7 +788,30 @@ mod tests {
     }
 
     #[test]
-    fn scenic_roadster_brakes_from_100_kmh_within_31_metres() {
+    fn foot_brake_builds_releases_and_does_not_fake_a_skid() {
+        let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let road = car.track.at_distance(50.0);
+        car.velocity = road.tangent.map(|v| v * 20.0);
+        let pedal = Controls {
+            brake: 1.0,
+            ..Controls::default()
+        };
+        car.update(Duration::from_millis(20), pedal);
+        assert!((car.brake_pressure - 0.1).abs() < 0.001);
+        car.update(Duration::from_millis(180), pedal);
+        assert!((car.brake_pressure - 1.0).abs() < 0.001);
+        assert!(
+            car.tire_scrub < 0.01,
+            "straight braking must not signal lockup"
+        );
+        car.update(Duration::from_millis(80), Controls::default());
+        assert!(car.brake_pressure < 0.001);
+        car.reset(road.lane_position(0.0), road.heading());
+        assert_eq!(car.brake_pressure, 0.0);
+    }
+
+    #[test]
+    fn scenic_roadster_brakes_from_100_kmh_progressively() {
         let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
         car.velocity = car
             .track
@@ -807,7 +838,7 @@ mod tests {
             car.speed
         );
         assert!(
-            (27.0..31.0).contains(&distance),
+            (38.0..44.0).contains(&distance),
             "100 km/h stopping distance: {distance} m"
         );
         assert_eq!(car.direction, Direction::Drive);
@@ -1200,6 +1231,7 @@ mod tests {
         }
         assert!(forward.body_pitch > 0.005);
         assert!((forward.body_pitch + reverse.body_pitch).abs() < 0.00001);
+        reverse.brake_pressure = 1.0;
         let brake = Controls {
             brake: 1.0,
             ..Controls::default()
