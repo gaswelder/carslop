@@ -2,6 +2,8 @@ use crate::{cars::CarModel, track};
 use std::time::Duration;
 
 pub const REVERSE_SPEED: f32 = 6.0;
+// Keep zero for reverse and 1..=N for forward ratios.
+pub const NEUTRAL_GEAR: u8 = u8::MAX;
 pub const IDLE_RPM: f32 = 900.0;
 pub const REDLINE_RPM: f32 = 6500.0;
 
@@ -27,6 +29,7 @@ pub struct Vehicle {
     pub speed: f32,
     pub heading: f32,
     pub gear: u8,
+    pub manual: bool,
     pub direction: Direction,
     pub slip: f32,
     pub body_pitch: f32,
@@ -69,6 +72,7 @@ impl Vehicle {
             speed: 0.0,
             heading,
             gear: 1,
+            manual: false,
             direction: Direction::Drive,
             slip: 0.0,
             body_pitch: 0.0,
@@ -93,7 +97,9 @@ impl Vehicle {
     }
 
     pub fn reset(&mut self, position: [f32; 3], heading: f32) {
+        let manual = self.manual;
         *self = Self::on_track(position, heading, self.model, self.track);
+        self.manual = manual;
     }
 
     /// Reference speed for AI planning; road load and gearing determine actual speed.
@@ -111,6 +117,9 @@ impl Vehicle {
         gearbox.speed_at_rpm(gearbox.upshift_rpm, gear)
     }
     pub fn target_engine_rpm(&self) -> f32 {
+        if self.gear == NEUTRAL_GEAR {
+            return IDLE_RPM;
+        }
         self.model
             .spec()
             .gearbox
@@ -134,7 +143,35 @@ impl Vehicle {
         true
     }
 
+    pub fn shift(&mut self, up: bool) {
+        let next = match (self.gear, up) {
+            (0, true) => NEUTRAL_GEAR,
+            (NEUTRAL_GEAR, true) => 1,
+            (NEUTRAL_GEAR, false) => 0,
+            (1, false) => NEUTRAL_GEAR,
+            (0, false) => 0,
+            (gear, true) => (gear + 1).min(self.model.spec().gearbox.gears()),
+            (gear, false) => gear - 1,
+        };
+        // Direction changes require the whole vehicle to be nearly stopped.
+        if (next == 0 || self.gear == 0) && self.velocity[0].hypot(self.velocity[1]) > 0.5 {
+            return;
+        }
+        if next != self.gear {
+            self.gear = next;
+            self.direction = if next == 0 {
+                Direction::Reverse
+            } else {
+                Direction::Drive
+            };
+            self.shift_timer = 0.16;
+        }
+    }
+
     pub fn gear_label(&self) -> String {
+        if self.gear == NEUTRAL_GEAR {
+            return "N".into();
+        }
         if self.direction == Direction::Reverse {
             "R".into()
         } else {
@@ -386,6 +423,9 @@ impl Vehicle {
     }
 
     fn drive_force(&self, speed: f32) -> f32 {
+        if self.gear == NEUTRAL_GEAR {
+            return 0.0;
+        }
         let spec = self.model.spec();
         let g = &spec.gearbox;
         let ratio = if self.direction == Direction::Reverse {
@@ -421,6 +461,9 @@ impl Vehicle {
     }
 
     fn engine_brake_force(&self, speed: f32) -> f32 {
+        if self.gear == NEUTRAL_GEAR {
+            return 0.0;
+        }
         let g = &self.model.spec().gearbox;
         let ratio = if self.direction == Direction::Reverse {
             g.reverse_ratio
@@ -519,6 +562,9 @@ impl Vehicle {
     pub fn refresh_speed(&mut self) {
         self.speed = dot(self.velocity, [self.heading.sin(), self.heading.cos()]);
         self.slip = dot(self.velocity, [self.heading.cos(), -self.heading.sin()]);
+        if self.manual {
+            return;
+        }
         let gearbox = &self.model.spec().gearbox;
         if self.direction == Direction::Reverse {
             self.gear = 0;
@@ -614,6 +660,43 @@ mod tests {
             CarModel::Roadster,
             route,
         )
+    }
+
+    #[test]
+    fn manual_shifts_hold_gears_and_pass_through_neutral() {
+        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::Roadster);
+        car.manual = true;
+        car.velocity = [0.0, 40.0];
+        car.refresh_speed();
+        assert_eq!(car.gear, 1);
+        car.shift(true);
+        car.refresh_speed();
+        assert_eq!(car.gear, 2);
+        car.velocity = [0.0; 2];
+        car.refresh_speed();
+        assert_eq!(car.gear, 2);
+        car.shift(false);
+        car.shift(false);
+        assert_eq!(car.gear_label(), "N");
+        assert_eq!(car.drive_force(0.0), 0.0);
+        assert_eq!(car.engine_brake_force(10.0), 0.0);
+        car.velocity = [2.0, 0.0];
+        car.shift(false);
+        assert_eq!(car.gear_label(), "N");
+        car.velocity = [0.0; 2];
+        car.shift(false);
+        assert_eq!(car.gear_label(), "R");
+        car.shift(true);
+        assert_eq!(car.gear_label(), "N");
+        car.shift(true);
+        assert_eq!(car.gear_label(), "1");
+        for _ in 0..20 {
+            car.shift(true);
+        }
+        assert_eq!(car.gear, car.model.spec().gearbox.gears());
+        car.reset([0.0; 3], 0.0);
+        assert!(car.manual);
+        assert_eq!(car.gear, 1);
     }
 
     #[test]

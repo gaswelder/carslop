@@ -690,7 +690,9 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
     c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
     c.label("GEAR", [166.0, 129.0], 0.95, muted);
     c.label(
-        &if gauges.gear == 0 {
+        &if gauges.gear == crate::vehicle::NEUTRAL_GEAR {
+            "N".into()
+        } else if gauges.gear == 0 {
             "R".into()
         } else {
             gauges.gear.to_string()
@@ -715,11 +717,11 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
         text(v, entry, [-0.86, 0.55 - i as f32 * 0.09], size, white);
     }
     for (i, entry) in [
-        "W / UP: ACCELERATE",
-        "S / DOWN: BRAKE",
-        "A / D: STEER",
+        "UP: ACCELERATE",
+        "DOWN: BRAKE",
+        "LEFT / RIGHT: STEER",
         "SPACE: HANDBRAKE",
-        "X: DRIVE / REVERSE",
+        "A: SHIFT UP / Z: SHIFT DOWN",
         "C: RECOVER",
         "TAB: CAMERA",
         "V: AUDIO",

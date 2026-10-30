@@ -115,12 +115,16 @@ impl Session {
         let start = track.spawn();
         Self {
             mode,
-            vehicle: Vehicle::on_track(
-                start.lane_position(if mode == DriveMode::Race { -1.45 } else { 0.0 }),
-                start.heading(),
-                model,
-                track,
-            ),
+            vehicle: {
+                let mut vehicle = Vehicle::on_track(
+                    start.lane_position(if mode == DriveMode::Race { -1.45 } else { 0.0 }),
+                    start.heading(),
+                    model,
+                    track,
+                );
+                vehicle.manual = true;
+                vehicle
+            },
             rival: Vehicle::on_track(
                 start.lane_position(1.45),
                 start.heading(),
@@ -343,7 +347,7 @@ impl Session {
                     }
                 ),
                 "NO TIMER / NO RIVAL".into(),
-                "X SHIFT DRIVE/REVERSE".into(),
+                "A SHIFT UP / Z SHIFT DOWN".into(),
                 "C NEARBY RECOVERY".into(),
                 speed,
                 status,
@@ -593,10 +597,10 @@ impl App {
             while accumulator >= TICK {
                 let held = |keys: &[Keycode]| keys.iter().any(|k| self.keys.contains(k));
                 let controls = Controls {
-                    throttle: held(&[Keycode::W, Keycode::Up, Keycode::F]) as u8 as f32,
-                    brake: held(&[Keycode::S, Keycode::Down, Keycode::B]) as u8 as f32,
-                    steering: held(&[Keycode::D, Keycode::Right]) as u8 as f32
-                        - held(&[Keycode::A, Keycode::Left]) as u8 as f32,
+                    throttle: held(&[Keycode::Up]) as u8 as f32,
+                    brake: held(&[Keycode::Down]) as u8 as f32,
+                    steering: held(&[Keycode::Right]) as u8 as f32
+                        - held(&[Keycode::Left]) as u8 as f32,
                     handbrake: held(&[Keycode::Space]),
                 };
                 self.session.tick(controls);
@@ -608,9 +612,7 @@ impl App {
                 if let Err(error) = audio.update(
                     car,
                     self.chase.pose(),
-                    self.keys.contains(&Keycode::W)
-                        || self.keys.contains(&Keycode::Up)
-                        || self.keys.contains(&Keycode::F),
+                    self.keys.contains(&Keycode::Up),
                     matches!(
                         self.session.state,
                         GameState::Driving | GameState::Finishing
@@ -811,10 +813,10 @@ impl App {
                 self.ensure_mesh();
                 self.snap_camera();
             }
-            Keycode::X
+            Keycode::A | Keycode::Z
                 if self.session.state == GameState::Driving && self.session.countdown <= 0.0 =>
             {
-                self.session.vehicle.toggle_direction();
+                self.session.vehicle.shift(key == Keycode::A);
             }
             Keycode::V => {
                 if let Some(audio) = &mut self.audio {
@@ -1919,7 +1921,9 @@ mod tests {
                 "restart must reuse mesh"
             );
             assert_eq!(app.session.countdown, 0.0);
-            app.key_down(Keycode::X);
+            app.key_down(Keycode::Z);
+            assert_eq!(app.session.vehicle.gear_label(), "N");
+            app.key_down(Keycode::Z);
             assert_eq!(app.session.vehicle.gear_label(), "R");
             for _ in 0..30 {
                 app.session.tick(Controls {
@@ -1955,7 +1959,7 @@ mod tests {
             app.key_down(Keycode::Return);
             assert_eq!(app.session.mode, DriveMode::Race);
             assert_eq!(app.session.countdown, 3.0);
-            app.key_down(Keycode::X);
+            app.key_down(Keycode::Z);
             assert_eq!(
                 app.session.vehicle.direction,
                 vehicle::Direction::Drive,
@@ -2051,6 +2055,7 @@ mod tests {
             let mut hard_contacts = 0;
             let mut peak_speed: f32 = 0.0;
             for _ in 0..60 * 300 {
+                s.vehicle.manual = false; // This fixture drives the player with AI.
                 s.tick(ai::controls(&s.vehicle, None));
                 let road = route.project(s.vehicle.position);
                 let mut delta = road.distance - previous;
@@ -2226,6 +2231,7 @@ mod tests {
             let mut probe = RaceProgress::new();
             for _ in 0..60 * 180 {
                 let previous = s.vehicle.position;
+                s.vehicle.manual = false; // This fixture drives the player with AI.
                 s.tick(ai::controls(&s.vehicle, None));
                 probe.update(previous, s.vehicle.position, TICK);
                 if probe.finish_time.is_some() {
@@ -2558,6 +2564,7 @@ mod tests {
             let run = || {
                 let mut s = Session::new(profile, DriveMode::Race);
                 for _ in 0..60 * 180 {
+                    s.vehicle.manual = false; // This fixture drives both cars with AI.
                     let controls = ai::controls(&s.vehicle, Some(&s.rival));
                     s.tick(controls);
                     if s.state == GameState::Finished {

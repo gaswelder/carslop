@@ -346,7 +346,7 @@ distributable game textures.
 
 ### Cars
 
-- [ ] Let's make gear changes manual: A shifts up, Z shifts down, stop using WASD for movement, keep the arrows. Add a neutral between 1 and R.
+- [x] Let's make gear changes manual: A shifts up, Z shifts down, stop using WASD for movement, keep the arrows. Add a neutral between 1 and R.
 - [x] Progressive foot braking with an ABS-like grip cap, retained steering authority, and skid feedback from sliding rather than brake input.
 - [x] Replace prescribed turning with axle tire forces, yaw inertia, weight transfer, gear-dependent torque, and sprung road contact.
 - [ ] Is handbrake side-sliding realistic?
