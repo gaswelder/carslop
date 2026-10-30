@@ -6,6 +6,7 @@ pub const REVERSE_SPEED: f32 = 6.0;
 pub const NEUTRAL_GEAR: u8 = u8::MAX;
 pub const IDLE_RPM: f32 = 900.0;
 pub const REDLINE_RPM: f32 = 6500.0;
+const REV_MATCH_SECONDS: f32 = 0.22;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -45,6 +46,7 @@ pub struct Vehicle {
     steering: f32,
     yaw_rate: f32,
     shift_timer: f32,
+    rev_match_timer: f32,
     acceleration: [f32; 2], // longitudinal/lateral, filtered for load transfer
     pitch_rate: f32,
     roll_rate: f32,
@@ -90,6 +92,7 @@ impl Vehicle {
             wheel_phase: [0.0; 2],
             tire_scrub: 0.0,
             shift_timer: 0.0,
+            rev_match_timer: 0.0,
             acceleration: [0.0; 2],
             pitch_rate: 0.0,
             roll_rate: 0.0,
@@ -164,6 +167,7 @@ impl Vehicle {
             return;
         }
         if next != self.gear {
+            let previous = self.gear;
             self.gear = next;
             self.direction = if next == 0 {
                 Direction::Reverse
@@ -171,7 +175,22 @@ impl Vehicle {
                 Direction::Drive
             };
             self.shift_timer = 0.16;
+            self.begin_rev_match(previous);
         }
+    }
+
+    fn begin_rev_match(&mut self, previous: u8) {
+        // Only a moving forward downshift needs a throttle blip. Neutral,
+        // reverse and shifts below idle should not rev the engine.
+        self.rev_match_timer = if self.gear > 0
+            && self.gear < previous
+            && previous <= self.model.spec().gearbox.gears()
+            && self.target_engine_rpm() > self.engine_rpm + 100.0
+        {
+            REV_MATCH_SECONDS
+        } else {
+            0.0
+        };
     }
 
     pub fn gear_label(&self) -> String {
@@ -213,6 +232,7 @@ impl Vehicle {
                 self.shift_timer = 0.16;
             }
             self.shift_timer = (self.shift_timer - seconds).max(0.0);
+            self.rev_match_timer = (self.rev_match_timer - seconds).max(0.0);
             self.update_steering(controls.steering, seconds);
             // Digital pedals build pressure in 0.2 s and release in 0.08 s.
             let requested_brake = controls.brake.clamp(0.0, 1.0);
@@ -547,11 +567,22 @@ impl Vehicle {
                 .max(IDLE_RPM + throttle * (2200.0 - IDLE_RPM))
                 .min(REDLINE_RPM)
         };
-        let response = if self.shift_timer > 0.0 { 12.0 } else { 7.5 };
+        let blip = self.rev_match_timer / REV_MATCH_SECONDS;
+        let response = if blip > 0.0 {
+            22.0
+        } else if self.shift_timer > 0.0 {
+            12.0
+        } else {
+            7.5
+        };
         self.engine_rpm += (target_rpm - self.engine_rpm) * (dt * response).clamp(0.0, 1.0);
         let requested = controls.throttle.clamp(0.0, 1.0);
         let shift_unload = if self.shift_timer > 0.0 { 0.25 } else { 1.0 };
-        let target_load = (requested * shift_unload + 0.12 * (1.0 - requested)).clamp(0.0, 1.0);
+        // Feed the blip into both recorded load/coast layers and procedural
+        // engine voices, without applying extra driving force at the wheels.
+        let target_load = (requested * shift_unload + 0.12 * (1.0 - requested))
+            .max(0.85 * blip)
+            .clamp(0.0, 1.0);
         self.engine_load += (target_load - self.engine_load) * (dt * 10.0).clamp(0.0, 1.0);
     }
 
@@ -610,6 +641,7 @@ impl Vehicle {
         if self.manual {
             return;
         }
+        let previous = self.gear;
         let gearbox = &self.model.spec().gearbox;
         if self.direction == Direction::Reverse {
             self.gear = 0;
@@ -625,6 +657,9 @@ impl Vehicle {
             {
                 self.gear -= 1;
             }
+        }
+        if self.gear != previous {
+            self.begin_rev_match(previous);
         }
     }
 
@@ -1832,6 +1867,77 @@ mod tests {
         let impact = v.update(Duration::from_millis(16), Controls::default());
         assert!(impact > 3.0);
         assert_eq!(v.update(Duration::ZERO, Controls::default()), 0.0);
+    }
+
+    #[test]
+    fn downshifts_blip_engine_while_braking_and_then_return_to_coast() {
+        let road = track::at_distance(50.0);
+        for model in crate::cars::ALL {
+            for manual in [false, true] {
+                let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
+                car.manual = manual;
+                car.gear = 3;
+                let g = &model.spec().gearbox;
+                let speed = g.speed_at_rpm(g.downshift_rpm - 50.0, 3);
+                car.speed = speed;
+                car.velocity = road.tangent.map(|v| v * speed);
+                car.engine_rpm = car.target_engine_rpm();
+                car.engine_load = 0.12;
+                let before_rpm = car.engine_rpm;
+                let matched_rpm = g.rpm(speed, 2).clamp(IDLE_RPM, REDLINE_RPM);
+                if manual {
+                    car.shift(false);
+                }
+                for _ in 0..6 {
+                    car.position = road.lane_position(0.0);
+                    car.update(
+                        Duration::from_secs_f64(1.0 / 60.0),
+                        Controls {
+                            brake: 1.0,
+                            ..Controls::default()
+                        },
+                    );
+                }
+                assert_eq!(car.gear, 2);
+                assert!(car.engine_rpm > before_rpm + (matched_rpm - before_rpm) * 0.5);
+                assert!(
+                    car.engine_load > 0.28,
+                    "downshift must sound loaded without pedal input"
+                );
+                car.manual = true; // Hold the gear while the blip decays.
+                for _ in 0..60 {
+                    car.position = road.lane_position(0.0);
+                    car.update(Duration::from_secs_f64(1.0 / 60.0), Controls::default());
+                }
+                assert_eq!(car.rev_match_timer, 0.0);
+                assert!((car.engine_load - 0.12).abs() < 0.01);
+                car.reset(road.lane_position(0.0), road.heading());
+                assert_eq!(car.rev_match_timer, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn rev_matching_excludes_upshifts_neutral_reverse_and_idle() {
+        let road = track::at_distance(50.0);
+        let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        car.manual = true;
+        car.gear = 3;
+        car.shift(false);
+        assert_eq!(car.rev_match_timer, 0.0, "stationary downshift");
+        car.speed = 20.0;
+        car.shift(true);
+        assert_eq!(car.rev_match_timer, 0.0, "upshift");
+        car.shift(false);
+        assert!(car.rev_match_timer > 0.0);
+        car.gear = 1;
+        car.shift(false);
+        assert_eq!(car.rev_match_timer, 0.0, "neutral cancels an active blip");
+        car.shift(false);
+        assert_eq!(car.rev_match_timer, 0.0, "reverse");
+        car.shift(true);
+        car.shift(true);
+        assert_eq!(car.rev_match_timer, 0.0, "engaging first from neutral");
     }
 
     #[test]
