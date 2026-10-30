@@ -115,16 +115,15 @@ impl Synth {
             0.0
         };
         self.turbo_spool += (turbo_target - self.turbo_spool) * 0.0007;
-        // Broad compressor airflow rather than a pitched oscillator. Two low-pass
-        // filters form a soft band: remove rumble and the brittle top-end hiss.
-        // The air gets brighter and stronger as turbine speed builds.
-        let low_cutoff = 180.0 + 220.0 * self.turbo_spool;
-        let high_cutoff = 1500.0 + 2800.0 * self.turbo_spool;
+        // Two low-pass filters keep compressor airflow in a higher, airy band.
+        // It brightens with turbine speed but stays behind the engine in the mix.
+        let low_cutoff = 900.0 + 1500.0 * self.turbo_spool;
+        let high_cutoff = 3500.0 + 3500.0 * self.turbo_spool;
         self.turbo_air_low +=
             (noise - self.turbo_air_low) * (1.0 - (-TAU * low_cutoff / RATE).exp());
         self.turbo_air_high +=
             (noise - self.turbo_air_high) * (1.0 - (-TAU * high_cutoff / RATE).exp());
-        let whoosh = (self.turbo_air_high - self.turbo_air_low) * 0.22 * self.turbo_spool.powf(1.4);
+        let whoosh = (self.turbo_air_high - self.turbo_air_low) * 0.10 * self.turbo_spool.powf(1.4);
         let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
