@@ -31,3 +31,47 @@ To regenerate after changing the procedural source:
 ```sh
 cargo test export_kestrel_mesh -- --ignored
 ```
+
+## Adding cars without recompiling
+
+Create a `*.json` file directly in `data/cars`, alongside `kestrel.mesh`, then
+restart the existing executable. Files are discovered at startup in filename
+order and appended to the three original cars. Invalid definitions are skipped
+with a warning. Use the menu or left/right car selection to select new entries;
+F1–F3 remain shortcuts for the original cars.
+
+For example, save this as `data/cars/my-coupe.json`:
+
+```json
+{
+  "base": "kestrel",
+  "name": "MY COUPE",
+  "description": "CUSTOM ROAD COUPE",
+  "mass": 1100,
+  "engine_force": 9500,
+  "top_speed": 60,
+  "half_track": 0.88,
+  "mesh": "my-coupe.mesh",
+  "gearbox": {
+    "ratios": [2.833, 1.778, 1.217, 0.962, 0.821],
+    "final_drive": 4.428571
+  }
+}
+```
+
+`base` is required: `kestrel`, `muscle`, or `club`. Other fields inherit that
+base's settings. Omit `mesh` to reuse its body; mesh paths are relative to the
+JSON file and use the format documented above. Custom meshes contain the body
+only; the game adds wheels using `half_track` and `wheelbase`. A missing or
+invalid mesh warns and uses the base body. Engine sound inherits the base voice.
+
+All handling values use SI units (`top_speed` is meters per second). Supported
+scalar overrides are `mass`, `engine_force`, `top_speed`, `brake_force`,
+`lateral_force`, `wheelbase`, and `steering_response`. The optional `dynamics`
+object accepts `front_weight`, `cg_height`, `track_width`, `yaw_inertia`,
+`front_drive`, `brake_bias`, `corner_stiffness` (front/rear array), `peak_torque`,
+`suspension_hz`, and `steering_speed_squared`. The `gearbox` object also accepts
+`rolling_radius`, `reverse_ratio`, `upshift_rpm`, and `downshift_rpm`; ratios
+must be positive and descending. `road_engine` accepts `wheel_power_watts` and
+`drag_accel`, or `null` to disable the power/drag model. Keep JSON definitions
+and referenced assets with the executable's working-directory `data/cars`.

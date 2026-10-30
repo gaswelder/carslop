@@ -358,6 +358,9 @@ distributable game textures.
 
 - [ ] What would it take to have realistic sounds?
 
+New cars can be added as runtime JSON definitions with optional body meshes; no
+recompilation is needed. See [the car asset guide](data/cars/README.md#adding-cars-without-recompiling). Restart the game to discover additions.
+
 ## Vehicle handling
 
 Vehicles use a nonlinear front/rear axle tire model, integrated at steps no

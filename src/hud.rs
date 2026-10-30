@@ -17,11 +17,11 @@ const LOCATION_BOXES: [[f32; 4]; 3] = [
     [-0.92, 0.19, 0.0, 0.39],
     [-0.92, -0.04, 0.0, 0.16],
 ];
-const CAR_BOXES: [[f32; 4]; 3] = [
-    [-0.92, -0.27, -0.64, -0.16],
-    [-0.60, -0.27, -0.32, -0.16],
-    [-0.28, -0.27, 0.0, -0.16],
-];
+fn car_box(index: usize) -> [f32; 4] {
+    let width = 0.96 / crate::cars::ALL.len() as f32;
+    let x = -0.92 + index as f32 * width;
+    [x, -0.27, x + width - 0.04_f32.min(width * 0.1), -0.16]
+}
 const ACTIVITY_BOX: [f32; 4] = [-0.92, -0.46, 0.0, -0.35];
 const START_BOX: [f32; 4] = [-0.92, -0.68, 0.0, -0.54];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +45,8 @@ pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
             return Some(MenuAction::Location(LOCATIONS[i]));
         }
     }
-    for (i, r) in CAR_BOXES.into_iter().enumerate() {
+    for i in 0..crate::cars::ALL.len() {
+        let r = car_box(i);
         if inside(r) {
             return Some(MenuAction::Car(crate::cars::ALL[i]));
         }
@@ -317,14 +318,14 @@ impl Hud {
         }
         text(&mut v, "CAR", [-0.92, -0.10], 0.0038, cyan);
         for (i, car) in crate::cars::ALL.into_iter().enumerate() {
-            let r = CAR_BOXES[i];
+            let r = car_box(i);
             let selected = menu.car == car;
             menu_button(&mut v, r, selected, menu.focus == 1 && selected);
             text(
                 &mut v,
                 car.spec().name,
-                [r[0] + 0.025, r[3] - 0.035],
-                0.0037,
+                [r[0] + (r[2] - r[0]) * 0.08, r[3] - 0.035],
+                0.0037_f32.min((r[2] - r[0]) * 0.84 / (car.spec().name.len().max(1) as f32 * 6.0)),
                 if selected { cyan } else { white },
             );
         }

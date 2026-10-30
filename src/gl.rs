@@ -340,7 +340,7 @@ pub struct Mesh {
     prefetch: Option<crate::prefetch::Prefetch>,
     aerial: std::cell::RefCell<Option<crate::aerial::Aerial>>,
     visible_chunks: std::cell::Cell<usize>,
-    car_ranges: [std::ops::Range<i32>; 3],
+    car_ranges: Vec<std::ops::Range<i32>>,
     wheel_range: std::ops::Range<i32>,
 }
 

@@ -1452,7 +1452,7 @@ mod tests {
             sliding.update(Duration::from_millis(50), Controls::default());
             (accelerating.speed, braking.speed, sliding.slip.abs())
         });
-        let [roadster, muscle, club] = results;
+        let [roadster, muscle, club] = [results[0], results[1], results[2]];
         assert!(
             muscle.0 > roadster.0 && roadster.0 > club.0,
             "acceleration: {results:?}"

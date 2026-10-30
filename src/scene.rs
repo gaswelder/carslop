@@ -127,7 +127,7 @@ impl Builder {
 pub struct Geometry {
     pub vertices: Vec<Vertex>,
     pub world_count: usize,
-    pub car_ranges: [Range<i32>; 3],
+    pub car_ranges: Vec<Range<i32>>,
     pub wheel_range: Range<i32>,
 }
 
@@ -533,6 +533,16 @@ fn wheel(b: &mut Builder, x: f32, z: f32) {
 }
 
 fn car(b: &mut Builder, model: CarModel) {
+    if let Some(path) = model.mesh() {
+        match car_mesh::load(path) {
+            Ok(vertices) => {
+                b.vertices.extend(vertices);
+                return;
+            }
+            Err(error) => log::warn!("Cannot load {}: {error}; using base body", path.display()),
+        }
+    }
+    let model = model.appearance();
     let paint = Surface {
         color: [0.92; 3],
         material: [1.0, 0.6],
@@ -564,7 +574,7 @@ fn car(b: &mut Builder, model: CarModel) {
             (1.45, 1.1, 0.37),
             (2.12, 1.01, 0.30),
         ],
-        CarModel::Club => [
+        CarModel::Club | CarModel::Custom(_) => [
             (-1.75, 0.84, 0.36),
             (-1.15, 0.95, 0.43),
             (-0.6, 0.94, 0.45),
@@ -612,7 +622,7 @@ fn car(b: &mut Builder, model: CarModel) {
     let (back, nose, roof_back, roof_front, height, roof_width, base_width, base_y) = match model {
         CarModel::Roadster => (-1.1, 0.97, -0.52, 0.22, 0.96, 0.65, 0.87, 0.4),
         CarModel::Muscle => (-1.6, 0.35, -1.0, -0.25, 1.04, 0.78, 0.94, 0.44),
-        CarModel::Club => (-1.68, 0.91, -1.22, 0.27, 1.23, 0.72, 0.83, 0.44),
+        CarModel::Club | CarModel::Custom(_) => (-1.68, 0.91, -1.22, 0.27, 1.23, 0.72, 0.83, 0.44),
     };
     b.quad(
         [
@@ -879,7 +889,7 @@ mod tests {
             });
             std::array::from_fn::<_, 3, _>(|i| max[i] - min[i])
         });
-        let [roadster, muscle, club] = extents;
+        let [roadster, muscle, club] = [extents[0], extents[1], extents[2]];
         assert!(muscle[0] > roadster[0] && roadster[0] > club[0]);
         assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
         assert!(club[1] > muscle[1] && muscle[1] > roadster[1]);

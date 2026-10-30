@@ -78,10 +78,12 @@ impl Synth {
         // Rubber resonance follows slip, independently of engine speed or gear.
         self.tire_phase = (self.tire_phase + (1050.0 + self.tire_gain * 420.0) / RATE).fract();
         let p = self.phase * TAU;
-        let harmonics = match voice.model {
+        let harmonics = match voice.model.appearance() {
             CarModel::Roadster => p.sin() * 0.65 + (p * 2.0).sin() * 0.23 + (p * 4.0).sin() * 0.12,
             CarModel::Muscle => p.sin() * 0.55 + (p * 0.5).sin() * 0.30 + (p * 3.0).sin() * 0.15,
-            CarModel::Club => p.sin() * 0.52 + (p * 3.0).sin() * 0.30 + (p * 6.0).sin() * 0.18,
+            CarModel::Club | CarModel::Custom(_) => {
+                p.sin() * 0.52 + (p * 3.0).sin() * 0.30 + (p * 6.0).sin() * 0.18
+            }
         };
         // Deterministic filtered noise: independent tire scrub, intake hiss and impact grit.
         self.noise = self
@@ -93,7 +95,8 @@ impl Synth {
         let procedural = (p.sin() * (1.0 - self.load) + harmonics * self.load)
             * (0.065 + self.load * 0.065)
             + self.filtered_noise * self.load * 0.025;
-        let engine = if voice.model == CarModel::Roadster && self.recorded.available() {
+        let engine = if voice.model.appearance() == CarModel::Roadster && self.recorded.available()
+        {
             // Kestrel is a four-stroke six-cylinder: three firing pulses per revolution.
             self.recorded.sample(self.frequency * 1.5, self.load)
         } else {
