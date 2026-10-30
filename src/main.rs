@@ -495,6 +495,16 @@ impl App {
                 self.selected_location = page * 3;
                 self.menu_focus = 0;
             }
+            hud::MenuAction::CarPage(direction) => {
+                let current = cars::ALL
+                    .into_iter()
+                    .position(|car| car == self.session.vehicle.model)
+                    .unwrap_or(0);
+                let pages = cars::ALL.len().div_ceil(3);
+                let page = (current as i32 / 3 + direction).rem_euclid(pages as i32) as usize;
+                self.session.select_car(cars::ALL[page * 3]);
+                self.menu_focus = 1;
+            }
             hud::MenuAction::Car(car) => {
                 self.menu_focus = 1;
                 self.session.select_car(car);
@@ -526,11 +536,12 @@ impl App {
                 });
             }
         } else if self.session.state == GameState::Menu {
-            if let Some(action) = hud::location_menu_hit_test(
+            if let Some(action) = hud::selection_menu_hit_test(
                 point[0],
                 point[1],
                 self.selected_location,
                 self.locations.len(),
+                self.session.vehicle.model,
             ) {
                 self.menu_action(action);
             }
@@ -1753,7 +1764,16 @@ mod tests {
     fn no_city_startup_renderer_smoke() {
         let mut app = App::with_location(false);
         assert!(app.locations.len() >= 2);
+        app.capture_path = std::env::var_os("NFS_MENU_PREVIEW").map(Into::into);
         app.render(Duration::ZERO);
+        app.capture_path = None;
+        if cars::ALL.len() > 3 {
+            app.menu_action(hud::MenuAction::CarPage(1));
+            assert_eq!(app.session.vehicle.model, cars::ALL[3]);
+            app.render(Duration::ZERO);
+            app.menu_action(hud::MenuAction::CarPage(-1));
+            assert_eq!(app.session.vehicle.model, cars::ALL[0]);
+        }
         app.menu_action(hud::MenuAction::Location(TrackId::Engomi));
         app.key_down(Keycode::F7);
         for _ in 0..6 {

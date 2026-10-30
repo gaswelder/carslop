@@ -12,22 +12,24 @@ pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
         &LOCATIONS[..2]
     }
 }
-const LOCATION_BOXES: [[f32; 4]; 3] = [
-    [-0.92, 0.42, 0.0, 0.62],
-    [-0.92, 0.19, 0.0, 0.39],
-    [-0.92, -0.04, 0.0, 0.16],
-];
-fn car_box(index: usize) -> [f32; 4] {
-    let width = 0.96 / crate::cars::ALL.len() as f32;
-    let x = -0.92 + index as f32 * width;
-    [x, -0.27, x + width - 0.04_f32.min(width * 0.1), -0.16]
+const CHOICES_PER_PAGE: usize = 3;
+fn choice_box(index: usize, top: f32) -> [f32; 4] {
+    let top = top - index as f32 * 0.125;
+    [-0.92, top - 0.10, 0.0, top]
 }
-const START_BOX: [f32; 4] = [-0.92, -0.68, 0.0, -0.54];
+fn location_box(index: usize) -> [f32; 4] {
+    choice_box(index, 0.62)
+}
+fn car_box(index: usize) -> [f32; 4] {
+    choice_box(index, 0.09)
+}
+const START_BOX: [f32; 4] = [-0.92, -0.52, 0.0, -0.40];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Location(TrackId),
     Choice(usize),
     Page(i32),
+    CarPage(i32),
     Car(CarModel),
     Start,
 }
@@ -37,32 +39,66 @@ pub struct MainMenu<'a> {
     pub car: CarModel,
     pub focus: usize,
 }
-pub fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
-    if (0.66..=0.76).contains(&y) {
+fn page_hit_test(x: f32, y: f32, header: f32) -> Option<i32> {
+    if (header - 0.05..=header + 0.05).contains(&y) {
         if (-0.48..=-0.40).contains(&x) {
-            return Some(MenuAction::Page(-1));
+            return Some(-1);
         }
         if (-0.12..=0.0).contains(&x) {
-            return Some(MenuAction::Page(1));
+            return Some(1);
         }
+    }
+    None
+}
+pub fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
+    if let Some(direction) = page_hit_test(x, y, 0.71) {
+        return Some(MenuAction::Page(direction));
     }
     match menu_hit_test(x, y) {
         Some(MenuAction::Location(id)) => {
             let slot = LOCATIONS.iter().position(|v| *v == id).unwrap();
-            let index = selected / 3 * 3 + slot;
+            let index = selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE + slot;
             (index < count).then_some(MenuAction::Choice(index))
         }
         action => action,
     }
 }
-pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
-    let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    for (i, r) in LOCATION_BOXES.into_iter().enumerate() {
-        if inside(r) {
-            return Some(MenuAction::Location(LOCATIONS[i]));
+pub fn selection_menu_hit_test(
+    x: f32,
+    y: f32,
+    selected: usize,
+    count: usize,
+    car: CarModel,
+) -> Option<MenuAction> {
+    if let Some(direction) = page_hit_test(x, y, 0.18) {
+        return Some(MenuAction::CarPage(direction));
+    }
+    let page_start = crate::cars::ALL
+        .into_iter()
+        .position(|model| model == car)
+        .unwrap_or(0)
+        / CHOICES_PER_PAGE
+        * CHOICES_PER_PAGE;
+    for slot in 0..CHOICES_PER_PAGE {
+        let r = car_box(slot);
+        if x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] {
+            return crate::cars::ALL
+                .into_iter()
+                .nth(page_start + slot)
+                .map(MenuAction::Car);
         }
     }
-    for i in 0..crate::cars::ALL.len() {
+    location_menu_hit_test(x, y, selected, count)
+}
+pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
+    let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    for (i, id) in LOCATIONS.into_iter().enumerate() {
+        let r = location_box(i);
+        if inside(r) {
+            return Some(MenuAction::Location(id));
+        }
+    }
+    for i in 0..crate::cars::ALL.len().min(CHOICES_PER_PAGE) {
         let r = car_box(i);
         if inside(r) {
             return Some(MenuAction::Car(crate::cars::ALL[i]));
@@ -269,56 +305,52 @@ impl Hud {
         let cyan = [0.15, 0.85, 0.95];
         let white = [0.9, 0.95, 1.0];
         let muted = [0.55, 0.66, 0.70];
-        quad(&mut v, [-0.96, -0.75], [0.04, 0.94], [0.025, 0.05, 0.075]);
+        quad(&mut v, [-0.96, -0.58], [0.04, 0.94], [0.025, 0.05, 0.075]);
         text(&mut v, "CHOOSE YOUR DRIVE", [-0.92, 0.86], 0.006, white);
-        text(&mut v, "LOCATION", [-0.92, 0.71], 0.0038, cyan);
         let location = &menu.locations[menu.selected];
-        text(
+        choice_header(
             &mut v,
-            &format!(
-                "{} / {}",
-                menu.selected / 3 + 1,
-                menu.locations.len().div_ceil(3)
-            ),
-            [-0.38, 0.71],
-            0.0035,
-            cyan,
+            "LOCATION",
+            0.71,
+            menu.selected,
+            menu.locations.len(),
         );
-        text(&mut v, "<", [-0.46, 0.71], 0.0035, cyan);
-        text(&mut v, ">", [-0.08, 0.71], 0.0035, cyan);
         for (i, entry) in menu
             .locations
             .iter()
             .enumerate()
-            .skip(menu.selected / 3 * 3)
-            .take(3)
+            .skip(menu.selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
+            .take(CHOICES_PER_PAGE)
         {
-            let r = LOCATION_BOXES[i % 3];
-            let selected = menu.selected == i;
-            menu_button(&mut v, r, selected, menu.focus == 0 && selected);
-            text(
+            choice_button(
                 &mut v,
+                location_box(i % CHOICES_PER_PAGE),
                 &entry.name,
-                [r[0] + 0.035, r[3] - 0.035],
-                0.0042_f32.min(0.84 / (entry.name.len().max(1) as f32 * 6.0)),
-                if selected { cyan } else { white },
+                menu.selected == i,
+                menu.focus == 0,
             );
         }
-        text(&mut v, "CAR", [-0.92, -0.10], 0.0038, cyan);
-        for (i, car) in crate::cars::ALL.into_iter().enumerate() {
-            let r = car_box(i);
-            let selected = menu.car == car;
-            menu_button(&mut v, r, selected, menu.focus == 1 && selected);
-            text(
+        let selected_car = crate::cars::ALL
+            .into_iter()
+            .position(|car| car == menu.car)
+            .unwrap_or(0);
+        choice_header(&mut v, "CAR", 0.18, selected_car, crate::cars::ALL.len());
+        for (i, car) in crate::cars::ALL
+            .into_iter()
+            .enumerate()
+            .skip(selected_car / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
+            .take(CHOICES_PER_PAGE)
+        {
+            choice_button(
                 &mut v,
+                car_box(i % CHOICES_PER_PAGE),
                 car.spec().name,
-                [r[0] + (r[2] - r[0]) * 0.08, r[3] - 0.035],
-                0.0037_f32.min((r[2] - r[0]) * 0.84 / (car.spec().name.len().max(1) as f32 * 6.0)),
-                if selected { cyan } else { white },
+                menu.car == car,
+                menu.focus == 1,
             );
         }
         menu_button(&mut v, START_BOX, true, menu.focus == 2);
-        text(&mut v, "START DRIVING", [-0.87, -0.585], 0.005, cyan);
+        text(&mut v, "START DRIVING", [-0.87, -0.435], 0.005, cyan);
         quad(&mut v, [0.13, 0.58], [0.98, 0.94], [0.025, 0.05, 0.075]);
         quad(&mut v, [0.13, -0.835], [0.98, -0.56], [0.025, 0.05, 0.075]);
         text(&mut v, "CAR PREVIEW", [0.17, 0.86], 0.0035, muted);
@@ -407,6 +439,39 @@ impl Hud {
             gl::Enable(gl::DEPTH_TEST);
         }
     }
+}
+
+fn choice_header(v: &mut Vec<f32>, label: &str, y: f32, selected: usize, count: usize) {
+    let cyan = [0.15, 0.85, 0.95];
+    text(v, label, [-0.92, y], 0.0038, cyan);
+    text(
+        v,
+        &format!(
+            "{} / {}",
+            selected / CHOICES_PER_PAGE + 1,
+            count.div_ceil(CHOICES_PER_PAGE)
+        ),
+        [-0.38, y],
+        0.0035,
+        cyan,
+    );
+    text(v, "<", [-0.46, y], 0.0035, cyan);
+    text(v, ">", [-0.08, y], 0.0035, cyan);
+}
+fn choice_button(v: &mut Vec<f32>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
+    menu_button(v, r, selected, focused && selected);
+    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / (label.chars().count().max(1) as f32 * 6.0));
+    text(
+        v,
+        label,
+        [r[0] + 0.035, (r[1] + r[3]) * 0.5 + size * 5.0],
+        size,
+        if selected {
+            [0.15, 0.85, 0.95]
+        } else {
+            [0.9, 0.95, 1.0]
+        },
+    );
 }
 
 fn menu_button(v: &mut Vec<f32>, r: [f32; 4], selected: bool, focused: bool) {
@@ -849,10 +914,10 @@ mod tests {
     #[test]
     fn location_pages_hit_only_visible_entries() {
         assert_eq!(
-            location_menu_hit_test(-0.5, 0.52, 3, 4),
+            location_menu_hit_test(-0.5, 0.57, 3, 4),
             Some(MenuAction::Choice(3))
         );
-        assert_eq!(location_menu_hit_test(-0.5, 0.29, 3, 4), None);
+        assert_eq!(location_menu_hit_test(-0.5, 0.445, 3, 4), None);
         assert_eq!(
             location_menu_hit_test(-0.45, 0.70, 0, 4),
             Some(MenuAction::Page(-1))
@@ -863,7 +928,7 @@ mod tests {
         );
         assert_eq!(location_menu_hit_test(-0.30, 0.70, 0, 4), None);
         assert_eq!(
-            location_menu_hit_test(-0.5, 0.06, 0, 4),
+            location_menu_hit_test(-0.5, 0.32, 0, 4),
             Some(MenuAction::Choice(2))
         );
         assert_eq!(
@@ -877,23 +942,52 @@ mod tests {
     }
 
     #[test]
+    fn car_pages_select_visible_rows_and_ignore_empty_rows() {
+        for (selected, car) in crate::cars::ALL.into_iter().enumerate() {
+            for slot in 0..CHOICES_PER_PAGE {
+                let r = car_box(slot);
+                let expected = crate::cars::ALL
+                    .into_iter()
+                    .nth(selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE + slot)
+                    .map(MenuAction::Car);
+                assert_eq!(
+                    selection_menu_hit_test(-0.5, (r[1] + r[3]) * 0.5, 0, 4, car),
+                    expected
+                );
+            }
+            assert_eq!(
+                selection_menu_hit_test(-0.45, 0.18, 0, 4, car),
+                Some(MenuAction::CarPage(-1))
+            );
+            assert_eq!(
+                selection_menu_hit_test(-0.07, 0.18, 0, 4, car),
+                Some(MenuAction::CarPage(1))
+            );
+        }
+    }
+
+    #[test]
     fn main_menu_click_targets_cover_all_locations_cars_and_start() {
         for (y, id) in [
-            (0.52, TrackId::Scenic),
-            (0.29, TrackId::Compact),
-            (0.06, TrackId::Engomi),
+            (0.57, TrackId::Scenic),
+            (0.445, TrackId::Compact),
+            (0.32, TrackId::Engomi),
         ] {
             assert_eq!(menu_hit_test(-0.5, y), Some(MenuAction::Location(id)));
         }
-        for (index, car) in crate::cars::ALL.into_iter().enumerate() {
+        for (index, car) in crate::cars::ALL
+            .into_iter()
+            .take(CHOICES_PER_PAGE)
+            .enumerate()
+        {
             let r = car_box(index);
             assert_eq!(
-                menu_hit_test((r[0] + r[2]) * 0.5, -0.215),
+                menu_hit_test((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5),
                 Some(MenuAction::Car(car))
             );
         }
-        assert_eq!(menu_hit_test(-0.5, -0.40), None);
-        assert_eq!(menu_hit_test(-0.5, -0.61), Some(MenuAction::Start));
+        assert_eq!(menu_hit_test(-0.5, -0.35), None);
+        assert_eq!(menu_hit_test(-0.5, -0.46), Some(MenuAction::Start));
         assert_eq!(menu_hit_test(0.5, 0.2), None);
         assert_eq!(menu_hit_test(-0.5, -0.8), None);
     }
