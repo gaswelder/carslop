@@ -6,7 +6,7 @@ use std::f32::consts::TAU;
 const RATE: f32 = crate::ambience::SAMPLE_RATE;
 const QUEUE_SAMPLES: usize = 2400;
 
-// Original procedural sound: no external assets or additional dependencies.
+// Recorded Roadster engine with procedural fallback voices, tires and environment.
 pub struct EngineAudio {
     stream: AudioStreamOwner,
     _subsystem: sdl3::AudioSubsystem,
@@ -26,6 +26,10 @@ struct Voice {
 
 #[derive(Default)]
 struct Synth {
+    recorded: crate::engine_sample::RecordedEngine,
+    road_speed: f32,
+    road_gain: f32,
+    road_noise: f32,
     phase: f32,
     frequency: f32,
     load: f32,
@@ -70,7 +74,8 @@ impl Synth {
         self.tire_gain += (tire - self.tire_gain) * 0.001;
         self.master += (f32::from(u8::from(voice.enabled)) - self.master) * 0.002;
         self.phase = (self.phase + self.frequency / RATE).rem_euclid(2.0);
-        self.tire_phase = (self.tire_phase + self.frequency * 8.7 / RATE).fract();
+        // Rubber resonance follows slip, independently of engine speed or gear.
+        self.tire_phase = (self.tire_phase + (1050.0 + self.tire_gain * 420.0) / RATE).fract();
         let p = self.phase * TAU;
         let harmonics = match voice.model {
             CarModel::Roadster => p.sin() * 0.65 + (p * 2.0).sin() * 0.23 + (p * 4.0).sin() * 0.12,
@@ -84,16 +89,26 @@ impl Synth {
             .wrapping_add(1_013_904_223);
         let noise = (self.noise >> 8) as f32 / 8_388_607.5 - 1.0;
         self.filtered_noise += (noise - self.filtered_noise) * 0.08;
-        let engine = (p.sin() * (1.0 - self.load) + harmonics * self.load)
+        let procedural = (p.sin() * (1.0 - self.load) + harmonics * self.load)
             * (0.065 + self.load * 0.065)
             + self.filtered_noise * self.load * 0.025;
+        let engine = if voice.model == CarModel::Roadster && self.recorded.available() {
+            // Kestrel is a four-stroke six-cylinder: three firing pulses per revolution.
+            self.recorded.sample(self.frequency * 1.5, self.load)
+        } else {
+            procedural
+        };
+        let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
+        self.road_gain += (road_target - self.road_gain) * 0.0005;
+        self.road_noise += (noise - self.road_noise) * 0.025;
+        let rolling = (self.road_noise * 0.18 + self.filtered_noise * 0.035) * self.road_gain;
         let tires = ((noise - self.filtered_noise) * 0.065 + (self.tire_phase * TAU).sin() * 0.012)
             * self.tire_gain;
         self.impact_phase = (self.impact_phase + (48.0 + self.impact * 42.0) / RATE).fract();
         let impact = ((self.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * self.impact * 0.22;
         self.impact *= 0.99981;
         self.impact_cooldown = (self.impact_cooldown - 1.0 / RATE).max(0.0);
-        ((engine + tires + impact) * self.master).clamp(-0.3, 0.3)
+        ((engine + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
     }
 }
 
@@ -141,6 +156,7 @@ impl EngineAudio {
             / 4;
         let count = QUEUE_SAMPLES.saturating_sub(queued);
         let enabled = active && !self.muted;
+        self.synth.road_speed = car.velocity[0].hypot(car.velocity[1]);
         if enabled {
             self.synth.hit(impact);
         } else {
@@ -191,6 +207,77 @@ fn engine_frequency(rpm: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolling_noise_follows_speed_independently_of_rpm() {
+        let mut stopped = Synth::default();
+        let mut moving = Synth {
+            road_speed: 30.0,
+            ..Synth::default()
+        };
+        let voice = Voice {
+            frequency: 60.0,
+            load: 0.0,
+            scrub: 0.0,
+            model: CarModel::Roadster,
+            enabled: true,
+        };
+        let difference: f32 = (0..24000)
+            .map(|_| {
+                let a = stopped.sample(voice);
+                let b = moving.sample(voice);
+                (a - b).abs()
+            })
+            .sum();
+        assert!(difference > 1.0);
+        assert_eq!(stopped.road_gain, 0.0);
+        assert!(moving.road_gain > 0.5);
+    }
+
+    #[test]
+    fn recorded_driving_preview() {
+        let mut synth = Synth::default();
+        let mut pcm = Vec::new();
+        let mut peak = 0.0_f32;
+        for i in 0..(RATE as usize * 18) {
+            let t = i as f32 / RATE;
+            // Idle, accelerate through three shifts, coast, skid, then mute.
+            let rpm = if t < 2.0 {
+                900.0
+            } else if t < 12.0 {
+                2200.0 + ((t - 2.0) % 3.0) / 3.0 * 4000.0
+            } else {
+                (5800.0 - (t - 12.0) * 900.0).max(900.0)
+            };
+            synth.road_speed = ((t - 2.0) * 3.5).clamp(0.0, 35.0);
+            let sample = synth.sample(Voice {
+                frequency: engine_frequency(rpm),
+                load: if t < 12.0 { 0.85 } else { 0.0 },
+                scrub: if (14.0..16.0).contains(&t) { 0.8 } else { 0.0 },
+                model: CarModel::Roadster,
+                enabled: t < 16.0,
+            });
+            assert!(sample.is_finite() && sample.abs() <= 0.3);
+            if t > 17.5 {
+                assert!(sample.abs() < 0.00001);
+            }
+            peak = peak.max(sample.abs());
+            pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
+        }
+        assert!(peak > 0.03);
+        if let Some(path) = std::env::var_os("NFS_AUDIO_PREVIEW") {
+            let mut wav = Vec::new();
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
+            wav.extend_from_slice(&(RATE as u32).to_le_bytes());
+            wav.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
+            wav.extend_from_slice(b"\x02\0\x10\0data");
+            wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+            wav.extend_from_slice(&pcm);
+            std::fs::write(path, wav).unwrap();
+        }
+    }
 
     #[test]
     fn engine_pitch_follows_ratio_based_shifts_on_every_route() {
@@ -381,7 +468,7 @@ mod tests {
         };
         synth.sample(voice);
         assert!(synth.phase < 0.01);
-        assert!((synth.tire_phase - (0.22 + 120.0 * 8.7 / RATE)).abs() < 0.00001);
+        assert!((synth.tire_phase - (0.22 + 1050.42 / RATE)).abs() < 0.00001);
     }
 
     #[test]

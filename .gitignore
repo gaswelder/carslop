@@ -10,6 +10,7 @@ __pycache__/
 /.vscode/
 
 # Generated locations, local previews, and validation output
+/artifacts/
 /data/*
 !/data/cars/
 /Screenshot From *.png

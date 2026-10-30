@@ -10,6 +10,7 @@ mod city_assets;
 mod city_imagery;
 mod cli;
 mod elevation;
+mod engine_sample;
 mod feedback;
 mod gl;
 mod hud;
