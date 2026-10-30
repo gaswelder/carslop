@@ -98,6 +98,9 @@ impl Synth {
         } else {
             procedural
         };
+        // Lift-off keeps the in-gear pitch but softens the engine independently
+        // of rolling noise, tire scrub and impacts. Load is already smoothed.
+        let engine = engine * (0.35 + self.load * 0.65);
         let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
@@ -207,6 +210,39 @@ fn engine_frequency(rpm: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coasting_quiets_every_engine_without_changing_pitch() {
+        for model in crate::cars::ALL {
+            for rpm in [2500.0, 5500.0] {
+                let render = |load| {
+                    let mut synth = Synth::default();
+                    let voice = Voice {
+                        frequency: engine_frequency(rpm),
+                        load,
+                        scrub: 0.0,
+                        model,
+                        enabled: true,
+                    };
+                    let mut energy = 0.0;
+                    for i in 0..24000 {
+                        let sample = synth.sample(voice);
+                        if i >= 12000 {
+                            energy += sample * sample;
+                        }
+                    }
+                    (energy, synth.frequency)
+                };
+                let (coast, coast_pitch) = render(0.12);
+                let (powered, powered_pitch) = render(1.0);
+                assert!(
+                    coast > 0.0 && coast < powered * 0.4,
+                    "{model:?} at {rpm} RPM: coast {coast}, powered {powered}"
+                );
+                assert_eq!(coast_pitch, powered_pitch);
+            }
+        }
+    }
 
     #[test]
     fn rolling_noise_follows_speed_independently_of_rpm() {
