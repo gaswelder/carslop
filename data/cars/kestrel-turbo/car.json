@@ -44,5 +44,12 @@
   "wheel_height": -0.02,
   "mesh": "body.mesh",
   "wheel_mesh": "wheel.mesh",
-  "base": "kestrel"
+  "base": "kestrel",
+  "turbo": {
+    "off_boost_fraction": 0.6,
+    "spool_start_rpm": 2000,
+    "full_boost_rpm": 3800,
+    "spool_seconds": 0.85,
+    "decay_seconds": 0.3
+  }
 }

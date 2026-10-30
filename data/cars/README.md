@@ -113,3 +113,10 @@ and referenced assets with the executable's working-directory `data/cars`.
 
 The [Kestrel Turbo](kestrel-turbo/README.md) is a 930-inspired wide-body variant,
 loaded through the same runtime catalog as other custom cars.
+
+Optional `turbo` enables boost lag and a procedural turbine whistle. Set it to
+`null` for a naturally aspirated engine. Its fields are `off_boost_fraction`
+(0..1 of rated torque/power), `spool_start_rpm`, `full_boost_rpm` (greater than
+start), `spool_seconds` and `decay_seconds` (positive exponential time constants).
+The engine torque and power tune represents full boost; boost follows throttle,
+RPM and gear changes. The whistle follows turbine spool, including its coast-down.

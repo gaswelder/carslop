@@ -37,6 +37,8 @@ pub struct Vehicle {
     pub curb_bump: f32,
     pub engine_rpm: f32,
     pub engine_load: f32,
+    pub turbo_spool: f32,      // normalized turbine speed / available boost
+    pub turbo_boost: f32,      // normalized manifold boost
     pub wheel_phase: [f32; 2], // rear/front axles; cosmetic, never affects physics
     pub tire_scrub: f32,
     brake_pressure: f32,
@@ -80,6 +82,8 @@ impl Vehicle {
             curb_bump: 0.0,
             engine_rpm: IDLE_RPM,
             engine_load: 0.0,
+            turbo_spool: 0.0,
+            turbo_boost: 0.0,
             brake_pressure: 0.0,
             steering: 0.0,
             yaw_rate: 0.0,
@@ -271,6 +275,7 @@ impl Vehicle {
             let wheel_forward = longitudinal * cos + front_v * sin;
             let wheel_side = front_v * cos - longitudinal * sin;
             let throttle = controls.throttle.clamp(0.0, 1.0);
+            self.update_turbo(seconds, throttle, longitudinal);
             let drive = self.drive_force(longitudinal) * throttle * direction;
             let engine_braking = (1.0 - throttle) * self.engine_brake_force(longitudinal);
             let brake = self.brake_pressure * brake_accel * spec.mass;
@@ -450,15 +455,52 @@ impl Vehicle {
         } else {
             force
         };
+        let force = force * self.boost_power_fraction();
         if self.direction == Direction::Reverse {
             force * (1.0 - (speed.abs() / REVERSE_SPEED).powi(2)).max(0.0)
         } else if rpm >= REDLINE_RPM {
             0.0
         } else if let Some(engine) = &spec.road_engine {
-            force.min(engine.wheel_power_watts / speed.abs().max(1.0))
+            force.min(engine.wheel_power_watts * self.boost_power_fraction() / speed.abs().max(1.0))
         } else {
             force
         }
+    }
+
+    fn boost_power_fraction(&self) -> f32 {
+        self.model.spec().turbo.as_ref().map_or(1.0, |t| {
+            t.off_boost_fraction + (1.0 - t.off_boost_fraction) * self.turbo_boost
+        })
+    }
+
+    fn update_turbo(&mut self, dt: f32, throttle: f32, speed: f32) {
+        let Some(tune) = &self.model.spec().turbo else {
+            self.turbo_spool = 0.0;
+            self.turbo_boost = 0.0;
+            return;
+        };
+        let loaded = self.gear != NEUTRAL_GEAR && self.shift_timer <= 0.0;
+        let rpm = self.model.spec().gearbox.rpm(speed, self.gear).max(2200.0);
+        let exhaust = ((rpm - tune.spool_start_rpm) / (tune.full_boost_rpm - tune.spool_start_rpm))
+            .clamp(0.0, 1.0);
+        let target = if loaded {
+            exhaust * throttle * throttle
+        } else {
+            0.0
+        };
+        let time = if target > self.turbo_spool {
+            tune.spool_seconds
+        } else {
+            tune.decay_seconds
+        };
+        self.turbo_spool += (target - self.turbo_spool) * (1.0 - (-dt / time).exp());
+        // Closing the throttle vents manifold pressure while the turbine coasts.
+        let boost_target = if loaded {
+            self.turbo_spool * throttle
+        } else {
+            0.0
+        };
+        self.turbo_boost += (boost_target - self.turbo_boost) * (1.0 - (-dt / 0.06).exp());
     }
 
     fn engine_brake_force(&self, speed: f32) -> f32 {
@@ -1934,5 +1976,60 @@ mod tests {
         assert_eq!(v.direction, Direction::Drive);
         assert_eq!(v.gear, 1);
         assert_eq!(v.speed, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod turbo_tests {
+    use super::*;
+
+    #[test]
+    fn boost_lags_adds_force_and_dumps_on_lift_shift_and_reset() {
+        let model = crate::cars::ALL
+            .into_iter()
+            .find(|m| m.spec().turbo.is_some())
+            .unwrap();
+        let mut car = Vehicle::new([0.0; 3], 0.0, model);
+        car.gear = 3;
+        let speed = model.spec().gearbox.speed_at_rpm(4200.0, 3);
+        let cold_force = car.drive_force(speed);
+        car.update_turbo(0.02, 1.0, speed);
+        assert!(car.turbo_boost < 0.05);
+        for _ in 0..1500 {
+            car.update_turbo(0.004, 1.0, speed);
+        }
+        assert!(car.turbo_boost > 0.99);
+        assert!(car.drive_force(speed) > cold_force * 1.6);
+        for _ in 0..30 {
+            car.update_turbo(0.004, 0.0, speed);
+        }
+        assert!(car.turbo_boost < 0.15);
+        assert!(car.turbo_spool > car.turbo_boost);
+        car.shift(true);
+        car.update_turbo(0.1, 1.0, speed);
+        assert!(car.turbo_boost < 0.05);
+        car.reset([0.0; 3], 0.0);
+        assert_eq!(car.turbo_spool, 0.0);
+        assert_eq!(car.turbo_boost, 0.0);
+        car.gear = NEUTRAL_GEAR;
+        car.update_turbo(5.0, 1.0, speed);
+        assert_eq!(car.turbo_spool, 0.0);
+    }
+
+    #[test]
+    fn low_rpm_and_naturally_aspirated_cars_do_not_build_boost() {
+        for model in crate::cars::ALL {
+            let mut car = Vehicle::new([0.0; 3], 0.0, model);
+            let speed = model.spec().gearbox.speed_at_rpm(1000.0, 1);
+            for _ in 0..1000 {
+                car.update_turbo(0.004, 1.0, speed);
+            }
+            if model.spec().turbo.is_none() {
+                assert_eq!(car.boost_power_fraction(), 1.0);
+                assert_eq!(car.turbo_spool, 0.0);
+            } else {
+                assert!(car.turbo_boost < 0.12);
+            }
+        }
     }
 }

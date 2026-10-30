@@ -28,6 +28,9 @@ struct Voice {
 #[derive(Default)]
 struct Synth {
     recorded: crate::engine_sample::RecordedEngine,
+    turbo_target: f32,
+    turbo_spool: f32,
+    turbo_phase: f32,
     road_speed: f32,
     road_gain: f32,
     road_noise: f32,
@@ -105,6 +108,17 @@ impl Synth {
         // Lift-off keeps the in-gear pitch but softens the engine independently
         // of rolling noise, tire scrub and impacts. Load is already smoothed.
         let engine = engine * (0.35 + self.load * 0.65);
+        let turbo_target = if voice.enabled {
+            self.turbo_target
+        } else {
+            0.0
+        };
+        self.turbo_spool += (turbo_target - self.turbo_spool) * 0.0007;
+        self.turbo_phase = (self.turbo_phase + (1400.0 + 3400.0 * self.turbo_spool) / RATE).fract();
+        let whistle = ((self.turbo_phase * TAU).sin() * 0.035
+            + (self.turbo_phase * TAU * 2.0).sin() * 0.006
+            + (noise - self.filtered_noise) * 0.012)
+            * self.turbo_spool.powf(1.4);
         let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
@@ -115,7 +129,7 @@ impl Synth {
         let impact = ((self.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * self.impact * 0.22;
         self.impact *= 0.99981;
         self.impact_cooldown = (self.impact_cooldown - 1.0 / RATE).max(0.0);
-        ((engine + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
+        ((engine + whistle + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
     }
 }
 
@@ -245,6 +259,7 @@ impl EngineAudio {
             / (2 * std::mem::size_of::<f32>());
         let count = QUEUE_SAMPLES.saturating_sub(queued);
         let enabled = active && !self.muted;
+        self.synth.turbo_target = car.turbo_spool;
         self.synth.road_speed = car.velocity[0].hypot(car.velocity[1]);
         if enabled {
             self.synth.hit(impact);
@@ -688,5 +703,40 @@ mod tests {
             let fast = engine_frequency(car.target_engine_rpm());
             assert!(idle < slow && slow < fast && fast <= 6500.0 / 30.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod turbo_tests {
+    use super::*;
+
+    #[test]
+    fn whistle_follows_spool_and_fades_when_disabled() {
+        let voice = Voice {
+            frequency: 120.0,
+            load: 0.7,
+            scrub: 0.0,
+            model: CarModel::Roadster,
+            enabled: true,
+        };
+        let mut quiet = Synth::default();
+        let mut turbo = Synth {
+            turbo_target: 1.0,
+            ..Synth::default()
+        };
+        let mut energy = 0.0;
+        for _ in 0..24000 {
+            let difference = turbo.sample(voice) - quiet.sample(voice);
+            energy += difference * difference;
+        }
+        assert!(energy > 1.0);
+        assert!(turbo.turbo_spool > 0.99);
+        for _ in 0..24000 {
+            turbo.sample(Voice {
+                enabled: false,
+                ..voice
+            });
+        }
+        assert!(turbo.turbo_spool < 0.001);
     }
 }

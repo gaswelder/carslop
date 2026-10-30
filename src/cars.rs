@@ -57,6 +57,34 @@ pub struct CarSpec {
     pub dynamics: Dynamics,
     pub gearbox: Gearbox,
     pub road_engine: Option<RoadEngine>,
+    pub turbo: Option<Turbo>,
+}
+
+/// Full-boost torque/power are already included in the engine tune.
+#[derive(Clone)]
+pub struct Turbo {
+    pub off_boost_fraction: f32,
+    pub spool_start_rpm: f32,
+    pub full_boost_rpm: f32,
+    pub spool_seconds: f32,
+    pub decay_seconds: f32,
+}
+
+fn turbo(value: &serde_json::Value) -> Result<Option<Turbo>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let tune = Turbo {
+        off_boost_fraction: fraction(&value["off_boost_fraction"])?,
+        spool_start_rpm: number(&value["spool_start_rpm"])?,
+        full_boost_rpm: number(&value["full_boost_rpm"])?,
+        spool_seconds: number(&value["spool_seconds"])?,
+        decay_seconds: number(&value["decay_seconds"])?,
+    };
+    if tune.full_boost_rpm <= tune.spool_start_rpm {
+        return Err("full boost RPM must exceed spool start RPM".into());
+    }
+    Ok(Some(tune))
 }
 
 /// Handling parameters in SI units. Rear drive is 0, front drive is 1.
@@ -184,6 +212,7 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         .filter(|a| a.len() == 2)
         .ok_or("expected two stiffness values")?;
     let spec = CarSpec {
+        turbo: turbo(&v["turbo"])?,
         mesh: asset_path(path, &v["mesh"])?,
         wheel_mesh: asset_path(path, &v["wheel_mesh"])?,
         name: text(&v["name"])?,
@@ -487,6 +516,9 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     }
     if let Some(v) = object.get("wheel_mesh") {
         spec.wheel_mesh = asset_path(path, v)?;
+    }
+    if let Some(value) = object.get("turbo") {
+        spec.turbo = turbo(value)?;
     }
     Ok(ExtraCar { spec, base })
 }

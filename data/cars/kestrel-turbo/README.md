@@ -20,6 +20,7 @@ The runtime tune uses 171.9 kW at the wheels (90% of 191 kW), rear drive,
 four forward gears, firmer suspension and more rear grip. Gear ratios,
 shift points, drag, launch force, brakes, inertia, and tire forces are game
 calibrations, not a certified reproduction. The existing Kestrel axle positions
-and wheel radius are retained to match the adapted mesh. The current engine
-model does not simulate turbo lag or a boost curve. All tuning is in `car.json`;
+and wheel radius are retained to match the adapted mesh. The turbo builds boost progressively with throttle and RPM, loses pressure on
+lift-off and shifts, and adds a turbine whistle that rises with spool speed.
+Rated torque and wheel power represent full boost. All tuning is in `car.json`;
 all geometry is in the mesh files.
