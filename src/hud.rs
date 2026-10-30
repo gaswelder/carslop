@@ -26,14 +26,34 @@ const START_BOX: [f32; 4] = [-0.92, -0.68, 0.0, -0.54];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Location(TrackId),
+    Choice(usize),
+    Page(i32),
     Car(CarModel),
     Start,
 }
-pub struct MainMenu {
-    pub location: TrackId,
+pub struct MainMenu<'a> {
+    pub locations: &'a [crate::city_assets::MenuLocation],
+    pub selected: usize,
     pub car: CarModel,
     pub focus: usize,
-    pub city_enabled: bool,
+}
+pub fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
+    if (0.66..=0.76).contains(&y) {
+        if (-0.48..=-0.40).contains(&x) {
+            return Some(MenuAction::Page(-1));
+        }
+        if (-0.12..=0.0).contains(&x) {
+            return Some(MenuAction::Page(1));
+        }
+    }
+    match menu_hit_test(x, y) {
+        Some(MenuAction::Location(id)) => {
+            let slot = LOCATIONS.iter().position(|v| *v == id).unwrap();
+            let index = selected / 3 * 3 + slot;
+            (index < count).then_some(MenuAction::Choice(index))
+        }
+        action => action,
+    }
 }
 pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
     let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
@@ -252,29 +272,43 @@ impl Hud {
         quad(&mut v, [-0.96, -0.75], [0.04, 0.94], [0.025, 0.05, 0.075]);
         text(&mut v, "CHOOSE YOUR DRIVE", [-0.92, 0.86], 0.006, white);
         text(&mut v, "LOCATION", [-0.92, 0.71], 0.0038, cyan);
-        let details = [
-            "SCENIC COASTAL ROAD / 2.3 KM",
-            "SHORT CIRCUIT / FREE DRIVE",
-            "NORTH + SOUTH / 289 KM2 / OFFLINE",
-        ];
-        for (i, &id) in available_locations(menu.city_enabled).iter().enumerate() {
-            let r = LOCATION_BOXES[i];
-            let selected = menu.location == id;
+        let location = &menu.locations[menu.selected];
+        text(
+            &mut v,
+            &format!(
+                "{} / {}",
+                menu.selected / 3 + 1,
+                menu.locations.len().div_ceil(3)
+            ),
+            [-0.38, 0.71],
+            0.0035,
+            cyan,
+        );
+        text(&mut v, "<", [-0.46, 0.71], 0.0035, cyan);
+        text(&mut v, ">", [-0.08, 0.71], 0.0035, cyan);
+        for (i, entry) in menu
+            .locations
+            .iter()
+            .enumerate()
+            .skip(menu.selected / 3 * 3)
+            .take(3)
+        {
+            let r = LOCATION_BOXES[i % 3];
+            let selected = menu.selected == i;
             menu_button(&mut v, r, selected, menu.focus == 0 && selected);
             text(
                 &mut v,
-                id.track().name,
+                &entry.name,
                 [r[0] + 0.035, r[3] - 0.035],
-                0.0042,
+                0.0042_f32.min(0.84 / (entry.name.len().max(1) as f32 * 6.0)),
                 if selected { cyan } else { white },
             );
-            text(
-                &mut v,
-                details[i],
-                [r[0] + 0.035, r[3] - 0.115],
-                0.003,
-                muted,
-            );
+            let detail = if entry.path.is_some() {
+                "OFFLINE LOCATION / LOAD ON START"
+            } else {
+                "BUILT-IN ROUTE / FREE DRIVE"
+            };
+            text(&mut v, detail, [r[0] + 0.035, r[3] - 0.115], 0.003, muted);
         }
         text(&mut v, "CAR", [-0.92, -0.10], 0.0038, cyan);
         for (i, car) in crate::cars::ALL.into_iter().enumerate() {
@@ -302,14 +336,8 @@ impl Hud {
             0.0032,
             white,
         );
-        text(
-            &mut v,
-            menu.location.track().name,
-            [0.17, -0.62],
-            0.0038,
-            white,
-        );
-        if menu.location == TrackId::Engomi {
+        text(&mut v, &location.name, [0.17, -0.62], 0.0038, white);
+        if location.track == TrackId::Engomi {
             text(
                 &mut v,
                 "MAP DATA: OPENSTREETMAP CONTRIBUTORS",
@@ -814,6 +842,8 @@ pub(crate) fn glyph(ch: char) -> [u8; 7] {
         '/' => [1, 2, 2, 4, 8, 8, 16],
         '-' => [0, 0, 0, 31, 0, 0, 0],
         '+' => [0, 4, 4, 31, 4, 4, 0],
+        '<' => [1, 2, 4, 8, 4, 2, 1],
+        '>' => [16, 8, 4, 2, 4, 8, 16],
         _ => [0; 7],
     }
 }
@@ -821,6 +851,36 @@ pub(crate) fn glyph(ch: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn location_pages_hit_only_visible_entries() {
+        assert_eq!(
+            location_menu_hit_test(-0.5, 0.52, 3, 4),
+            Some(MenuAction::Choice(3))
+        );
+        assert_eq!(location_menu_hit_test(-0.5, 0.29, 3, 4), None);
+        assert_eq!(
+            location_menu_hit_test(-0.45, 0.70, 0, 4),
+            Some(MenuAction::Page(-1))
+        );
+        assert_eq!(
+            location_menu_hit_test(-0.07, 0.70, 0, 4),
+            Some(MenuAction::Page(1))
+        );
+        assert_eq!(location_menu_hit_test(-0.30, 0.70, 0, 4), None);
+        assert_eq!(
+            location_menu_hit_test(-0.5, 0.06, 0, 4),
+            Some(MenuAction::Choice(2))
+        );
+        assert_eq!(
+            location_menu_hit_test(-0.4, 0.70, 0, 4),
+            Some(MenuAction::Page(-1))
+        );
+        assert_eq!(
+            location_menu_hit_test(-0.1, 0.70, 0, 4),
+            Some(MenuAction::Page(1))
+        );
+    }
 
     #[test]
     fn main_menu_click_targets_cover_all_locations_cars_and_start() {

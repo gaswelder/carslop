@@ -36,8 +36,10 @@ fn error(message: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message)
 }
 pub fn signature() -> u32 {
-    static KEY: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *KEY.get_or_init(|| {
+    static KEY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, &'static u32>>,
+    > = std::sync::OnceLock::new();
+    *crate::city_assets::cached(&KEY, || {
         let data = [
             "city.txt",
             "streets.txt",

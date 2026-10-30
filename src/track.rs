@@ -87,11 +87,13 @@ impl TrackId {
     pub fn track(self) -> &'static Track {
         static COMPACT: OnceLock<Track> = OnceLock::new();
         static SCENIC: OnceLock<Track> = OnceLock::new();
-        static ENGOMI: OnceLock<Track> = OnceLock::new();
+        static ENGOMI: OnceLock<
+            std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, &'static Track>>,
+        > = OnceLock::new();
         match self {
             Self::Compact => COMPACT.get_or_init(|| Track::build(self, &ROAD_POINTS)),
             Self::Scenic => SCENIC.get_or_init(|| Track::build(self, &SCENIC_POINTS)),
-            Self::Engomi => ENGOMI.get_or_init(Track::engomi),
+            Self::Engomi => crate::city_assets::cached(&ENGOMI, Track::engomi),
         }
     }
 }

@@ -6,11 +6,11 @@ use sdl3::{
     video::Window,
 };
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
-static CITY_READY: AtomicBool = AtomicBool::new(false);
+static CITY_READY: OnceLock<Mutex<std::collections::HashSet<std::path::PathBuf>>> = OnceLock::new();
 
 /// Warm the shared city map and validate its archive before creating a session.
 /// A close request is requeued for the application's normal shutdown path.
@@ -20,7 +20,13 @@ pub fn prepare(
     events: &mut sdl3::EventPump,
     sdl: &sdl3::Sdl,
 ) -> bool {
-    if id != TrackId::Engomi || CITY_READY.load(Ordering::Acquire) {
+    if id != TrackId::Engomi
+        || CITY_READY
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .contains(crate::city_assets::directory())
+    {
         return true;
     }
     let started = Instant::now();
@@ -33,7 +39,11 @@ pub fn prepare(
         .spawn(|| {
             TrackId::Engomi.track();
             crate::scene_archive::Archive::open_default().map_err(|e| e.to_string())?;
-            CITY_READY.store(true, Ordering::Release);
+            CITY_READY
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .insert(crate::city_assets::directory().to_path_buf());
             Ok::<_, String>(())
         })
         .expect("failed to start location loader");

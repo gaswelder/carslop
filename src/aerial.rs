@@ -128,8 +128,10 @@ pub fn source_available() -> bool {
         )
 }
 pub fn attribution_label() -> &'static str {
-    static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    LABEL.get_or_init(|| {
+    static LABEL: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, &'static &'static str>>,
+    > = std::sync::OnceLock::new();
+    *crate::city_assets::cached::<&'static str>(&LABEL, || {
         let path = std::env::var_os("NFS_AERIAL_DATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))

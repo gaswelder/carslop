@@ -218,7 +218,8 @@ struct App {
     chase: camera::ChaseCamera,
     preview_angle: f32,
     menu_focus: usize,
-    city_enabled: bool,
+    locations: Vec<city_assets::MenuLocation>,
+    selected_location: usize,
     #[cfg(test)]
     capture_path: Option<std::path::PathBuf>,
     keys: HashSet<Keycode>,
@@ -237,21 +238,17 @@ impl Drop for App {
 impl App {
     #[cfg(test)]
     fn new() -> Self {
-        // Existing city fixture tests explicitly enable the city menu.
-        Self::with_options(false, true)
+        Self::with_location(false)
     }
 
     fn with_location(city: bool) -> Self {
-        Self::with_options(city, city)
-    }
-    fn with_options(city: bool, city_enabled: bool) -> Self {
         let sdl_context = sdl3::init().expect("SDL init failed");
         let video = sdl_context.video().expect("failed to get video subsystem");
         let gl_attr = video.gl_attr();
         gl_attr.set_context_profile(sdl3::video::GLProfile::Core);
         gl_attr.set_context_version(3, 3);
         gl_attr.set_depth_size(24);
-        let mut events = sdl_context.event_pump().expect("failed to get event pump");
+        let events = sdl_context.event_pump().expect("failed to get event pump");
         let mut window = video
             .window("Coastal Loop", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
             .opengl()
@@ -262,13 +259,32 @@ impl App {
         gl::load_gl();
         gl::enable_depth_test();
         info!("{}", gl::debug_context_info());
-        let loaded =
-            !city || loading::prepare(TrackId::Engomi, &mut window, &mut events, &sdl_context);
-        let mut session = if city && loaded {
-            Session::on_track(CarModel::Roadster, TrackId::Engomi)
-        } else {
-            Session::new(CarModel::Roadster)
-        };
+        let mut locations = city_assets::menu_locations();
+        let selected_city = city.then(|| {
+            city_assets::directory()
+                .canonicalize()
+                .unwrap_or_else(|_| city_assets::directory().to_path_buf())
+        });
+        let selected_location = selected_city.map_or(0, |path| {
+            if let Some(index) = locations.iter().position(|entry| {
+                entry
+                    .path
+                    .as_deref()
+                    .and_then(|p| p.canonicalize().ok())
+                    .as_deref()
+                    == Some(path.as_path())
+            }) {
+                index
+            } else {
+                locations.push(city_assets::MenuLocation {
+                    name: city_assets::name().into(),
+                    track: TrackId::Engomi,
+                    path: Some(path),
+                });
+                locations.len() - 1
+            }
+        });
+        let mut session = Session::new(CarModel::Roadster);
         session.state = GameState::Menu;
         let _ = window.set_title(session.track().name);
 
@@ -304,13 +320,34 @@ impl App {
             chase,
             preview_angle: 0.0,
             menu_focus: 0,
-            city_enabled,
+            locations,
+            selected_location,
             #[cfg(test)]
             capture_path: None,
             keys: HashSet::new(),
         };
         app.ensure_mesh();
         app
+    }
+
+    fn start_selected(&mut self) {
+        let entry = self.locations[self.selected_location].clone();
+        if let Some(path) = entry.path {
+            let changed = path.canonicalize().ok().as_deref() != Some(city_assets::directory());
+            if let Err(error) = city_assets::select(path) {
+                warn!("Cannot select location: {error}");
+                return;
+            }
+            if changed {
+                self.meshes[TrackId::Engomi.index()] = None;
+            }
+        }
+        if !self.prepare_location(entry.track) {
+            return;
+        }
+        self.session.select_location(entry.track);
+        self.ensure_mesh();
+        self.restart();
     }
 
     fn prepare_location(&mut self, id: TrackId) -> bool {
@@ -440,21 +477,30 @@ impl App {
         }
         match action {
             hud::MenuAction::Location(id) => {
-                if id == TrackId::Engomi && !self.city_enabled {
-                    return;
-                }
-                if !self.prepare_location(id) {
-                    return;
+                if let Some(index) = self.locations.iter().position(|entry| entry.track == id) {
+                    self.selected_location = index;
                 }
                 self.menu_focus = 0;
-                self.session.select_location(id);
+            }
+            hud::MenuAction::Choice(index) => {
+                if index < self.locations.len() {
+                    self.selected_location = index;
+                }
+                self.menu_focus = 0;
+            }
+            hud::MenuAction::Page(direction) => {
+                let pages = self.locations.len().div_ceil(3);
+                let page = (self.selected_location as i32 / 3 + direction).rem_euclid(pages as i32)
+                    as usize;
+                self.selected_location = page * 3;
+                self.menu_focus = 0;
             }
             hud::MenuAction::Car(car) => {
                 self.menu_focus = 1;
                 self.session.select_car(car);
             }
             hud::MenuAction::Start => {
-                self.restart();
+                self.start_selected();
                 return;
             }
         }
@@ -480,7 +526,12 @@ impl App {
                 });
             }
         } else if self.session.state == GameState::Menu {
-            if let Some(action) = hud::menu_hit_test(point[0], point[1]) {
+            if let Some(action) = hud::location_menu_hit_test(
+                point[0],
+                point[1],
+                self.selected_location,
+                self.locations.len(),
+            ) {
                 self.menu_action(action);
             }
         }
@@ -495,22 +546,13 @@ impl App {
                     let direction = if key == Keycode::Left { -1 } else { 1 };
                     match self.menu_focus {
                         0 => {
-                            let locations = hud::available_locations(self.city_enabled);
-                            let current = locations
-                                .iter()
-                                .position(|id| *id == self.session.track().id)
-                                .unwrap();
-                            let next = (current as i32 + direction)
-                                .rem_euclid(locations.len() as i32)
+                            self.selected_location = (self.selected_location as i32 + direction)
+                                .rem_euclid(self.locations.len() as i32)
                                 as usize;
-                            if !self.prepare_location(locations[next]) {
-                                return;
-                            }
-                            self.session.cycle_location(direction, self.city_enabled);
                         }
                         1 => self.session.cycle_car(direction),
                         _ if key == Keycode::Space => {
-                            self.restart();
+                            self.start_selected();
                             return;
                         }
                         _ => {}
@@ -538,12 +580,13 @@ impl App {
                 };
                 self.keys.clear();
             }
-            Keycode::Return if self.session.state == GameState::Menu => self.restart(),
+            Keycode::Return if self.session.state == GameState::Menu => self.start_selected(),
             Keycode::M => {
                 self.menu_focus = 0;
                 self.session.state = GameState::Menu;
                 self.keys.clear();
             }
+            Keycode::R if self.session.state == GameState::Menu => self.start_selected(),
             Keycode::R => self.restart(),
             Keycode::C => {
                 let paused = self.session.state == GameState::Paused;
@@ -571,18 +614,16 @@ impl App {
                 self.snap_camera();
             }
             Keycode::F6 if self.session.state == GameState::Menu => {
-                self.session.toggle_track();
-                self.ensure_mesh();
-                self.snap_camera();
+                self.selected_location = if self.selected_location == 0 { 1 } else { 0 };
             }
-            Keycode::F7 if self.city_enabled && self.session.state == GameState::Menu => {
-                if !self.prepare_location(TrackId::Engomi) {
-                    return;
+            Keycode::F7 if self.session.state == GameState::Menu => {
+                if let Some(index) = self
+                    .locations
+                    .iter()
+                    .position(|entry| entry.track == TrackId::Engomi)
+                {
+                    self.selected_location = index;
                 }
-                self.session = Session::on_track(self.session.vehicle.model, TrackId::Engomi);
-                self.session.state = GameState::Menu;
-                self.ensure_mesh();
-                self.snap_camera();
             }
             Keycode::A | Keycode::Z if self.session.state == GameState::Driving => {
                 self.session.vehicle.shift(key == Keycode::A);
@@ -661,10 +702,10 @@ impl App {
             self.hud.draw_menu(
                 self.program,
                 hud::MainMenu {
-                    location: s.track().id,
+                    locations: &self.locations,
+                    selected: self.selected_location,
                     car: s.vehicle.model,
                     focus: self.menu_focus,
-                    city_enabled: self.city_enabled,
                 },
             );
         } else {
@@ -747,7 +788,10 @@ mod tests {
             "select an imported location"
         );
         let mut app = App::with_location(true);
+        assert_ne!(app.session.track().id, TrackId::Engomi);
+        app.start_selected();
         assert_eq!(app.session.track().id, TrackId::Engomi);
+        app.session.state = GameState::Menu;
         if let Some(path) = std::env::var_os("NFS_IMPORTED_PREVIEW") {
             app.capture_path = Some(path.into());
         }
@@ -768,6 +812,8 @@ mod tests {
         let mut app = App::new();
         let loading = std::time::Instant::now();
         app.key_down(Keycode::F7);
+        app.start_selected();
+        app.session.state = GameState::Menu;
         eprintln!(
             "City selection: {:.2}s including map/collision loading and archive validation",
             loading.elapsed().as_secs_f32()
@@ -1706,7 +1752,7 @@ mod tests {
     #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
     fn no_city_startup_renderer_smoke() {
         let mut app = App::with_location(false);
-        assert!(!app.city_enabled);
+        assert!(app.locations.len() >= 2);
         app.render(Duration::ZERO);
         app.menu_action(hud::MenuAction::Location(TrackId::Engomi));
         app.key_down(Keycode::F7);
@@ -1717,7 +1763,27 @@ mod tests {
             assert_ne!(app.session.track().id, TrackId::Engomi);
         }
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
+        app.menu_action(hud::MenuAction::Choice(1));
+        assert_eq!(app.session.track().id, TrackId::Scenic);
+        app.key_down(Keycode::Return);
+        assert_eq!(app.session.track().id, TrackId::Compact);
+        assert!(app.session.state == GameState::Driving);
+        assert!(app.meshes[TrackId::Engomi.index()].is_none());
+        app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        drop(app);
+        if let Ok(path) = city_assets::directory().canonicalize() {
+            let mut app = App::with_location(true);
+            let selected = &app.locations[app.selected_location];
+            assert_eq!(
+                selected.path.as_ref().unwrap().canonicalize().unwrap(),
+                path
+            );
+            assert_ne!(app.session.track().id, TrackId::Engomi);
+            assert!(app.meshes[TrackId::Engomi.index()].is_none());
+            app.render(Duration::ZERO);
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
     }
 
     #[test]

@@ -27,8 +27,10 @@ Choose a location and car, then start free driving.
 
 Press **Tab** while driving to cycle **Close → Wide → Bonnet** camera views.
 
-Running without arguments opens the built-in track menu without loading city
-assets. Cities appear only when selected with `--location`. To drive in Nicosia:
+Running without arguments lists the built-in routes and all imported locations
+without loading city assets. Choose a location, then Start Driving to load it.
+Use Left/Right to browse or click the page arrows for more locations.
+`--location` preselects a city in the menu. To drive in Nicosia:
 
 ```sh
 ./target/release/nfs5like play --location nicosia
