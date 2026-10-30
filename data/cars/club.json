@@ -1,0 +1,43 @@
+{
+  "name": "CLUB",
+  "description": "LIGHT HATCH - GRIP AND BRAKES",
+  "mass": 850.0,
+  "engine_force": 7225.0,
+  "top_speed": 22.5,
+  "brake_force": 18700.0,
+  "lateral_force": 11900.0,
+  "wheelbase": 2.3,
+  "steering_response": 10.0,
+  "road_engine": null,
+  "dynamics": {
+    "front_weight": 0.63,
+    "cg_height": 0.48,
+    "track_width": 1.4,
+    "yaw_inertia": 950.0,
+    "front_drive": 1.0,
+    "brake_bias": 0.68,
+    "corner_stiffness": [
+      58000.0,
+      43000.0
+    ],
+    "peak_torque": 102.0,
+    "suspension_hz": 1.85,
+    "steering_speed_squared": 0.0
+  },
+  "gearbox": {
+    "ratios": [
+      3.454545497894287,
+      1.9444444179534912,
+      1.2857142686843872,
+      0.9090909361839294,
+      0.7105262875556946
+    ],
+    "final_drive": 3.8947367668151855,
+    "rolling_radius": 0.2785211503505707,
+    "reverse_ratio": 3.1666667461395264,
+    "upshift_rpm": 6000.0,
+    "downshift_rpm": 2400.0
+  },
+  "half_track": 0.95,
+  "wheel_height": -0.02
+}

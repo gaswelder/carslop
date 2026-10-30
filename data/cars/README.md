@@ -32,10 +32,22 @@ To regenerate after changing the procedural source:
 cargo test export_kestrel_mesh -- --ignored
 ```
 
+## Tuning existing cars
+
+`kestrel.json`, `muscle.json`, and `club.json` are the required runtime parameter
+files for the original cars. Edit them and restart the executable to change
+names, handling, power/drag, gearbox, or wheel placement without rebuilding.
+These files contain complete definitions; custom cars inherit their current
+values. Missing or invalid required files stop loading with the filename and
+error, rather than silently using compiled-in tuning. Ship these files with
+all builds. `half_track` sets lateral wheel spacing; `wheel_height` sets the
+wheel-center Y coordinate in meters. Body artwork and the shared wheel mesh
+remain assets/procedural geometry, separate from these tuning parameters.
+
 ## Adding cars without recompiling
 
 Create a `*.json` file directly in `data/cars`, alongside `kestrel.mesh`, then
-restart the existing executable. Files are discovered at startup in filename
+restart the existing executable. Other JSON files are discovered at startup in filename
 order and appended to the three original cars. Invalid definitions are skipped
 with a warning. Use the menu or left/right car selection to select new entries;
 F1–F3 remain shortcuts for the original cars.
@@ -62,7 +74,7 @@ For example, save this as `data/cars/my-coupe.json`:
 `base` is required: `kestrel`, `muscle`, or `club`. Other fields inherit that
 base's settings. Omit `mesh` to reuse its body; mesh paths are relative to the
 JSON file and use the format documented above. Custom meshes contain the body
-only; the game adds wheels using `half_track` and `wheelbase`. A missing or
+only; the game adds wheels using `half_track`, `wheel_height`, and `wheelbase`. A missing or
 invalid mesh warns and uses the base body. Engine sound inherits the base voice.
 
 All handling values use SI units (`top_speed` is meters per second). Supported

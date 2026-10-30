@@ -1,0 +1,44 @@
+{
+  "name": "MUSCLE",
+  "description": "HEAVY GT - POWER AND SLIDE",
+  "mass": 1450.0,
+  "engine_force": 15950.0,
+  "top_speed": 29.0,
+  "brake_force": 26100.0,
+  "lateral_force": 14500.0,
+  "wheelbase": 2.9,
+  "steering_response": 6.8,
+  "road_engine": null,
+  "dynamics": {
+    "front_weight": 0.55,
+    "cg_height": 0.55,
+    "track_width": 1.62,
+    "yaw_inertia": 2800.0,
+    "front_drive": 0.0,
+    "brake_bias": 0.65,
+    "corner_stiffness": [
+      78000.0,
+      82000.0
+    ],
+    "peak_torque": 420.0,
+    "suspension_hz": 1.45,
+    "steering_speed_squared": 0.0
+  },
+  "gearbox": {
+    "ratios": [
+      2.66,
+      1.78,
+      1.3,
+      1.0,
+      0.8,
+      0.63
+    ],
+    "final_drive": 3.73,
+    "rolling_radius": 0.335,
+    "reverse_ratio": 2.9,
+    "upshift_rpm": 5500.0,
+    "downshift_rpm": 2200.0
+  },
+  "half_track": 1.13,
+  "wheel_height": -0.02
+}

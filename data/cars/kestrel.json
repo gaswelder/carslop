@@ -1,0 +1,46 @@
+{
+  "name": "KESTREL",
+  "description": "REAR-ENGINE HERITAGE COUPE",
+  "mass": 1000.0,
+  "engine_force": 9000.0,
+  "top_speed": 58.333335876464844,
+  "brake_force": 20000.0,
+  "lateral_force": 12000.0,
+  "wheelbase": 2.6,
+  "steering_response": 8.0,
+  "road_engine": {
+    "wheel_power_watts": 86400.0,
+    "drag_accel": 0.00036
+  },
+  "dynamics": {
+    "front_weight": 0.39,
+    "cg_height": 0.48,
+    "track_width": 1.46,
+    "yaw_inertia": 1450.0,
+    "front_drive": 0.0,
+    "brake_bias": 0.61,
+    "corner_stiffness": [
+      56000.0,
+      105000.0
+    ],
+    "peak_torque": 155.0,
+    "suspension_hz": 1.65,
+    "steering_speed_squared": 0.01
+  },
+  "gearbox": {
+    "ratios": [
+      2.833,
+      1.778,
+      1.217,
+      0.962,
+      0.821
+    ],
+    "final_drive": 4.4285712242126465,
+    "rolling_radius": 0.315,
+    "reverse_ratio": 3.094,
+    "upshift_rpm": 6200.0,
+    "downshift_rpm": 2600.0
+  },
+  "half_track": 0.88,
+  "wheel_height": -0.02
+}

@@ -1,4 +1,4 @@
-//! Shared original car catalog: selection, rendering, physics, and AI use one identity.
+//! Runtime car catalog: selection, rendering, physics, and AI use one identity.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CarModel {
@@ -49,6 +49,8 @@ pub struct CarSpec {
     pub brake_force: f32,
     pub lateral_force: f32,
     pub wheelbase: f32,
+    pub half_track: f32,
+    pub wheel_height: f32,
     pub steering_response: f32,
     pub dynamics: Dynamics,
     pub gearbox: Gearbox,
@@ -113,133 +115,134 @@ impl Gearbox {
     }
 }
 
-const ROADSTER: CarSpec = CarSpec {
-    name: "KESTREL",
-    description: "REAR-ENGINE HERITAGE COUPE",
-    mass: 1000.0,
-    engine_force: 9000.0,
-    top_speed: 210.0 / 3.6,
-    brake_force: 20000.0,
-    lateral_force: 12000.0,
-    wheelbase: 2.6,
-    steering_response: 8.0,
-    // 96 kW reference engine, approximate 90% driveline efficiency. Drag is
-    // gameplay calibration for a ~210 km/h power/road-load equilibrium.
-    road_engine: Some(RoadEngine {
-        wheel_power_watts: 86_400.0,
-        drag_accel: 0.00036,
-    }),
-    dynamics: Dynamics {
-        front_weight: 0.39,
-        cg_height: 0.48,
-        track_width: 1.46,
-        yaw_inertia: 1450.0,
-        front_drive: 0.0,
-        brake_bias: 0.61,
-        corner_stiffness: [56000.0, 105000.0],
-        peak_torque: 155.0,
-        suspension_hz: 1.65,
-        // Keyboard full lock at city speed should not demand a parking turn.
-        steering_speed_squared: 0.01,
-    },
-    gearbox: Gearbox {
-        // Original 1964–65 911, 901/0 (AA / GA / O / U / Y).
-        ratios: &[2.833, 1.778, 1.217, 0.962, 0.821],
-        final_drive: 31.0 / 7.0,
-        rolling_radius: 0.315,
-        reverse_ratio: 3.094,
-        upshift_rpm: 6200.0,
-        downshift_rpm: 2600.0,
-    },
-};
-const MUSCLE: CarSpec = CarSpec {
-    name: "MUSCLE",
-    description: "HEAVY GT - POWER AND SLIDE",
-    mass: 1450.0,
-    engine_force: 15950.0,
-    top_speed: 29.0,
-    brake_force: 26100.0,
-    lateral_force: 14500.0,
-    wheelbase: 2.9,
-    steering_response: 6.8,
-    road_engine: None,
-    dynamics: Dynamics {
-        front_weight: 0.55,
-        cg_height: 0.55,
-        track_width: 1.62,
-        yaw_inertia: 2800.0,
-        front_drive: 0.0,
-        brake_bias: 0.65,
-        corner_stiffness: [78000.0, 82000.0],
-        peak_torque: 420.0,
-        suspension_hz: 1.45,
-        steering_speed_squared: 0.0,
-    },
-    gearbox: Gearbox {
-        // TREMEC Magnum close-ratio six-speed, Ford TUET11010.
-        ratios: &[2.66, 1.78, 1.30, 1.0, 0.80, 0.63],
-        final_drive: 3.73,
-        rolling_radius: 0.335,
-        reverse_ratio: 2.90,
-        upshift_rpm: 5500.0,
-        downshift_rpm: 2200.0,
-    },
-};
-const CLUB: CarSpec = CarSpec {
-    name: "CLUB",
-    description: "LIGHT HATCH - GRIP AND BRAKES",
-    mass: 850.0,
-    engine_force: 7225.0,
-    top_speed: 22.5,
-    brake_force: 18700.0,
-    lateral_force: 11900.0,
-    wheelbase: 2.3,
-    steering_response: 10.0,
-    road_engine: None,
-    dynamics: Dynamics {
-        front_weight: 0.63,
-        cg_height: 0.48,
-        track_width: 1.40,
-        yaw_inertia: 950.0,
-        front_drive: 1.0,
-        brake_bias: 0.68,
-        corner_stiffness: [58000.0, 43000.0],
-        peak_torque: 102.0,
-        suspension_hz: 1.85,
-        steering_speed_squared: 0.0,
-    },
-    gearbox: Gearbox {
-        // Volkswagen Golf Mk1 020 FF, wide-ratio five-speed / economy fifth.
-        ratios: &[
-            38.0 / 11.0,
-            35.0 / 18.0,
-            36.0 / 28.0,
-            30.0 / 33.0,
-            27.0 / 38.0,
-        ],
-        final_drive: 74.0 / 19.0,
-        rolling_radius: 1.75 / std::f32::consts::TAU,
-        reverse_ratio: 38.0 / 12.0,
-        upshift_rpm: 6000.0,
-        downshift_rpm: 2400.0,
-    },
-};
+fn originals() -> &'static [CarSpec; 3] {
+    static CARS: std::sync::OnceLock<[CarSpec; 3]> = std::sync::OnceLock::new();
+    CARS.get_or_init(|| {
+        ["kestrel", "muscle", "club"].map(|id| {
+            let path = std::path::PathBuf::from(format!("data/cars/{id}.json"));
+            load_original(&path).unwrap_or_else(|error| {
+                panic!("Cannot load required car {}: {error}", path.display())
+            })
+        })
+    })
+}
+fn number(v: &serde_json::Value) -> Result<f32, String> {
+    let n = v.as_f64().ok_or("expected number")? as f32;
+    if !n.is_finite() || n <= 0.0 {
+        return Err("expected finite positive number".into());
+    }
+    Ok(n)
+}
+fn fraction(v: &serde_json::Value) -> Result<f32, String> {
+    let n = nonnegative(v)?;
+    if n > 1.0 {
+        return Err("expected fraction in 0..1".into());
+    }
+    Ok(n)
+}
+fn nonnegative(v: &serde_json::Value) -> Result<f32, String> {
+    let n = signed(v)?;
+    if n < 0.0 {
+        return Err("expected nonnegative number".into());
+    }
+    Ok(n)
+}
+fn signed(v: &serde_json::Value) -> Result<f32, String> {
+    let n = v.as_f64().ok_or("expected number")? as f32;
+    if !n.is_finite() {
+        return Err("expected finite number".into());
+    }
+    Ok(n)
+}
+fn text(v: &serde_json::Value) -> Result<&'static str, String> {
+    let s = v
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("expected nonempty text")?;
+    Ok(Box::leak(s.to_owned().into_boxed_str()))
+}
+fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let d = &v["dynamics"];
+    let g = &v["gearbox"];
+    let ratios = g["ratios"]
+        .as_array()
+        .filter(|a| !a.is_empty() && a.len() <= 255)
+        .ok_or("expected 1..255 ratios")?
+        .iter()
+        .map(number)
+        .collect::<Result<Vec<_>, _>>()?;
+    if !ratios.windows(2).all(|p| p[0] > p[1]) {
+        return Err("ratios must descend".into());
+    }
+    let stiffness = d["corner_stiffness"]
+        .as_array()
+        .filter(|a| a.len() == 2)
+        .ok_or("expected two stiffness values")?;
+    let spec = CarSpec {
+        name: text(&v["name"])?,
+        description: text(&v["description"])?,
+        mass: number(&v["mass"])?,
+        engine_force: number(&v["engine_force"])?,
+        top_speed: number(&v["top_speed"])?,
+        brake_force: number(&v["brake_force"])?,
+        lateral_force: number(&v["lateral_force"])?,
+        wheelbase: number(&v["wheelbase"])?,
+        steering_response: number(&v["steering_response"])?,
+        half_track: number(&v["half_track"])?,
+        wheel_height: signed(&v["wheel_height"])?,
+        dynamics: Dynamics {
+            front_weight: fraction(&d["front_weight"])?,
+            cg_height: number(&d["cg_height"])?,
+            track_width: number(&d["track_width"])?,
+            yaw_inertia: number(&d["yaw_inertia"])?,
+            front_drive: fraction(&d["front_drive"])?,
+            brake_bias: fraction(&d["brake_bias"])?,
+            peak_torque: number(&d["peak_torque"])?,
+            suspension_hz: number(&d["suspension_hz"])?,
+            steering_speed_squared: nonnegative(&d["steering_speed_squared"])?,
+            corner_stiffness: [number(&stiffness[0])?, number(&stiffness[1])?],
+        },
+        gearbox: Gearbox {
+            ratios: Box::leak(ratios.into_boxed_slice()),
+            final_drive: number(&g["final_drive"])?,
+            rolling_radius: number(&g["rolling_radius"])?,
+            reverse_ratio: number(&g["reverse_ratio"])?,
+            upshift_rpm: number(&g["upshift_rpm"])?,
+            downshift_rpm: number(&g["downshift_rpm"])?,
+        },
+        road_engine: if v
+            .get("road_engine")
+            .ok_or("road_engine is required")?
+            .is_null()
+        {
+            None
+        } else {
+            Some(RoadEngine {
+                wheel_power_watts: number(&v["road_engine"]["wheel_power_watts"])?,
+                drag_accel: number(&v["road_engine"]["drag_accel"])?,
+            })
+        },
+    };
+    if spec.gearbox.downshift_rpm >= spec.gearbox.upshift_rpm {
+        return Err("invalid shift thresholds".into());
+    }
+    Ok(spec)
+}
 
 impl CarModel {
     /// Rear pair first, then front pair. Shared by artwork and tire feedback.
     pub fn wheel_centers(self) -> [[f32; 3]; 4] {
-        let half_track = match self {
-            Self::Roadster => 0.88,
-            Self::Muscle => 1.13,
-            Self::Club => 0.95,
-            Self::Custom(i) => extras()[i].half_track,
-        };
+        let half_track = self.spec().half_track;
+        let height = self.spec().wheel_height;
         let axle = self.spec().wheelbase * 0.5;
         [
-            [-half_track, -0.02, -axle],
-            [half_track, -0.02, -axle],
-            [-half_track, -0.02, axle],
-            [half_track, -0.02, axle],
+            [-half_track, height, -axle],
+            [half_track, height, -axle],
+            [-half_track, height, axle],
+            [half_track, height, axle],
         ]
     }
 
@@ -254,9 +257,9 @@ impl CarModel {
 
     pub fn spec(self) -> &'static CarSpec {
         match self {
-            Self::Roadster => &ROADSTER,
-            Self::Muscle => &MUSCLE,
-            Self::Club => &CLUB,
+            Self::Roadster => &originals()[0],
+            Self::Muscle => &originals()[1],
+            Self::Club => &originals()[2],
             Self::Custom(i) => &extras()[i].spec,
         }
     }
@@ -303,7 +306,6 @@ mod tests {
 struct ExtraCar {
     spec: CarSpec,
     base: CarModel,
-    half_track: f32,
     mesh: Option<std::path::PathBuf>,
 }
 impl CarModel {
@@ -329,6 +331,11 @@ fn extras() -> &'static Vec<ExtraCar> {
                 .filter_map(Result::ok)
                 .map(|e| e.path())
                 .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .filter(|p| {
+                    !["kestrel", "muscle", "club"]
+                        .iter()
+                        .any(|id| p.file_stem().is_some_and(|s| s == *id))
+                })
                 .collect(),
             Err(_) => return Vec::new(),
         };
@@ -369,13 +376,6 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             *target = Box::leak(text.to_owned().into_boxed_str());
         }
     }
-    fn number(v: &serde_json::Value) -> Result<f32, String> {
-        let n = v.as_f64().ok_or("expected number")? as f32;
-        if !n.is_finite() || n <= 0.0 {
-            return Err("expected finite positive number".into());
-        }
-        Ok(n)
-    }
     macro_rules! fields { ($obj:expr, $target:expr, $($field:ident),+) => {
         $(if let Some(value) = $obj.get(stringify!($field)) { $target.$field = number(value)?; })+
     }; }
@@ -388,7 +388,8 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
         brake_force,
         lateral_force,
         wheelbase,
-        steering_response
+        steering_response,
+        half_track
     );
     if let Some(d) = object.get("dynamics") {
         let d = d.as_object().ok_or("expected dynamics object")?;
@@ -462,11 +463,9 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             })
         };
     }
-    let half_track = object
-        .get("half_track")
-        .map(number)
-        .transpose()?
-        .unwrap_or(base.wheel_centers()[0][0].abs());
+    if let Some(v) = object.get("wheel_height") {
+        spec.wheel_height = signed(v)?;
+    }
     let mesh = object
         .get("mesh")
         .map(|v| {
@@ -475,12 +474,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
                 .ok_or("expected mesh path")
         })
         .transpose()?;
-    Ok(ExtraCar {
-        spec,
-        base,
-        half_track,
-        mesh,
-    })
+    Ok(ExtraCar { spec, base, mesh })
 }
 
 #[cfg(test)]
@@ -493,6 +487,7 @@ mod runtime_tests {
             return;
         }
         assert_eq!(ALL.len(), 4);
+        assert_eq!(CarModel::Club.spec().mass, 999.0);
         let car = ALL[3];
         assert_eq!(car.index(), 3);
         assert_eq!(car.spec().name, "NEW CAR");
@@ -509,10 +504,42 @@ mod runtime_tests {
     }
 
     #[test]
+    fn required_parameters_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("car.json");
+        let original: serde_json::Value =
+            serde_json::from_slice(&std::fs::read("data/cars/club.json").unwrap()).unwrap();
+        for (key, value) in [
+            ("mass", serde_json::json!(-1)),
+            ("half_track", serde_json::Value::Null),
+            ("gearbox", serde_json::json!({"ratios": []})),
+        ] {
+            let mut invalid = original.clone();
+            invalid[key] = value;
+            std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(load_original(&path).is_err(), "accepted invalid {key}");
+        }
+    }
+
+    #[test]
     fn new_car_is_discovered_by_existing_binary() {
         let dir = tempfile::tempdir().unwrap();
         let cars = dir.path().join("data/cars");
         std::fs::create_dir_all(&cars).unwrap();
+        for id in ["kestrel", "muscle", "club"] {
+            let mut v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(format!("data/cars/{id}.json")).unwrap())
+                    .unwrap();
+            if id == "club" {
+                v["mass"] = serde_json::json!(999);
+            }
+            std::fs::write(
+                cars.join(format!("{id}.json")),
+                serde_json::to_vec(&v).unwrap(),
+            )
+            .unwrap();
+        }
+
         std::fs::write(
             cars.join("new.json"),
             r#"{
