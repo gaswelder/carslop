@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "sample_rate": 48000,
+  "bands": [
+    {
+      "rpm": 1150,
+      "load": {
+        "file": "flat6-1150-load.pcm",
+        "pulse_hz": 57.40899,
+        "overlap": 5017,
+        "source_start_seconds": 276.0,
+        "repeat_seconds": 1.672333,
+        "source_gain": 4.039411
+      },
+      "coast": {
+        "file": "flat6-1150-coast.pcm",
+        "pulse_hz": 57.40899,
+        "overlap": 5017,
+        "source_start_seconds": 276.0,
+        "repeat_seconds": 1.672333,
+        "source_gain": 4.039411
+      }
+    },
+    {
+      "rpm": 2000,
+      "load": {
+        "file": "flat6-2000-load.pcm",
+        "pulse_hz": 110.2353,
+        "overlap": 2613,
+        "source_start_seconds": 10.0,
+        "repeat_seconds": 1.665917,
+        "source_gain": 3.838532
+      },
+      "coast": {
+        "file": "flat6-2000-coast.pcm",
+        "pulse_hz": 95.2409,
+        "overlap": 3024,
+        "source_start_seconds": 100.0,
+        "repeat_seconds": 1.507333,
+        "source_gain": 4.023396
+      }
+    },
+    {
+      "rpm": 2600,
+      "load": {
+        "file": "flat6-2600-load.pcm",
+        "pulse_hz": 125.64737,
+        "overlap": 2292,
+        "source_start_seconds": 150.0,
+        "repeat_seconds": 1.388646,
+        "source_gain": 1.648924
+      },
+      "coast": {
+        "file": "flat6-2600-coast.pcm",
+        "pulse_hz": 128.90287,
+        "overlap": 2234,
+        "source_start_seconds": 134.0,
+        "repeat_seconds": 1.35,
+        "source_gain": 2.28857
+      }
+    },
+    {
+      "rpm": 3500,
+      "load": {
+        "file": "flat6-3500-load.pcm",
+        "pulse_hz": 180.31012,
+        "overlap": 1597,
+        "source_start_seconds": 192.0,
+        "repeat_seconds": 1.364937,
+        "source_gain": 1.616499
+      },
+      "coast": {
+        "file": "flat6-3500-coast.pcm",
+        "pulse_hz": 171.16887,
+        "overlap": 1683,
+        "source_start_seconds": 235.0,
+        "repeat_seconds": 1.357292,
+        "source_gain": 2.884985
+      }
+    },
+    {
+      "rpm": 4400,
+      "load": {
+        "file": "flat6-4400-load.pcm",
+        "pulse_hz": 223.60285,
+        "overlap": 1288,
+        "source_start_seconds": 303.0,
+        "repeat_seconds": 1.395646,
+        "source_gain": 1.965144
+      },
+      "coast": {
+        "file": "flat6-4400-coast.pcm",
+        "pulse_hz": 207.79916,
+        "overlap": 1386,
+        "source_start_seconds": 363.0,
+        "repeat_seconds": 1.617417,
+        "source_gain": 1.793251
+      }
+    },
+    {
+      "rpm": 5100,
+      "load": {
+        "file": "flat6-5100-load.pcm",
+        "pulse_hz": 250.62383,
+        "overlap": 1149,
+        "source_start_seconds": 395.0,
+        "repeat_seconds": 1.627542,
+        "source_gain": 2.23374
+      },
+      "coast": {
+        "file": "flat6-5100-coast.pcm",
+        "pulse_hz": 251.43894,
+        "overlap": 1145,
+        "source_start_seconds": 450.0,
+        "repeat_seconds": 1.835542,
+        "source_gain": 2.29051
+      }
+    }
+  ]
+}

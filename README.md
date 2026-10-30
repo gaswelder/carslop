@@ -381,14 +381,19 @@ restart; rebuilding is unnecessary. Paths are relative to that car's folder.
 Missing or invalid designs stop scene loading with the asset filename and error.
 There is no compiled-in design fallback.
 
-Audio loads the three mono 48 kHz signed 16-bit little-endian `.pcm` files from
-`data/cars/kestrel/audio/` once at startup, relative to the working directory. Restart the
-game after replacing them; rebuilding is unnecessary. If any loop is missing
-or invalid, the game warns and uses its procedural engine voice. A valid loop
-has an even byte count, more than twice its overlap in samples (2242 idle,
-2068 load, 2064 coast), and at most 9,600,000 bytes. Raw PCM has no header, so
-the sample rate and encoding must match. Keep all of `data/cars` with packaged
-builds. Audio fallback operates independently of mesh loading.
+Audio loads `data/cars/kestrel/audio/engine.json` and its mono 48 kHz signed
+16-bit little-endian `.pcm` loops once at startup, relative to the working
+directory. Kestrel and Kestrel Turbo share this six-band flat-six bank. Adjacent
+RPM bands crossfade with constant-power weights; each band's load/coast loops
+use their own measured source pitch. Loops keep advancing while inaudible so
+RPM and throttle transitions never restart playback. Restart after replacing
+assets; rebuilding is unnecessary. A missing/invalid bank warns and falls back
+to the procedural engine voice. The version-1 manifest requires 2–16 bands in
+strictly increasing RPM order, `sample_rate: 48000`, and a local `.pcm` filename,
+`pulse_hz`, and `overlap` for each `load`/`coast` entry. Each loop must have an
+even byte count, more than twice its overlap in samples, and at most 960,000
+bytes. Keep all of `data/cars` with packaged builds. Audio fallback operates
+independently of mesh loading.
 
 See [Kestrel sound credits and conversion commands](#engine-audio-and-recording-credits).
 
@@ -523,7 +528,29 @@ all geometry is in that folder's mesh files.
 
 All files below are in `data/cars/kestrel/audio/` unless otherwise stated.
 
-### Idle recording
+### Active flat-six RPM bank
+
+`engine.json` and `flat6-*.pcm` use Pole Position Production's **1981 Porsche
+911 SC 3.0-litre exhaust recording**, provided in the free Sonniss GDC 2016
+bundle. Six blend anchors cover 1,150, 2,000, 2,600, 3,500, 4,400 and 5,100 RPM;
+the highest band pitches upward to the game's 6,500 RPM redline. Load and coast
+use distinct excerpts, except idle. Their labels are inferred from exhaust
+level/tone; the source has no throttle or tachometer telemetry.
+
+See [the full source, license, excerpt times and calibration notes](data/cars/kestrel/audio/CREDITS.md).
+These are licensed game assets under the [Sonniss GDC bundle license](https://sonniss.com/gdc-bundle-license/),
+not CC0 recordings. The uncut original stays outside the distributed assets.
+Rebuild with Python, NumPy/SciPy and ffmpeg:
+
+```sh
+python3 tools/build_engine_audio.py artifacts/audio/source/porsche-911-sc-1981.wav
+```
+
+Muscle and Club retain their procedural voices. Rolling noise, tire scrub and
+turbo airflow are procedural. The mono engine source is placed in stereo by
+the camera-listener audio system.
+
+### Legacy idle recording (unused)
 
 `engine-source.wav`: domasx2, **racing car engine sound loops**, `loop_0.wav`.
 Source: https://opengameart.org/content/racing-car-engine-sound-loops
@@ -533,24 +560,14 @@ The author describes the current upload as derived from a public-domain car
 recording. Retrieved 2026-10-30. The other files in that pack are pitch variants
 of the same recording; they are deliberately not presented as separate RPM captures.
 
-`roadster-engine.pcm` is the runtime-loaded mono 48 kHz signed 16-bit little-endian
-playback derivative. Recreate with:
+`roadster-engine.pcm` is the old mono 48 kHz signed 16-bit little-endian
+playback derivative, no longer referenced by the active bank. Recreate with:
 
 ```sh
 ffmpeg -i data/cars/kestrel/audio/engine-source.wav -af 'highpass=f=28,volume=1.2' -ar 48000 -ac 1 -f s16le data/cars/kestrel/audio/roadster-engine.pcm
 ```
 
-The Kestrel keeps this sample at idle, blending into separate load and overrun
-recordings between 1150 and 2800 RPM. All three loops run continuously, with
-interpolated playback and overlapping seams. The target firing pulse follows a
-six-cylinder four-stroke engine. These are generic engine recordings, not a
-recording of the specific heritage coupe. Dedicated mid-RPM recordings remain
-the next improvement; the running loops are pitched down at intermediate RPM.
-Muscle and Club retain their distinct procedural voices. Rolling noise and
-tire scrub are procedural; rolling follows road speed and scrub resonance is
-independent of engine RPM. Playback remains mono.
-
-### Running recordings (separate license)
+### Legacy V8 running recordings (unused, separate license)
 
 `engine-load-source.wav` / `engine-coast-source.wav`: `Acc_05570.wav` /
 `Dec_05581.wav` from **Generic V8 Engine Sound**.
@@ -562,7 +579,7 @@ https://creativecommons.org/licenses/by-sa/4.0/
 Retrieved 2026-10-30. The originals and their modified PCM derivatives are
 distributed under that license. Changes: mono downmix, 30 Hz high-pass filter,
 raw signed 16-bit little-endian export; runtime pitch/filter/crossfade processing.
-The generic V8 character is a temporary stand-in for the six-cylinder Kestrel.
+The active flat-six bank replaces these generic V8 stand-ins.
 
 Recreate each derivative with:
 
