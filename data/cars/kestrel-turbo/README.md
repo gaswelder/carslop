@@ -21,6 +21,6 @@ four forward gears, firmer suspension and more rear grip. Gear ratios,
 shift points, drag, launch force, brakes, inertia, and tire forces are game
 calibrations, not a certified reproduction. The existing Kestrel axle positions
 and wheel radius are retained to match the adapted mesh. The turbo builds boost progressively with throttle and RPM, loses pressure on
-lift-off and shifts, and adds a turbine whistle that rises with spool speed.
+lift-off and shifts, and adds an airflow whoosh that grows brighter and stronger with spool speed.
 Rated torque and wheel power represent full boost. All tuning is in `car.json`;
 all geometry is in the mesh files.

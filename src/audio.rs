@@ -30,7 +30,8 @@ struct Synth {
     recorded: crate::engine_sample::RecordedEngine,
     turbo_target: f32,
     turbo_spool: f32,
-    turbo_phase: f32,
+    turbo_air_low: f32,
+    turbo_air_high: f32,
     road_speed: f32,
     road_gain: f32,
     road_noise: f32,
@@ -114,11 +115,16 @@ impl Synth {
             0.0
         };
         self.turbo_spool += (turbo_target - self.turbo_spool) * 0.0007;
-        self.turbo_phase = (self.turbo_phase + (1400.0 + 3400.0 * self.turbo_spool) / RATE).fract();
-        let whistle = ((self.turbo_phase * TAU).sin() * 0.035
-            + (self.turbo_phase * TAU * 2.0).sin() * 0.006
-            + (noise - self.filtered_noise) * 0.012)
-            * self.turbo_spool.powf(1.4);
+        // Broad compressor airflow rather than a pitched oscillator. Two low-pass
+        // filters form a soft band: remove rumble and the brittle top-end hiss.
+        // The air gets brighter and stronger as turbine speed builds.
+        let low_cutoff = 180.0 + 220.0 * self.turbo_spool;
+        let high_cutoff = 1500.0 + 2800.0 * self.turbo_spool;
+        self.turbo_air_low +=
+            (noise - self.turbo_air_low) * (1.0 - (-TAU * low_cutoff / RATE).exp());
+        self.turbo_air_high +=
+            (noise - self.turbo_air_high) * (1.0 - (-TAU * high_cutoff / RATE).exp());
+        let whoosh = (self.turbo_air_high - self.turbo_air_low) * 0.22 * self.turbo_spool.powf(1.4);
         let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
@@ -129,7 +135,7 @@ impl Synth {
         let impact = ((self.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * self.impact * 0.22;
         self.impact *= 0.99981;
         self.impact_cooldown = (self.impact_cooldown - 1.0 / RATE).max(0.0);
-        ((engine + whistle + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
+        ((engine + whoosh + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
     }
 }
 
@@ -711,7 +717,7 @@ mod turbo_tests {
     use super::*;
 
     #[test]
-    fn whistle_follows_spool_and_fades_when_disabled() {
+    fn whoosh_follows_spool_and_fades_when_disabled() {
         let voice = Voice {
             frequency: 120.0,
             load: 0.7,
