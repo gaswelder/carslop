@@ -303,12 +303,6 @@ impl Hud {
                 0.0042_f32.min(0.84 / (entry.name.len().max(1) as f32 * 6.0)),
                 if selected { cyan } else { white },
             );
-            let detail = if entry.path.is_some() {
-                "OFFLINE LOCATION / LOAD ON START"
-            } else {
-                "BUILT-IN ROUTE / FREE DRIVE"
-            };
-            text(&mut v, detail, [r[0] + 0.035, r[3] - 0.115], 0.003, muted);
         }
         text(&mut v, "CAR", [-0.92, -0.10], 0.0038, cyan);
         for (i, car) in crate::cars::ALL.into_iter().enumerate() {
