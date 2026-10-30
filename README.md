@@ -567,7 +567,8 @@ python3 tools/build_engine_audio.py artifacts/audio/source/porsche-911-sc-1981.w
 
 Muscle and Club retain their procedural voices. Rolling noise, tire scrub and
 turbo airflow are procedural. The mono engine source is placed in stereo by
-the camera-listener audio system.
+the camera-listener audio system. Tire scrub builds into a wavering, band-limited
+squeal with increasing slip and speed, with smoothed onset and release.
 
 ### Legacy idle recording (unused)
 
@@ -612,6 +613,13 @@ To render an offline driving audition (no audio device required):
 ```sh
 mkdir -p artifacts/audio
 NFS_AUDIO_PREVIEW=artifacts/audio/driving.wav cargo test recorded_driving_preview -- --ignored --nocapture
+```
+
+For an isolated tire audition (gentle cornering, building slide, recovery, then
+a slower skid):
+
+```sh
+NFS_TIRE_PREVIEW=artifacts/audio/tires.wav cargo test tire_squeal_preview -- --ignored --nocapture
 ```
 
 ## Development

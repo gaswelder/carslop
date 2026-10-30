@@ -38,8 +38,7 @@ struct Synth {
     phase: f32,
     frequency: f32,
     load: f32,
-    tire_gain: f32,
-    tire_phase: f32,
+    tires: TireSound,
     master: f32,
     noise: u32,
     filtered_noise: f32,
@@ -76,11 +75,8 @@ impl Synth {
             0.0
         };
         self.load += (load - self.load) * 0.001;
-        self.tire_gain += (tire - self.tire_gain) * 0.001;
         self.master += (f32::from(u8::from(voice.enabled)) - self.master) * 0.002;
         self.phase = (self.phase + self.frequency / RATE).rem_euclid(2.0);
-        // Rubber resonance follows slip, independently of engine speed or gear.
-        self.tire_phase = (self.tire_phase + (1050.0 + self.tire_gain * 420.0) / RATE).fract();
         let p = self.phase * TAU;
         let harmonics = match voice.model.appearance() {
             CarModel::Roadster => p.sin() * 0.65 + (p * 2.0).sin() * 0.23 + (p * 4.0).sin() * 0.12,
@@ -128,13 +124,72 @@ impl Synth {
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
         let rolling = (self.road_noise * 0.18 + self.filtered_noise * 0.035) * self.road_gain;
-        let tires = ((noise - self.filtered_noise) * 0.065 + (self.tire_phase * TAU).sin() * 0.012)
-            * self.tire_gain;
+        let tires = self.tires.sample(tire, self.road_speed);
         self.impact_phase = (self.impact_phase + (48.0 + self.impact * 42.0) / RATE).fract();
         let impact = ((self.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * self.impact * 0.22;
         self.impact *= 0.99981;
         self.impact_cooldown = (self.impact_cooldown - 1.0 / RATE).max(0.0);
         ((engine + whoosh + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
+    }
+}
+
+/// Rubber scrub grows into a wavering squeal as slip builds. Independent noise,
+/// two resonances and slightly detuned tones avoid a fixed whistle or white hiss.
+#[derive(Default)]
+struct TireSound {
+    gain: f32,
+    slip: f32,
+    speed: f32,
+    noise: u32,
+    wander: f32,
+    flutter: f32,
+    phase: [f32; 2],
+    low: [f32; 2],
+    band: [f32; 2],
+    scrub_low: f32,
+    scrub_high: f32,
+}
+
+impl TireSound {
+    fn sample(&mut self, slip: f32, speed: f32) -> f32 {
+        // Quiet grip corrections should not sound like a sustained slide.
+        let slip = ((slip - 0.10) / 0.90).clamp(0.0, 1.0);
+        let speed_gain = ((speed.abs() - 1.5) / 7.0).clamp(0.0, 1.0);
+        let target = slip * speed_gain;
+        // About 20 ms attack / 65 ms release; no clicks at physics updates.
+        let envelope = if target > self.gain { 0.001 } else { 0.00032 };
+        self.gain += (target - self.gain) * envelope;
+        self.slip += (slip - self.slip) * 0.0005;
+        self.speed += (speed.abs().min(60.0) - self.speed) * 0.0002;
+        self.noise = self
+            .noise
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let noise = (self.noise >> 8) as f32 / 8_388_607.5 - 1.0;
+        self.wander += (noise - self.wander) * 0.0008;
+        self.flutter = (self.flutter + (11.0 + self.speed * 0.18) / RATE).fract();
+        let flutter = (self.flutter * TAU).sin();
+        let pitch = 850.0 + self.slip * 460.0 + self.speed * 3.0;
+        let pitch = pitch * (1.0 + self.wander * 1.8 + flutter * 0.012);
+        let mut resonance = 0.0;
+        let mut tone = 0.0;
+        for i in 0..2 {
+            let frequency = pitch * if i == 0 { 1.0 } else { 1.47 };
+            // Damped state-variable bandpass: energy stays around rubber's
+            // resonances rather than spraying high-frequency noise into the mix.
+            let coefficient = 2.0 * (std::f32::consts::PI * frequency / RATE).sin();
+            self.low[i] += coefficient * self.band[i];
+            let high = noise - self.low[i] - 0.24 * self.band[i];
+            self.band[i] += coefficient * high;
+            resonance += self.band[i] * if i == 0 { 0.032 } else { 0.018 };
+            self.phase[i] = (self.phase[i] + frequency / RATE).fract();
+            tone += (self.phase[i] * TAU).sin() * if i == 0 { 0.024 } else { 0.010 };
+        }
+        self.scrub_low += (noise - self.scrub_low) * 0.025;
+        self.scrub_high += (noise - self.scrub_high) * 0.18;
+        let scrub = (self.scrub_high - self.scrub_low) * 0.055;
+        let squeal = self.slip * self.slip;
+        (scrub + (resonance + tone) * squeal) * self.gain * (0.92 + flutter * 0.08)
     }
 }
 
@@ -487,6 +542,10 @@ mod tests {
             pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
         }
         assert!(peak > 0.03);
+        write_preview(path, &pcm);
+    }
+
+    fn write_preview(path: impl AsRef<std::path::Path>, pcm: &[u8]) {
         let mut wav = Vec::new();
         wav.extend_from_slice(b"RIFF");
         wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
@@ -495,7 +554,7 @@ mod tests {
         wav.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
         wav.extend_from_slice(b"\x02\0\x10\0data");
         wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-        wav.extend_from_slice(&pcm);
+        wav.extend_from_slice(pcm);
         std::fs::write(path, wav).unwrap();
     }
 
@@ -608,7 +667,11 @@ mod tests {
         assert_ne!(voices[0], voices[1]);
         assert_ne!(voices[0], voices[2]);
         let mut quiet = Synth::default();
-        let mut sliding = Synth::default();
+        let mut sliding = Synth {
+            road_speed: 20.0,
+            ..Synth::default()
+        };
+        quiet.road_speed = 20.0;
         let voice = Voice {
             frequency: 80.0,
             load: 0.0,
@@ -672,23 +735,71 @@ mod tests {
     }
 
     #[test]
-    fn tire_tone_phase_does_not_reset_at_engine_cycle_boundaries() {
-        let mut synth = Synth {
-            phase: 1.999,
-            frequency: 120.0,
-            tire_phase: 0.22,
-            ..Synth::default()
+    fn tire_scrub_requires_motion_and_meaningful_slip() {
+        let energy = |slip, speed| {
+            let mut tires = TireSound::default();
+            (0..24000)
+                .map(|_| tires.sample(slip, speed).powi(2))
+                .sum::<f32>()
         };
-        let voice = Voice {
-            frequency: 120.0,
-            load: 0.0,
-            scrub: 1.0,
-            model: CarModel::Roadster,
-            enabled: true,
-        };
-        synth.sample(voice);
-        assert!(synth.phase < 0.01);
-        assert!((synth.tire_phase - (0.22 + 1050.42 / RATE)).abs() < 0.00001);
+        assert_eq!(energy(1.0, 0.0), 0.0);
+        assert_eq!(energy(0.08, 25.0), 0.0);
+        let slow = energy(1.0, 3.0);
+        let scrub = energy(0.4, 25.0);
+        let slide = energy(1.0, 25.0);
+        assert!(slow > 0.0 && slow < slide * 0.15);
+        assert!(scrub > 0.0 && scrub < slide * 0.25);
+    }
+
+    #[test]
+    fn tire_squeal_is_band_limited_and_releases_smoothly() {
+        let mut tires = TireSound::default();
+        let mut previous = 0.0;
+        let mut energy = 0.0;
+        let mut difference_energy = 0.0;
+        for _ in 0..48000 {
+            let sample = tires.sample(1.0, 30.0);
+            assert!(sample.is_finite() && sample.abs() < 0.2);
+            energy += sample * sample;
+            difference_energy += (sample - previous).powi(2);
+            previous = sample;
+        }
+        // Broadband hiss has roughly twice as much first-difference energy.
+        assert!(energy > 1.0 && difference_energy < energy * 0.4);
+        let before = tires.gain;
+        tires.sample(0.0, 30.0);
+        assert!(tires.gain < before && tires.gain > before * 0.99);
+        let mut tail = 0.0_f32;
+        for i in 0..48000 {
+            let sample = tires.sample(0.0, 30.0);
+            if i > 40000 {
+                tail = tail.max(sample.abs());
+            }
+        }
+        assert!(tail < 0.00001);
+    }
+
+    #[test]
+    #[ignore = "exports isolated tire WAV; set NFS_TIRE_PREVIEW to the output path"]
+    fn tire_squeal_preview() {
+        let path = std::env::var_os("NFS_TIRE_PREVIEW").expect("set NFS_TIRE_PREVIEW");
+        let mut tires = TireSound::default();
+        let mut pcm = Vec::new();
+        for i in 0..(RATE as usize * 12) {
+            let t = i as f32 / RATE;
+            // Gentle cornering, building slide, recovery, then a slower skid.
+            let slip = match t {
+                t if t < 2.0 => 0.08,
+                t if t < 6.0 => 0.15 + (t - 2.0) * 0.2125,
+                t if t < 8.0 => 0.0,
+                t if t < 10.0 => 0.85,
+                _ => 0.0,
+            };
+            let sample = tires.sample(slip, if t < 8.0 { 25.0 } else { 5.0 });
+            assert!(sample.is_finite() && sample.abs() < 0.2);
+            pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
+        }
+        write_preview(path, &pcm);
     }
 
     #[test]
