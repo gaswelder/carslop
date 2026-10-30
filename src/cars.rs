@@ -121,7 +121,7 @@ fn originals() -> &'static [CarSpec; 3] {
     static CARS: std::sync::OnceLock<[CarSpec; 3]> = std::sync::OnceLock::new();
     CARS.get_or_init(|| {
         ["kestrel", "muscle", "club"].map(|id| {
-            let path = std::path::PathBuf::from(format!("data/cars/{id}.json"));
+            let path = std::path::PathBuf::from(format!("data/cars/{id}/car.json"));
             load_original(&path).unwrap_or_else(|error| {
                 panic!("Cannot load required car {}: {error}", path.display())
             })
@@ -344,12 +344,14 @@ fn extras() -> &'static Vec<ExtraCar> {
             Ok(entries) => entries
                 .filter_map(Result::ok)
                 .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .filter(|p| p.is_dir())
                 .filter(|p| {
                     !["kestrel", "muscle", "club"]
                         .iter()
-                        .any(|id| p.file_stem().is_some_and(|s| s == *id))
+                        .any(|id| p.file_name().is_some_and(|s| s == *id))
                 })
+                .map(|p| p.join("car.json"))
+                .filter(|p| p.is_file())
                 .collect(),
             Err(_) => return Vec::new(),
         };
@@ -528,7 +530,7 @@ mod runtime_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
         let original: serde_json::Value =
-            serde_json::from_slice(&std::fs::read("data/cars/club.json").unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
         for (key, value) in [
             ("mass", serde_json::json!(-1)),
             ("half_track", serde_json::Value::Null),
@@ -546,40 +548,48 @@ mod runtime_tests {
         let dir = tempfile::tempdir().unwrap();
         let cars = dir.path().join("data/cars");
         std::fs::create_dir_all(&cars).unwrap();
-        for name in ["kestrel", "muscle", "club", "wheel"] {
-            let mut bytes = std::fs::read(format!("data/cars/{name}.mesh")).unwrap();
-            if name == "club" {
-                bytes[12..16].copy_from_slice(&7.25_f32.to_le_bytes());
+        for id in ["kestrel", "muscle", "club"] {
+            let folder = cars.join(id);
+            std::fs::create_dir_all(&folder).unwrap();
+            for name in ["body", "wheel"] {
+                let mut bytes = std::fs::read(format!("data/cars/{id}/{name}.mesh")).unwrap();
+                if id == "club" && name == "body" {
+                    bytes[12..16].copy_from_slice(&7.25_f32.to_le_bytes());
+                }
+                if name == "wheel" {
+                    bytes[12..16].copy_from_slice(&0.123_f32.to_le_bytes());
+                }
+                std::fs::write(folder.join(format!("{name}.mesh")), bytes).unwrap();
             }
-            if name == "wheel" {
-                bytes[12..16].copy_from_slice(&0.123_f32.to_le_bytes());
-            }
-            std::fs::write(cars.join(format!("{name}.mesh")), bytes).unwrap();
         }
 
         for id in ["kestrel", "muscle", "club"] {
             let mut v: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(format!("data/cars/{id}.json")).unwrap())
+                serde_json::from_slice(&std::fs::read(format!("data/cars/{id}/car.json")).unwrap())
                     .unwrap();
             if id == "club" {
                 v["mass"] = serde_json::json!(999);
             }
             std::fs::write(
-                cars.join(format!("{id}.json")),
+                cars.join(id).join("car.json"),
                 serde_json::to_vec(&v).unwrap(),
             )
             .unwrap();
         }
 
+        std::fs::create_dir_all(cars.join("new")).unwrap();
+        std::fs::create_dir_all(cars.join("bad")).unwrap();
+        std::fs::create_dir_all(cars.join("notes")).unwrap();
+        std::fs::write(cars.join("ignored.json"), "{}").unwrap();
         std::fs::write(
-            cars.join("new.json"),
+            cars.join("new/car.json"),
             r#"{
             "base": "club", "name": "NEW CAR", "mass": 1234,
             "half_track": 0.99, "gearbox": {"ratios": [3, 2, 1]}
         }"#,
         )
         .unwrap();
-        std::fs::write(cars.join("bad.json"), r#"{"base":"club","mass":-1}"#).unwrap();
+        std::fs::write(cars.join("bad/car.json"), r#"{"base":"club","mass":-1}"#).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .current_dir(dir.path())
             .env("NFS_TEST_RUNTIME_CAR", "1")

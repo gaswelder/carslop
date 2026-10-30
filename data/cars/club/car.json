@@ -40,6 +40,6 @@
   },
   "half_track": 0.95,
   "wheel_height": -0.02,
-  "mesh": "club.mesh",
+  "mesh": "body.mesh",
   "wheel_mesh": "wheel.mesh"
 }

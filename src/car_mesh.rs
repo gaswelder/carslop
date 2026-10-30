@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_meshes() {
-        let valid = include_bytes!("../data/cars/kestrel.mesh");
+        let valid = include_bytes!("../data/cars/kestrel/body.mesh");
         assert!(decode(valid).is_ok());
         assert!(decode(&valid[..valid.len() - 1]).is_err());
         let mut bad = valid.to_vec();

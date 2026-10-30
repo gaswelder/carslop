@@ -1,11 +1,30 @@
 # Car assets
 
-Kestrel assets live together under `data/cars`: Car designs are runtime assets: `kestrel.mesh`, `muscle.mesh`, and `club.mesh`
-contain the original bodies, and `wheel.mesh` contains the original wheel design.
-Every car definition selects its body with `mesh` and its wheel with `wheel_mesh`.
-Replace the assets or edit those paths, then restart; rebuilding is unnecessary.
-Paths are relative to the JSON file. Missing or invalid designs stop scene loading
-with the asset filename and error. There is no compiled-in design fallback.
+Each car has one folder containing its definition and assets:
+
+```text
+data/cars/
+  README.md
+  kestrel/
+    car.json
+    body.mesh
+    wheel.mesh
+    audio/
+  muscle/
+    car.json
+    body.mesh
+    wheel.mesh
+  club/
+    car.json
+    body.mesh
+    wheel.mesh
+```
+
+Car designs are runtime assets. Every `car.json` selects its body with `mesh`
+and its wheel with `wheel_mesh`. Replace the assets or edit those paths, then
+restart; rebuilding is unnecessary. Paths are relative to that car's folder.
+Missing or invalid designs stop scene loading with the asset filename and error.
+There is no compiled-in design fallback.
 
 Audio loads the three mono 48 kHz signed 16-bit little-endian `.pcm` files from
 `kestrel/audio/` once at startup, relative to the working directory. Restart the
@@ -33,7 +52,7 @@ strength. Triangle winding and normals must face outward.
 
 ## Tuning existing cars
 
-`kestrel.json`, `muscle.json`, and `club.json` are the required runtime parameter
+`kestrel/car.json`, `muscle/car.json`, and `club/car.json` are the required runtime parameter
 files for the original cars. Edit them and restart the executable to change
 names, handling, power/drag, gearbox, or wheel placement without rebuilding.
 These files contain complete definitions; custom cars inherit their current
@@ -44,13 +63,14 @@ wheel-center Y coordinate in meters. Body and wheel artwork are external mesh as
 
 ## Adding cars without recompiling
 
-Create a `*.json` file directly in `data/cars`, alongside `kestrel.mesh`, then
-restart the existing executable. Other JSON files are discovered at startup in filename
-order and appended to the three original cars. Invalid definitions are skipped
-with a warning. Use the menu or left/right car selection to select new entries;
+Create `data/cars/my-coupe/car.json` and put its assets in the same folder, then
+restart the existing executable. Car folders are discovered at startup in folder
+name order and appended to the three original cars. Folders without `car.json`
+and loose JSON files are ignored. Invalid custom definitions are skipped with a
+warning. Use the menu or left/right car selection to select new entries;
 F1–F3 remain shortcuts for the original cars.
 
-For example, save this as `data/cars/my-coupe.json`:
+For example, save this as `data/cars/my-coupe/car.json`:
 
 ```json
 {
@@ -62,7 +82,6 @@ For example, save this as `data/cars/my-coupe.json`:
   "top_speed": 60,
   "half_track": 0.88,
   "mesh": "my-coupe.mesh",
-  "wheel_mesh": "wheel.mesh",
   "gearbox": {
     "ratios": [2.833, 1.778, 1.217, 0.962, 0.821],
     "final_drive": 4.428571

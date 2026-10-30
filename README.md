@@ -369,7 +369,7 @@ Vehicles use a nonlinear front/rear axle tire model, integrated at steps no
 larger than 1/240 second. Steering creates tire forces and a yaw moment about
 the center of mass. Rear-engine Kestrel, rear-drive Muscle, and front-drive Club
 have separate weight distributions, yaw inertias, brake biases, and axle
-stiffnesses in `data/cars/{kestrel,muscle,club}.json`, loaded at startup. These values are gameplay calibrations rather than
+stiffnesses in `data/cars/{kestrel,muscle,club}/car.json`, loaded at startup. These values are gameplay calibrations rather than
 measured specifications or a recreation of NFS5's internal physics.
 
 Acceleration and braking transfer load between axles. Lateral transfer reduces

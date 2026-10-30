@@ -43,6 +43,6 @@
   },
   "half_track": 0.88,
   "wheel_height": -0.02,
-  "mesh": "kestrel.mesh",
+  "mesh": "body.mesh",
   "wheel_mesh": "wheel.mesh"
 }
