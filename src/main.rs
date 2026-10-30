@@ -16,6 +16,7 @@ mod gl;
 mod hud;
 mod imagery_trees;
 mod landscape;
+mod loading;
 mod location;
 mod package;
 mod particles;
@@ -396,6 +397,7 @@ struct App {
     _gl_context: sdl3::video::GLContext,
     window: Window,
     sdl_context: sdl3::Sdl,
+    events: sdl3::EventPump,
     session: Session,
     chase: camera::ChaseCamera,
     preview_angle: f32,
@@ -433,18 +435,9 @@ impl App {
         gl_attr.set_context_profile(sdl3::video::GLProfile::Core);
         gl_attr.set_context_version(3, 3);
         gl_attr.set_depth_size(24);
-        let mut session = if city {
-            Session::on_track(CarModel::Roadster, DriveMode::FreeDrive, TrackId::Engomi)
-        } else {
-            Session::new(CarModel::Roadster, DriveMode::FreeDrive)
-        };
-        session.state = GameState::Menu;
-        let window = video
-            .window(
-                session.track().name,
-                WINDOW_WIDTH as u32,
-                WINDOW_HEIGHT as u32,
-            )
+        let mut events = sdl_context.event_pump().expect("failed to get event pump");
+        let mut window = video
+            .window("Coastal Loop", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
             .opengl()
             .build()
             .expect("failed to create window");
@@ -453,6 +446,16 @@ impl App {
         gl::load_gl();
         gl::enable_depth_test();
         info!("{}", gl::debug_context_info());
+        let loaded =
+            !city || loading::prepare(TrackId::Engomi, &mut window, &mut events, &sdl_context);
+        let mut session = if city && loaded {
+            Session::on_track(CarModel::Roadster, DriveMode::FreeDrive, TrackId::Engomi)
+        } else {
+            Session::new(CarModel::Roadster, DriveMode::FreeDrive)
+        };
+        session.state = GameState::Menu;
+        let _ = window.set_title(session.track().name);
+
         let program =
             gl::create_program(gl::VS_SRC, gl::FS_SRC).expect("failed to create GL program");
         let scene_program =
@@ -471,6 +474,7 @@ impl App {
         let chase = camera::ChaseCamera::new(&session.vehicle);
         let mut app = Self {
             sdl_context,
+            events,
             window,
             _gl_context: gl_context,
             program,
@@ -493,10 +497,25 @@ impl App {
         app
     }
 
+    fn prepare_location(&mut self, id: TrackId) -> bool {
+        let loaded = loading::prepare(id, &mut self.window, &mut self.events, &self.sdl_context);
+        self.keys.clear();
+        loaded
+    }
+
     fn ensure_mesh(&mut self) {
         let track = self.session.track();
         let slot = &mut self.meshes[track.id.index()];
         if slot.is_none() {
+            if track.id == TrackId::Engomi {
+                loading::draw(
+                    &self.window,
+                    track.name,
+                    "PREPARING VEHICLES AND SCENERY",
+                    0.0,
+                );
+                gl::swap_window(&self.window);
+            }
             *slot = Some(gl::Mesh::new(track).expect("failed to create route mesh"));
         }
     }
@@ -521,11 +540,10 @@ impl App {
     }
 
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut events = self.sdl_context.event_pump()?;
         let mut last_frame = Instant::now();
         let mut accumulator = Duration::ZERO;
         'running: loop {
-            for event in events.poll_iter() {
+            while let Some(event) = self.events.poll_event() {
                 match event {
                     Event::Quit { .. }
                     | Event::Window {
@@ -616,6 +634,9 @@ impl App {
                 if id == TrackId::Engomi && !self.city_enabled {
                     return;
                 }
+                if !self.prepare_location(id) {
+                    return;
+                }
                 self.menu_focus = 0;
                 self.session.select_location(id);
             }
@@ -668,7 +689,20 @@ impl App {
                 Keycode::Left | Keycode::Right | Keycode::Space => {
                     let direction = if key == Keycode::Left { -1 } else { 1 };
                     match self.menu_focus {
-                        0 => self.session.cycle_location(direction, self.city_enabled),
+                        0 => {
+                            let locations = hud::available_locations(self.city_enabled);
+                            let current = locations
+                                .iter()
+                                .position(|id| *id == self.session.track().id)
+                                .unwrap();
+                            let next = (current as i32 + direction)
+                                .rem_euclid(locations.len() as i32)
+                                as usize;
+                            if !self.prepare_location(locations[next]) {
+                                return;
+                            }
+                            self.session.cycle_location(direction, self.city_enabled);
+                        }
                         1 => self.session.cycle_car(direction),
                         2 => self.session.toggle_activity(),
                         _ if key == Keycode::Space => {
@@ -764,6 +798,9 @@ impl App {
                     && self.session.state == GameState::Menu
                     && self.session.mode == DriveMode::FreeDrive =>
             {
+                if !self.prepare_location(TrackId::Engomi) {
+                    return;
+                }
                 self.session = Session::on_track(
                     self.session.vehicle.model,
                     DriveMode::FreeDrive,
@@ -1454,6 +1491,32 @@ mod tests {
             app.session.tick(Controls::default());
         }
         assert_eq!(app.session.signal_time, clock);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; captures the location loading screen"]
+    fn location_loading_renderer_smoke() {
+        let mut app = App::with_location(false);
+        let path = std::env::var("NFS_LOADING_PREVIEW")
+            .unwrap_or_else(|_| "/tmp/location-loading.ppm".into());
+        loading::draw(
+            &app.window,
+            "NICOSIA",
+            "READING MAP AND BUILDING COLLISIONS",
+            12.0,
+        );
+        capture_frame(std::path::Path::new(&path));
+        gl::swap_window(&app.window);
+        unsafe {
+            assert_eq!(::gl::GetError(), ::gl::NO_ERROR);
+        }
+        // Completed loads must not create another loader or consume input.
+        assert!(loading::prepare(
+            TrackId::Scenic,
+            &mut app.window,
+            &mut app.events,
+            &app.sdl_context
+        ));
     }
 
     #[test]
