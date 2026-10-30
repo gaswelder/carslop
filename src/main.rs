@@ -607,6 +607,7 @@ impl App {
                 let car = &self.session.vehicle;
                 if let Err(error) = audio.update(
                     car,
+                    self.chase.pose(),
                     self.keys.contains(&Keycode::W)
                         || self.keys.contains(&Keycode::Up)
                         || self.keys.contains(&Keycode::F),
@@ -1906,10 +1907,12 @@ mod tests {
             assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
             if let Some(audio) = &mut app.audio {
                 audio.reset_feedback();
-                audio.update(&app.session.vehicle, true, true, 8.0).unwrap();
+                audio
+                    .update(&app.session.vehicle, app.chase.pose(), true, true, 8.0)
+                    .unwrap();
                 audio.muted = true;
                 audio
-                    .update(&app.session.vehicle, false, false, 0.0)
+                    .update(&app.session.vehicle, app.chase.pose(), false, false, 0.0)
                     .unwrap();
                 audio.muted = false;
             }

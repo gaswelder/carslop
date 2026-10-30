@@ -12,6 +12,7 @@ pub struct EngineAudio {
     _subsystem: sdl3::AudioSubsystem,
     synth: Synth,
     ambience: CoastalAmbience,
+    spatial: SpatialAudio,
     pub muted: bool,
 }
 
@@ -115,17 +116,97 @@ impl Synth {
     }
 }
 
+// The camera is the listener. Smooth at sample rate so camera switches and
+// recovery do not create volume or stereo discontinuities.
+struct SpatialAudio {
+    gain: f32,
+    pan: f32,
+    filtered: f32,
+    reflections: Vec<f32>,
+    cursor: usize,
+    reflection_low: f32,
+}
+
+impl Default for SpatialAudio {
+    fn default() -> Self {
+        Self {
+            gain: 0.0,
+            pan: 0.0,
+            filtered: 0.0,
+            reflections: vec![0.0; (RATE * 0.15) as usize],
+            cursor: 0,
+            reflection_low: 0.0,
+        }
+    }
+}
+
+impl SpatialAudio {
+    fn placement(source: [f32; 3], listener: crate::camera::Pose) -> (f32, f32, f32) {
+        let offset: [f32; 3] = std::array::from_fn(|i| source[i] - listener.eye[i]);
+        let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
+        // Gentle falloff keeps driving cues present; distance also changes
+        // the direct/reflected balance below, rather than just turning down.
+        let gain = (6.0 / (distance + 3.0)).min(1.0);
+        let forward = [
+            listener.target[0] - listener.eye[0],
+            listener.target[2] - listener.eye[2],
+        ];
+        let length = forward[0].hypot(forward[1]);
+        let pan = if length > 0.001 && distance > 0.001 {
+            ((offset[0] * forward[1] - offset[2] * forward[0]) / (length * distance))
+                .clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let cutoff = 6500.0 / (1.0 + distance / 8.0);
+        let filter = 1.0 - (-TAU * cutoff.max(350.0) / RATE).exp();
+        (gain, pan, filter)
+    }
+
+    fn sample(&mut self, input: f32, placement: (f32, f32, f32)) -> [f32; 2] {
+        let (gain, pan, filter) = placement;
+        let blend = 1.0 - (-1.0 / (RATE * 0.03)).exp();
+        self.gain += (gain - self.gain) * blend;
+        self.pan += (pan - self.pan) * blend;
+        self.filtered += (input - self.filtered) * filter;
+        let sample = self.filtered * self.gain;
+        // A ground bounce arrives first, followed by sparse, asymmetric outdoor
+        // reflections. Different arrival times in each ear externalize even a
+        // centred source. A damped feedback path adds a short diffuse decay,
+        // rather than a long indoor/hall reverb.
+        let tap = |ms: f32| {
+            let delay = (RATE * ms / 1000.0) as usize;
+            self.reflections
+                [(self.cursor + self.reflections.len() - delay) % self.reflections.len()]
+        };
+        let ground = tap(4.3) * 0.28;
+        let left = ground + tap(19.7) * 0.26 + tap(43.1) * 0.17 + tap(79.3) * 0.10;
+        let right = ground + tap(25.3) * 0.26 + tap(53.7) * 0.17 + tap(89.9) * 0.10;
+        let feedback = tap(113.0);
+        self.reflection_low += (feedback - self.reflection_low) * 0.12;
+        self.reflections[self.cursor] = sample + self.reflection_low * 0.28;
+        self.cursor = (self.cursor + 1) % self.reflections.len();
+        let wet = 0.35 + (1.0 - self.gain) * 0.65;
+        let direct = 0.85 - (1.0 - self.gain) * 0.20;
+        [
+            sample * direct * (1.0 - self.pan).sqrt() + left * wet,
+            sample * direct * (1.0 + self.pan).sqrt() + right * wet,
+        ]
+    }
+}
+
 impl EngineAudio {
     // Preserve surf/gust phase across recovery/restart; only clear vehicle transients.
     pub fn reset_feedback(&mut self) {
         self.synth = Synth::default();
+        self.spatial = SpatialAudio::default();
     }
 
     pub fn new(sdl: &sdl3::Sdl) -> Result<Self, String> {
         let audio = sdl.audio().map_err(|e| e.to_string())?;
         let spec = AudioSpec {
             freq: Some(RATE as i32),
-            channels: Some(1),
+            channels: Some(2),
             format: Some(AudioFormat::f32_sys()),
         };
         let device = audio
@@ -140,6 +221,7 @@ impl EngineAudio {
             _subsystem: audio,
             synth: Synth::default(),
             ambience: CoastalAmbience::default(),
+            spatial: SpatialAudio::default(),
             muted: false,
         })
     }
@@ -147,6 +229,7 @@ impl EngineAudio {
     pub fn update(
         &mut self,
         car: &crate::vehicle::Vehicle,
+        listener: crate::camera::Pose,
         throttle: bool,
         active: bool,
         impact: f32,
@@ -156,7 +239,7 @@ impl EngineAudio {
             .queued_bytes()
             .map_err(|e| e.to_string())?
             .max(0) as usize
-            / 4;
+            / (2 * std::mem::size_of::<f32>());
         let count = QUEUE_SAMPLES.saturating_sub(queued);
         let enabled = active && !self.muted;
         self.synth.road_speed = car.velocity[0].hypot(car.velocity[1]);
@@ -181,12 +264,12 @@ impl EngineAudio {
             car.velocity[0].hypot(car.velocity[1]),
             car.track,
         );
+        let placement = SpatialAudio::placement(car.position, listener);
         let samples: Vec<f32> = (0..count)
-            .map(|_| {
-                mix(
-                    self.synth.sample(voice),
-                    self.ambience.sample(levels, enabled),
-                )
+            .flat_map(|_| {
+                let driving = self.spatial.sample(self.synth.sample(voice), placement);
+                let ambience = self.ambience.sample(levels, enabled);
+                driving.map(|channel| mix(channel, ambience))
             })
             .collect();
         if !samples.is_empty() {
@@ -210,6 +293,84 @@ fn engine_frequency(rpm: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outdoor_reflections_spread_a_centred_source_and_decay() {
+        let mut spatial = SpatialAudio {
+            gain: 0.7,
+            ..SpatialAudio::default()
+        };
+        let placement = (0.7, 0.0, 0.3);
+        let mut early = 0.0;
+        let mut reflected = 0.0;
+        let mut width = 0.0;
+        let mut tail = 0.0_f32;
+        for i in 0..48000 {
+            let output = spatial.sample(if i == 0 { 0.2 } else { 0.0 }, placement);
+            assert!(output.iter().all(|v| v.is_finite() && v.abs() < 0.3));
+            let energy = output[0] * output[0] + output[1] * output[1];
+            if i < 100 {
+                early += energy;
+            }
+            if i > 150 {
+                reflected += energy;
+            }
+            width += (output[0] - output[1]).abs();
+            if i > 40000 {
+                tail = tail.max(output[0].abs()).max(output[1].abs());
+            }
+        }
+        assert!(early > 0.0 && reflected > early * 0.01);
+        assert!(
+            width > 0.01,
+            "reflections must have different ear arrival times"
+        );
+        assert!(tail < 0.00001, "outdoor decay must stay short");
+    }
+
+    #[test]
+    fn distance_reduces_level_and_high_frequencies() {
+        let listener = crate::camera::Pose {
+            eye: [0.0; 3],
+            target: [0.0, 0.0, 1.0],
+        };
+        let near = SpatialAudio::placement([0.0, 0.0, 5.5], listener);
+        let far = SpatialAudio::placement([0.0, 0.0, 10.0], listener);
+        assert!(near.0 > far.0 && near.2 > far.2);
+        assert_eq!(near.1, 0.0);
+        let origin = SpatialAudio::placement(listener.eye, listener);
+        assert_eq!(origin.0, 1.0);
+        assert!(origin.2.is_finite());
+    }
+
+    #[test]
+    fn stereo_follows_listener_orientation_and_changes_smoothly() {
+        let listener = crate::camera::Pose {
+            eye: [0.0; 3],
+            target: [0.0, 0.0, 1.0],
+        };
+        let right = SpatialAudio::placement([5.0, 0.0, 5.0], listener);
+        let left = SpatialAudio::placement([-5.0, 0.0, 5.0], listener);
+        assert!(right.1 > 0.0 && left.1 < 0.0);
+        let reversed = SpatialAudio::placement(
+            [5.0, 0.0, 5.0],
+            crate::camera::Pose {
+                target: [0.0, 0.0, -1.0],
+                ..listener
+            },
+        );
+        assert!(reversed.1 < 0.0);
+        let mut spatial = SpatialAudio::default();
+        for _ in 0..24000 {
+            let output = spatial.sample(0.1, right);
+            assert!(output.iter().all(|v| v.is_finite() && v.abs() < 0.3));
+        }
+        let before = spatial.sample(0.1, right);
+        assert!(before[1] > before[0]);
+        let after = spatial.sample(0.1, left);
+        assert!((after[0] - before[0]).abs() < 0.001);
+        assert!((after[1] - before[1]).abs() < 0.001);
+    }
 
     #[test]
     fn coasting_quiets_every_engine_without_changing_pitch() {
