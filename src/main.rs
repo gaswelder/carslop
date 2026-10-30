@@ -1228,45 +1228,51 @@ mod tests {
             .expect("set NFS_CAR_PREVIEW_DIR to an output directory");
         std::fs::create_dir_all(&directory).unwrap();
         let app = App::new();
-        let car = &app.session.vehicle;
-        let p = car.position;
-        for (name, offset) in [
-            ("front", [4.2, 2.1, 5.0]),
-            ("rear", [-4.2, 1.8, -5.0]),
-            ("side", [6.0, 1.0, 0.0]),
-        ] {
-            gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
-            gl::clear_screen();
-            let camera = gl::chase_camera(
-                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
-                camera::Pose {
-                    eye: std::array::from_fn(|i| p[i] + offset[i]),
-                    target: [p[0], p[1] + 0.25, p[2]],
-                },
-            );
-            let model = gl::model_matrix(p, 0.0, 0.0);
-            app.mesh()
-                .draw(app.scene_program, &camera, &model, [0.60, 0.12, 0.065], car);
-            let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
-            unsafe {
-                ::gl::ReadBuffer(::gl::BACK);
-                ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
-                ::gl::ReadPixels(
-                    0,
-                    0,
-                    WINDOW_WIDTH,
-                    WINDOW_HEIGHT,
-                    ::gl::RGB,
-                    ::gl::UNSIGNED_BYTE,
-                    pixels.as_mut_ptr().cast(),
+        for car_model in cars::ALL {
+            let preview_car = vehicle::Vehicle::new(app.session.vehicle.position, 0.0, car_model);
+            let car = &preview_car;
+            let p = car.position;
+            for (name, offset) in [
+                ("front", [4.2, 2.1, 5.0]),
+                ("rear", [-4.2, 1.8, -5.0]),
+                ("side", [6.0, 1.0, 0.0]),
+            ] {
+                gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+                gl::clear_screen();
+                let camera = gl::chase_camera(
+                    WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                    camera::Pose {
+                        eye: std::array::from_fn(|i| p[i] + offset[i]),
+                        target: [p[0], p[1] + 0.25, p[2]],
+                    },
                 );
-            }
-            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-            let mut file =
-                std::fs::File::create(format!("{directory}/kestrel-{name}.ppm")).unwrap();
-            write!(file, "P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).unwrap();
-            for row in pixels.chunks_exact((WINDOW_WIDTH * 3) as usize).rev() {
-                file.write_all(row).unwrap();
+                let model = gl::model_matrix(p, 0.0, 0.0);
+                app.mesh()
+                    .draw(app.scene_program, &camera, &model, [0.60, 0.12, 0.065], car);
+                let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+                unsafe {
+                    ::gl::ReadBuffer(::gl::BACK);
+                    ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
+                    ::gl::ReadPixels(
+                        0,
+                        0,
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        ::gl::RGB,
+                        ::gl::UNSIGNED_BYTE,
+                        pixels.as_mut_ptr().cast(),
+                    );
+                }
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                let mut file = std::fs::File::create(format!(
+                    "{directory}/car-{}-{name}.ppm",
+                    car_model.index()
+                ))
+                .unwrap();
+                write!(file, "P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).unwrap();
+                for row in pixels.chunks_exact((WINDOW_WIDTH * 3) as usize).rev() {
+                    file.write_all(row).unwrap();
+                }
             }
         }
     }

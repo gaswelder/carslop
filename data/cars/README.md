@@ -54,6 +54,14 @@ match the shared wheel animation/feedback calibration. Paint material X = 1
 receives the selected car tint; X = 0 remains untinted. Material Y controls specular
 strength. Triangle winding and normals must face outward.
 
+Muscle and Club have authored body shells with smooth panel normals, open wheel
+arches, inset glazing, window seals, mirrors, door seams, grilles and separate
+light lenses. Muscle retains its long fastback, twin bonnet scoops and quad
+headlights; Club retains its tall hatch, rectangular lamps and roof spoiler.
+Regenerate these two body assets with `python3 tools/build_car_bodies.py` from
+the repository root. The generator uses only Python's standard library; it
+does not alter tuning, wheels, or either Kestrel design.
+
 ## Tuning existing cars
 
 `kestrel/car.json`, `muscle/car.json`, and `club/car.json` are the required runtime parameter
