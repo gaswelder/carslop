@@ -107,7 +107,8 @@ void main() {
     if (!gl_FrontFacing) n = -n;
     vec3 sun = normalize(vec3(-0.45, 0.85, -0.3));
     vec3 view = normalize(u_eye - v_world);
-    vec3 paint = v_color * mix(vec3(1.0), u_tint, clamp(v_material.x, 0.0, 1.0));
+    float paint_mask = step(0.5, v_material.x) * (1.0 - step(1.5, v_material.x));
+    vec3 paint = v_color * mix(vec3(1.0), u_tint, paint_mask);
     vec3 ambient = mix(vec3(0.25, 0.27, 0.23), vec3(0.53, 0.61, 0.67), n.y * 0.5 + 0.5);
     float diffuse = max(dot(n, sun), 0.0);
     float highlight = pow(max(dot(n, normalize(sun + view)), 0.0), 48.0)
@@ -138,6 +139,46 @@ void main() {
         smoothstep(-0.15, 0.55, reflected.y));
     float fresnel = 0.04 + 0.56 * pow(1.0 - max(dot(n, view), 0.0), 5.0);
     lit = mix(lit, environment, fresnel * clamp(v_material.y, 0.0, 1.0));
+    // Authored car finishes: linear-light paint with a dielectric clear coat,
+    // reflective glazing, polished metal, and coloured optical lenses. The
+    // analytic daylight environment is stable as the car and camera turn.
+    // Untagged world surfaces and older fixed-colour mesh details keep their
+    // existing lighting; these tags require no scene archive format change.
+    if (v_material.x > 0.5) {
+        float gloss = clamp(v_material.y, 0.0, 1.0);
+        float nv = max(dot(n, view), 0.0);
+        float grazing = pow(1.0 - nv, 5.0);
+        float sky = smoothstep(-0.06, 0.12, reflected.y);
+        vec3 ground_reflection = mix(vec3(0.065, 0.075, 0.055),
+            vec3(0.22, 0.24, 0.22), smoothstep(-0.65, 0.02, reflected.y));
+        vec3 sky_reflection = mix(vec3(0.78, 0.85, 0.88), vec3(0.30, 0.49, 0.69),
+            smoothstep(0.02, 0.85, reflected.y));
+        float cloud = exp(-pow((reflected.y - 0.38 - 0.10 * reflected.x) / 0.12, 2.0));
+        sky_reflection = mix(sky_reflection, vec3(0.91, 0.93, 0.92), cloud * 0.45);
+        vec3 env = mix(ground_reflection, sky_reflection, sky);
+        float nh = max(dot(n, normalize(sun + view)), 0.0);
+        float glint = pow(nh, mix(48.0, 220.0, gloss)) * step(0.001, diffuse);
+        vec3 base = pow(max(paint, vec3(0.0)), vec3(2.2));
+        vec3 irradiance = mix(vec3(0.30, 0.32, 0.29), vec3(0.68, 0.75, 0.82), n.y * 0.5 + 0.5)
+            + vec3(0.70, 0.64, 0.53) * diffuse;
+        vec3 finish;
+        if (v_material.x < 1.5) {
+            float coat = (0.035 + 0.48 * grazing) * gloss;
+            finish = base * irradiance * (1.0 - coat) + env * coat
+                + vec3(1.0, 0.95, 0.84) * glint * 0.55 * gloss
+                + base * pow(nh, 24.0) * 0.12 * gloss;
+        } else if (v_material.x < 2.5) {
+            finish = base * 0.45 + env * (0.10 + 0.64 * grazing) * gloss
+                + vec3(0.85, 0.92, 1.0) * glint * 0.65;
+        } else if (v_material.x < 3.5) {
+            finish = base * (env * (0.65 + 0.25 * gloss) + irradiance * 0.13)
+                + vec3(1.0, 0.96, 0.88) * glint * gloss;
+        } else {
+            finish = base * (irradiance * 0.72 + vec3(0.18))
+                + env * (0.025 + 0.16 * grazing) + vec3(1.0) * glint * 0.4;
+        }
+        lit = pow(clamp(finish, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
     // Evaluate on the receiving road itself: no floating decal or depth bias.
     lit *= contact_visibility();
     float fog = smoothstep(u_fog_range.x, u_fog_range.y, length(u_eye - v_world));

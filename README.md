@@ -48,8 +48,13 @@ Choose a location and car, then start free driving.
 | R | Restart |
 | C | Recover the car |
 | M | Open the full map (pauses driving) |
+| Mouse wheel / + / - | Zoom the full map in / out |
 | L | Return to location and car selection |
 | V | Toggle audio mute |
+
+The full map opens centered on your car at the minimap's scale. Zooming keeps
+the car centered; zoom out to see the entire road network. Reopening the map
+resets the zoom to the minimap's scale.
 
 ### Locations
 
@@ -409,15 +414,28 @@ origin and rotate about X; the game positions and animates four copies using the
 car's wheel mounts. Colors, normals, and material values are stored in each mesh.
 The original wheel has a 0.4 m radius; keep replacement wheels at that radius to
 match the shared wheel animation/feedback calibration. Paint material X = 1
-receives the selected car tint; X = 0 remains untinted. Material Y controls specular
-strength. Triangle winding and normals must face outward.
+receives the selected car tint; X = 0 remains untinted. Kestrel also uses X = 2
+for reflective glass, X = 3 for metal, and X = 4 for optical lenses; these retain
+their authored colours. Material Y controls specular strength. Paint uses a
+clear-coat response, and the finish materials reflect an analytic daylight sky
+and ground (not live scene reflections). Triangle winding and normals must face outward.
 
-Kestrel has a curved heritage-coupe shell, raised front wings, round domed
-headlamp lenses, chrome and rubber bumpers, framed glazing, door seams, and a
-slatted rear engine cover. Rebuild its body with
+Kestrel has continuous sculpted wings and shoulders, a tucked-under sill, open
+wheel arches with recessed liners, a curved fastback roof, thin framed glazing,
+tilted fluted headlamps, wraparound signals, chrome and rubber bumpers, panel
+shutlines, wipers, fuel flap, rear cooling grille and a hollow exhaust tip.
+Its five-petal alloy wheels have polished lips, recessed centres, lug nuts and
+rounded, grooved tires. Rebuild both Kestrel bodies and their wheels with
 `python3 tools/build_kestrel.py`; this uses Python's standard library and the
-shared mesh writer in `tools/build_car_bodies.py`. It preserves tuning and wheels
-and changes only the original Kestrel body asset.
+shared mesh writer in `tools/build_car_bodies.py`. It preserves all tuning,
+wheel mounts and the 0.4 m rolling radius.
+
+To inspect the actual game renderer from front, rear and side, including closer
+detail views (requires SDL3/OpenGL):
+
+```sh
+NFS_CAR_PREVIEW_DIR=artifacts/car-quality cargo test kestrel_art_preview -- --ignored --test-threads=1
+```
 
 Muscle and Club have authored body shells with smooth panel normals, open wheel
 arches, inset glazing, window seals, mirrors, door seams, grilles and separate
@@ -503,11 +521,12 @@ A fictional Kestrel variant inspired by the 1975 Porsche 911 Turbo 3.0 (930).
 Select **KESTREL TURBO** in the car menu. `data/cars/kestrel-turbo/` is a runtime car package;
 adding it to an existing build's `data/cars` and restarting discovers it.
 
-The body is derived from the project's original Kestrel mesh, with widened
-haunches, a whale-tail rear spoiler, black spoiler edging and grille, deeper
-front chin, and impact-bumper strips. No Porsche artwork or badges are used.
-Wheel design and engine recordings are inherited from the original Kestrel;
-the local wheel mesh keeps the package's visual assets together.
+The body uses the same authored coachwork as Kestrel, with wider front arches
+and rear haunches, a swept whale-tail rear spoiler with a rounded rubber edge,
+a recessed spoiler grille, deeper front chin, black window trim and impact-bumper
+strips. No Porsche artwork or badges are used. Both variants share the new
+five-petal wheel design; engine recordings are inherited from the original
+Kestrel. Each package keeps its own generated body and wheel mesh.
 
 Reference: [Porsche's 1975 Turbo 3.0 museum specification](https://newsroom.porsche.com/dam/jcr%3A3c07547c-36bc-4e00-825c-5ac2bbe10805/Datenblatt%20911%20Turbo%203.0%20Coup%C3%A9.pdf.PDF)
 lists 191 kW / 260 PS, 1140 kg, 250 km/h, and 5.5 seconds to 100 km/h.

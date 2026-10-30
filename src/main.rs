@@ -418,6 +418,7 @@ impl App {
                         y,
                         ..
                     } => self.menu_click(x, y),
+                    Event::MouseWheel { y, direction, .. } => self.mouse_wheel(y, direction),
                     Event::KeyUp {
                         keycode: Some(key), ..
                     } => {
@@ -548,8 +549,11 @@ impl App {
     }
     fn key_down(&mut self, key: Keycode) {
         if self.session.state == GameState::FullMap {
-            if key == Keycode::Escape {
-                self.session.state = GameState::Driving;
+            match key {
+                Keycode::Escape => self.session.state = GameState::Driving,
+                Keycode::Plus | Keycode::Equals | Keycode::KpPlus => self.zoom_map(1.0),
+                Keycode::Minus | Keycode::KpMinus => self.zoom_map(-1.0),
+                _ => {}
             }
             self.keys.clear();
             return;
@@ -587,6 +591,30 @@ impl App {
         }
         self.handle_key(key);
     }
+
+    fn mouse_wheel(&mut self, y: f32, direction: sdl3::mouse::MouseWheelDirection) {
+        self.zoom_map(if direction == sdl3::mouse::MouseWheelDirection::Flipped {
+            -y
+        } else {
+            y
+        });
+    }
+
+    fn zoom_map(&mut self, steps: f32) {
+        if self.session.state != GameState::FullMap {
+            return;
+        }
+        self.hud.zoom_full_map(
+            hud::Map {
+                track: self.session.track(),
+                player: self.session.vehicle.position,
+            },
+            self.session.vehicle.heading,
+            [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
+            steps,
+        );
+    }
+
     fn handle_key(&mut self, key: Keycode) {
         match key {
             Keycode::Escape => {
@@ -1323,6 +1351,10 @@ mod tests {
                 ("front", [4.2, 2.1, 5.0]),
                 ("rear", [-4.2, 1.8, -5.0]),
                 ("side", [6.0, 1.0, 0.0]),
+                ("detail-front", [2.8, 1.45, 3.65]),
+                ("detail-rear", [-2.9, 1.55, -3.8]),
+                ("detail-side", [4.6, 0.65, 0.0]),
+                ("road", [-3.2, 1.5, -4.6]),
             ] {
                 gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
                 gl::clear_screen();
@@ -1334,8 +1366,18 @@ mod tests {
                     },
                 );
                 let model = gl::model_matrix(p, 0.0, 0.0);
+                let tint = if name == "road" {
+                    app.mesh().draw_ground(
+                        app.scene_program,
+                        &camera,
+                        &[shadows::ContactShadow::new(car)],
+                    );
+                    [0.10, 0.30, 0.24]
+                } else {
+                    [0.60, 0.12, 0.065]
+                };
                 app.mesh()
-                    .draw(app.scene_program, &camera, &model, [0.60, 0.12, 0.065], car);
+                    .draw(app.scene_program, &camera, &model, tint, car);
                 let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
                 unsafe {
                     ::gl::ReadBuffer(::gl::BACK);
@@ -1814,6 +1856,7 @@ mod tests {
             let gear = app.session.vehicle.gear;
             let signal_time = app.session.signal_time;
             let view = app.chase.view();
+            let mut initial_frame = None;
             for from in [GameState::Driving, GameState::Paused] {
                 app.session.state = from;
                 app.key_down(Keycode::Up);
@@ -1848,8 +1891,45 @@ mod tests {
                 assert_eq!(app.session.signal_time, signal_time);
                 assert_eq!(app.session.recoveries, 0);
                 assert_eq!(app.chase.view(), view);
-                app.capture_path = Some(directory.join(format!("map-{}.ppm", id.index())));
+                let path = directory.join(format!("map-{}.ppm", id.index()));
+                app.capture_path = Some(path.clone());
                 app.render(Duration::ZERO);
+                let initial = std::fs::read(&path).unwrap();
+                if let Some(previous) = &initial_frame {
+                    assert!(
+                        *previous == initial,
+                        "reopening must restore the minimap scale"
+                    );
+                }
+                initial_frame = Some(initial.clone());
+                for key in [Keycode::Equals, Keycode::Plus, Keycode::KpPlus] {
+                    app.key_down(key);
+                }
+                let zoomed = directory.join(format!("map-{}-zoom-in.ppm", id.index()));
+                app.capture_path = Some(zoomed.clone());
+                app.render(Duration::ZERO);
+                assert!(
+                    initial != std::fs::read(zoomed).unwrap(),
+                    "zoom keys must change the map"
+                );
+                for key in [Keycode::Minus, Keycode::KpMinus] {
+                    app.key_down(key);
+                }
+                app.mouse_wheel(1.0, sdl3::mouse::MouseWheelDirection::Flipped);
+                app.mouse_wheel(0.5, sdl3::mouse::MouseWheelDirection::Normal);
+                let wheel_path = directory.join(format!("map-{}-wheel.ppm", id.index()));
+                app.capture_path = Some(wheel_path.clone());
+                app.render(Duration::ZERO);
+                assert!(
+                    initial != std::fs::read(wheel_path).unwrap(),
+                    "fractional wheel input must zoom"
+                );
+                app.mouse_wheel(-100.0, sdl3::mouse::MouseWheelDirection::Normal);
+                app.capture_path = Some(directory.join(format!("map-{}-zoom-out.ppm", id.index())));
+                app.render(Duration::ZERO);
+                assert!(app.session.state == GameState::FullMap);
+                assert!(app.keys.is_empty());
+                assert_eq!(app.session.vehicle.position, position);
                 app.capture_path = None;
                 app.render(Duration::ZERO);
                 assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);

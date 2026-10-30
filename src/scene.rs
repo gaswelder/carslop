@@ -20,7 +20,8 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub color: [f32; 3],
     pub normal: [f32; 3],
-    // Material X: 1 paint, 0 untinted, -1 road receiver, -2 signal lens.
+    // Material X: 0 untinted, 1 paint, 2 glass, 3 metal, 4 optical lens;
+    // negative values: -1 road receiver, -2 signal lens.
     // Y: specular strength, or encoded signal phase/lens for material -2.
     pub material: [f32; 2],
 }
@@ -671,7 +672,7 @@ mod tests {
             "reference Roadster needs more than a coarse body shell"
         );
         assert!(
-            count([1.0, 0.94, 0.72]) >= 60,
+            count([0.84, 0.88, 0.90]) >= 60,
             "missing separate headlamp geometry"
         );
         assert!(
@@ -792,7 +793,12 @@ mod tests {
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
         let route = track::TrackId::Scenic.track();
         let geometry = build(&route);
-        assert!(geometry.world_count > 100_000 && geometry.vertices.len() < 800_000);
+        assert!(
+            geometry.world_count > 100_000 && geometry.vertices.len() < 800_000,
+            "scenic geometry budget exceeded: {} world / {} total vertices",
+            geometry.world_count,
+            geometry.vertices.len()
+        );
         for v in &geometry.vertices {
             assert!(v
                 .position
