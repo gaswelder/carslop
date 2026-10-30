@@ -186,7 +186,7 @@ pub(crate) fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
 }
 fn osm_trees(path: &Path) -> Result<Vec<(String, f64, f64)>> {
     use quick_xml::{events::Event, Reader};
-    let mut r = Reader::from_reader(std::io::BufReader::new(fs::File::open(path)?));
+    let mut r = Reader::from_reader(std::io::BufReader::new(crate::package::Reader::open(path)?));
     let mut buf = vec![];
     let mut node = None;
     let mut trees = vec![];

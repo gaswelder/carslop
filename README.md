@@ -30,7 +30,7 @@ assets. Cities appear only when selected with `--location`. To drive in Nicosia:
 ./target/release/nfs5like play --location nicosia
 ```
 
-Built-in tracks need no city files. For city play, keep its `data/locations/NAME`
+Built-in tracks need no city files. For city play, keep its `data/locations/NAME.sqlite`
 package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 
@@ -130,7 +130,7 @@ space. Existing locations are never overwritten.
 ./target/release/nfs5like play --location engomi-demo
 ```
 
-Keep `data/locations/engomi-demo`: the game reads its assets when you play.
+Keep `data/locations/engomi-demo.sqlite`: the game reads its assets when you play.
 Use the same location name and storage directory as in step 3. To see all imported
 cities in that directory:
 
@@ -158,7 +158,7 @@ to add imagery and inferred trees.
 ## Nicosia map
 
 The bundled map covers about 289 km² of Nicosia, including Engomi, Strovolos,
-Lakatamia, Aglandjia and Gonyeli. Assets live in `data/locations/nicosia`.
+Lakatamia, Aglandjia and Gonyeli. Assets live in `data/locations/nicosia.sqlite`.
 
 OpenStreetMap supplies roads, building footprints, green spaces and street
 furniture. Heights and architectural details are partly estimated, with extra
@@ -168,7 +168,7 @@ are drivable; buildings remain solid.
 Bridges, tunnels and some complex buildings are omitted. Some roads remain
 disconnected. One-way rules are not enforced, and city traffic AI is not yet available.
 
-The aerial pack loads from `data/locations/nicosia/aerial` when present; set
+The location package contains the aerial imagery; set
 `NFS_NO_AERIAL=1` to disable it. The city-wide preparation command below extends
 coverage beyond the original 445 × 445 m Engomi pilot.
 See [redistribution limits](#credits-and-distribution) before sharing it.
@@ -194,7 +194,7 @@ so temporary input files can be removed after a successful import.
 ./target/release/nfs5like preview-trees \
   --image /path/to/image.jpg \
   --export /path/to/export.json \
-  --city-data data/locations/nicosia \
+  --city-data data/locations/nicosia.sqlite \
   --output /tmp/tree-preview
 ```
 
@@ -207,7 +207,7 @@ To replace a city's imagery-tree supplement with accepted proposals:
 ```sh
 ./target/release/nfs5like import-imagery-trees \
   --candidates /tmp/tree-preview/kept-candidates.geojson \
-  --city-data data/locations/nicosia
+  --city-data data/locations/nicosia.sqlite
 ./target/release/nfs5like bake-city --location nicosia
 ```
 
@@ -218,7 +218,7 @@ shadows for trees. The original OSM trees remain unchanged.
 
 ```sh
 ./target/release/nfs5like prepare-city-imagery \
-  --city-data data/locations/nicosia \
+  --city-data data/locations/nicosia.sqlite \
   --work-dir /tmp/nicosia-imagery
 ./target/release/nfs5like bake-city --location nicosia
 ```
@@ -229,14 +229,41 @@ the same work directory to resume. `--limit-blocks 2` downloads a sample without
 changing city assets. Allow several gigabytes of disk space for preparation.
 
 After a successful preparation and bake, the work directory can be deleted.
-Keep the complete city package, including `aerial/` and `imagery-trees.txt`.
-Provider metadata, preparation settings and coverage counts are retained in
-`aerial/service.json`, `aerial/plan.json` and `aerial/source.json` inside the package.
+Keep the `.sqlite` file: it includes imagery, trees, roads, buildings, terrain,
+source records and the baked scene.
+Provider metadata, preparation settings and coverage counts remain inside the
+package as `aerial/service.json`, `aerial/plan.json` and `aerial/source.json`.
 Gameplay stays offline; the imagery cache uses at most 64 MiB of GPU memory.
 
 World Imagery covers northern neighbourhoods where the DLS source returns blank
 images. Image dates and sharpness vary. These are local development assets;
 redistribution permission has not been established.
+
+### Single-file location packages
+
+Each location is one self-contained SQLite file, such as
+`data/locations/nicosia.sqlite`. Geometry chunks and imagery tiles are read on
+demand; the game does not unpack the location or load the whole database.
+Assets are split into independently compressed 256 KiB blocks with checksums.
+Road and collision data currently retain the existing in-memory representation.
+SQLite is bundled into the executable; no database server is needed.
+
+```sh
+# Convert an existing location folder; the original folder is preserved.
+./target/release/nfs5like pack-location /path/to/location data/locations/my-city.sqlite
+
+# Check database integrity, every compressed block, and all asset hashes.
+./target/release/nfs5like verify-location data/locations/my-city.sqlite
+
+# Extract source records or edit a location offline.
+./target/release/nfs5like unpack-location data/locations/my-city.sqlite /tmp/my-city
+```
+
+New imports publish `.sqlite` packages automatically. `bake-city --location NAME`
+updates the baked scene in the package. Imagery preparation and tree-import
+commands also accept a `.sqlite` path for `--city-data`; they use a temporary
+working folder and replace the package after a successful update. Allow extra
+disk space during offline edits. Finalized packages need no sidecar files.
 
 ## Development
 
@@ -259,14 +286,15 @@ Saved OSM sources and OSM-derived map databases are distributed under ODbL 1.0;
 game code and original generated materials are separate. Preserve attribution
 and source provenance when sharing city assets. The bundled map uses the
 [Geofabrik Cyprus extract](https://download.geofabrik.de/europe/cyprus.html);
-source records are in `data/locations/nicosia/manifest.json` and `data/locations/nicosia/sources/manifest.json`.
+source records are stored inside the package as `manifest.json` and
+`sources/manifest.json`.
 
 Elevation: [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/),
 using the [Skadi N35E033 tile](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
 Terrain data courtesy of USGS; European terrain produced using Copernicus data
 and information funded by the European Union (EU-DEM). See the provider's
 [source attribution and licensing](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
-Local source records are in `data/locations/nicosia/elevation/heightfield.json`.
+Local source records are stored as `elevation/heightfield.json` inside the package.
 
 City-wide imagery: Esri World Imagery — Source: Esri, Vantor, Earthstar
 Geographics, and the GIS User Community. See the
@@ -275,7 +303,8 @@ Geographics, and the GIS User Community. See the
 Original pilot imagery: Cyprus Department of Lands and Surveys,
 [Orthoimagery 2019 WebMercator service](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
 Redistribution permission for the local imagery pack has not been established;
-omit `data/locations/nicosia/aerial` from distributions unless authorised.
+do not redistribute packages containing this imagery or its derived assets
+unless authorised.
 
 Architectural references:
 

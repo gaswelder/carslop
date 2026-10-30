@@ -3,7 +3,6 @@ use crate::location::{invalid, Result};
 use geo::{Coord, Intersects, LineString, Point, Polygon};
 use rstar::{RTree, RTreeObject, AABB};
 use std::{
-    fs,
     io::{BufRead, BufReader},
     path::Path,
 };
@@ -59,7 +58,7 @@ fn obstacle(
 }
 impl Obstacles {
     pub fn read(directory: &Path, lonlat_bounds: [f64; 4]) -> Result<Self> {
-        let text = fs::read_to_string(directory.join("city.txt"))?;
+        let text = crate::package::read_to_string(&directory.join("city.txt"))?;
         let city = crate::city::City::parse(&text).map_err(invalid)?;
         let origin_line = text
             .lines()
@@ -94,7 +93,9 @@ impl Obstacles {
             }
         }
         println!("Checking road surfaces for tree exclusions...");
-        let mut input = BufReader::new(fs::File::open(directory.join("streets.txt"))?);
+        let mut input = BufReader::new(crate::package::Reader::open(
+            &directory.join("streets.txt"),
+        )?);
         let mut line = String::new();
         input.read_line(&mut line)?;
         let expected = format!(
@@ -184,6 +185,7 @@ impl Obstacles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn reads_matching_map_surfaces_and_preserves_pavement() {
         let temp = tempfile::tempdir().unwrap();

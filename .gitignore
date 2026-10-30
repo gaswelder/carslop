@@ -9,22 +9,6 @@ __pycache__/
 # Machine-specific editor settings
 /.vscode/
 
-# Local previews, validation output, backups, and screenshots
-# Keep local outputs under data alongside the bundled map assets.
-/data/*
-!/data/locations/
-/data/locations/*
-!/data/locations/nicosia/
-/data/locations/nicosia/*.png
-/data/locations/nicosia/*.ppm
+# Generated locations, local previews, and validation output
+/data/
 /Screenshot From *.png
-
-# Large generated map geometry; rebuild with the map import/bake tools
-/data/locations/nicosia/streets.txt
-/data/locations/nicosia/scene.pack
-
-# Optional local imagery; redistribution rights are not established
-/data/locations/nicosia/aerial/
-
-# Local imagery-derived tree supplement
-/data/locations/nicosia/imagery-trees.*

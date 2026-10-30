@@ -20,6 +20,7 @@ tempfile = "3.27.0"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 crc32fast = "1.5.3"
 ureq = { version = "3", features = ["json"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
 
 # Keep development builds practical for city-scale geometry and spatial queries.
 [profile.dev]

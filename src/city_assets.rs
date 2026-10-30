@@ -10,7 +10,7 @@ pub fn select(path: PathBuf) -> std::io::Result<()> {
 pub fn name() -> &'static str {
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
-        std::fs::read_to_string(directory().join("manifest.json"))
+        crate::package::read_to_string(&directory().join("manifest.json"))
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned))
@@ -54,10 +54,15 @@ pub fn directory() -> &'static Path {
             .cloned()
             .or_else(|| std::env::var_os("NFS_LOCATIONS_DIR").map(PathBuf::from))
             .unwrap_or_else(default_locations_directory);
-        root.join("nicosia")
+        let package = root.join("nicosia.sqlite");
+        if package.is_file() {
+            package
+        } else {
+            root.join("nicosia")
+        }
     })
 }
 pub fn read(name: &str) -> String {
-    std::fs::read_to_string(directory().join(name))
+    crate::package::read_to_string(&directory().join(name))
         .unwrap_or_else(|e| panic!("cannot read city asset {name}: {e}"))
 }

@@ -18,7 +18,7 @@ pub fn invalid(message: impl Into<String>) -> Box<dyn std::error::Error> {
 }
 pub fn sha(path: &Path) -> Result<String> {
     use std::io::Read;
-    let mut file = fs::File::open(path)?;
+    let mut file = crate::package::Reader::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
     loop {

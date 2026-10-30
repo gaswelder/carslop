@@ -16,6 +16,7 @@ mod hud;
 mod imagery_trees;
 mod landscape;
 mod location;
+mod package;
 mod particles;
 mod prefetch;
 mod race;

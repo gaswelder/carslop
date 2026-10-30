@@ -110,7 +110,7 @@ fn wanted(catalog: &Catalog, eye: [f32; 3], capacity: usize) -> Vec<usize> {
 }
 fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, String> {
     let tile = &catalog.tiles[id];
-    let bytes = std::fs::read(directory.join(&tile.name)).map_err(|e| e.to_string())?;
+    let bytes = crate::package::read(&directory.join(&tile.name)).map_err(|e| e.to_string())?;
     if bytes.len() != (catalog.size + catalog.gutter * 2).pow(2) * 3
         || crate::street_surface::crc32_bytes(&bytes) != tile.crc
     {
@@ -120,11 +120,12 @@ fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, 
 }
 pub fn source_available() -> bool {
     std::env::var_os("NFS_NO_AERIAL").is_none()
-        && std::env::var_os("NFS_AERIAL_DATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
-            .join("tiles.txt")
-            .exists()
+        && crate::package::exists(
+            &std::env::var_os("NFS_AERIAL_DATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
+                .join("tiles.txt"),
+        )
 }
 pub fn attribution_label() -> &'static str {
     static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
@@ -133,7 +134,7 @@ pub fn attribution_label() -> &'static str {
             .map(PathBuf::from)
             .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
             .join("source.json");
-        let metadata = std::fs::read(path)
+        let metadata = crate::package::read(&path)
             .ok()
             .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
         if metadata
@@ -171,10 +172,10 @@ impl Aerial {
             .map(PathBuf::from)
             .unwrap_or_else(|| crate::city_assets::directory().join("aerial"));
         let path = directory.join("tiles.txt");
-        if !path.exists() {
+        if !crate::package::exists(&path) {
             return None;
         }
-        let catalog = std::fs::read_to_string(path)
+        let catalog = crate::package::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|s| Catalog::parse(&s));
         let catalog = match catalog {

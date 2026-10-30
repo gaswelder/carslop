@@ -161,7 +161,7 @@ impl City {
         )
         .expect("invalid bundled Engomi landscape");
         let imagery = crate::city_assets::directory().join("imagery-trees.txt");
-        match std::fs::read_to_string(imagery) {
+        match crate::package::read_to_string(&imagery) {
             Ok(text) => city
                 .landscape
                 .append_imagery(&text, &source, &streets)

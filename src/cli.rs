@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city --location NAME             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nCities load only with play --location NAME. Run without a command to open the built-in track menu.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city --location NAME             Rebuild the render archive\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nCities load only with play --location NAME. Run without a command to open the built-in track menu.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -85,6 +85,9 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             | "preview-trees"
             | "import-imagery-trees"
             | "prepare-city-imagery"
+            | "pack-location"
+            | "unpack-location"
+            | "verify-location"
     ) {
         args.insert(0, cmd.into());
         return Ok(Args {
@@ -178,12 +181,20 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
     Ok(Args { command, root })
 }
 fn select(root: &Path, name: &str) -> Result<()> {
-    let path = root.join(name);
+    let database = root.join(format!("{name}.sqlite"));
+    let path = if database.is_file() {
+        database
+    } else {
+        root.join(name)
+    };
     validate(&path)?;
     crate::city_assets::select(path)?;
     Ok(())
 }
 fn validate(path: &Path) -> Result<()> {
+    if crate::package::is_package(path) {
+        return crate::package::validate(path);
+    }
     for name in [
         "city.txt",
         "streets.txt",
@@ -223,15 +234,21 @@ pub fn run() -> Result<Option<bool>> {
         }
         Command::List => {
             if args.root.exists() {
-                let mut paths = fs::read_dir(&args.root)?.collect::<std::io::Result<Vec<_>>>()?;
-                paths.sort_by_key(|e| e.file_name());
-                for e in paths {
-                    let name = e.file_name();
-                    let Some(name) = name.to_str() else {
-                        continue;
+                let mut entries = fs::read_dir(&args.root)?.collect::<std::io::Result<Vec<_>>>()?;
+                entries.sort_by_key(|e| e.file_name());
+                for entry in entries {
+                    let path = entry.path();
+                    let name = if crate::package::is_package(&path) {
+                        path.file_stem().and_then(|s| s.to_str())
+                    } else if path.is_dir() && !path.with_extension("sqlite").is_file() {
+                        path.file_name().and_then(|s| s.to_str())
+                    } else {
+                        None
                     };
-                    if valid_name(name) && e.file_type()?.is_dir() && validate(&e.path()).is_ok() {
-                        println!("{name}\t{}", e.path().display());
+                    if let Some(name) = name.filter(|s| valid_name(s)) {
+                        if validate(&path).is_ok() {
+                            println!("{name}\t{}", path.display());
+                        }
                     }
                 }
             }
@@ -246,8 +263,8 @@ pub fn run() -> Result<Option<bool>> {
             bbox,
             elevation,
         } => {
-            let destination = args.root.join(&name);
-            if destination.exists() {
+            let destination = args.root.join(format!("{name}.sqlite"));
+            if destination.exists() || args.root.join(&name).exists() {
                 return Err(invalid(format!(
                     "location {name} already exists; choose another name"
                 )));
@@ -274,7 +291,17 @@ pub fn run() -> Result<Option<bool>> {
                     "location appeared during import; refusing to replace it",
                 ));
             }
-            fs::rename(&pending.0, &destination)?;
+            let publication = tempfile::Builder::new()
+                .prefix(".location-publish-")
+                .tempdir_in(&args.root)?;
+            let package = publication.path().join("location.sqlite");
+            crate::package::pack(&pending.0, &package, false)?;
+            if destination.exists() {
+                return Err(invalid(
+                    "location appeared during packing; refusing to replace it",
+                ));
+            }
+            fs::rename(package, &destination)?;
             println!(
                 "Added {name}: {}\nSelect with: nfs5like play --location {name}\nUse the same --locations-dir if you supplied one.",
                 destination.display()
