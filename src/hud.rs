@@ -1013,7 +1013,7 @@ mod tests {
             let track = id.track();
             for player in [track.spawn().point, track.at_distance(600.0).point] {
                 for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-                    let fit = MapFit::new(track, player, viewport);
+                    let fit = MapFit::new(&track, player, viewport);
                     let center = fit.point(player);
                     assert!(
                         (center[0] - 0.78).abs() < 0.00001 && (center[1] - 0.685).abs() < 0.00001

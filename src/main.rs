@@ -90,8 +90,8 @@ impl Session {
         }
     }
 
-    fn track(&self) -> &'static Track {
-        self.vehicle.track
+    fn track(&self) -> &Track {
+        &self.vehicle.track
     }
 
     fn restart(&mut self) {
@@ -332,18 +332,28 @@ impl App {
 
     fn start_selected(&mut self) {
         let entry = self.locations[self.selected_location].clone();
+        let previous = city_assets::directory().to_path_buf();
+        let mut changed = false;
         if let Some(path) = entry.path {
-            let changed = path.canonicalize().ok().as_deref() != Some(city_assets::directory());
+            changed = path.canonicalize().ok().as_deref() != Some(city_assets::directory());
             if let Err(error) = city_assets::select(path) {
                 warn!("Cannot select location: {error}");
                 return;
             }
-            if changed {
-                self.meshes[TrackId::Engomi.index()] = None;
-            }
         }
         if !self.prepare_location(entry.track) {
+            let _ = city_assets::select(previous);
             return;
+        }
+        if changed || self.meshes[entry.track.index()].is_none() {
+            match gl::Mesh::new(&entry.track.track()) {
+                Ok(mesh) => self.meshes[entry.track.index()] = Some(mesh),
+                Err(error) => {
+                    warn!("Cannot prepare location geometry: {error}");
+                    let _ = city_assets::select(previous);
+                    return;
+                }
+            }
         }
         self.session.select_location(entry.track);
         self.ensure_mesh();

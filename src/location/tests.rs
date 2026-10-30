@@ -56,6 +56,32 @@ fn native_import_loads_in_game_and_preserves_topology() {
         elevation: &tile,
     })
     .unwrap();
+    let second = temp.0.join("second");
+    compile(Options {
+        source: &source,
+        output: &second,
+        name: "second",
+        bbox: None,
+        elevation: &tile,
+    })
+    .unwrap();
+    fs::create_dir(temp.0.join("broken")).unwrap();
+    fs::write(temp.0.join("broken/city.txt"), "invalid map").unwrap();
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .env("NFS_TEST_LOCATION_CACHE", &temp.0)
+        .args([
+            "--exact",
+            "location::tests::runtime_location_failure_and_eviction_probe",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     let city = fs::read_to_string(output.join("city.txt")).unwrap();
     let parsed = crate::city::City::parse(&city).unwrap();
     assert_eq!(parsed.streets.len(), 3);
@@ -225,4 +251,43 @@ fn mapped_multipolygon_holes_stay_empty() {
         landscape.ground.iter().all(|t| t.style == 1),
         "relation members must not create their own ground cover"
     );
+}
+
+#[test]
+fn runtime_location_failure_and_eviction_probe() {
+    let Some(root) = std::env::var_os("NFS_TEST_LOCATION_CACHE") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    crate::city_assets::select(root.join("broken")).unwrap();
+    assert!(crate::track::TrackId::Engomi.try_track().is_err());
+    fs::write(root.join("broken/streets.txt"), "invalid surfaces").unwrap();
+    assert!(crate::track::TrackId::Engomi.try_track().is_err());
+    crate::city_assets::select(root.join("compiled")).unwrap();
+    let workers: Vec<_> = (0..4)
+        .map(|_| std::thread::spawn(|| crate::track::TrackId::Engomi.try_track().unwrap()))
+        .collect();
+    let tracks: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    let first = tracks[0].clone();
+    assert!(tracks
+        .iter()
+        .all(|track| std::sync::Arc::ptr_eq(&first, track)));
+    drop(tracks);
+    let weak = std::sync::Arc::downgrade(&first);
+    crate::city_assets::select(root.join("second")).unwrap();
+    let second = crate::track::TrackId::Engomi.try_track().unwrap();
+    assert!(first.city().is_some());
+    drop(first);
+    assert!(weak.upgrade().is_none(), "inactive city remained allocated");
+    assert!(second.spawn().point.iter().all(|v| v.is_finite()));
+    crate::city_assets::select(root.join("broken")).unwrap();
+    assert!(crate::track::TrackId::Engomi.try_track().is_err());
+    crate::city_assets::select(root.join("second")).unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &second,
+        &crate::track::TrackId::Engomi.try_track().unwrap()
+    ));
 }

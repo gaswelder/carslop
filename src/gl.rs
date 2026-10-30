@@ -1003,7 +1003,7 @@ fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32
 
 /// Body transform shared by rendering and the rigid bonnet camera mount.
 pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
-    let track = vehicle.track;
+    let track = &vehicle.track;
     let (road_pitch, road_roll) = if let Some(city) = track.city() {
         let h = |dx: f32, dz: f32| {
             city.drive_height([vehicle.position[0] + dx, vehicle.position[2] + dz])

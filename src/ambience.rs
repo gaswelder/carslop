@@ -15,7 +15,7 @@ pub struct Levels {
 impl Levels {
     #[cfg(test)]
     pub fn at(position: [f32; 3], speed: f32) -> Self {
-        Self::on_track(position, speed, track::TrackId::Compact.track())
+        Self::on_track(position, speed, &track::TrackId::Compact.track())
     }
 
     pub fn on_track(position: [f32; 3], speed: f32, track: &track::Track) -> Self {
@@ -33,8 +33,8 @@ impl Levels {
 }
 
 #[cfg(test)]
-fn shoreline() -> &'static [[f32; 3]] {
-    track::TrackId::Compact.track().shoreline()
+fn shoreline() -> Vec<[f32; 3]> {
+    track::TrackId::Compact.track().shoreline().to_vec()
 }
 
 pub struct CoastalAmbience {
@@ -101,19 +101,16 @@ mod tests {
     fn shoreline_levels_are_route_local_and_compact_wrapper_is_unchanged() {
         let compact = track::TrackId::Compact.track();
         let scenic = track::TrackId::Scenic.track();
-        assert!(std::ptr::eq(
-            shoreline().as_ptr(),
-            compact.shoreline().as_ptr()
-        ));
+        assert_eq!(shoreline(), compact.shoreline());
         let shore = scenic.shoreline()[10];
-        let near_scenic = Levels::on_track(shore, 0.0, scenic);
-        let far_compact = Levels::on_track(shore, 0.0, compact);
+        let near_scenic = Levels::on_track(shore, 0.0, &scenic);
+        let far_compact = Levels::on_track(shore, 0.0, &compact);
         assert_eq!(near_scenic.surf, 1.0);
         assert!(far_compact.surf < 0.02);
         assert_eq!(Levels::at(shore, 0.0), far_compact);
         for i in 0..100 {
             let road = scenic.at_distance(i as f32 * scenic.length() / 100.0);
-            let levels = Levels::on_track(road.lane_position(0.0), 30.0, scenic);
+            let levels = Levels::on_track(road.lane_position(0.0), 30.0, &scenic);
             assert!((0.0..=1.0).contains(&levels.wind));
             assert!((0.0..=1.0).contains(&levels.surf));
         }

@@ -158,9 +158,9 @@ pub fn directory() -> &'static Path {
         }
     })
 }
-pub fn read(name: &str) -> String {
+pub fn try_read(name: &str) -> Result<String, String> {
     crate::package::read_to_string(&directory().join(name))
-        .unwrap_or_else(|e| panic!("cannot read city asset {name}: {e}"))
+        .map_err(|e| format!("cannot read city asset {name}: {e}"))
 }
 
 #[cfg(test)]
@@ -188,4 +188,9 @@ mod tests {
         assert!(locations[2].path.as_ref().unwrap().is_file());
         assert_eq!(discover(&root.path().join("missing")).unwrap().len(), 2);
     }
+}
+
+#[cfg(test)]
+pub fn read(name: &str) -> String {
+    try_read(name).unwrap()
 }

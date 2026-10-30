@@ -297,7 +297,8 @@ mod tests {
     use super::*;
     #[test]
     fn concave_and_bundled_roofs_preserve_footprint_area() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let concave = vec![
             [0.0, 0.0],
             [4.0, 0.0],
@@ -327,7 +328,8 @@ mod tests {
     }
     #[test]
     fn reference_block_is_local_and_details_respect_collision_margin() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let selected: Vec<_> = city
             .buildings
             .iter()
@@ -373,7 +375,8 @@ mod tests {
 
     #[test]
     fn distant_buildings_keep_identical_walls_roofs_and_foundations() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let building = city
             .buildings
             .iter()
@@ -402,7 +405,8 @@ mod tests {
 
     #[test]
     fn city_geometry_is_finite_and_bounded_in_size() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let mut b = Builder::default();
         build(&mut b, &city);
         let area =

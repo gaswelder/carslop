@@ -163,7 +163,7 @@ mod tests {
                 road.lane_position(2.55),
                 road.heading(),
                 CarModel::Roadster,
-                track,
+                track.clone(),
             );
             car.tire_scrub = 0.9;
             marks.record(0, &car);

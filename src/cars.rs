@@ -199,8 +199,8 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
     let g = &v["gearbox"];
     let ratios = g["ratios"]
         .as_array()
-        .filter(|a| !a.is_empty() && a.len() <= 255)
-        .ok_or("expected 1..255 ratios")?
+        .filter(|a| !a.is_empty() && a.len() <= 254)
+        .ok_or("expected 1..254 ratios")?
         .iter()
         .map(number)
         .collect::<Result<Vec<_>, _>>()?;
@@ -486,8 +486,8 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
         if let Some(r) = g.get("ratios") {
             let r = r
                 .as_array()
-                .filter(|r| !r.is_empty() && r.len() <= 255)
-                .ok_or("expected 1..255 ratios")?;
+                .filter(|r| !r.is_empty() && r.len() <= 254)
+                .ok_or("expected 1..254 ratios")?;
             let ratios = r.iter().map(number).collect::<Result<Vec<_>, _>>()?;
             if !ratios.windows(2).all(|p| p[0] > p[1]) {
                 return Err("ratios must descend".into());
@@ -519,6 +519,9 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     }
     if let Some(value) = object.get("turbo") {
         spec.turbo = turbo(value)?;
+    }
+    for mesh in [&spec.mesh, &spec.wheel_mesh] {
+        crate::scene::validate_design(&mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
     }
     Ok(ExtraCar { spec, base })
 }
@@ -555,6 +558,30 @@ mod runtime_tests {
             crate::hud::selection_menu_hit_test(-0.5, 0.055, 0, 4, car),
             Some(crate::hud::MenuAction::Car(car))
         );
+    }
+
+    #[test]
+    fn gearbox_limit_keeps_neutral_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("car.json");
+        let original: serde_json::Value =
+            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+        for count in [254, 255] {
+            let ratios: Vec<_> = (1..=count).rev().collect();
+            let mut required = original.clone();
+            required["gearbox"]["ratios"] = serde_json::json!(ratios);
+            std::fs::write(&path, serde_json::to_vec(&required).unwrap()).unwrap();
+            assert_eq!(load_original(&path).is_ok(), count == 254);
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({
+                    "base":"club", "gearbox":{"ratios":ratios}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(load_extra(&path).is_ok(), count == 254);
+        }
     }
 
     #[test]
@@ -622,6 +649,27 @@ mod runtime_tests {
         )
         .unwrap();
         std::fs::write(cars.join("bad/car.json"), r#"{"base":"club","mass":-1}"#).unwrap();
+        for (folder, field, contents) in [
+            ("missing_body", "mesh", None),
+            ("missing_wheel", "wheel_mesh", None),
+            ("corrupt_body", "mesh", Some(b"invalid mesh".as_slice())),
+            (
+                "corrupt_wheel",
+                "wheel_mesh",
+                Some(b"invalid mesh".as_slice()),
+            ),
+        ] {
+            let folder = cars.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            if let Some(bytes) = contents {
+                std::fs::write(folder.join("bad.mesh"), bytes).unwrap();
+            }
+            std::fs::write(
+                folder.join("car.json"),
+                serde_json::to_vec(&serde_json::json!({"base":"club", field: "bad.mesh"})).unwrap(),
+            )
+            .unwrap();
+        }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .current_dir(dir.path())
             .env("NFS_TEST_RUNTIME_CAR", "1")

@@ -84,17 +84,45 @@ impl TrackId {
         }
     }
 
-    pub fn track(self) -> &'static Track {
-        static COMPACT: OnceLock<Track> = OnceLock::new();
-        static SCENIC: OnceLock<Track> = OnceLock::new();
-        static ENGOMI: OnceLock<
-            std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, &'static Track>>,
-        > = OnceLock::new();
-        match self {
-            Self::Compact => COMPACT.get_or_init(|| Track::build(self, &ROAD_POINTS)),
-            Self::Scenic => SCENIC.get_or_init(|| Track::build(self, &SCENIC_POINTS)),
-            Self::Engomi => crate::city_assets::cached(&ENGOMI, Track::engomi),
-        }
+    pub fn track(self) -> std::sync::Arc<Track> {
+        self.try_track().expect("cannot load required track")
+    }
+
+    pub fn try_track(self) -> Result<std::sync::Arc<Track>, String> {
+        use std::sync::{Arc, Mutex};
+        static COMPACT: OnceLock<Arc<Track>> = OnceLock::new();
+        static SCENIC: OnceLock<Arc<Track>> = OnceLock::new();
+        // Retain only the most recent city; sessions own their own references.
+        static CITY: OnceLock<Mutex<Option<(std::path::PathBuf, Arc<Track>)>>> = OnceLock::new();
+        // Serialize construction separately: a failed builder cannot poison the cache,
+        // and concurrent requests cannot allocate multiple copies of a large city.
+        static BUILD: Mutex<()> = Mutex::new(());
+        Ok(match self {
+            Self::Compact => COMPACT
+                .get_or_init(|| Arc::new(Track::build(self, &ROAD_POINTS)))
+                .clone(),
+            Self::Scenic => SCENIC
+                .get_or_init(|| Arc::new(Track::build(self, &SCENIC_POINTS)))
+                .clone(),
+            Self::Engomi => {
+                let path = crate::city_assets::directory().to_path_buf();
+                let cache = CITY.get_or_init(Default::default);
+                if let Some((key, track)) = cache.lock().unwrap().as_ref() {
+                    if *key == path {
+                        return Ok(track.clone());
+                    }
+                }
+                let _build = BUILD.lock().unwrap_or_else(|error| error.into_inner());
+                if let Some((key, track)) = cache.lock().unwrap().as_ref() {
+                    if *key == path {
+                        return Ok(track.clone());
+                    }
+                }
+                let track = Arc::new(Track::engomi()?);
+                *cache.lock().unwrap() = Some((path, track.clone()));
+                track
+            }
+        })
     }
 }
 
@@ -134,9 +162,9 @@ impl Track {
         flat
     }
 
-    fn engomi() -> Self {
-        let city = crate::city::City::engomi();
-        Self {
+    fn engomi() -> Result<Self, String> {
+        let city = crate::city::City::engomi()?;
+        Ok(Self {
             id: TrackId::Engomi,
             name: crate::city_assets::name(),
             width: 8.0,
@@ -152,7 +180,7 @@ impl Track {
             shoreline: Vec::new(),
             buckets: Default::default(),
             city: Some(city),
-        }
+        })
     }
     pub fn city(&self) -> Option<&crate::city::City> {
         self.city.as_ref()
@@ -441,7 +469,7 @@ mod tests {
             scenic.at_distance(scenic.length()).point
         );
         assert!(scenic.centerline().len() > 800);
-        assert!(!std::ptr::eq(scenic, TrackId::Compact.track()));
+        assert!(!std::sync::Arc::ptr_eq(&scenic, &TrackId::Compact.track()));
         for i in 0..scenic.points.len() {
             let a = scenic.points[i];
             let b = scenic.points[(i + 1) % scenic.points.len()];

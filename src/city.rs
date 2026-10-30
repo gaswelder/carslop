@@ -93,13 +93,12 @@ impl Building {
     }
 }
 impl City {
-    pub fn engomi() -> Self {
-        let source = crate::city_assets::read("city.txt");
-        let streets = crate::city_assets::read("streets.txt");
-        let mut city = Self::parse(&source).expect("invalid bundled Engomi map");
+    pub fn engomi() -> Result<Self, String> {
+        let source = crate::city_assets::try_read("city.txt")?;
+        let streets = crate::city_assets::try_read("streets.txt")?;
+        let mut city = Self::parse(&source)?;
         let (surfaces, paths) =
-            crate::street_surface::StreetSurface::load(&streets, &source, city.streets.len())
-                .expect("invalid bundled Engomi street surfaces");
+            crate::street_surface::StreetSurface::load(&streets, &source, city.streets.len())?;
         city.length = 0.0;
         city.road_grid.clear();
         for (i, (street, path)) in city.streets.iter_mut().zip(paths).enumerate() {
@@ -108,7 +107,9 @@ impl City {
             street.length = 0.0;
             for pair in street.path.windows(2) {
                 let length = (pair[1][0] - pair[0][0]).hypot(pair[1][2] - pair[0][2]);
-                assert!(length > 0.0001, "degenerate compiled road path");
+                if !length.is_finite() || length <= 0.0001 {
+                    return Err("degenerate compiled road path".into());
+                }
                 street.length += length;
                 street.path_distances.push(street.length);
             }
@@ -121,16 +122,14 @@ impl City {
             );
         }
         city.furniture = crate::traffic::load(
-            &crate::city_assets::read("furniture.txt"),
+            &crate::city_assets::try_read("furniture.txt")?,
             &source,
             &streets,
-        )
-        .expect("invalid bundled road furniture");
+        )?;
         let field = crate::elevation::HeightField::load(
-            &crate::city_assets::read("elevation/heightfield.txt"),
+            &crate::city_assets::try_read("elevation/heightfield.txt")?,
             &source,
-        )
-        .expect("invalid bundled Engomi elevation");
+        )?;
         for p in &mut city.nodes {
             p[1] = field.height([p[0], p[2]]);
         }
@@ -155,23 +154,19 @@ impl City {
                 + 0.02;
         }
         city.landscape = crate::landscape::Landscape::load(
-            &crate::city_assets::read("landscape.txt"),
+            &crate::city_assets::try_read("landscape.txt")?,
             &source,
             &streets,
-        )
-        .expect("invalid bundled Engomi landscape");
+        )?;
         let imagery = crate::city_assets::directory().join("imagery-trees.txt");
         match crate::package::read_to_string(&imagery) {
-            Ok(text) => city
-                .landscape
-                .append_imagery(&text, &source, &streets)
-                .expect("invalid imagery trees; regenerate with import-imagery-trees"),
+            Ok(text) => city.landscape.append_imagery(&text, &source, &streets)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("cannot read imagery trees: {e}"),
+            Err(e) => return Err(format!("cannot read imagery trees: {e}")),
         }
         city.elevation = Some(field);
         city.surfaces = Some(surfaces);
-        city
+        Ok(city)
     }
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let mut city = Self {
@@ -712,7 +707,8 @@ mod tests {
     }
     #[test]
     fn engomi_ground_contact_props_and_foundations_share_elevation() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
         for i in 0..city.streets.len() {
@@ -749,7 +745,8 @@ mod tests {
     }
     #[test]
     fn sidewalks_and_parking_are_drivable_at_rendered_height_and_crop_stays_solid() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let mut checked = 0;
         for triangle in &city.surfaces.as_ref().unwrap().triangles {
             if !matches!(triangle.style, 5 | 6) {
@@ -820,7 +817,8 @@ mod tests {
 
     #[test]
     fn expanded_city_has_connected_streets_across_the_original_extract_edges() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let old_north = -0.006 * std::f32::consts::PI / 180.0 * 6_371_000.0;
         let old_east =
             0.008 * std::f32::consts::PI / 180.0 * 6_371_000.0 * 35.162_f32.to_radians().cos();
@@ -845,7 +843,8 @@ mod tests {
 
     #[test]
     fn urban_map_covers_centres_on_both_sides_and_queries_only_nearby_streets() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         assert!(city.streets.len() > 100_000 && city.buildings.len() > 70_000);
         for (name, lat, lon) in [
             ("Nicosia", 35.1746503, 33.3638783),
@@ -918,7 +917,8 @@ mod tests {
     }
     #[test]
     fn compiled_street_paths_render_and_collide_on_the_same_surface() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let surfaces = city.surfaces.as_ref().unwrap();
         let mut styles = [false; 8];
         for triangle in &surfaces.triangles {
@@ -966,7 +966,8 @@ mod tests {
 
     #[test]
     fn bundled_nicosia_retains_real_scale_networks_and_buildings() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         assert!(city.nodes.len() > 1000 && city.buildings.len() > 1000);
         assert!(city.bounds[1][0] - city.bounds[0][0] > 1400.0);
         let mut visited = std::collections::HashSet::new();

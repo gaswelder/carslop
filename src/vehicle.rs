@@ -23,7 +23,7 @@ pub struct Controls {
 
 pub struct Vehicle {
     pub model: CarModel,
-    pub track: &'static track::Track,
+    pub track: std::sync::Arc<track::Track>,
     pub position: [f32; 3],
     pub velocity: [f32; 2],
     pub speed: f32,
@@ -64,7 +64,7 @@ impl Vehicle {
         position: [f32; 3],
         heading: f32,
         model: CarModel,
-        track: &'static track::Track,
+        track: std::sync::Arc<track::Track>,
     ) -> Self {
         Self {
             model,
@@ -102,7 +102,7 @@ impl Vehicle {
 
     pub fn reset(&mut self, position: [f32; 3], heading: f32) {
         let manual = self.manual;
-        *self = Self::on_track(position, heading, self.model, self.track);
+        *self = Self::on_track(position, heading, self.model, self.track.clone());
         self.manual = manual;
     }
 
@@ -625,7 +625,7 @@ impl Vehicle {
     #[cfg(test)]
     pub fn collide(&mut self, other: &mut Vehicle) -> f32 {
         debug_assert!(
-            std::ptr::eq(self.track, other.track),
+            std::sync::Arc::ptr_eq(&self.track, &other.track),
             "vehicle contact requires the same route"
         );
         let dx = self.position[0] - other.position[0];
@@ -947,7 +947,7 @@ mod tests {
 
     // Drivetrain calibration compares identical level ground across route tuning.
     fn level_route_car(id: track::TrackId, model: CarModel) -> Vehicle {
-        let track = Box::leak(Box::new(id.track().flat_test_track()));
+        let track = std::sync::Arc::new(id.track().flat_test_track());
         let road = track.at_distance(50.0);
         Vehicle::on_track(road.lane_position(0.0), road.heading(), model, track)
     }
@@ -1187,7 +1187,7 @@ mod tests {
             .expect("missing clear curb crossing fixture");
         let position = [q[0] + normal[0] * 0.08, 0.0, q[1] + normal[1] * 0.08];
         let heading = (-normal[0]).atan2(-normal[1]);
-        let mut car = Vehicle::on_track(position, heading, CarModel::Roadster, track);
+        let mut car = Vehicle::on_track(position, heading, CarModel::Roadster, track.clone());
         car.velocity = normal.map(|n| -n * 8.0);
         car.update(Duration::from_millis(24), Controls::default());
         assert!(!surfaces.contains([car.position[0], car.position[2]]));
@@ -1442,7 +1442,10 @@ mod tests {
         for (actual, expected) in compact.position.into_iter().zip(compact_position) {
             assert!((actual - expected).abs() < 0.001);
         }
-        assert!(std::ptr::eq(compact.track, track::TrackId::Compact.track()));
+        assert!(std::sync::Arc::ptr_eq(
+            &compact.track,
+            &track::TrackId::Compact.track()
+        ));
     }
 
     #[test]
@@ -1460,7 +1463,10 @@ mod tests {
         car.tire_scrub = 1.0;
         let road = car.track.at_distance(850.0);
         car.reset(road.lane_position(0.0), road.heading());
-        assert!(std::ptr::eq(car.track, track::TrackId::Scenic.track()));
+        assert!(std::sync::Arc::ptr_eq(
+            &car.track,
+            &track::TrackId::Scenic.track()
+        ));
         assert_eq!(car.model, CarModel::Muscle);
         assert_eq!(car.position, road.lane_position(0.0));
         assert_eq!(car.heading, road.heading());

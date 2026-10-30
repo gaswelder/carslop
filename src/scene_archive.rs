@@ -238,7 +238,8 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
     Ok(())
 }
 pub fn bake_default() -> std::io::Result<()> {
-    let city = crate::track::TrackId::Engomi.track().city().expect("city");
+    let city_track = crate::track::TrackId::Engomi.track();
+    let city = city_track.city().expect("city");
     let directory = crate::city_assets::directory();
     let packaged = crate::package::is_package(directory);
     let temporary = if packaged {

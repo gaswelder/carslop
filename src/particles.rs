@@ -235,7 +235,7 @@ mod tests {
             road.lane_position(2.0),
             road.heading(),
             CarModel::Roadster,
-            track,
+            track.clone(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
         car.tire_scrub = 0.0;

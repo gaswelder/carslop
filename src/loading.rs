@@ -5,12 +5,7 @@ use sdl3::{
     keyboard::Keycode,
     video::Window,
 };
-use std::{
-    sync::{Mutex, OnceLock},
-    time::{Duration, Instant},
-};
-
-static CITY_READY: OnceLock<Mutex<std::collections::HashSet<std::path::PathBuf>>> = OnceLock::new();
+use std::time::{Duration, Instant};
 
 /// Warm the shared city map and validate its archive before creating a session.
 /// A close request is requeued for the application's normal shutdown path.
@@ -20,13 +15,7 @@ pub fn prepare(
     events: &mut sdl3::EventPump,
     sdl: &sdl3::Sdl,
 ) -> bool {
-    if id != TrackId::Engomi
-        || CITY_READY
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap()
-            .contains(crate::city_assets::directory())
-    {
+    if id != TrackId::Engomi {
         return true;
     }
     let started = Instant::now();
@@ -37,13 +26,8 @@ pub fn prepare(
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
         .spawn(|| {
-            TrackId::Engomi.track();
+            TrackId::Engomi.try_track()?;
             crate::scene_archive::Archive::open_default().map_err(|e| e.to_string())?;
-            CITY_READY
-                .get_or_init(Default::default)
-                .lock()
-                .unwrap()
-                .insert(crate::city_assets::directory().to_path_buf());
             Ok::<_, String>(())
         })
         .expect("failed to start location loader");
@@ -64,6 +48,7 @@ pub fn prepare(
                 let _ = sdl
                     .event()
                     .and_then(|events| events.push_event(Event::Quit { timestamp: 0 }));
+                let _ = worker.join();
                 let _ = window.set_title(&title);
                 return false;
             }
@@ -74,9 +59,19 @@ pub fn prepare(
         crate::gl::swap_window(window);
         std::thread::sleep(Duration::from_millis(16));
     }
-    match worker.join() {
-        Ok(result) => result.expect("failed to load location"),
-        Err(panic) => std::panic::resume_unwind(panic),
+    let result = worker
+        .join()
+        .unwrap_or_else(|_| Err("location loader panicked".into()));
+    if let Err(error) = result {
+        log::warn!("Cannot load location: {error}");
+        let _ = sdl3::messagebox::show_simple_message_box(
+            sdl3::messagebox::MessageBoxFlag::ERROR,
+            "Cannot load location",
+            &error,
+            Some(&*window),
+        );
+        let _ = window.set_title(&title);
+        return false;
     }
     let _ = window.set_title(&title);
     true

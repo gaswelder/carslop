@@ -113,7 +113,8 @@ mod tests {
     }
     #[test]
     fn mapped_furniture_is_typed_finite_and_outside_the_driving_surface() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let surface = city.surfaces.as_ref().unwrap();
         assert_eq!(
             city.furniture

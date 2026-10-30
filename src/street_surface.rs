@@ -293,7 +293,8 @@ mod tests {
     }
     #[test]
     fn curbs_report_crossings_without_becoming_walls() {
-        let city = crate::track::TrackId::Engomi.track().city().unwrap();
+        let city_track = crate::track::TrackId::Engomi.track();
+        let city = city_track.city().unwrap();
         let surfaces = city.surfaces.as_ref().unwrap();
         let mut checked = 0;
         for curb in surfaces.curbs.iter().step_by(71) {

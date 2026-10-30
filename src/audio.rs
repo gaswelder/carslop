@@ -286,7 +286,7 @@ impl EngineAudio {
         let levels = Levels::on_track(
             car.position,
             car.velocity[0].hypot(car.velocity[1]),
-            car.track,
+            &car.track,
         );
         let placement = SpatialAudio::placement(car.position, listener);
         let samples: Vec<f32> = (0..count)
@@ -509,7 +509,7 @@ mod tests {
                     road.lane_position(0.0),
                     road.heading(),
                     model,
-                    track,
+                    track.clone(),
                 );
                 let step = car.upshift_speed(1);
                 car.velocity = road.tangent.map(|v| v * (step - 0.01));

@@ -47,7 +47,8 @@ fn aerial_drape_preview() {
     assert_eq!(pixels.len(), width as usize * height as usize * 3);
     let mut app = crate::App::new();
     app.key_down(sdl3::keyboard::Keycode::F7);
-    let city = app.session.track().city().unwrap();
+    let city_track = app.session.vehicle.track.clone();
+    let city = city_track.city().unwrap();
     let field = city.elevation.as_ref().unwrap();
     let nw = local(xmin, ymax);
     let se = local(xmax, ymin);

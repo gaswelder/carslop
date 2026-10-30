@@ -39,7 +39,7 @@ pub struct Pose {
 }
 
 pub struct ChaseCamera {
-    track: &'static track::Track,
+    track: std::sync::Arc<track::Track>,
     view: FollowView,
     anchor: [f32; 3],
     heading: f32,
@@ -53,7 +53,7 @@ impl ChaseCamera {
     pub fn new(car: &Vehicle) -> Self {
         let (distance, height) = FollowView::Close.dimensions();
         let mut camera = Self {
-            track: car.track,
+            track: car.track.clone(),
             view: FollowView::Close,
             anchor: car.position,
             heading: car.heading,
@@ -80,7 +80,7 @@ impl ChaseCamera {
 
     pub fn snap(&mut self, car: &Vehicle) {
         self.bonnet = bonnet_pose(car);
-        self.track = car.track;
+        self.track = car.track.clone();
         self.anchor = car.position;
         self.heading = car.heading.rem_euclid(TAU);
         self.look_ahead = desired_look(car);
@@ -89,7 +89,7 @@ impl ChaseCamera {
     }
 
     pub fn update(&mut self, car: &Vehicle, frame_time: Duration) {
-        if !std::ptr::eq(self.track, car.track) {
+        if !std::sync::Arc::ptr_eq(&self.track, &car.track) {
             self.snap(car);
             return;
         }
@@ -266,11 +266,11 @@ mod tests {
             road.lane_position(0.0),
             road.heading(),
             CarModel::Roadster,
-            track,
+            track.clone(),
         );
         scenic.speed = 30.0;
         camera.update(&scenic, Duration::ZERO);
-        assert!(std::ptr::eq(camera.track, track));
+        assert!(std::sync::Arc::ptr_eq(&camera.track, &track));
         assert_eq!(camera.view(), FollowView::Wide);
         assert_eq!(camera.anchor, scenic.position);
         let mut expected = ChaseCamera::new(&scenic);
@@ -279,10 +279,10 @@ mod tests {
         assert_eq!(camera.pose(), expected.pose());
         let compact = car();
         camera.update(&compact, Duration::from_millis(16));
-        assert!(std::ptr::eq(camera.track, compact.track));
+        assert!(std::sync::Arc::ptr_eq(&camera.track, &compact.track));
         assert_eq!(camera.anchor, compact.position);
         camera.snap(&scenic);
-        assert!(std::ptr::eq(camera.track, scenic.track));
+        assert!(std::sync::Arc::ptr_eq(&camera.track, &scenic.track));
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
             road.lane_position(0.0),
             road.heading(),
             CarModel::Roadster,
-            track,
+            track.clone(),
         );
         let mut camera = ChaseCamera::new(&car);
         for close in [false, true] {

@@ -537,6 +537,9 @@ fn wheel(b: &mut Builder, x: f32, z: f32) {
     }
     b.vertices.extend(vertices);
 }
+pub(crate) fn validate_design(path: &std::path::Path) -> std::io::Result<()> {
+    car_mesh::load(path).map(|_| ())
+}
 fn load_design(path: &std::path::Path) -> Vec<Vertex> {
     car_mesh::load(path).unwrap_or_else(|error| {
         panic!(
@@ -584,7 +587,7 @@ mod tests {
             car_ranges,
             wheel_range,
             ..
-        } = build(track::TrackId::Compact.track());
+        } = build(&track::TrackId::Compact.track());
         assert!(world > 1000 && v.len() > world + 500);
         assert_eq!(world % 3, 0);
         assert_eq!(v.len() % 3, 0);
@@ -737,7 +740,7 @@ mod tests {
     #[test]
     fn road_markings_face_the_sky_and_wheels_face_outward() {
         let mut b = Builder::default();
-        road(&mut b, track::TrackId::Compact.track());
+        road(&mut b, &track::TrackId::Compact.track());
         for v in &b.vertices {
             // Asphalt, curbs, and lane/finish markings all have upward normals.
             if v.color == [0.23, 0.25, 0.26]
@@ -767,7 +770,7 @@ mod tests {
     #[test]
     fn contact_receivers_include_markings_but_exclude_guardrails() {
         let mut b = Builder::default();
-        road(&mut b, track::TrackId::Compact.track());
+        road(&mut b, &track::TrackId::Compact.track());
         let mut markings = 0;
         let mut rails = 0;
         for v in b.vertices {
@@ -786,7 +789,7 @@ mod tests {
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
         let route = track::TrackId::Scenic.track();
-        let geometry = build(route);
+        let geometry = build(&route);
         assert!(geometry.world_count > 100_000 && geometry.vertices.len() < 800_000);
         for v in &geometry.vertices {
             assert!(v
