@@ -679,9 +679,12 @@ mod tests {
                 crate::vehicle::Vehicle::new(road.lane_position(0.0), road.heading(), model);
             car.toggle_direction();
             let idle = engine_frequency(car.target_engine_rpm());
-            car.speed = -3.0;
+            let gearbox = &model.spec().gearbox;
+            let speed = 2000.0 * std::f32::consts::TAU * gearbox.rolling_radius
+                / (60.0 * gearbox.reverse_ratio * gearbox.final_drive);
+            car.speed = -speed;
             let slow = engine_frequency(car.target_engine_rpm());
-            car.speed = -6.0;
+            car.speed = -speed * 2.0;
             let fast = engine_frequency(car.target_engine_rpm());
             assert!(idle < slow && slow < fast && fast <= 6500.0 / 30.0);
         }

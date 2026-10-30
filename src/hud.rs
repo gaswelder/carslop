@@ -902,12 +902,12 @@ mod tests {
         ] {
             assert_eq!(menu_hit_test(-0.5, y), Some(MenuAction::Location(id)));
         }
-        for (x, car) in [
-            (-0.78, CarModel::Roadster),
-            (-0.46, CarModel::Muscle),
-            (-0.14, CarModel::Club),
-        ] {
-            assert_eq!(menu_hit_test(x, -0.215), Some(MenuAction::Car(car)));
+        for (index, car) in crate::cars::ALL.into_iter().enumerate() {
+            let r = car_box(index);
+            assert_eq!(
+                menu_hit_test((r[0] + r[2]) * 0.5, -0.215),
+                Some(MenuAction::Car(car))
+            );
         }
         assert_eq!(menu_hit_test(-0.5, -0.40), Some(MenuAction::Activity));
         assert_eq!(menu_hit_test(-0.5, -0.61), Some(MenuAction::Start));

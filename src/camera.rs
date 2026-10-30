@@ -246,7 +246,11 @@ mod tests {
                 std::array::from_fn(|axis| (0..3).map(|i| relative[i] * body[axis * 4 + i]).sum());
             assert_close(local, [0.0, 0.65, 0.95], 0.001);
             let sight: [f32; 3] = std::array::from_fn(|i| pose.target[i] - pose.eye[i]);
-            assert_close(sight, std::array::from_fn(|i| body[8 + i] * 30.0 - body[4 + i] * 2.4), 0.001);
+            assert_close(
+                sight,
+                std::array::from_fn(|i| body[8 + i] * 30.0 - body[4 + i] * 2.4),
+                0.001,
+            );
         }
         c.toggle_view();
         assert_eq!(c.view(), FollowView::Close);

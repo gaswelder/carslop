@@ -1,0 +1,48 @@
+{
+  "name": "KESTREL TURBO",
+  "description": "3.0 TURBO - WIDE-BODY REAR-ENGINE COUPE",
+  "mass": 1140,
+  "engine_force": 10500,
+  "top_speed": 69.44444444444444,
+  "brake_force": 23940,
+  "lateral_force": 14500,
+  "wheelbase": 2.6,
+  "steering_response": 8.5,
+  "road_engine": {
+    "wheel_power_watts": 171900,
+    "drag_accel": 0.00045
+  },
+  "dynamics": {
+    "front_weight": 0.39,
+    "cg_height": 0.49,
+    "track_width": 1.51,
+    "yaw_inertia": 1750,
+    "front_drive": 0.0,
+    "brake_bias": 0.61,
+    "corner_stiffness": [
+      66000,
+      122000
+    ],
+    "peak_torque": 350,
+    "suspension_hz": 1.85,
+    "steering_speed_squared": 0.009
+  },
+  "gearbox": {
+    "ratios": [
+      2.25,
+      1.304,
+      0.893,
+      0.656
+    ],
+    "final_drive": 4.222222,
+    "rolling_radius": 0.315,
+    "reverse_ratio": 2.25,
+    "upshift_rpm": 6200,
+    "downshift_rpm": 2700
+  },
+  "half_track": 0.98,
+  "wheel_height": -0.02,
+  "mesh": "body.mesh",
+  "wheel_mesh": "wheel.mesh",
+  "base": "kestrel"
+}

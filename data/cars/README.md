@@ -10,6 +10,10 @@ data/cars/
     body.mesh
     wheel.mesh
     audio/
+  kestrel-turbo/
+    car.json
+    body.mesh
+    wheel.mesh
   muscle/
     car.json
     body.mesh
@@ -106,3 +110,6 @@ object accepts `front_weight`, `cg_height`, `track_width`, `yaw_inertia`,
 must be positive and descending. `road_engine` accepts `wheel_power_watts` and
 `drag_accel`, or `null` to disable the power/drag model. Keep JSON definitions
 and referenced assets with the executable's working-directory `data/cars`.
+
+The [Kestrel Turbo](kestrel-turbo/README.md) is a 930-inspired wide-body variant,
+loaded through the same runtime catalog as other custom cars.

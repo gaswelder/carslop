@@ -2360,7 +2360,10 @@ mod tests {
         s.cycle_location(-1, true);
         assert_eq!(s.track().id, TrackId::Engomi);
         s.cycle_car(1);
-        assert_eq!(s.vehicle.model, CarModel::Roadster);
+        assert_eq!(
+            s.vehicle.model,
+            cars::ALL[(CarModel::Club.index() + 1) % cars::ALL.len()]
+        );
     }
 
     #[test]
@@ -2539,12 +2542,13 @@ mod tests {
             assert_eq!(s.rival.model, CarModel::Roadster);
             assert!(s.state == GameState::Menu);
         }
+        let selected = s.vehicle.model;
         s.state = GameState::Driving;
         s.countdown = 0.0;
         s.recover();
-        assert_eq!(s.vehicle.model, CarModel::Club);
+        assert_eq!(s.vehicle.model, selected);
         s.restart();
-        assert_eq!(s.vehicle.model, CarModel::Club);
+        assert_eq!(s.vehicle.model, selected);
         assert_eq!(s.countdown, 3.0);
         for state in [
             GameState::Driving,
@@ -2554,7 +2558,7 @@ mod tests {
         ] {
             s.state = state;
             s.select_car(CarModel::Muscle);
-            assert_eq!(s.vehicle.model, CarModel::Club);
+            assert_eq!(s.vehicle.model, selected);
         }
     }
 
