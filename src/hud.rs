@@ -165,12 +165,14 @@ pub struct PauseMenu<'a> {
 }
 
 const MAP_CONTENT: [[f32; 2]; 2] = [[0.61, 0.49], [0.95, 0.88]];
+const FULL_MAP_CONTENT: [[f32; 2]; 2] = [[-0.94, -0.72], [0.94, 0.75]];
 const MAP_WIDTH_METRES: f32 = 400.0;
 
 struct MapFit {
     center: [f32; 2],
     scale: [f32; 2],
     north_up: bool,
+    content: [[f32; 2]; 2],
 }
 impl MapFit {
     fn new(track: &Track, player: [f32; 3], viewport: [f32; 2]) -> Self {
@@ -179,11 +181,37 @@ impl MapFit {
             center: [player[0], player[2]],
             scale: [x_scale, x_scale * viewport[0] / viewport[1]],
             north_up: track.city().is_some(),
+            content: MAP_CONTENT,
+        }
+    }
+    fn full(track: &Track, player: [f32; 3], viewport: [f32; 2]) -> Self {
+        let mut bounds = track.bounds;
+        // Include every road endpoint and the car, even outside the route bounds.
+        for p in track
+            .map_segments()
+            .flat_map(|(a, b)| [a, b])
+            .chain(std::iter::once(player))
+        {
+            for (axis, coordinate) in [p[0], p[2]].into_iter().enumerate() {
+                bounds[0][axis] = bounds[0][axis].min(coordinate);
+                bounds[1][axis] = bounds[1][axis].max(coordinate);
+            }
+        }
+        let aspect = viewport[0] / viewport[1];
+        let size: [f32; 2] = std::array::from_fn(|i| (bounds[1][i] - bounds[0][i]).max(1.0));
+        let available: [f32; 2] =
+            std::array::from_fn(|i| (FULL_MAP_CONTENT[1][i] - FULL_MAP_CONTENT[0][i]) * 0.9);
+        let scale = (available[0] / size[0]).min(available[1] / (size[1] * aspect));
+        Self {
+            center: std::array::from_fn(|i| (bounds[0][i] + bounds[1][i]) * 0.5),
+            scale: [scale, scale * aspect],
+            north_up: track.city().is_some(),
+            content: FULL_MAP_CONTENT,
         }
     }
     fn world_bounds(&self) -> [[f32; 2]; 2] {
-        let x = MAP_WIDTH_METRES * 0.5;
-        let z = (MAP_CONTENT[1][1] - MAP_CONTENT[0][1]) * 0.5 / self.scale[1];
+        let x = (self.content[1][0] - self.content[0][0]) * 0.5 / self.scale[0];
+        let z = (self.content[1][1] - self.content[0][1]) * 0.5 / self.scale[1];
         [
             [self.center[0] - x, self.center[1] - z],
             [self.center[0] + x, self.center[1] + z],
@@ -191,8 +219,9 @@ impl MapFit {
     }
     fn point(&self, p: [f32; 3]) -> [f32; 2] {
         [
-            0.78 + (p[0] - self.center[0]) * self.scale[0],
-            0.685
+            (self.content[0][0] + self.content[1][0]) * 0.5
+                + (p[0] - self.center[0]) * self.scale[0],
+            (self.content[0][1] + self.content[1][1]) * 0.5
                 + (p[2] - self.center[1]) * self.scale[1] * if self.north_up { -1.0 } else { 1.0 },
         ]
     }
@@ -236,6 +265,7 @@ fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, color: [f32; 3]) {
 pub struct Hud {
     vao: u32,
     vbo: u32,
+    full_map_vertices: i32,
 }
 
 impl Drop for Hud {
@@ -259,7 +289,11 @@ impl Hud {
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 24, std::ptr::null());
             gl::EnableVertexAttribArray(1);
             gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, 24, 12usize as *const _);
-            Self { vao, vbo }
+            Self {
+                vao,
+                vbo,
+                full_map_vertices: 0,
+            }
         }
     }
 
@@ -295,10 +329,23 @@ impl Hud {
         if map.track.city().is_some() {
             text(&mut v, "N", [0.94, 0.86], 0.0035, white);
         }
+        text(&mut v, "M FULL MAP", [0.60, 0.435], 0.0032, white);
         if let Some(pause) = pause {
             append_pause(&mut v, pause);
         }
         self.upload(program, &v);
+    }
+
+    pub fn prepare_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
+        let mut vertices = Vec::new();
+        append_full_map(&mut vertices, map, heading, viewport);
+        // The map is modal and static: build/upload the city network only on entry.
+        self.set_vertices(&vertices);
+        self.full_map_vertices = (vertices.len() / 6) as i32;
+    }
+
+    pub fn draw_full_map(&self, program: u32) {
+        self.draw_vertices(program, self.full_map_vertices);
     }
 
     pub fn draw_menu(&self, program: u32, menu: MainMenu) {
@@ -408,6 +455,23 @@ impl Hud {
     }
 
     fn upload(&self, program: u32, v: &[f32]) {
+        self.set_vertices(v);
+        self.draw_vertices(program, (v.len() / 6) as i32);
+    }
+
+    fn set_vertices(&self, v: &[f32]) {
+        unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                std::mem::size_of_val(v) as isize,
+                v.as_ptr() as *const _,
+                gl::STREAM_DRAW,
+            );
+        }
+    }
+
+    fn draw_vertices(&self, program: u32, count: i32) {
         let identity = [
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
@@ -415,12 +479,6 @@ impl Hud {
             gl::Disable(gl::DEPTH_TEST);
             gl::BindVertexArray(self.vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (v.len() * 4) as isize,
-                v.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
             gl::UseProgram(program);
             let name = CString::new("u_mvp").unwrap();
             gl::UniformMatrix4fv(
@@ -436,10 +494,98 @@ impl Hud {
                 1.0,
                 1.0,
             );
-            gl::DrawArrays(gl::TRIANGLES, 0, (v.len() / 6) as i32);
+            gl::DrawArrays(gl::TRIANGLES, 0, count);
             gl::Enable(gl::DEPTH_TEST);
         }
     }
+}
+
+fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
+    let white = [0.9, 0.95, 1.0];
+    let muted = [0.55, 0.66, 0.70];
+    let cyan = [0.15, 0.85, 0.95];
+    let orange = [1.0, 0.25, 0.12];
+    quad(v, [-1.0, -1.0], [1.0, 1.0], [0.015, 0.025, 0.04]);
+    quad(
+        v,
+        FULL_MAP_CONTENT[0],
+        FULL_MAP_CONTENT[1],
+        [0.025, 0.05, 0.075],
+    );
+    text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
+    let name_size = 0.004_f32.min(0.94 / (map.track.name.chars().count().max(1) as f32 * 6.0));
+    text(v, map.track.name, [-0.60, 0.90], name_size, white);
+    text(v, "ESC BACK TO GAME", [0.49, 0.90], 0.004, white);
+
+    let fit = MapFit::full(map.track, map.player, viewport);
+    let pixel = |p: [f32; 2]| {
+        [
+            (p[0] + 1.0) * viewport[0] * 0.5,
+            (1.0 - p[1]) * viewport[1] * 0.5,
+        ]
+    };
+    let mut canvas = InstrumentCanvas {
+        vertices: v,
+        viewport,
+        scale: 1.0,
+        origin: [0.0, 0.0],
+    };
+    let road_width = if fit.north_up { 1.5 } else { 3.0 };
+    for (a, b) in map.track.map_segments() {
+        canvas.stroke(
+            pixel(fit.point(a)),
+            pixel(fit.point(b)),
+            road_width,
+            [0.40, 0.55, 0.60],
+        );
+    }
+    let player = pixel(fit.point(map.player));
+    canvas.disc(player, 15.0, white);
+    canvas.disc(player, 12.0, [0.025, 0.05, 0.075]);
+    let forward = [
+        heading.sin(),
+        heading.cos() * if fit.north_up { 1.0 } else { -1.0 },
+    ];
+    let right = [-forward[1], forward[0]];
+    let tip = std::array::from_fn(|i| player[i] + forward[i] * 10.0);
+    let left = std::array::from_fn(|i| player[i] - forward[i] * 7.0 - right[i] * 7.0);
+    let right = std::array::from_fn(|i| player[i] - forward[i] * 7.0 + right[i] * 7.0);
+    canvas.triangle([tip, left, right], orange);
+    canvas.disc(pixel([-0.925, -0.855]), 5.0, orange);
+    text(v, "YOUR POSITION", [-0.90, -0.83], 0.0035, white);
+    text(v, "DRIVING PAUSED", [-0.54, -0.83], 0.0035, muted);
+    if fit.north_up {
+        text(v, "N", [0.885, 0.68], 0.0045, cyan);
+        line(v, [0.90, 0.54], [0.90, 0.61], 0.002, cyan);
+        line(v, [0.90, 0.61], [0.89, 0.58], 0.002, cyan);
+        line(v, [0.90, 0.61], [0.91, 0.58], 0.002, cyan);
+        text(
+            v,
+            "MAP DATA: OPENSTREETMAP CONTRIBUTORS / OPENSTREETMAP.ORG/COPYRIGHT / ODBL",
+            [-0.94, -0.94],
+            0.0025,
+            muted,
+        );
+    }
+    // A round distance whose scale bar fits in the footer.
+    let target = 0.25 / fit.scale[0];
+    let magnitude = 10.0_f32.powf(target.log10().floor());
+    let metres = [5.0, 2.0, 1.0]
+        .into_iter()
+        .find(|n| n * magnitude <= target)
+        .unwrap_or(1.0)
+        * magnitude;
+    let width = metres * fit.scale[0];
+    line(v, [0.94 - width, -0.88], [0.94, -0.88], 0.002, white);
+    for x in [0.94 - width, 0.94] {
+        line(v, [x, -0.87], [x, -0.89], 0.002, white);
+    }
+    let distance = if metres >= 1000.0 {
+        format!("{:.0} KM", metres / 1000.0)
+    } else {
+        format!("{metres:.0} M")
+    };
+    text(v, &distance, [0.94 - width, -0.82], 0.003, white);
 }
 
 fn choice_header(v: &mut Vec<f32>, label: &str, y: f32, selected: usize, count: usize) {
@@ -802,7 +948,7 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
     }
     text(
         v,
-        "ESC RESUME / R RESTART / M LOCATION AND CAR / Q QUIT",
+        "ESC RESUME / M MAP / R RESTART / L LOCATION AND CAR / Q QUIT",
         [-0.86, -0.755],
         0.0032,
         muted,
@@ -1045,6 +1191,35 @@ mod tests {
         for p in v.as_chunks::<6>().0 {
             assert!(p[0] >= MAP_CONTENT[0][0] && p[0] <= MAP_CONTENT[1][0]);
             assert!(p[1] >= MAP_CONTENT[0][1] && p[1] <= MAP_CONTENT[1][1]);
+        }
+    }
+
+    #[test]
+    fn full_map_fits_every_road_and_player_without_distorting_distances() {
+        for id in crate::track::ALL {
+            let track = id.track();
+            for player in [
+                track.spawn().point,
+                [track.bounds[1][0] + 100.0, 0.0, track.bounds[1][1] + 100.0],
+            ] {
+                for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
+                    let fit = MapFit::full(&track, player, viewport);
+                    for p in track.map_segments().flat_map(|(a, b)| [a, b]).chain([player]) {
+                        let point = fit.point(p);
+                        for axis in 0..2 {
+                            assert!(point[axis] > FULL_MAP_CONTENT[0][axis]);
+                            assert!(point[axis] < FULL_MAP_CONTENT[1][axis]);
+                        }
+                    }
+                    let center = fit.point(player);
+                    let east = fit.point([player[0] + 100.0, 0.0, player[2]]);
+                    let south = fit.point([player[0], 0.0, player[2] + 100.0]);
+                    let width = (east[0] - center[0]) * viewport[0];
+                    let height = (south[1] - center[1]).abs() * viewport[1];
+                    assert!((width - height).abs() < 0.001);
+                    assert_eq!(south[1] < center[1], id == TrackId::Engomi);
+                }
+            }
         }
     }
 

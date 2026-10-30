@@ -44,10 +44,11 @@ Choose a location and car, then start free driving.
 | A / Z | Shift up / down (includes neutral between first and reverse) |
 | Space | Handbrake |
 | Tab | Cycle Close → Wide → Bonnet cameras |
-| Esc | Pause / resume |
+| Esc | Pause / resume, or close the full map and return to driving |
 | R | Restart |
 | C | Recover the car |
-| M | Return to location and car selection |
+| M | Open the full map (pauses driving) |
+| L | Return to location and car selection |
 | V | Toggle audio mute |
 
 ### Locations
@@ -643,7 +644,7 @@ distributable game textures.
 
 ### HUD
 
-- [ ] Add a full map view (proposed: M to open, Esc to return; M currently opens selection).
+- [x] Add a full map view (M to open, Esc to return; L opens location and car selection).
 
 ### Sound
 

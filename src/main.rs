@@ -54,6 +54,7 @@ enum GameState {
     Menu,
     Driving,
     Paused,
+    FullMap,
 }
 
 struct Session {
@@ -527,7 +528,7 @@ impl App {
                 self.key_down(match action {
                     hud::PauseAction::Resume => Keycode::Escape,
                     hud::PauseAction::Restart => Keycode::R,
-                    hud::PauseAction::Selection => Keycode::M,
+                    hud::PauseAction::Selection => Keycode::L,
                     hud::PauseAction::Audio => Keycode::V,
                     hud::PauseAction::Camera => Keycode::Tab,
                     hud::PauseAction::Recover => Keycode::C,
@@ -546,6 +547,13 @@ impl App {
         }
     }
     fn key_down(&mut self, key: Keycode) {
+        if self.session.state == GameState::FullMap {
+            if key == Keycode::Escape {
+                self.session.state = GameState::Driving;
+            }
+            self.keys.clear();
+            return;
+        }
         self.keys.insert(key);
         if self.session.state == GameState::Menu {
             match key {
@@ -590,7 +598,21 @@ impl App {
                 self.keys.clear();
             }
             Keycode::Return if self.session.state == GameState::Menu => self.start_selected(),
-            Keycode::M => {
+            Keycode::M
+                if matches!(self.session.state, GameState::Driving | GameState::Paused) =>
+            {
+                self.hud.prepare_full_map(
+                    hud::Map {
+                        track: self.session.track(),
+                        player: self.session.vehicle.position,
+                    },
+                    self.session.vehicle.heading,
+                    [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
+                );
+                self.session.state = GameState::FullMap;
+                self.keys.clear();
+            }
+            Keycode::L => {
                 self.menu_focus = 0;
                 self.session.state = GameState::Menu;
                 self.keys.clear();
@@ -657,6 +679,24 @@ impl App {
     fn render(&mut self, frame_time: Duration) {
         gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
         gl::clear_screen();
+        if self.session.state == GameState::FullMap {
+            self.hud.draw_full_map(self.program);
+        } else {
+            self.render_scene(frame_time);
+        }
+        #[cfg(test)]
+        if let Some(path) = &self.capture_path {
+            tests::capture_frame(path);
+        }
+        gl::swap_window(&self.window);
+        let _ = self.window.set_title(&format!(
+            "{} | {} | FREE DRIVE",
+            self.session.track().name,
+            self.session.vehicle.model.spec().name,
+        ));
+    }
+
+    fn render_scene(&mut self, frame_time: Duration) {
         gl::set_signal_time(self.scene_program, self.session.signal_time);
         let car = &self.session.vehicle;
         if matches!(self.session.state, GameState::Driving) {
@@ -695,8 +735,6 @@ impl App {
                 .draw(&camera, &self.session.particles);
         }
         let s = &self.session;
-        let spec = s.vehicle.model.spec();
-        let profile = spec.name;
         let audio_status = match &self.audio {
             Some(a) if a.muted => "MUTED",
             Some(_) => "ON",
@@ -739,17 +777,6 @@ impl App {
                 }),
             );
         }
-        #[cfg(test)]
-        if let Some(path) = &self.capture_path {
-            tests::capture_frame(path);
-        }
-        gl::swap_window(&self.window);
-        let _ = self.window.set_title(&format!(
-            "{} | {} | {}",
-            s.track().name,
-            profile,
-            "FREE DRIVE"
-        ));
     }
 }
 
@@ -1141,7 +1168,7 @@ mod tests {
         assert_eq!(app.session.track().id, TrackId::Engomi);
         app.key_down(Keycode::F7);
         assert_eq!(app.session.track().id, TrackId::Engomi);
-        app.key_down(Keycode::M);
+        app.key_down(Keycode::L);
         app.key_down(Keycode::F6);
         app.key_down(Keycode::F7);
         assert!(std::ptr::eq(app.mesh(), mesh));
@@ -1765,6 +1792,81 @@ mod tests {
         app.capture_path = Some(std::path::PathBuf::from("/tmp/bonnet-camera.ppm"));
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; verifies full map rendering and modal controls"]
+    fn full_map_renderer_smoke() {
+        let mut app = App::new();
+        app.key_down(Keycode::M);
+        assert!(app.session.state == GameState::Menu);
+        app.key_down(Keycode::Return);
+        let directory = std::path::PathBuf::from(
+            std::env::var("NFS_MAP_PREVIEW_DIR").unwrap_or_else(|_| "/tmp/full-map-preview".into()),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for id in track::ALL {
+            app.session = Session::on_track(CarModel::Roadster, id);
+            app.session.vehicle.speed = 12.0;
+            app.session.vehicle.velocity = [1.0, 12.0];
+            let position = app.session.vehicle.position;
+            let velocity = app.session.vehicle.velocity;
+            let gear = app.session.vehicle.gear;
+            let signal_time = app.session.signal_time;
+            let view = app.chase.view();
+            for from in [GameState::Driving, GameState::Paused] {
+                app.session.state = from;
+                app.key_down(Keycode::Up);
+                app.key_down(Keycode::M);
+                assert!(app.session.state == GameState::FullMap);
+                assert!(app.keys.is_empty());
+                for key in [
+                    Keycode::R,
+                    Keycode::C,
+                    Keycode::A,
+                    Keycode::Z,
+                    Keycode::Tab,
+                    Keycode::L,
+                    Keycode::Return,
+                    Keycode::M,
+                    Keycode::Up,
+                ] {
+                    app.key_down(key);
+                    assert!(app.session.state == GameState::FullMap);
+                }
+                app.menu_click(640.0, 576.0);
+                for _ in 0..60 {
+                    app.session.tick(Controls {
+                        throttle: 1.0,
+                        ..Controls::default()
+                    });
+                }
+                assert_eq!(app.session.vehicle.position, position);
+                assert_eq!(app.session.vehicle.velocity, velocity);
+                assert_eq!(app.session.vehicle.speed, 12.0);
+                assert_eq!(app.session.vehicle.gear, gear);
+                assert_eq!(app.session.signal_time, signal_time);
+                assert_eq!(app.session.recoveries, 0);
+                assert_eq!(app.chase.view(), view);
+                app.capture_path = Some(directory.join(format!("map-{}.ppm", id.index())));
+                app.render(Duration::ZERO);
+                app.capture_path = None;
+                app.render(Duration::ZERO);
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                app.key_down(Keycode::Escape);
+                assert!(app.session.state == GameState::Driving);
+                assert!(app.keys.is_empty());
+                assert_eq!(app.session.vehicle.position, position);
+            }
+        }
+        // Exercise the regular HUD after the map reused its vertex buffer.
+        app.session = Session::new(CarModel::Roadster);
+        app.snap_camera();
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        app.key_down(Keycode::Escape);
+        app.menu_click(1018.0, 576.0);
+        assert!(app.session.state == GameState::Menu);
     }
 
     #[test]
