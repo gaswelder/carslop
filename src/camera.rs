@@ -159,8 +159,8 @@ fn bonnet_pose(car: &Vehicle) -> Pose {
         std::array::from_fn(|i| body[12 + i] + body[4 + i] * height + body[8 + i] * forward)
     };
     Pose {
-        eye: mount(1.15, 0.85),
-        target: mount(1.15, 30.85),
+        eye: mount(0.65, 0.95),
+        target: mount(-1.75, 30.95),
     }
 }
 
@@ -244,9 +244,9 @@ mod tests {
             let relative: [f32; 3] = std::array::from_fn(|i| pose.eye[i] - body[12 + i]);
             let local: [f32; 3] =
                 std::array::from_fn(|axis| (0..3).map(|i| relative[i] * body[axis * 4 + i]).sum());
-            assert_close(local, [0.0, 1.15, 0.85], 0.001);
+            assert_close(local, [0.0, 0.65, 0.95], 0.001);
             let sight: [f32; 3] = std::array::from_fn(|i| pose.target[i] - pose.eye[i]);
-            assert_close(sight, std::array::from_fn(|i| body[8 + i] * 30.0), 0.001);
+            assert_close(sight, std::array::from_fn(|i| body[8 + i] * 30.0 - body[4 + i] * 2.4), 0.001);
         }
         c.toggle_view();
         assert_eq!(c.view(), FollowView::Close);

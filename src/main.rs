@@ -2301,6 +2301,20 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires SDL/OpenGL; exports the bonnet camera for visual review"]
+    fn bonnet_camera_preview() {
+        let mut app = App::with_location(false);
+        app.key_down(Keycode::Return);
+        while app.chase.view() != camera::FollowView::Bonnet {
+            app.key_down(Keycode::Tab);
+        }
+        app.snap_camera();
+        app.capture_path = Some(std::path::PathBuf::from("/tmp/bonnet-camera.ppm"));
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
     #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
     fn no_city_startup_renderer_smoke() {
         let mut app = App::with_location(false);
