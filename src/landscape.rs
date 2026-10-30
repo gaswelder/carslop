@@ -18,12 +18,21 @@ pub struct Landscape {
     grid: std::collections::HashMap<(i32, i32), Vec<usize>>,
 }
 impl Landscape {
+    #[cfg(test)]
     pub fn load(text: &str, city: &str, streets: &str) -> Result<Self, String> {
+        Self::load_with_checksums(
+            text,
+            crate::street_surface::SourceChecksums::new(city, streets),
+        )
+    }
+    pub(crate) fn load_with_checksums(
+        text: &str,
+        checksums: crate::street_surface::SourceChecksums,
+    ) -> Result<Self, String> {
         let mut lines = text.lines();
         let expected = format!(
             "LANDSCAPE 1 {:08x} {:08x}",
-            crate::street_surface::crc32(city),
-            crate::street_surface::crc32(streets)
+            checksums.city, checksums.streets
         );
         if lines.next() != Some(expected.as_str()) {
             return Err(
@@ -102,8 +111,19 @@ impl Landscape {
         }
         Ok(result)
     }
+    #[cfg(test)]
     pub fn append_imagery(&mut self, text: &str, city: &str, streets: &str) -> Result<(), String> {
-        let extra = Self::load(text, city, streets)?;
+        self.append_imagery_with_checksums(
+            text,
+            crate::street_surface::SourceChecksums::new(city, streets),
+        )
+    }
+    pub(crate) fn append_imagery_with_checksums(
+        &mut self,
+        text: &str,
+        checksums: crate::street_surface::SourceChecksums,
+    ) -> Result<(), String> {
+        let extra = Self::load_with_checksums(text, checksums)?;
         if !extra.ground.is_empty() {
             return Err("imagery supplement must contain only trees".into());
         }
@@ -148,6 +168,33 @@ impl Landscape {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_checksums_accept_matching_assets_and_reject_stale_sources() {
+        use crate::street_surface::SourceChecksums;
+        let checksums = SourceChecksums::new("city", "streets");
+        let text = format!(
+            "LANDSCAPE 1 {:08x} {:08x}\nt 1 0 0 5 1\n",
+            checksums.city, checksums.streets
+        );
+        let mut landscape = Landscape::load_with_checksums(&text, checksums).unwrap();
+        assert_eq!(landscape.trees.len(), 1);
+        let supplement = text.replace("t 1 ", "t 9223372036854775808 ");
+        landscape
+            .append_imagery_with_checksums(&supplement, checksums)
+            .unwrap();
+        assert_eq!(landscape.trees.len(), 2);
+        for stale in [
+            SourceChecksums::new("changed city", "streets"),
+            SourceChecksums::new("city", "changed streets"),
+        ] {
+            assert!(Landscape::load_with_checksums(&text, stale).is_err());
+            assert!(landscape
+                .append_imagery_with_checksums(&supplement, stale)
+                .is_err());
+        }
+        assert_eq!(landscape.trees.len(), 2);
+    }
+
     #[test]
     fn landscape_rejects_stale_packages_and_nonfinite_geometry() {
         assert!(Landscape::load("LANDSCAPE 1 0 0", "city", "streets").is_err());

@@ -18,7 +18,17 @@ pub struct Furniture {
     pub _estimated_curb: bool,
     pub _inferred_direction: bool,
 }
+#[cfg(test)]
 pub fn load(text: &str, city: &str, streets: &str) -> Result<Vec<Furniture>, String> {
+    load_with_checksums(
+        text,
+        crate::street_surface::SourceChecksums::new(city, streets),
+    )
+}
+pub(crate) fn load_with_checksums(
+    text: &str,
+    checksums: crate::street_surface::SourceChecksums,
+) -> Result<Vec<Furniture>, String> {
     let mut lines = text.lines();
     let header: Vec<_> = lines
         .next()
@@ -28,8 +38,8 @@ pub fn load(text: &str, city: &str, streets: &str) -> Result<Vec<Furniture>, Str
     if header.len() != 4
         || header[0] != "FURNITURE"
         || header[1] != "1"
-        || u32::from_str_radix(header[2], 16).ok() != Some(crate::street_surface::crc32(city))
-        || u32::from_str_radix(header[3], 16).ok() != Some(crate::street_surface::crc32(streets))
+        || u32::from_str_radix(header[2], 16).ok() != Some(checksums.city)
+        || u32::from_str_radix(header[3], 16).ok() != Some(checksums.streets)
     {
         return Err(
             "stale furniture package; re-import the source with add-location under a new name"
@@ -100,6 +110,23 @@ pub fn lamp_lit(time: f32, offset: u8, lamp: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_checksums_reject_stale_furniture_sources() {
+        use crate::street_surface::SourceChecksums;
+        let checksums = SourceChecksums::new("city", "streets");
+        let text = format!(
+            "FURNITURE 1 {:08x} {:08x}\n",
+            checksums.city, checksums.streets
+        );
+        assert!(load_with_checksums(&text, checksums).unwrap().is_empty());
+        for stale in [
+            SourceChecksums::new("changed city", "streets"),
+            SourceChecksums::new("city", "changed streets"),
+        ] {
+            assert!(load_with_checksums(&text, stale).is_err());
+        }
+    }
+
     #[test]
     fn alternating_signal_phases_include_clearance_and_never_conflicting_green() {
         for t in 0..5000 {

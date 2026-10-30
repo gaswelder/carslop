@@ -96,6 +96,7 @@ impl City {
     pub fn engomi() -> Result<Self, String> {
         let source = crate::city_assets::try_read("city.txt")?;
         let streets = crate::city_assets::try_read("streets.txt")?;
+        let checksums = crate::street_surface::SourceChecksums::new(&source, &streets);
         let mut city = Self::parse(&source)?;
         let (surfaces, paths) =
             crate::street_surface::StreetSurface::load(&streets, &source, city.streets.len())?;
@@ -121,10 +122,9 @@ impl City {
                 i,
             );
         }
-        city.furniture = crate::traffic::load(
+        city.furniture = crate::traffic::load_with_checksums(
             &crate::city_assets::try_read("furniture.txt")?,
-            &source,
-            &streets,
+            checksums,
         )?;
         let field = crate::elevation::HeightField::load(
             &crate::city_assets::try_read("elevation/heightfield.txt")?,
@@ -153,14 +153,15 @@ impl City {
                 .fold(f32::NEG_INFINITY, f32::max)
                 + 0.02;
         }
-        city.landscape = crate::landscape::Landscape::load(
+        city.landscape = crate::landscape::Landscape::load_with_checksums(
             &crate::city_assets::try_read("landscape.txt")?,
-            &source,
-            &streets,
+            checksums,
         )?;
         let imagery = crate::city_assets::directory().join("imagery-trees.txt");
         match crate::package::read_to_string(&imagery) {
-            Ok(text) => city.landscape.append_imagery(&text, &source, &streets)?,
+            Ok(text) => city
+                .landscape
+                .append_imagery_with_checksums(&text, checksums)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("cannot read imagery trees: {e}")),
         }

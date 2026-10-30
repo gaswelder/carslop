@@ -59,27 +59,22 @@ pub(crate) fn crc32(source: &str) -> u32 {
     crc32_bytes(source.as_bytes())
 }
 pub(crate) fn crc32_bytes(source: &[u8]) -> u32 {
-    const fn table() -> [u32; 256] {
-        let mut result = [0; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut c = i as u32;
-            let mut j = 0;
-            while j < 8 {
-                c = (c >> 1) ^ if c & 1 != 0 { 0xedb88320 } else { 0 };
-                j += 1;
-            }
-            result[i] = c;
-            i += 1;
+    crc32fast::hash(source)
+}
+
+/// Compute once per load and share across assets tied to the same source data.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceChecksums {
+    pub city: u32,
+    pub streets: u32,
+}
+impl SourceChecksums {
+    pub fn new(city: &str, streets: &str) -> Self {
+        Self {
+            city: crc32(city),
+            streets: crc32(streets),
         }
-        result
     }
-    const TABLE: [u32; 256] = table();
-    let mut crc = !0_u32;
-    for &b in source {
-        crc = (crc >> 8) ^ TABLE[((crc ^ b as u32) & 255) as usize];
-    }
-    !crc
 }
 
 impl StreetSurface {
@@ -280,6 +275,24 @@ impl StreetSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accelerated_checksums_match_existing_asset_format() {
+        assert_eq!(crc32_bytes(b""), 0);
+        assert_eq!(crc32_bytes(b"123456789"), 0xcbf43926);
+        // Compare binary data and SIMD/block boundaries with the old polynomial.
+        let data: Vec<u8> = (0..=u16::MAX).map(|i| i as u8).collect();
+        for length in [1, 15, 16, 17, 63, 64, 65, 255, 256, 257, 65536] {
+            let mut expected = !0u32;
+            for &byte in &data[..length] {
+                expected ^= byte as u32;
+                for _ in 0..8 {
+                    expected = (expected >> 1) ^ if expected & 1 != 0 { 0xedb88320 } else { 0 };
+                }
+            }
+            assert_eq!(crc32_bytes(&data[..length]), !expected);
+        }
+    }
+
     #[test]
     fn stale_surface_package_is_rejected_before_loading_geometry() {
         let source = &crate::city_assets::read("city.txt");
