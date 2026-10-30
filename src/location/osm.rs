@@ -268,21 +268,35 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
         "secondary_link",
         "tertiary_link",
     ];
-    for way in source.ways.values() {
+    let mut ways: Vec<_> = source.ways.values().collect();
+    // Put circuits first so a circuit location starts on its drivable track.
+    ways.sort_by_key(|way| way.tag("highway") != "raceway");
+    for way in ways {
         let kind = way.tag("highway");
         if !major.contains(&kind)
-            && !["unclassified", "residential", "living_street", "service"].contains(&kind)
+            && ![
+                "unclassified",
+                "residential",
+                "living_street",
+                "service",
+                "raceway",
+            ]
+            .contains(&kind)
         {
             continue;
         }
-        if ["access", "vehicle", "motor_vehicle"]
-            .iter()
-            .any(|k| matches!(way.tag(k), "no" | "private"))
-            || way.tag("area") == "yes"
-            || ["bridge", "tunnel"]
+        // Circuit access restrictions describe public traffic, not whether it
+        // can be driven in the game. Keep those roads in offline locations.
+        if (kind != "raceway"
+            && ["access", "vehicle", "motor_vehicle"]
                 .iter()
-                .any(|k| !matches!(way.tag(k), "" | "no"))
-            || !matches!(way.tag("layer"), "" | "0")
+                .any(|k| matches!(way.tag(k), "no" | "private")))
+            || way.tag("area") == "yes"
+            || (kind != "raceway"
+                && (["bridge", "tunnel"]
+                    .iter()
+                    .any(|k| !matches!(way.tag(k), "" | "no"))
+                    || !matches!(way.tag("layer"), "" | "0")))
         {
             continue;
         }
@@ -292,6 +306,7 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
             "primary" => 10.0,
             "secondary" => 9.0,
             "tertiary" => 8.0,
+            "raceway" => 10.0,
             "service" | "living_street" => 5.5,
             _ => 6.5,
         };

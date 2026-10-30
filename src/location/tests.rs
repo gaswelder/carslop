@@ -110,6 +110,33 @@ fn native_import_loads_in_game_and_preserves_topology() {
     }
 }
 #[test]
+fn raceways_allow_restricted_circuit_access_without_opening_private_streets() {
+    let temp = Temp::new();
+    let source = temp.0.join("circuit.osm");
+    let mut xml = FIXTURE.to_owned();
+    for (id, highway, access) in [
+        (201, "raceway", "private"),
+        (202, "raceway", "no"),
+        (203, "service", "private"),
+        (204, "cycleway", "yes"),
+    ] {
+        xml = xml.replace("</osm>", &format!(
+            "<way id=\"{id}\"><nd ref=\"1\"/><nd ref=\"3\"/><tag k=\"highway\" v=\"{highway}\"/><tag k=\"access\" v=\"{access}\"/></way></osm>"
+        ));
+    }
+    xml = xml.replace("</osm>", "<way id=\"205\"><nd ref=\"2\"/><nd ref=\"3\"/><tag k=\"highway\" v=\"raceway\"/><tag k=\"bridge\" v=\"yes\"/><tag k=\"layer\" v=\"1\"/><tag k=\"oneway\" v=\"yes\"/></way></osm>");
+    fs::write(&source, xml).unwrap();
+    let map = osm::compile(&osm::read(&source).unwrap(), None).unwrap();
+    for id in [201, 202] {
+        let road = map.roads.iter().find(|r| r.way == id).unwrap();
+        assert_eq!(road.width, 10.0);
+    }
+    assert!(!map.roads.iter().any(|r| [103, 203, 204].contains(&r.way)));
+    assert_eq!(map.roads[0].way, 201);
+    let bridge = map.roads.iter().find(|r| r.way == 205).unwrap();
+    assert_eq!(bridge.direction, 1);
+}
+#[test]
 fn clipping_does_not_join_unrelated_roads() {
     assert_eq!(
         osm::clip([-20.0, 0.0], [20.0, 0.0], [-10.0, -10.0, 10.0, 10.0]),

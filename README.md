@@ -30,6 +30,20 @@ assets. Cities appear only when selected with `--location`. To drive in Nicosia:
 ./target/release/nfs5like play --location nicosia
 ```
 
+Nürburgring is also available as an offline location, covering the Nordschleife,
+Grand Prix circuit, connecting lanes and surrounding roads:
+
+```sh
+./target/release/nfs5like play --location nurburgring
+```
+
+Its package is `data/locations/nurburgring.sqlite`, built from the
+[Geofabrik Rheinland-Pfalz extract](https://download.geofabrik.de/europe/germany/rheinland-pfalz.html)
+with Skadi N50E006 and N50E007 elevation. Bounds: `50.315 6.910 50.390 7.015`.
+This is a free-drive map with generated scenery. Circuit bridge sections follow
+the terrain surface; banking, bridge decks and circuit-specific barriers are
+not reconstructed.
+
 Built-in tracks need no city files. For city play, keep its `data/locations/NAME.sqlite`
 package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
@@ -81,9 +95,12 @@ Choose a small neighbourhood for your first import. Write down its bounds in
 **south, west, north, east** order: minimum latitude, minimum longitude, maximum
 latitude, maximum longitude, all in decimal degrees.
 
-One elevation tile must cover the whole area plus 80 m of padding, with no missing
-samples. Areas spanning multiple elevation tiles are not supported yet. Keep the
-tile's coordinate filename, such as `N35E033.hgt.gz`, so the importer can locate it.
+Elevation tiles must cover the whole area plus padding, with no missing samples.
+For areas spanning tile boundaries, put the adjacent tiles in the same directory
+and supply any tile covering the area to `--elevation`. Tiles must have matching
+resolution. Keep coordinate filenames such as `N35E033.hgt.gz`; the importer
+finds neighbouring `.hgt` or `.hgt.gz` files automatically and preserves them in
+the package.
 
 The commands below import Engomi using the two downloads above.
 For your own city, replace the map path, elevation path, bounds and location name.
