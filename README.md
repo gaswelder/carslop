@@ -8,9 +8,10 @@ Everything else, including README.md outside of this section, is generated.
 
 --- human info ends ---
 
-
 A driving game inspired by NFS5: beautiful cars, pleasant roads, readable handling
 and mechanical personality.
+
+<img src="screenshot.20261030.jpg">
 
 ## Contents
 
