@@ -9,6 +9,8 @@ use std::ops::Range;
 
 #[path = "car_art.rs"]
 mod car_art;
+#[path = "car_mesh.rs"]
+mod car_mesh;
 #[path = "city_scene.rs"]
 mod city_scene;
 #[path = "road_furniture.rs"]
@@ -716,11 +718,69 @@ fn car(b: &mut Builder, model: CarModel) {
 }
 
 fn kestrel_car(b: &mut Builder, paint: Surface, glass: Surface, trim: Surface) {
-    car_art::kestrel(b, paint, glass, trim);
+    match car_mesh::load(std::path::Path::new("data/cars/kestrel.mesh")) {
+        Ok(vertices) => b.vertices.extend(vertices),
+        Err(error) => {
+            log::warn!("Cannot load data/cars/kestrel.mesh: {error}; using procedural Kestrel");
+            car_art::kestrel(b, paint, glass, trim);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kestrel_file_matches_procedural_artwork() {
+        let mut b = super::Builder::default();
+        super::car_art::kestrel(
+            &mut b,
+            super::Surface {
+                color: [0.92; 3],
+                material: [1.0, 0.6],
+            },
+            super::Surface {
+                color: [0.10, 0.21, 0.27],
+                material: [0.0, 0.95],
+            },
+            super::Surface::matte([0.045, 0.055, 0.06]),
+        );
+        let loaded = super::car_mesh::load(std::path::Path::new("data/cars/kestrel.mesh")).unwrap();
+        assert_eq!(loaded, b.vertices);
+    }
+
+    #[test]
+    #[ignore = "explicitly regenerate the authored Kestrel mesh"]
+    fn export_kestrel_mesh() {
+        let mut b = super::Builder::default();
+        super::car_art::kestrel(
+            &mut b,
+            super::Surface {
+                color: [0.92; 3],
+                material: [1.0, 0.6],
+            },
+            super::Surface {
+                color: [0.10, 0.21, 0.27],
+                material: [0.0, 0.95],
+            },
+            super::Surface::matte([0.045, 0.055, 0.06]),
+        );
+        let mut bytes = b"NFSCAR01".to_vec();
+        bytes.extend_from_slice(&(b.vertices.len() as u32).to_le_bytes());
+        for v in b.vertices {
+            for f in v
+                .position
+                .into_iter()
+                .chain(v.color)
+                .chain(v.normal)
+                .chain(v.material)
+            {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
+        }
+        std::fs::create_dir_all("data/cars").unwrap();
+        std::fs::write("data/cars/kestrel.mesh", bytes).unwrap();
+    }
+
     #[test]
     fn chunked_builder_preserves_triangle_geometry() {
         let mut regular = super::Builder::default();
