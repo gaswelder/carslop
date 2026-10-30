@@ -104,7 +104,9 @@ impl Synth {
         };
         // Lift-off keeps the in-gear pitch but softens the engine independently
         // of rolling noise, tire scrub and impacts. Load is already smoothed.
-        let engine = engine * (0.35 + self.load * 0.65);
+        // Boost the engine by 6 dB before spatial attenuation, keeping other
+        // driving sounds at their existing levels and preserving mix headroom.
+        let engine = engine * 2.0 * (0.35 + self.load * 0.65);
         let turbo_target = if voice.enabled {
             self.turbo_target
         } else {
