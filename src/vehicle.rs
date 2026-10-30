@@ -539,9 +539,14 @@ impl Vehicle {
 
     fn update_engine_feedback(&mut self, controls: Controls, dt: f32) {
         let throttle = controls.throttle.clamp(0.0, 1.0);
-        let target_rpm = (self.target_engine_rpm() + self.wheel_spin * throttle * 1800.0)
-            .max(IDLE_RPM + throttle * (2200.0 - IDLE_RPM))
-            .min(REDLINE_RPM);
+        let target_rpm = if self.gear == NEUTRAL_GEAR {
+            // With the clutch disengaged, throttle sets RPM independently of road speed.
+            IDLE_RPM + throttle * (REDLINE_RPM - IDLE_RPM)
+        } else {
+            (self.target_engine_rpm() + self.wheel_spin * throttle * 1800.0)
+                .max(IDLE_RPM + throttle * (2200.0 - IDLE_RPM))
+                .min(REDLINE_RPM)
+        };
         let response = if self.shift_timer > 0.0 { 12.0 } else { 7.5 };
         self.engine_rpm += (target_rpm - self.engine_rpm) * (dt * response).clamp(0.0, 1.0);
         let requested = controls.throttle.clamp(0.0, 1.0);
@@ -1827,6 +1832,38 @@ mod tests {
         let impact = v.update(Duration::from_millis(16), Controls::default());
         assert!(impact > 3.0);
         assert_eq!(v.update(Duration::ZERO, Controls::default()), 0.0);
+    }
+
+    #[test]
+    fn neutral_throttle_revs_to_redline_and_release_returns_to_idle() {
+        let road = track::at_distance(50.0);
+        for model in crate::cars::ALL {
+            let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
+            car.manual = true;
+            car.shift(false);
+            for throttle in [0.5, 1.0, 0.0] {
+                let target = IDLE_RPM + throttle * (REDLINE_RPM - IDLE_RPM);
+                for _ in 0..120 {
+                    car.update(
+                        Duration::from_secs_f64(1.0 / 60.0),
+                        Controls {
+                            throttle,
+                            ..Controls::default()
+                        },
+                    );
+                    assert!(car.engine_rpm >= IDLE_RPM && car.engine_rpm <= REDLINE_RPM);
+                }
+                assert!(
+                    (car.engine_rpm - target).abs() < 10.0,
+                    "{model:?}, throttle {throttle}: expected {target} RPM, got {}",
+                    car.engine_rpm
+                );
+                assert_eq!(car.gear, NEUTRAL_GEAR);
+                assert!(car.speed.abs() < 0.01, "neutral must not propel the car");
+                assert_eq!(car.drive_force(0.0), 0.0);
+                assert_eq!(car.turbo_boost, 0.0);
+            }
+        }
     }
 
     #[test]
