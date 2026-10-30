@@ -341,7 +341,7 @@ pub struct Mesh {
     aerial: std::cell::RefCell<Option<crate::aerial::Aerial>>,
     visible_chunks: std::cell::Cell<usize>,
     car_ranges: Vec<std::ops::Range<i32>>,
-    wheel_range: std::ops::Range<i32>,
+    wheel_range: Vec<std::ops::Range<i32>>,
 }
 
 impl Drop for Mesh {
@@ -448,8 +448,9 @@ impl Mesh {
                 set_scene_transform(program, camera, &matrix);
                 gl::DrawArrays(
                     GL_TRIANGLES,
-                    self.wheel_range.start,
-                    self.wheel_range.end - self.wheel_range.start,
+                    self.wheel_range[car.model.index()].start,
+                    self.wheel_range[car.model.index()].end
+                        - self.wheel_range[car.model.index()].start,
                 );
             }
         }

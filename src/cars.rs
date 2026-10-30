@@ -41,6 +41,8 @@ pub const WHEEL_RADIUS: f32 = 0.4;
 
 #[derive(Clone)]
 pub struct CarSpec {
+    pub mesh: std::path::PathBuf,
+    pub wheel_mesh: std::path::PathBuf,
     pub name: &'static str,
     pub description: &'static str,
     pub mass: f32,
@@ -182,6 +184,8 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         .filter(|a| a.len() == 2)
         .ok_or("expected two stiffness values")?;
     let spec = CarSpec {
+        mesh: asset_path(path, &v["mesh"])?,
+        wheel_mesh: asset_path(path, &v["wheel_mesh"])?,
         name: text(&v["name"])?,
         description: text(&v["description"])?,
         mass: number(&v["mass"])?,
@@ -306,7 +310,6 @@ mod tests {
 struct ExtraCar {
     spec: CarSpec,
     base: CarModel,
-    mesh: Option<std::path::PathBuf>,
 }
 impl CarModel {
     pub fn appearance(self) -> Self {
@@ -315,13 +318,24 @@ impl CarModel {
             _ => self,
         }
     }
-    pub fn mesh(self) -> Option<&'static std::path::Path> {
-        match self {
-            Self::Custom(i) => extras()[i].mesh.as_deref(),
-            _ => None,
-        }
+    pub fn mesh(self) -> &'static std::path::Path {
+        &self.spec().mesh
+    }
+    pub fn wheel_mesh(self) -> &'static std::path::Path {
+        &self.spec().wheel_mesh
     }
 }
+fn asset_path(
+    definition: &std::path::Path,
+    value: &serde_json::Value,
+) -> Result<std::path::PathBuf, String> {
+    let name = value
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("expected nonempty mesh path")?;
+    Ok(definition.parent().unwrap().join(name))
+}
+
 fn extras() -> &'static Vec<ExtraCar> {
     static CARS: std::sync::OnceLock<Vec<ExtraCar>> = std::sync::OnceLock::new();
     CARS.get_or_init(|| {
@@ -466,15 +480,13 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     if let Some(v) = object.get("wheel_height") {
         spec.wheel_height = signed(v)?;
     }
-    let mesh = object
-        .get("mesh")
-        .map(|v| {
-            v.as_str()
-                .map(|s| path.parent().unwrap().join(s))
-                .ok_or("expected mesh path")
-        })
-        .transpose()?;
-    Ok(ExtraCar { spec, base, mesh })
+    if let Some(v) = object.get("mesh") {
+        spec.mesh = asset_path(path, v)?;
+    }
+    if let Some(v) = object.get("wheel_mesh") {
+        spec.wheel_mesh = asset_path(path, v)?;
+    }
+    Ok(ExtraCar { spec, base })
 }
 
 #[cfg(test)]
@@ -496,7 +508,15 @@ mod runtime_tests {
         assert_eq!(car.wheel_centers()[0][0], -0.99);
         let geometry = crate::scene::cars_only();
         assert_eq!(geometry.car_ranges.len(), 4);
+        assert_eq!(
+            geometry.vertices[geometry.car_ranges[3].start as usize].position[0],
+            7.25
+        );
         assert!(!geometry.car_ranges[3].is_empty());
+        assert_eq!(
+            geometry.vertices[geometry.wheel_range[3].start as usize].position[0],
+            0.123
+        );
         assert_eq!(
             crate::hud::menu_hit_test(-0.08, -0.2),
             Some(crate::hud::MenuAction::Car(car))
@@ -526,6 +546,17 @@ mod runtime_tests {
         let dir = tempfile::tempdir().unwrap();
         let cars = dir.path().join("data/cars");
         std::fs::create_dir_all(&cars).unwrap();
+        for name in ["kestrel", "muscle", "club", "wheel"] {
+            let mut bytes = std::fs::read(format!("data/cars/{name}.mesh")).unwrap();
+            if name == "club" {
+                bytes[12..16].copy_from_slice(&7.25_f32.to_le_bytes());
+            }
+            if name == "wheel" {
+                bytes[12..16].copy_from_slice(&0.123_f32.to_le_bytes());
+            }
+            std::fs::write(cars.join(format!("{name}.mesh")), bytes).unwrap();
+        }
+
         for id in ["kestrel", "muscle", "club"] {
             let mut v: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(format!("data/cars/{id}.json")).unwrap())

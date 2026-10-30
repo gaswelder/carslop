@@ -1,4 +1,4 @@
-//! Original procedural coastal scenery and sports-car artwork. No physics lives here.
+//! Procedural coastal scenery and file-backed car artwork. No physics lives here.
 
 use crate::{
     cars::{self, CarModel},
@@ -7,8 +7,6 @@ use crate::{
 use std::f32::consts::TAU;
 use std::ops::Range;
 
-#[path = "car_art.rs"]
-mod car_art;
 #[path = "car_mesh.rs"]
 mod car_mesh;
 #[path = "city_scene.rs"]
@@ -128,7 +126,7 @@ pub struct Geometry {
     pub vertices: Vec<Vertex>,
     pub world_count: usize,
     pub car_ranges: Vec<Range<i32>>,
-    pub wheel_range: Range<i32>,
+    pub wheel_range: Vec<Range<i32>>,
 }
 
 pub fn build(track: &track::Track) -> Geometry {
@@ -167,9 +165,11 @@ fn finish(mut b: Builder) -> Geometry {
         car(&mut b, model);
         start..b.vertices.len() as i32
     });
-    let start = b.vertices.len() as i32;
-    wheel(&mut b, 0.0, 0.0);
-    let wheel_range = start..b.vertices.len() as i32;
+    let wheel_range = cars::ALL.map(|model| {
+        let start = b.vertices.len() as i32;
+        b.vertices.extend(load_design(model.wheel_mesh()));
+        start..b.vertices.len() as i32
+    });
     Geometry {
         vertices: b.vertices,
         world_count,
@@ -528,269 +528,29 @@ fn scenery(b: &mut Builder, track: &track::Track) {
     }
 }
 
+#[cfg(test)]
 fn wheel(b: &mut Builder, x: f32, z: f32) {
-    car_art::wheel(b, x, z);
+    let mut vertices = load_design(CarModel::Roadster.wheel_mesh());
+    for vertex in &mut vertices {
+        vertex.position[0] += x;
+        vertex.position[2] += z;
+    }
+    b.vertices.extend(vertices);
 }
-
+fn load_design(path: &std::path::Path) -> Vec<Vertex> {
+    car_mesh::load(path).unwrap_or_else(|error| {
+        panic!(
+            "Cannot load required car design {}: {error}",
+            path.display()
+        )
+    })
+}
 fn car(b: &mut Builder, model: CarModel) {
-    if let Some(path) = model.mesh() {
-        match car_mesh::load(path) {
-            Ok(vertices) => {
-                b.vertices.extend(vertices);
-                return;
-            }
-            Err(error) => log::warn!("Cannot load {}: {error}; using base body", path.display()),
-        }
-    }
-    let model = model.appearance();
-    let paint = Surface {
-        color: [0.92; 3],
-        material: [1.0, 0.6],
-    };
-    let glass = Surface {
-        color: [0.10, 0.21, 0.27],
-        material: [0.0, 0.95],
-    };
-    let trim = Surface::matte([0.045, 0.055, 0.06]);
-    if model == CarModel::Roadster {
-        kestrel_car(b, paint, glass, trim);
-        return;
-    }
-    // Independent body contours, not a scaled copy of one mesh.
-    let rings = match model {
-        CarModel::Roadster => [
-            (-2.0, 0.91, 0.23),
-            (-1.3, 1.09, 0.39),
-            (-0.55, 1.06, 0.42),
-            (0.85, 1.04, 0.34),
-            (1.4, 1.01, 0.23),
-            (2.05, 0.86, 0.02),
-        ],
-        CarModel::Muscle => [
-            (-2.13, 1.01, 0.36),
-            (-1.45, 1.14, 0.43),
-            (-0.6, 1.12, 0.44),
-            (0.4, 1.12, 0.42),
-            (1.45, 1.1, 0.37),
-            (2.12, 1.01, 0.30),
-        ],
-        CarModel::Club | CarModel::Custom(_) => [
-            (-1.75, 0.84, 0.36),
-            (-1.15, 0.95, 0.43),
-            (-0.6, 0.94, 0.45),
-            (0.65, 0.93, 0.43),
-            (1.15, 0.91, 0.30),
-            (1.73, 0.82, 0.16),
-        ],
-    };
-    for pair in rings.windows(2) {
-        let (z, w, y) = pair[0];
-        let (q, v, h) = pair[1];
-        b.quad([[-w, y, z], [-v, h, q], [v, h, q], [w, y, z]], paint);
-        b.quad(
-            [[-w, -0.19, z], [-v, -0.19, q], [-v, h, q], [-w, y, z]],
-            paint,
-        );
-        b.quad([[w, y, z], [v, h, q], [v, -0.19, q], [w, -0.19, z]], paint);
-        if model == CarModel::Muscle && (z >= 0.4 || q <= -1.45) {
-            for side in [-1.0, 1.0] {
-                b.quad(
-                    [
-                        [side * 0.10, y + 0.008, z],
-                        [side * 0.10, h + 0.008, q],
-                        [side * 0.29, h + 0.008, q],
-                        [side * 0.29, y + 0.008, z],
-                    ],
-                    Surface::matte([0.86, 0.83, 0.68]),
-                );
-            }
-        }
-    }
-    let (rear, rear_width, rear_height) = rings[0];
-    let (front, front_width, front_height) = rings[5];
-    b.cuboid(
-        [-rear_width, -0.23, rear - 0.02],
-        [rear_width, rear_height, rear + 0.02],
-        paint,
-    );
-    b.cuboid(
-        [-front_width, -0.23, front - 0.02],
-        [front_width, front_height, front + 0.02],
-        paint,
-    );
-    // Cabin extents: glass base rear/front, roof rear/front, height and widths.
-    let (back, nose, roof_back, roof_front, height, roof_width, base_width, base_y) = match model {
-        CarModel::Roadster => (-1.1, 0.97, -0.52, 0.22, 0.96, 0.65, 0.87, 0.4),
-        CarModel::Muscle => (-1.6, 0.35, -1.0, -0.25, 1.04, 0.78, 0.94, 0.44),
-        CarModel::Club | CarModel::Custom(_) => (-1.68, 0.91, -1.22, 0.27, 1.23, 0.72, 0.83, 0.44),
-    };
-    b.quad(
-        [
-            [-base_width, base_y, back],
-            [-roof_width, height, roof_back],
-            [roof_width, height, roof_back],
-            [base_width, base_y, back],
-        ],
-        glass,
-    );
-    b.quad(
-        [
-            [-roof_width, height, roof_back],
-            [-roof_width, height, roof_front],
-            [roof_width, height, roof_front],
-            [roof_width, height, roof_back],
-        ],
-        paint,
-    );
-    b.quad(
-        [
-            [-roof_width, height, roof_front],
-            [-base_width, base_y, nose],
-            [base_width, base_y, nose],
-            [roof_width, height, roof_front],
-        ],
-        glass,
-    );
-    for side in [-1.0, 1.0] {
-        let p = [
-            [side * base_width, base_y, back],
-            [side * base_width, base_y, nose],
-            [side * roof_width, height, roof_front],
-            [side * roof_width, height, roof_back],
-        ];
-        b.quad(
-            if side > 0.0 {
-                [p[3], p[2], p[1], p[0]]
-            } else {
-                p
-            },
-            glass,
-        );
-        let x = side * (base_width + 0.14);
-        b.cuboid(
-            [x - 0.06, base_y + 0.03, nose - 0.45],
-            [x + 0.06, base_y + 0.13, nose - 0.19],
-            paint,
-        );
-        // Sloping window pillars connect the roof to the body without floating bars.
-        for (base_z, roof_z) in [(back, roof_back), (nose, roof_front)] {
-            let x = side * base_width;
-            let r = side * roof_width;
-            let p = [
-                [x, base_y, base_z - 0.035],
-                [x, base_y, base_z + 0.035],
-                [r, height + 0.005, roof_z + 0.035],
-                [r, height + 0.005, roof_z - 0.035],
-            ];
-            b.quad(
-                if side > 0.0 {
-                    [p[3], p[2], p[1], p[0]]
-                } else {
-                    p
-                },
-                paint,
-            );
-        }
-        let x = side * (front_width - 0.28);
-        b.cuboid(
-            [x - 0.20, front_height - 0.05, front + 0.025],
-            [x + 0.20, front_height + 0.07, front + 0.04],
-            Surface::matte([1.0, 0.92, 0.67]),
-        );
-        let x = side * (rear_width - 0.28);
-        b.cuboid(
-            [x - 0.20, rear_height - 0.13, rear - 0.04],
-            [x + 0.20, rear_height - 0.01, rear - 0.025],
-            Surface::matte([0.85, 0.045, 0.02]),
-        );
-    }
-    b.cuboid(
-        [-rear_width, -0.22, rear - 0.055],
-        [rear_width, -0.12, rear - 0.025],
-        trim,
-    );
-    b.cuboid(
-        [-0.35, -0.15, front + 0.025],
-        [0.35, -0.06, front + 0.045],
-        trim,
-    );
-    b.cuboid(
-        [-0.23, -0.1, rear - 0.06],
-        [0.23, 0.05, rear - 0.05],
-        Surface::matte([0.86, 0.82, 0.64]),
-    );
-    if model == CarModel::Muscle {
-        for x in [-0.65, 0.65] {
-            b.cuboid([x - 0.04, 0.39, -1.95], [x + 0.04, 0.63, -1.83], trim);
-        }
-        b.cuboid([-1.06, 0.63, -2.05], [1.06, 0.70, -1.75], paint);
-    }
-}
-
-fn kestrel_car(b: &mut Builder, paint: Surface, glass: Surface, trim: Surface) {
-    match car_mesh::load(std::path::Path::new("data/cars/kestrel.mesh")) {
-        Ok(vertices) => b.vertices.extend(vertices),
-        Err(error) => {
-            log::warn!("Cannot load data/cars/kestrel.mesh: {error}; using procedural Kestrel");
-            car_art::kestrel(b, paint, glass, trim);
-        }
-    }
+    b.vertices.extend(load_design(model.mesh()));
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn kestrel_file_matches_procedural_artwork() {
-        let mut b = super::Builder::default();
-        super::car_art::kestrel(
-            &mut b,
-            super::Surface {
-                color: [0.92; 3],
-                material: [1.0, 0.6],
-            },
-            super::Surface {
-                color: [0.10, 0.21, 0.27],
-                material: [0.0, 0.95],
-            },
-            super::Surface::matte([0.045, 0.055, 0.06]),
-        );
-        let loaded = super::car_mesh::load(std::path::Path::new("data/cars/kestrel.mesh")).unwrap();
-        assert_eq!(loaded, b.vertices);
-    }
-
-    #[test]
-    #[ignore = "explicitly regenerate the authored Kestrel mesh"]
-    fn export_kestrel_mesh() {
-        let mut b = super::Builder::default();
-        super::car_art::kestrel(
-            &mut b,
-            super::Surface {
-                color: [0.92; 3],
-                material: [1.0, 0.6],
-            },
-            super::Surface {
-                color: [0.10, 0.21, 0.27],
-                material: [0.0, 0.95],
-            },
-            super::Surface::matte([0.045, 0.055, 0.06]),
-        );
-        let mut bytes = b"NFSCAR01".to_vec();
-        bytes.extend_from_slice(&(b.vertices.len() as u32).to_le_bytes());
-        for v in b.vertices {
-            for f in v
-                .position
-                .into_iter()
-                .chain(v.color)
-                .chain(v.normal)
-                .chain(v.material)
-            {
-                bytes.extend_from_slice(&f.to_le_bytes());
-            }
-        }
-        std::fs::create_dir_all("data/cars").unwrap();
-        std::fs::write("data/cars/kestrel.mesh", bytes).unwrap();
-    }
-
     #[test]
     fn chunked_builder_preserves_triangle_geometry() {
         let mut regular = super::Builder::default();
@@ -852,9 +612,12 @@ mod tests {
             assert!(vertices.iter().any(|v| v.material[0] == 0.0));
             end = range.end;
         }
-        assert_eq!(end, wheel_range.start);
-        assert!(wheel_range.end - wheel_range.start > 200);
-        assert_eq!(wheel_range.end as usize, v.len());
+        for range in wheel_range {
+            assert_eq!(end, range.start);
+            assert!(range.end - range.start > 200);
+            end = range.end;
+        }
+        assert_eq!(end as usize, v.len());
     }
 
     #[test]
