@@ -149,7 +149,7 @@ impl Archive {
             return Err(error("damaged scene layer; rebuild the city archive"));
         }
         let mut vertices = Vec::with_capacity(span.count);
-        for b in bytes.chunks_exact(STRIDE) {
+        for b in bytes.as_chunks::<STRIDE>().0 {
             let position = std::array::from_fn(|i| {
                 f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap())
             });
@@ -195,9 +195,11 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
         }; 3];
         for (layer, chunk) in layers.into_iter().enumerate() {
             let vertices = if let Some(chunk) = chunk {
-                for axis in 0..3 {
-                    bounds[0][axis] = bounds[0][axis].min(chunk.bounds[0][axis]);
-                    bounds[1][axis] = bounds[1][axis].max(chunk.bounds[1][axis]);
+                for (axis, value) in bounds[0].iter_mut().enumerate() {
+                    *value = value.min(chunk.bounds[0][axis]);
+                }
+                for (axis, value) in bounds[1].iter_mut().enumerate() {
+                    *value = value.max(chunk.bounds[1][axis]);
                 }
                 chunk.vertices
             } else {

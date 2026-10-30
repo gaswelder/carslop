@@ -13,13 +13,13 @@ fn decode(bytes: &[u8]) -> io::Result<Vec<Vertex>> {
     }
     let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
     if count == 0
-        || count % 3 != 0
+        || !count.is_multiple_of(3)
         || count.checked_mul(44).and_then(|n| n.checked_add(12)) != Some(bytes.len())
     {
         return Err(invalid());
     }
     let mut vertices = Vec::with_capacity(count);
-    for record in bytes[12..].chunks_exact(44) {
+    for record in bytes[12..].as_chunks::<44>().0 {
         let values: [f32; 11] = std::array::from_fn(|i| {
             f32::from_le_bytes(record[i * 4..i * 4 + 4].try_into().unwrap())
         });

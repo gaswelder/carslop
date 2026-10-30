@@ -389,8 +389,8 @@ mod tests {
             .unwrap();
         let mut near = Builder::default();
         let mut far = Builder::default();
-        building_mesh(&mut near, building, &city, true);
-        building_mesh(&mut far, building, &city, false);
+        building_mesh(&mut near, building, city, true);
+        building_mesh(&mut far, building, city, false);
         assert!(near.vertices.len() > far.vertices.len());
         let shell: Vec<_> = near
             .vertices
@@ -408,7 +408,7 @@ mod tests {
         let city_track = crate::track::TrackId::Engomi.track();
         let city = city_track.city().unwrap();
         let mut b = Builder::default();
-        build(&mut b, &city);
+        build(&mut b, city);
         let area =
             (city.bounds[1][0] - city.bounds[0][0]) * (city.bounds[1][1] - city.bounds[0][1]);
         // At most one million vertices per square kilometre at this detail level.

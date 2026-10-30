@@ -470,11 +470,13 @@ impl Mesh {
             let visible = crate::chunks::visible(chunk.entry.bounds, camera.view_projection);
             let coarse = coarse_lod(chunk.gpu.as_ref().map(|g| g.coarse), distance);
             let rank = if visible { 0 } else { 2 };
-            if chunk.gpu.is_none() {
+            if let Some(gpu) = &chunk.gpu {
+                if gpu.coarse != coarse {
+                    wanted.push((0, distance, (index, if coarse { 2 } else { 1 })));
+                }
+            } else {
                 wanted.push((rank, distance, (index, 0)));
                 wanted.push((rank, distance, (index, if coarse { 2 } else { 1 })));
-            } else if chunk.gpu.as_ref().unwrap().coarse != coarse {
-                wanted.push((0, distance, (index, if coarse { 2 } else { 1 })));
             }
             if let Some(gpu) = &chunk.gpu {
                 if gpu.coarse && distance < 240.0_f32.powi(2) {

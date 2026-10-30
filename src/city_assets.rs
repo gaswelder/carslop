@@ -27,7 +27,7 @@ pub fn name() -> &'static str {
         std::sync::Mutex<std::collections::HashMap<PathBuf, &'static String>>,
     > = std::sync::OnceLock::new();
     cached::<String>(&NAME, || {
-        crate::package::read_to_string(&directory().join("manifest.json"))
+        crate::package::read_to_string(directory().join("manifest.json"))
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned))
@@ -159,8 +159,13 @@ pub fn directory() -> &'static Path {
     })
 }
 pub fn try_read(name: &str) -> Result<String, String> {
-    crate::package::read_to_string(&directory().join(name))
+    crate::package::read_to_string(directory().join(name))
         .map_err(|e| format!("cannot read city asset {name}: {e}"))
+}
+
+#[cfg(test)]
+pub fn read(name: &str) -> String {
+    try_read(name).unwrap()
 }
 
 #[cfg(test)]
@@ -188,9 +193,4 @@ mod tests {
         assert!(locations[2].path.as_ref().unwrap().is_file());
         assert_eq!(discover(&root.path().join("missing")).unwrap().len(), 2);
     }
-}
-
-#[cfg(test)]
-pub fn read(name: &str) -> String {
-    try_read(name).unwrap()
 }

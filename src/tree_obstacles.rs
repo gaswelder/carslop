@@ -58,7 +58,7 @@ fn obstacle(
 }
 impl Obstacles {
     pub fn read(directory: &Path, lonlat_bounds: [f64; 4]) -> Result<Self> {
-        let text = crate::package::read_to_string(&directory.join("city.txt"))?;
+        let text = crate::package::read_to_string(directory.join("city.txt"))?;
         let city = crate::city::City::parse(&text).map_err(invalid)?;
         let origin_line = text
             .lines()

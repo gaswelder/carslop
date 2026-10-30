@@ -706,7 +706,9 @@ mod tests {
         // distinct normals; extra triangles with constant face normals would
         // retain the old faceted appearance.
         let curved_triangles = b.vertices[..18_000]
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|t| {
                 t[0].normal
                     .iter()

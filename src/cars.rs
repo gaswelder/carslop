@@ -37,6 +37,7 @@ impl std::ops::Index<usize> for Catalog {
         &MODELS.get_or_init(|| ALL.into_iter().collect())[index]
     }
 }
+#[cfg(test)]
 pub const WHEEL_RADIUS: f32 = 0.4;
 
 #[derive(Clone)]
@@ -521,7 +522,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
         spec.turbo = turbo(value)?;
     }
     for mesh in [&spec.mesh, &spec.wheel_mesh] {
-        crate::scene::validate_design(&mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
+        crate::scene::validate_design(mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
     }
     Ok(ExtraCar { spec, base })
 }

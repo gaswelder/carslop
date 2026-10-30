@@ -11,6 +11,7 @@ pub const COLORS: [[f32; 3]; 8] = [
     [0.56, 0.51, 0.40],
 ];
 const CELL: f32 = 32.0;
+type RoadPaths = Vec<Vec<[f32; 3]>>;
 #[derive(Debug)]
 pub struct SurfaceTriangle {
     pub style: usize,
@@ -82,11 +83,7 @@ pub(crate) fn crc32_bytes(source: &[u8]) -> u32 {
 }
 
 impl StreetSurface {
-    pub fn load(
-        text: &str,
-        source: &str,
-        count: usize,
-    ) -> Result<(Self, Vec<Vec<[f32; 3]>>), String> {
+    pub fn load(text: &str, source: &str, count: usize) -> Result<(Self, RoadPaths), String> {
         let mut lines = text.lines();
         let header: Vec<_> = lines
             .next()

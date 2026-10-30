@@ -81,7 +81,8 @@ pub fn facade(b: &mut Builder, building: &Building, a: [f32; 2], c: [f32; 2], de
         let y = base + level as f32 * 3.1;
         for bay in 0..bays {
             let centre = (bay as f32 + 0.5) * length / bays as f32;
-            let balcony = level > 0 && (bay as u64 + seed) % 3 != 0 && length / bays as f32 > 3.0;
+            let balcony =
+                level > 0 && !(bay as u64 + seed).is_multiple_of(3) && length / bays as f32 > 3.0;
             let half = if balcony {
                 1.25_f32.min(length / bays as f32 * 0.36)
             } else {
@@ -173,7 +174,7 @@ pub fn facade(b: &mut Builder, building: &Building, a: [f32; 2], c: [f32; 2], de
                     [r + 0.10, y + 1.23, 0.34],
                     plaster,
                 );
-            } else if (seed + bay as u64) % 3 == 0 {
+            } else if (seed + bay as u64).is_multiple_of(3) {
                 // Roller-shutter housing, with visible horizontal slats.
                 f.solid(
                     b,

@@ -126,7 +126,9 @@ impl Hgt {
             south,
             west,
             samples: raw
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|p| i16::from_be_bytes([p[0], p[1]]))
                 .collect(),
         })

@@ -5,6 +5,7 @@ use crate::{
 use std::ffi::CString;
 
 pub const LOCATIONS: [TrackId; 3] = [TrackId::Scenic, TrackId::Compact, TrackId::Engomi];
+#[cfg(test)]
 pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
     if city_enabled {
         &LOCATIONS
@@ -1041,7 +1042,7 @@ mod tests {
         assert!(v.is_empty());
         map_marker(&mut v, [0.95, 0.88], 0.013, [1.0, 0.0, 0.0]);
         assert!(!v.is_empty());
-        for p in v.chunks_exact(6) {
+        for p in v.as_chunks::<6>().0 {
             assert!(p[0] >= MAP_CONTENT[0][0] && p[0] <= MAP_CONTENT[1][0]);
             assert!(p[1] >= MAP_CONTENT[0][1] && p[1] <= MAP_CONTENT[1][1]);
         }
@@ -1093,14 +1094,16 @@ mod tests {
             [1280.0, 720.0],
         );
         assert!(!v.is_empty());
-        for vertex in v.chunks_exact(6) {
+        for vertex in v.as_chunks::<6>().0 {
             assert!(vertex[0] >= 0.48 && vertex[0] <= 0.99, "x {}", vertex[0]);
             assert!(vertex[1] >= -0.995 && vertex[1] <= -0.50, "y {}", vertex[1]);
             assert!(vertex[2] == 0.0);
             assert!(vertex[3..6].iter().all(|c| *c >= 0.0 && *c <= 1.0));
         }
         let amber_vertices = v
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .filter(|vertex| vertex[3..6] == [1.0, 0.55, 0.18])
             .count();
         assert!(amber_vertices > 0, "high RPM should use warning color");

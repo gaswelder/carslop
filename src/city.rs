@@ -330,7 +330,7 @@ impl City {
                 return h != 0.08;
             }
         }
-        matches!(self.landscape.style(p), Some(3 | 4 | 5))
+        matches!(self.landscape.style(p), Some(3..=5))
     }
     pub fn ground_segment(&self, a: [f32; 2], b: [f32; 2]) -> Vec<[f32; 3]> {
         self.elevation.as_ref().map_or_else(

@@ -106,19 +106,6 @@ impl Session {
         self.state = GameState::Menu;
     }
 
-    fn toggle_track(&mut self) {
-        if self.state != GameState::Menu {
-            return;
-        }
-        let id = match self.track().id {
-            TrackId::Compact => TrackId::Scenic,
-            TrackId::Scenic => TrackId::Compact,
-            TrackId::Engomi => TrackId::Scenic,
-        };
-        *self = Self::on_track(self.vehicle.model, id);
-        self.state = GameState::Menu;
-    }
-
     fn select_location(&mut self, id: TrackId) {
         if self.state != GameState::Menu {
             return;
@@ -126,6 +113,7 @@ impl Session {
         *self = Self::on_track(self.vehicle.model, id);
         self.state = GameState::Menu;
     }
+    #[cfg(test)]
     fn cycle_location(&mut self, direction: i32, city_enabled: bool) {
         let locations = hud::available_locations(city_enabled);
         let current = locations
@@ -796,7 +784,12 @@ mod tests {
         }
         let mut file = std::fs::File::create(path).unwrap();
         write!(file, "P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).unwrap();
-        for row in pixels.chunks_exact((WINDOW_WIDTH * 3) as usize).rev() {
+        for row in pixels
+            .as_chunks::<{ (WINDOW_WIDTH * 3) as usize }>()
+            .0
+            .iter()
+            .rev()
+        {
             file.write_all(row).unwrap();
         }
     }
@@ -1337,7 +1330,12 @@ mod tests {
                 ))
                 .unwrap();
                 write!(file, "P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).unwrap();
-                for row in pixels.chunks_exact((WINDOW_WIDTH * 3) as usize).rev() {
+                for row in pixels
+                    .as_chunks::<{ (WINDOW_WIDTH * 3) as usize }>()
+                    .0
+                    .iter()
+                    .rev()
+                {
                     file.write_all(row).unwrap();
                 }
             }

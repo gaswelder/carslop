@@ -134,7 +134,7 @@ fn indexed_obstacle_checks_match_merged_coverage_including_block_holes() {
     let m = map(
         &[[-20., -20.], [20., -20.], [20., 20.], [-20., 20.]],
         &[(0, 1, 6., 1), (1, 2, 6., 1), (2, 3, 6., 1), (3, 0, 6., 1)],
-        &[building.clone()],
+        std::slice::from_ref(&building),
     );
     let (_, s, _) = surfaces(&m);
     let index = surfaces::PolygonIndex::new(&s.obstacles);

@@ -135,6 +135,7 @@ impl Vehicle {
         self.model.spec().brake_force / self.model.spec().mass * self.track.brake_scale
     }
 
+    #[cfg(test)]
     pub fn toggle_direction(&mut self) -> bool {
         // Check total motion, not just longitudinal speed, so slides cannot shift.
         if self.velocity[0].hypot(self.velocity[1]) > 0.5 {
@@ -402,8 +403,8 @@ impl Vehicle {
                 }) {
                     let across = dot(self.velocity, normal);
                     let loss = (across.abs() * 0.08).min(1.2) * (rise / 0.09);
-                    for axis in 0..2 {
-                        self.velocity[axis] -= normal[axis] * across.signum() * loss;
+                    for (velocity, normal) in self.velocity.iter_mut().zip(normal) {
+                        *velocity -= normal * across.signum() * loss;
                     }
                     self.curb_bump = self
                         .curb_bump

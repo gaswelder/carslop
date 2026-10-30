@@ -240,34 +240,6 @@ fn directions(e: &Element, kind: usize) -> (Vec<i8>, bool, Option<P>) {
     }
 }
 
-#[cfg(test)]
-mod direction_tests {
-    use super::*;
-    #[test]
-    fn compass_faces_opposite_travel_and_explicit_directions_take_precedence() {
-        let mut e = Element::default();
-        e.tags.insert("direction".into(), "N".into());
-        let (d, inferred, travel) = directions(&e, 3);
-        assert!(d.is_empty());
-        assert!(!inferred);
-        let p = travel.unwrap();
-        assert!(p[0].abs() < 1e-10);
-        assert!((p[1] - 1.).abs() < 1e-10);
-        e.tags
-            .insert("traffic_sign:direction".into(), "backward".into());
-        assert_eq!(directions(&e, 3), (vec![-1], false, None));
-        e.tags.clear();
-        assert_eq!(directions(&e, 1), (vec![-1, 1], true, None));
-    }
-    #[test]
-    fn relation_members_join_in_either_direction_and_reject_open_rings() {
-        let joined = rings(vec![vec![1, 2, 3], vec![1, 4, 3]]).unwrap();
-        assert_eq!(joined.len(), 1);
-        assert_eq!(joined[0].first(), joined[0].last());
-        assert_eq!(joined[0].len(), 5);
-        assert!(rings(vec![vec![1, 2], vec![3, 4]]).is_none());
-    }
-}
 fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path) -> Result<()> {
     let tree = super::surfaces::index(&s.paths);
     let obstacles = super::surfaces::PolygonIndex::new(&s.obstacles);
@@ -549,4 +521,33 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
         &output.join("furniture.json"),
         serde_json::json!({"compiler":"native-rust-v1","features":unique.len(),"skipped_source_nodes":skipped,"signal_program":"Fictional 50-second alternating cycle; no real timing or traffic-rule enforcement."}),
     )
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+    #[test]
+    fn compass_faces_opposite_travel_and_explicit_directions_take_precedence() {
+        let mut e = Element::default();
+        e.tags.insert("direction".into(), "N".into());
+        let (d, inferred, travel) = directions(&e, 3);
+        assert!(d.is_empty());
+        assert!(!inferred);
+        let p = travel.unwrap();
+        assert!(p[0].abs() < 1e-10);
+        assert!((p[1] - 1.).abs() < 1e-10);
+        e.tags
+            .insert("traffic_sign:direction".into(), "backward".into());
+        assert_eq!(directions(&e, 3), (vec![-1], false, None));
+        e.tags.clear();
+        assert_eq!(directions(&e, 1), (vec![-1, 1], true, None));
+    }
+    #[test]
+    fn relation_members_join_in_either_direction_and_reject_open_rings() {
+        let joined = rings(vec![vec![1, 2, 3], vec![1, 4, 3]]).unwrap();
+        assert_eq!(joined.len(), 1);
+        assert_eq!(joined[0].first(), joined[0].last());
+        assert_eq!(joined[0].len(), 5);
+        assert!(rings(vec![vec![1, 2], vec![3, 4]]).is_none());
+    }
 }

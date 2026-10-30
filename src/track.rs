@@ -61,6 +61,7 @@ pub struct Track {
     pub name: &'static str,
     pub width: f32,
     pub bounds: [[f32; 2]; 2], // min/max XZ, from actual spline samples
+    #[cfg(test)]
     pub speed_scale: f32,
     pub brake_scale: f32,
     pub drag: f32,
@@ -93,7 +94,8 @@ impl TrackId {
         static COMPACT: OnceLock<Arc<Track>> = OnceLock::new();
         static SCENIC: OnceLock<Arc<Track>> = OnceLock::new();
         // Retain only the most recent city; sessions own their own references.
-        static CITY: OnceLock<Mutex<Option<(std::path::PathBuf, Arc<Track>)>>> = OnceLock::new();
+        type CityCache = Mutex<Option<(std::path::PathBuf, Arc<Track>)>>;
+        static CITY: OnceLock<CityCache> = OnceLock::new();
         // Serialize construction separately: a failed builder cannot poison the cache,
         // and concurrent requests cannot allocate multiple copies of a large city.
         static BUILD: Mutex<()> = Mutex::new(());
@@ -169,6 +171,7 @@ impl Track {
             name: crate::city_assets::name(),
             width: 8.0,
             bounds: city.bounds,
+            #[cfg(test)]
             speed_scale: 1.6,
             brake_scale: 0.65,
             drag: 0.004,
@@ -301,6 +304,7 @@ impl Track {
             },
             width: if scenic { 8.0 } else { ROAD_WIDTH },
             bounds,
+            #[cfg(test)]
             speed_scale: if scenic { 1.6 } else { 1.0 },
             brake_scale: if scenic { 0.65 } else { 1.0 },
             drag: if scenic { 0.004 } else { 0.009 },
