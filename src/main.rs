@@ -429,9 +429,6 @@ impl App {
                         ..
                     } => {
                         self.keys.clear();
-                        if matches!(self.session.state, GameState::Driving) {
-                            self.session.state = GameState::Paused;
-                        }
                     }
                     _ => {}
                 }
