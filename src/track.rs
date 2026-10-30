@@ -123,6 +123,15 @@ impl RoadSample {
 }
 
 impl Track {
+    #[cfg(test)]
+    pub fn flat_test_track(&self) -> Self {
+        let mut flat = Self::build(self.id, &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z]));
+        flat.speed_scale = self.speed_scale;
+        flat.brake_scale = self.brake_scale;
+        flat.drag = self.drag;
+        flat
+    }
+
     fn engomi() -> Self {
         let city = crate::city::City::engomi();
         Self {
@@ -145,6 +154,22 @@ impl Track {
     }
     pub fn city(&self) -> Option<&crate::city::City> {
         self.city.as_ref()
+    }
+
+    /// Ground rise per horizontal metre (XZ). Ignore discrete curb heights:
+    /// those already have their own impact response.
+    pub fn ground_gradient(&self, position: [f32; 3]) -> [f32; 2] {
+        let height = |x, z| {
+            self.city.as_ref().map_or_else(
+                || self.project([x, position[1], z]).point[1],
+                |city| city.height([x, z]),
+            )
+        };
+        let [x, _, z] = position;
+        [
+            height(x + 0.5, z) - height(x - 0.5, z),
+            height(x, z + 0.5) - height(x, z - 0.5),
+        ]
     }
     pub fn spawn(&self) -> RoadSample {
         self.city

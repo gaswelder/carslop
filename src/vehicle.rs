@@ -169,8 +169,12 @@ impl Vehicle {
                 (requested_brake - self.brake_pressure).clamp(-rate * seconds, rate * seconds);
             let forward = [self.heading.sin(), self.heading.cos()];
             let right = [self.heading.cos(), -self.heading.sin()];
+            let gradient = self.track.ground_gradient(self.position);
+            // Horizontal component of gravity projected onto y = h(x, z).
+            // Velocity is stored in XZ, so divide by 1 + |gradient|².
+            let gravity = gradient.map(|g| -9.81 * g / (1.0 + dot(gradient, gradient)));
             let mut longitudinal = dot(self.velocity, forward);
-            let lateral = dot(self.velocity, right);
+            let lateral = dot(self.velocity, right) + dot(gravity, right) * seconds;
             let drive_speed = longitudinal * direction;
             let available_drive =
                 if let Some(engine) = spec.road_engine.as_ref().filter(|_| !reversing) {
@@ -189,7 +193,7 @@ impl Vehicle {
             let foot_braking = self.brake_pressure * brake_accel.min(grip * 0.8);
             let lateral_grip = (grip * grip - foot_braking * foot_braking).max(0.0).sqrt();
             let braking = foot_braking + if controls.handbrake { 4.0 } else { 0.0 };
-            let driven = drive_speed + engine * seconds;
+            let driven = drive_speed + (engine + dot(gravity, forward) * direction) * seconds;
             let resistance = (braking + 0.25 + drag * driven * driven) * seconds;
             longitudinal = driven.signum() * (driven.abs() - resistance).max(0.0) * direction;
             let lateral_accel = (-lateral * if controls.handbrake { 1.7 } else { 9.0 })
@@ -412,6 +416,83 @@ fn dot(a: [f32; 2], b: [f32; 2]) -> f32 {
 mod tests {
     use super::*;
 
+    fn hill_car(uphill: bool) -> Vehicle {
+        let route = track::TrackId::Scenic.track();
+        let road = (0..200)
+            .map(|i| route.at_distance(i as f32 * 10.0))
+            .max_by(|a, b| {
+                dot(route.ground_gradient(a.point), a.tangent)
+                    .total_cmp(&dot(route.ground_gradient(b.point), b.tangent))
+            })
+            .unwrap();
+        assert!(dot(route.ground_gradient(road.point), road.tangent) > 0.04);
+        Vehicle::on_track(
+            road.lane_position(0.0),
+            road.heading() + if uphill { 0.0 } else { std::f32::consts::PI },
+            CarModel::Roadster,
+            route,
+        )
+    }
+
+    #[test]
+    fn elevation_changes_coasting_and_power_in_both_directions() {
+        for throttle in [0.0, 1.0] {
+            for reverse in [false, true] {
+                let run = |uphill| {
+                    let mut car = hill_car(uphill);
+                    if reverse {
+                        car.toggle_direction();
+                        car.heading += std::f32::consts::PI;
+                    }
+                    let sign = if reverse { -1.0 } else { 1.0 };
+                    car.velocity = [
+                        car.heading.sin() * 8.0 * sign,
+                        car.heading.cos() * 8.0 * sign,
+                    ];
+                    car.update(
+                        Duration::from_millis(250),
+                        Controls {
+                            throttle,
+                            ..Controls::default()
+                        },
+                    );
+                    car.speed * sign
+                };
+                assert!(run(false) > run(true) + 0.15);
+            }
+        }
+    }
+
+    #[test]
+    fn hills_allow_rollback_but_brakes_hold_and_substeps_are_consistent() {
+        let mut rolling = hill_car(true);
+        rolling.update(Duration::from_secs(1), Controls::default());
+        assert!(rolling.speed < -0.1, "rollback: {}", rolling.speed);
+        for handbrake in [false, true] {
+            let mut held = hill_car(true);
+            held.update(
+                Duration::from_secs(2),
+                Controls {
+                    brake: if handbrake { 0.0 } else { 1.0 },
+                    handbrake,
+                    ..Controls::default()
+                },
+            );
+            assert!(held.speed.abs() < 0.001);
+        }
+        let run = |hz| {
+            let mut car = hill_car(false);
+            for _ in 0..hz {
+                car.update(
+                    Duration::from_secs_f64(1.0 / hz as f64),
+                    Controls::default(),
+                );
+            }
+            car.speed
+        };
+        assert!((run(30) - run(120)).abs() < 0.005);
+    }
+
     fn car() -> Vehicle {
         let start = track::at_distance(5.0);
         Vehicle::new(
@@ -423,6 +504,13 @@ mod tests {
 
     fn route_car(id: track::TrackId, model: CarModel) -> Vehicle {
         let track = id.track();
+        let road = track.at_distance(50.0);
+        Vehicle::on_track(road.lane_position(0.0), road.heading(), model, track)
+    }
+
+    // Drivetrain calibration compares identical level ground across route tuning.
+    fn level_route_car(id: track::TrackId, model: CarModel) -> Vehicle {
+        let track = Box::leak(Box::new(id.track().flat_test_track()));
         let road = track.at_distance(50.0);
         Vehicle::on_track(road.lane_position(0.0), road.heading(), model, track)
     }
@@ -724,7 +812,7 @@ mod tests {
             ..Controls::default()
         };
         let speeds = track::ALL.map(|id| {
-            let mut car = route_car(id, CarModel::Roadster);
+            let mut car = level_route_car(id, CarModel::Roadster);
             for _ in 0..240 * 15 {
                 treadmill_tick(&mut car, throttle);
             }
@@ -847,8 +935,8 @@ mod tests {
     #[test]
     fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         for model in crate::cars::ALL {
-            let mut compact = route_car(track::TrackId::Compact, model);
-            let mut scenic = route_car(track::TrackId::Scenic, model);
+            let mut compact = level_route_car(track::TrackId::Compact, model);
+            let mut scenic = level_route_car(track::TrackId::Scenic, model);
             assert!(compact.toggle_direction() && scenic.toggle_direction());
             for _ in 0..240 * 12 {
                 for car in [&mut compact, &mut scenic] {
