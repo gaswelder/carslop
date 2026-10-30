@@ -6,9 +6,19 @@ and mechanical personality.
 ## Contents
 
 - [Build and play](#build-and-play)
+  - [Controls](#controls)
+  - [Locations](#locations)
 - [Add a city](#add-a-city)
 - [Nicosia map](#nicosia-map)
 - [Optional source tools](#optional-source-tools)
+- [Vehicle handling](#vehicle-handling)
+- [Car assets](#car-assets)
+  - [Mesh format](#mesh-format)
+  - [Tuning existing cars](#tuning-existing-cars)
+  - [Adding cars without recompiling](#adding-cars-without-recompiling)
+  - [Turbo tuning](#turbo-tuning)
+  - [Kestrel Turbo](#kestrel-turbo)
+- [Engine audio and recording credits](#engine-audio-and-recording-credits)
 - [Development](#development)
 - [Credits and distribution](#credits-and-distribution)
 - [Backlog](#backlog)
@@ -25,7 +35,22 @@ cargo build --release
 
 Choose a location and car, then start free driving.
 
-Press **Tab** while driving to cycle **Close → Wide → Bonnet** camera views.
+### Controls
+
+| Key | Action |
+| --- | --- |
+| Up / Down | Accelerate / brake |
+| Left / Right | Steer |
+| A / Z | Shift up / down (includes neutral between first and reverse) |
+| Space | Handbrake |
+| Tab | Cycle Close → Wide → Bonnet cameras |
+| Esc | Pause / resume |
+| R | Restart |
+| C | Recover the car |
+| M | Return to location and car selection |
+| V | Toggle audio mute |
+
+### Locations
 
 Running without arguments lists the built-in routes and all imported locations
 without loading city assets. Choose a location, then Start Driving to load it.
@@ -292,6 +317,259 @@ commands also accept a `.sqlite` path for `--city-data`; they use a temporary
 working folder and replace the package after a successful update. Allow extra
 disk space during offline edits. Finalized packages need no sidecar files.
 
+## Vehicle handling
+
+Vehicles use a nonlinear front/rear axle tire model, integrated at steps no
+larger than 1/240 second. Steering creates tire forces and a yaw moment about
+the center of mass. Rear-engine Kestrel, rear-drive Muscle, and front-drive Club
+have separate weight distributions, yaw inertias, brake biases, and axle
+stiffnesses in `data/cars/{kestrel,muscle,club}/car.json`, loaded at startup. These values are gameplay calibrations rather than
+measured specifications or a recreation of NFS5's internal physics.
+
+Acceleration and braking transfer load between axles. Lateral transfer reduces
+available grip through tire load sensitivity. Drive, braking, and cornering
+share each axle's friction budget; hard acceleration can saturate driven tires,
+and the handbrake locks the rear axle. Foot braking retains ABS-like regulation.
+Tire forces peak and soften into sliding grip, so front and rear breakaway and
+countersteering arise from forces rather than a target rotation rate. Keyboard
+steering still ramps progressively and reduces lock with speed. Kestrel has
+additional speed-dependent lock reduction and a firmer rear-axle response so
+holding a steering key at city speeds does not provoke abrupt oversteer.
+
+Engine torque varies with RPM, passes through the selected gear and final drive,
+and is interrupted during gear changes. Closed-throttle engine braking
+also depends on gearing. Kestrel retains its wheel-power/drag limit; the other
+cars use their torque curves against route-specific road load. Wheelspin feedback reflects
+driven-axle saturation, but there is no independent wheel angular-inertia solver.
+
+A damped spring supports chassis height and permits unloading, flight, and
+landing over changes in ground height. Pitch and roll respond to acceleration
+through damped springs; curb impacts retain their small feedback bump. This is
+an axle model with one vertical chassis degree of freedom, not four independent
+suspension corners or a full 3D rigid body. Collision shapes and damage modeling
+remain simplified.
+
+## Car assets
+
+Each car has one folder containing its definition and assets:
+
+```text
+data/cars/
+  kestrel/
+    car.json
+    body.mesh
+    wheel.mesh
+    audio/
+  kestrel-turbo/
+    car.json
+    body.mesh
+    wheel.mesh
+  muscle/
+    car.json
+    body.mesh
+    wheel.mesh
+  club/
+    car.json
+    body.mesh
+    wheel.mesh
+```
+
+Car designs are runtime assets. Every `car.json` selects its body with `mesh`
+and its wheel with `wheel_mesh`. Replace the assets or edit those paths, then
+restart; rebuilding is unnecessary. Paths are relative to that car's folder.
+Missing or invalid designs stop scene loading with the asset filename and error.
+There is no compiled-in design fallback.
+
+Audio loads the three mono 48 kHz signed 16-bit little-endian `.pcm` files from
+`data/cars/kestrel/audio/` once at startup, relative to the working directory. Restart the
+game after replacing them; rebuilding is unnecessary. If any loop is missing
+or invalid, the game warns and uses its procedural engine voice. A valid loop
+has an even byte count, more than twice its overlap in samples (2242 idle,
+2068 load, 2064 coast), and at most 9,600,000 bytes. Raw PCM has no header, so
+the sample rate and encoding must match. Keep all of `data/cars` with packaged
+builds. Audio fallback operates independently of mesh loading.
+
+See [Kestrel sound credits and conversion commands](#engine-audio-and-recording-credits).
+
+### Mesh format
+
+Format version 1: eight ASCII bytes `NFSCAR01`, then a little-endian u32 vertex
+count, followed by that many records of eleven little-endian f32 values:
+position XYZ, color RGB, normal XYZ, material XY. Each three records form a
+triangle. Coordinates are meters, Y up, +Z forward. No indices or textures.
+
+Bodies use car-local coordinates. Wheel meshes are centered on the axle at the
+origin and rotate about X; the game positions and animates four copies using the
+car's wheel mounts. Colors, normals, and material values are stored in each mesh.
+The original wheel has a 0.4 m radius; keep replacement wheels at that radius to
+match the shared wheel animation/feedback calibration. Paint material X = 1
+receives the selected car tint; X = 0 remains untinted. Material Y controls specular
+strength. Triangle winding and normals must face outward.
+
+Muscle and Club have authored body shells with smooth panel normals, open wheel
+arches, inset glazing, window seals, mirrors, door seams, grilles and separate
+light lenses. Muscle retains its long fastback, twin bonnet scoops and quad
+headlights; Club retains its tall hatch, rectangular lamps and roof spoiler.
+Regenerate these two body assets with `python3 tools/build_car_bodies.py` from
+the repository root. The generator uses only Python's standard library; it
+does not alter tuning, wheels, or either Kestrel design.
+
+### Tuning existing cars
+
+`data/cars/kestrel/car.json`, `data/cars/muscle/car.json`, and
+`data/cars/club/car.json` are the required runtime parameter
+files for the original cars. Edit them and restart the executable to change
+names, handling, power/drag, gearbox, or wheel placement without rebuilding.
+These files contain complete definitions; custom cars inherit their current
+values. Missing or invalid required files stop loading with the filename and
+error, rather than silently using compiled-in tuning. Ship these files with
+all builds. `half_track` sets lateral wheel spacing; `wheel_height` sets the
+wheel-center Y coordinate in meters. Body and wheel artwork are external mesh assets selected by the same JSON file.
+
+### Adding cars without recompiling
+
+Create `data/cars/my-coupe/car.json` and put its assets in the same folder, then
+restart the existing executable. Car folders are discovered at startup in folder
+name order and appended to the three original cars. Folders without `car.json`
+and loose JSON files are ignored. Invalid custom definitions are skipped with a
+warning. Use the menu or left/right car selection to select new entries;
+F1–F3 remain shortcuts for the original cars.
+
+For example, save this as `data/cars/my-coupe/car.json`:
+
+```json
+{
+  "base": "kestrel",
+  "name": "MY COUPE",
+  "description": "CUSTOM ROAD COUPE",
+  "mass": 1100,
+  "engine_force": 9500,
+  "top_speed": 60,
+  "half_track": 0.88,
+  "mesh": "my-coupe.mesh",
+  "gearbox": {
+    "ratios": [2.833, 1.778, 1.217, 0.962, 0.821],
+    "final_drive": 4.428571
+  }
+}
+```
+
+`base` is required: `kestrel`, `muscle`, or `club`. Other fields inherit that
+base's settings. Omit `mesh` to reuse its body; mesh paths are relative to the
+JSON file and use the format documented above. Custom meshes contain the body
+only; the game adds wheels using `half_track`, `wheel_height`, and `wheelbase`.
+Omit `wheel_mesh` to inherit the base wheel design, or supply a separate wheel mesh.
+Engine sound inherits the base voice.
+
+All handling values use SI units (`top_speed` is meters per second). Supported
+scalar overrides are `mass`, `engine_force`, `top_speed`, `brake_force`,
+`lateral_force`, `wheelbase`, and `steering_response`. The optional `dynamics`
+object accepts `front_weight`, `cg_height`, `track_width`, `yaw_inertia`,
+`front_drive`, `brake_bias`, `corner_stiffness` (front/rear array), `peak_torque`,
+`suspension_hz`, and `steering_speed_squared`. The `gearbox` object also accepts
+`rolling_radius`, `reverse_ratio`, `upshift_rpm`, and `downshift_rpm`; ratios
+must be positive and descending. `road_engine` accepts `wheel_power_watts` and
+`drag_accel`, or `null` to disable the power/drag model. Keep JSON definitions
+and referenced assets with the executable's working-directory `data/cars`.
+
+The [Kestrel Turbo](#kestrel-turbo) is a 930-inspired wide-body variant,
+loaded through the same runtime catalog as other custom cars.
+
+### Turbo tuning
+
+Optional `turbo` enables boost lag and a procedural airflow whoosh. Set it to
+`null` for a naturally aspirated engine. Its fields are `off_boost_fraction`
+(0..1 of rated torque/power), `spool_start_rpm`, `full_boost_rpm` (greater than
+start), `spool_seconds` and `decay_seconds` (positive exponential time constants).
+The engine torque and power tune represents full boost; boost follows throttle,
+RPM and gear changes. The whoosh follows turbine spool, including its coast-down.
+
+### Kestrel Turbo
+
+A fictional Kestrel variant inspired by the 1975 Porsche 911 Turbo 3.0 (930).
+Select **KESTREL TURBO** in the car menu. `data/cars/kestrel-turbo/` is a runtime car package;
+adding it to an existing build's `data/cars` and restarting discovers it.
+
+The body is derived from the project's original Kestrel mesh, with widened
+haunches, a whale-tail rear spoiler, black spoiler edging and grille, deeper
+front chin, and impact-bumper strips. No Porsche artwork or badges are used.
+Wheel design and engine recordings are inherited from the original Kestrel;
+the local wheel mesh keeps the package's visual assets together.
+
+Reference: [Porsche's 1975 Turbo 3.0 museum specification](https://newsroom.porsche.com/dam/jcr%3A3c07547c-36bc-4e00-825c-5ac2bbe10805/Datenblatt%20911%20Turbo%203.0%20Coup%C3%A9.pdf.PDF)
+lists 191 kW / 260 PS, 1140 kg, 250 km/h, and 5.5 seconds to 100 km/h.
+[Porsche's historical feature](https://newsroom.porsche.com/en_AU/2020/Lifestyle/porsche-klassik-magazine-guus-reinerink-taycan-turbo-23297.html)
+lists 350 Nm and a four-speed gearbox (and a different 1195 kg weight).
+We use the museum's 1140 kg specification.
+
+The runtime tune uses 171.9 kW at the wheels (90% of 191 kW), rear drive,
+four forward gears, firmer suspension and more rear grip. Gear ratios,
+shift points, drag, launch force, brakes, inertia, and tire forces are game
+calibrations, not a certified reproduction. The existing Kestrel axle positions
+and wheel radius are retained to match the adapted mesh. The turbo builds boost progressively with throttle and RPM, loses pressure on
+lift-off and shifts, and adds an airflow whoosh that grows brighter and stronger with spool speed.
+Rated torque and wheel power represent full boost. All tuning is in `data/cars/kestrel-turbo/car.json`;
+all geometry is in that folder's mesh files.
+
+## Engine audio and recording credits
+
+All files below are in `data/cars/kestrel/audio/` unless otherwise stated.
+
+### Idle recording
+
+`engine-source.wav`: domasx2, **racing car engine sound loops**, `loop_0.wav`.
+Source: https://opengameart.org/content/racing-car-engine-sound-loops
+Download: https://opengameart.org/sites/default/files/loop_0.wav
+License: CC0 1.0, https://creativecommons.org/publicdomain/zero/1.0/
+The author describes the current upload as derived from a public-domain car
+recording. Retrieved 2026-10-30. The other files in that pack are pitch variants
+of the same recording; they are deliberately not presented as separate RPM captures.
+
+`roadster-engine.pcm` is the runtime-loaded mono 48 kHz signed 16-bit little-endian
+playback derivative. Recreate with:
+
+```sh
+ffmpeg -i data/cars/kestrel/audio/engine-source.wav -af 'highpass=f=28,volume=1.2' -ar 48000 -ac 1 -f s16le data/cars/kestrel/audio/roadster-engine.pcm
+```
+
+The Kestrel keeps this sample at idle, blending into separate load and overrun
+recordings between 1150 and 2800 RPM. All three loops run continuously, with
+interpolated playback and overlapping seams. The target firing pulse follows a
+six-cylinder four-stroke engine. These are generic engine recordings, not a
+recording of the specific heritage coupe. Dedicated mid-RPM recordings remain
+the next improvement; the running loops are pitched down at intermediate RPM.
+Muscle and Club retain their distinct procedural voices. Rolling noise and
+tire scrub are procedural; rolling follows road speed and scrub resonance is
+independent of engine RPM. Playback remains mono.
+
+### Running recordings (separate license)
+
+`engine-load-source.wav` / `engine-coast-source.wav`: `Acc_05570.wav` /
+`Dec_05581.wav` from **Generic V8 Engine Sound**.
+Sound made by DerMeehdrescher / Meehdrescher Studios.
+Source: https://opengameart.org/content/generic-v8-engine-sound
+Download: https://opengameart.org/sites/default/files/genericv8sound.zip
+License: Creative Commons Attribution-ShareAlike 4.0 International,
+https://creativecommons.org/licenses/by-sa/4.0/
+Retrieved 2026-10-30. The originals and their modified PCM derivatives are
+distributed under that license. Changes: mono downmix, 30 Hz high-pass filter,
+raw signed 16-bit little-endian export; runtime pitch/filter/crossfade processing.
+The generic V8 character is a temporary stand-in for the six-cylinder Kestrel.
+
+Recreate each derivative with:
+
+```sh
+ffmpeg -i data/cars/kestrel/audio/engine-load-source.wav -af highpass=f=30 -ac 1 -ar 48000 -f s16le data/cars/kestrel/audio/engine-load.pcm
+ffmpeg -i data/cars/kestrel/audio/engine-coast-source.wav -af highpass=f=30 -ac 1 -ar 48000 -f s16le data/cars/kestrel/audio/engine-coast.pcm
+```
+
+To render an offline driving audition (no audio device required):
+
+```sh
+mkdir -p artifacts/audio
+NFS_AUDIO_PREVIEW=artifacts/audio/driving.wav cargo test recorded_driving_preview -- --ignored --nocapture
+```
+
 ## Development
 
 Run tests:
@@ -347,58 +625,19 @@ distributable game textures.
 
 ### World
 
-- [ ] Let's make Nicosia the default.
-- [ ] arbitrary-city downloader
-- [ ] Is it possible to track real-world coordinates in game so we can refer to locations?
-- [ ] What if we use the satellite images to infer trees?
+- [ ] Make Nicosia the default location.
+- [ ] Add a downloader for arbitrary cities.
+- [ ] Show real-world coordinates in game to identify locations.
 
 ### Cars
 
-- [x] Let's make gear changes manual: A shifts up, Z shifts down, stop using WASD for movement, keep the arrows. Add a neutral between 1 and R.
-- [x] Progressive foot braking with an ABS-like grip cap, retained steering authority, and skid feedback from sliding rather than brake input.
-- [x] Replace prescribed turning with axle tire forces, yaw inertia, weight transfer, gear-dependent torque, and sprung road contact.
-- [ ] Is handbrake side-sliding realistic?
-- [ ] Let's add Mazda Demio.
+- [ ] Review handbrake side-sliding realism.
+- [ ] Add a Mazda Demio.
 
 ### HUD
 
-- [ ] Need a full map view (M to open, esc to return back to the game).
+- [ ] Add a full map view (proposed: M to open, Esc to return; M currently opens selection).
 
 ### Sound
 
-- [ ] What would it take to have realistic sounds?
-
-New cars can be added as runtime JSON definitions with optional body meshes; no
-recompilation is needed. See [the car asset guide](data/cars/README.md#adding-cars-without-recompiling). Restart the game to discover additions.
-
-## Vehicle handling
-
-Vehicles use a nonlinear front/rear axle tire model, integrated at steps no
-larger than 1/240 second. Steering creates tire forces and a yaw moment about
-the center of mass. Rear-engine Kestrel, rear-drive Muscle, and front-drive Club
-have separate weight distributions, yaw inertias, brake biases, and axle
-stiffnesses in `data/cars/{kestrel,muscle,club}/car.json`, loaded at startup. These values are gameplay calibrations rather than
-measured specifications or a recreation of NFS5's internal physics.
-
-Acceleration and braking transfer load between axles. Lateral transfer reduces
-available grip through tire load sensitivity. Drive, braking, and cornering
-share each axle's friction budget; hard acceleration can saturate driven tires,
-and the handbrake locks the rear axle. Foot braking retains ABS-like regulation.
-Tire forces peak and soften into sliding grip, so front and rear breakaway and
-countersteering arise from forces rather than a target rotation rate. Keyboard
-steering still ramps progressively and reduces lock with speed. Kestrel has
-additional speed-dependent lock reduction and a firmer rear-axle response so
-holding a steering key at city speeds does not provoke abrupt oversteer.
-
-Engine torque varies with RPM, passes through the selected gear and final drive,
-and is interrupted during automatic shifts. Closed-throttle engine braking
-also depends on gearing. Kestrel retains its wheel-power/drag limit; the other
-cars use their torque curves against route-specific road load. Wheelspin feedback reflects
-driven-axle saturation, but there is no independent wheel angular-inertia solver.
-
-A damped spring supports chassis height and permits unloading, flight, and
-landing over changes in ground height. Pitch and roll respond to acceleration
-through damped springs; curb impacts retain their small feedback bump. This is
-an axle model with one vertical chassis degree of freedom, not four independent
-suspension corners or a full 3D rigid body. Collision shapes and damage modeling
-remain simplified.
+- [ ] Improve engine realism with dedicated mid-RPM recordings.
