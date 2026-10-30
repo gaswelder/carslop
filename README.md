@@ -406,6 +406,13 @@ match the shared wheel animation/feedback calibration. Paint material X = 1
 receives the selected car tint; X = 0 remains untinted. Material Y controls specular
 strength. Triangle winding and normals must face outward.
 
+Kestrel has a curved heritage-coupe shell, raised front wings, round domed
+headlamp lenses, chrome and rubber bumpers, framed glazing, door seams, and a
+slatted rear engine cover. Rebuild its body with
+`python3 tools/build_kestrel.py`; this uses Python's standard library and the
+shared mesh writer in `tools/build_car_bodies.py`. It preserves tuning and wheels
+and changes only the original Kestrel body asset.
+
 Muscle and Club have authored body shells with smooth panel normals, open wheel
 arches, inset glazing, window seals, mirrors, door seams, grilles and separate
 light lenses. Muscle retains its long fastback, twin bonnet scoops and quad
