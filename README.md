@@ -329,7 +329,7 @@ distributable game textures.
 
 - [ ] Let's make gear changes manual: A shifts up, Z shifts down, stop using WASD for movement, keep the arrows. Add a neutral between 1 and R.
 - [x] Progressive foot braking with an ABS-like grip cap, retained steering authority, and skid feedback from sliding rather than brake input.
-- [ ] The physics feels off, not entirely realistic. Can you describe the difference from NFS5?
+- [x] Replace prescribed turning with axle tire forces, yaw inertia, weight transfer, gear-dependent torque, and sprung road contact.
 - [ ] Is handbrake side-sliding realistic?
 - [ ] Let's add Mazda Demio.
 
@@ -340,3 +340,35 @@ distributable game textures.
 ### Sound
 
 - [ ] What would it take to have realistic sounds?
+
+## Vehicle handling
+
+Vehicles use a nonlinear front/rear axle tire model, integrated at steps no
+larger than 1/240 second. Steering creates tire forces and a yaw moment about
+the center of mass. Rear-engine Kestrel, rear-drive Muscle, and front-drive Club
+have separate weight distributions, yaw inertias, brake biases, and axle
+stiffnesses in `src/cars.rs`. These values are gameplay calibrations rather than
+measured specifications or a recreation of NFS5's internal physics.
+
+Acceleration and braking transfer load between axles. Lateral transfer reduces
+available grip through tire load sensitivity. Drive, braking, and cornering
+share each axle's friction budget; hard acceleration can saturate driven tires,
+and the handbrake locks the rear axle. Foot braking retains ABS-like regulation.
+Tire forces peak and soften into sliding grip, so front and rear breakaway and
+countersteering arise from forces rather than a target rotation rate. Keyboard
+steering still ramps progressively and reduces lock with speed. Kestrel has
+additional speed-dependent lock reduction and a firmer rear-axle response so
+holding a steering key at city speeds does not provoke abrupt oversteer.
+
+Engine torque varies with RPM, passes through the selected gear and final drive,
+and is interrupted during automatic shifts. Closed-throttle engine braking
+also depends on gearing. Kestrel retains its wheel-power/drag limit; the other
+cars use their torque curves against route-specific road load. Wheelspin feedback reflects
+driven-axle saturation, but there is no independent wheel angular-inertia solver.
+
+A damped spring supports chassis height and permits unloading, flight, and
+landing over changes in ground height. Pitch and roll respond to acceleration
+through damped springs; curb impacts retain their small feedback bump. This is
+an axle model with one vertical chassis degree of freedom, not four independent
+suspension corners or a full 3D rigid body. Collision shapes and damage modeling
+remain simplified.

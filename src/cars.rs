@@ -20,8 +20,24 @@ pub struct CarSpec {
     pub lateral_force: f32,
     pub wheelbase: f32,
     pub steering_response: f32,
+    pub dynamics: Dynamics,
     pub gearbox: Gearbox,
     pub road_engine: Option<RoadEngine>,
+}
+
+/// Handling parameters in SI units. Rear drive is 0, front drive is 1.
+/// These are game calibrations, not measured vehicle specifications.
+pub struct Dynamics {
+    pub front_weight: f32,
+    pub cg_height: f32,
+    pub track_width: f32,
+    pub yaw_inertia: f32,
+    pub front_drive: f32,
+    pub brake_bias: f32,
+    pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
+    pub peak_torque: f32,
+    pub suspension_hz: f32,
+    pub steering_speed_squared: f32, // additional steering-lock falloff per (m/s)^2
 }
 
 /// Car-specific wheel power and aerodynamic resistance, independent of map.
@@ -80,6 +96,19 @@ const ROADSTER: CarSpec = CarSpec {
         wheel_power_watts: 86_400.0,
         drag_accel: 0.00036,
     }),
+    dynamics: Dynamics {
+        front_weight: 0.39,
+        cg_height: 0.48,
+        track_width: 1.46,
+        yaw_inertia: 1450.0,
+        front_drive: 0.0,
+        brake_bias: 0.61,
+        corner_stiffness: [56000.0, 105000.0],
+        peak_torque: 155.0,
+        suspension_hz: 1.65,
+        // Keyboard full lock at city speed should not demand a parking turn.
+        steering_speed_squared: 0.01,
+    },
     gearbox: Gearbox {
         // Original 1964–65 911, 901/0 (AA / GA / O / U / Y).
         ratios: &[2.833, 1.778, 1.217, 0.962, 0.821],
@@ -101,6 +130,18 @@ const MUSCLE: CarSpec = CarSpec {
     wheelbase: 2.9,
     steering_response: 6.8,
     road_engine: None,
+    dynamics: Dynamics {
+        front_weight: 0.55,
+        cg_height: 0.55,
+        track_width: 1.62,
+        yaw_inertia: 2800.0,
+        front_drive: 0.0,
+        brake_bias: 0.65,
+        corner_stiffness: [78000.0, 82000.0],
+        peak_torque: 420.0,
+        suspension_hz: 1.45,
+        steering_speed_squared: 0.0,
+    },
     gearbox: Gearbox {
         // TREMEC Magnum close-ratio six-speed, Ford TUET11010.
         ratios: &[2.66, 1.78, 1.30, 1.0, 0.80, 0.63],
@@ -122,6 +163,18 @@ const CLUB: CarSpec = CarSpec {
     wheelbase: 2.3,
     steering_response: 10.0,
     road_engine: None,
+    dynamics: Dynamics {
+        front_weight: 0.63,
+        cg_height: 0.48,
+        track_width: 1.40,
+        yaw_inertia: 950.0,
+        front_drive: 1.0,
+        brake_bias: 0.68,
+        corner_stiffness: [58000.0, 43000.0],
+        peak_torque: 102.0,
+        suspension_hz: 1.85,
+        steering_speed_squared: 0.0,
+    },
     gearbox: Gearbox {
         // Volkswagen Golf Mk1 020 FF, wide-ratio five-speed / economy fifth.
         ratios: &[
