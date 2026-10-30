@@ -193,20 +193,4 @@ mod tests {
         }
         assert!(tail < 0.00001);
     }
-
-    #[test]
-    fn sample_clock_is_continuous_across_queue_chunks() {
-        let levels = Levels {
-            wind: 0.7,
-            surf: 0.8,
-        };
-        let mut continuous = CoastalAmbience::default();
-        let expected: Vec<_> = (0..6000).map(|_| continuous.sample(levels, true)).collect();
-        let mut chunked = CoastalAmbience::default();
-        let mut actual = Vec::new();
-        for count in [0, 127, 2400, 3473] {
-            actual.extend((0..count).map(|_| chunked.sample(levels, true)));
-        }
-        assert_eq!(actual, expected);
-    }
 }

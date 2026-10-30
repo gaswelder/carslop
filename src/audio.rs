@@ -456,7 +456,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "exports a WAV preview; set NFS_AUDIO_PREVIEW to the output path"]
     fn recorded_driving_preview() {
+        let path = std::env::var_os("NFS_AUDIO_PREVIEW").expect("set NFS_AUDIO_PREVIEW");
         let mut synth = Synth::default();
         let mut pcm = Vec::new();
         let mut peak = 0.0_f32;
@@ -486,18 +488,16 @@ mod tests {
             pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
         }
         assert!(peak > 0.03);
-        if let Some(path) = std::env::var_os("NFS_AUDIO_PREVIEW") {
-            let mut wav = Vec::new();
-            wav.extend_from_slice(b"RIFF");
-            wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
-            wav.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
-            wav.extend_from_slice(&(RATE as u32).to_le_bytes());
-            wav.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
-            wav.extend_from_slice(b"\x02\0\x10\0data");
-            wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-            wav.extend_from_slice(&pcm);
-            std::fs::write(path, wav).unwrap();
-        }
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
+        wav.extend_from_slice(&(RATE as u32).to_le_bytes());
+        wav.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
+        wav.extend_from_slice(b"\x02\0\x10\0data");
+        wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&pcm);
+        std::fs::write(path, wav).unwrap();
     }
 
     #[test]

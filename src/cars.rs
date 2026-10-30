@@ -552,7 +552,7 @@ mod runtime_tests {
             0.123
         );
         assert_eq!(
-            crate::hud::menu_hit_test(-0.08, -0.2),
+            crate::hud::selection_menu_hit_test(-0.5, 0.055, 0, 4, car),
             Some(crate::hud::MenuAction::Car(car))
         );
     }

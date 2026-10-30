@@ -1538,17 +1538,6 @@ mod tests {
     }
 
     #[test]
-    fn car_contact_separates_and_transfers_momentum() {
-        let mut a = car();
-        let mut b = car();
-        b.position[0] += 1.0;
-        a.velocity = [6.0, 0.0];
-        assert!(a.collide(&mut b) > 0.0);
-        assert!(b.velocity[0] > 0.0);
-        assert!(a.position.iter().all(|v| v.is_finite()));
-    }
-
-    #[test]
     fn models_have_distinct_acceleration_braking_and_grip() {
         let sample = track::at_distance(50.0);
         let results = crate::cars::ALL.map(|model| {
@@ -1651,6 +1640,14 @@ mod tests {
         let heavy_before = heavy.position;
         let light_before = light.position;
         assert!(heavy.collide(&mut light) > 0.0);
+        assert!(dot(light.velocity, n) < 0.0);
+        for car in [&heavy, &light] {
+            assert!(car
+                .position
+                .iter()
+                .chain(car.velocity.iter())
+                .all(|v| v.is_finite()));
+        }
         let after = momentum(&heavy, &light);
         for i in 0..2 {
             assert!((before[i] - after[i]).abs() < 0.01);
