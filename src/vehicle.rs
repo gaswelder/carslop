@@ -589,14 +589,10 @@ impl Vehicle {
         if excess.abs() > 0.0001 {
             self.position[0] -= normal[0] * excess;
             self.position[2] -= normal[1] * excess;
-            let outward = dot(self.velocity, normal) * excess.signum();
-            if outward > 0.0 {
-                impact = outward;
-                for (axis, normal_component) in normal.iter().enumerate() {
-                    self.velocity[axis] -= normal_component * excess.signum() * outward * 1.08;
-                    self.velocity[axis] *= 0.94;
-                }
-            }
+            impact = crate::city::deflect(
+                &mut self.velocity,
+                normal.map(|component| component * excess.signum()),
+            );
         }
         self.position[1] = road.point[1] + 0.48;
         impact

@@ -619,11 +619,23 @@ impl City {
         eye
     }
 }
-fn deflect(velocity: &mut [f32; 2], normal: [f32; 2]) -> f32 {
+pub(crate) fn deflect(velocity: &mut [f32; 2], normal: [f32; 2]) -> f32 {
     let outward = velocity[0] * normal[0] + velocity[1] * normal[1];
     if outward > 0.0 {
+        // Friction is limited by the normal impact impulse. A fixed percentage
+        // of total speed on every contact makes light, repeated scrapes stop cars.
+        let tangent = [
+            velocity[0] - normal[0] * outward,
+            velocity[1] - normal[1] * outward,
+        ];
+        let speed = tangent[0].hypot(tangent[1]);
+        let retained = if speed > 0.0 {
+            (1.0 - 0.06 * outward / speed).max(0.0)
+        } else {
+            0.0
+        };
         for i in 0..2 {
-            velocity[i] = (velocity[i] - normal[i] * outward * 1.08) * 0.94;
+            velocity[i] = tangent[i] * retained - normal[i] * outward * 0.08;
         }
         outward
     } else {
@@ -634,6 +646,33 @@ fn deflect(velocity: &mut [f32; 2], normal: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_light_barrier_contacts_preserve_sliding_speed() {
+        // Exercise a rotated wall so the response cannot depend on world axes.
+        let normal = [0.6, 0.8];
+        let tangent = [-0.8, 0.6];
+        let mut speed = 20.0;
+        for _ in 0..120 {
+            let mut velocity = std::array::from_fn(|i| tangent[i] * speed + normal[i] * 0.01);
+            let impact = deflect(&mut velocity, normal);
+            assert!((impact - 0.01).abs() < 0.00001);
+            assert!(velocity[0] * normal[0] + velocity[1] * normal[1] <= 0.0);
+            speed = velocity[0] * tangent[0] + velocity[1] * tangent[1];
+        }
+        assert!(speed > 19.9, "light scrapes drained sliding speed: {speed}");
+    }
+
+    #[test]
+    fn barrier_response_rebounds_head_on_and_leaves_departing_cars_alone() {
+        let mut velocity = [10.0, 0.0];
+        assert_eq!(deflect(&mut velocity, [1.0, 0.0]), 10.0);
+        assert!((velocity[0] + 0.8).abs() < 0.00001);
+        assert_eq!(velocity[1], 0.0);
+        let departing = velocity;
+        assert_eq!(deflect(&mut velocity, [1.0, 0.0]), 0.0);
+        assert_eq!(velocity, departing);
+    }
+
     const CROSS:&str="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
     #[test]
     fn branches_are_open_and_dead_ends_do_not_join_other_streets() {
