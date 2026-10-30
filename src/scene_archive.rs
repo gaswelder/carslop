@@ -1,10 +1,6 @@
 //! Seekable offline render geometry. Only the index remains in CPU memory;
 //! individual layers are decoded, uploaded, and immediately released.
-use crate::{
-    chunks::Chunk,
-    scene::Vertex,
-    street_surface::{crc32, crc32_bytes},
-};
+use crate::{chunks::Chunk, scene::Vertex, street_surface::crc32_bytes};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -27,66 +23,12 @@ pub struct Entry {
 pub struct Archive {
     file: crate::package::Reader,
     path: std::path::PathBuf,
-    key: u32,
     pub entries: Vec<Entry>,
     pub bytes_read: usize,
     pub peak_decode_bytes: usize,
 }
 fn error(message: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message)
-}
-pub fn signature() -> u32 {
-    static KEY: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, &'static u32>>,
-    > = std::sync::OnceLock::new();
-    *crate::city_assets::cached(&KEY, || {
-        let data = [
-            "city.txt",
-            "streets.txt",
-            "furniture.txt",
-            "landscape.txt",
-            "elevation/heightfield.txt",
-        ];
-        let data_sums = data
-            .iter()
-            .map(|name| crc32(&crate::city_assets::read(name)))
-            .collect::<Vec<_>>();
-        let imagery = match crate::package::read_to_string(
-            &crate::city_assets::directory().join("imagery-trees.txt"),
-        ) {
-            Ok(text) => crc32(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(e) => panic!("cannot fingerprint imagery trees: {e}"),
-        };
-        let sources = [
-            include_str!("city_assets.rs"),
-            include_str!("scene.rs"),
-            include_str!("city_scene.rs"),
-            include_str!("engomi_art.rs"),
-            include_str!("road_furniture.rs"),
-            include_str!("city.rs"),
-            include_str!("hud.rs"),
-            include_str!("traffic.rs"),
-            include_str!("landscape.rs"),
-            include_str!("track.rs"),
-            include_str!("street_surface.rs"),
-            include_str!("elevation.rs"),
-            include_str!("chunks.rs"),
-            include_str!("scene_archive.rs"),
-        ];
-        let mut sums = data_sums
-            .iter()
-            .map(|v| format!("{v:08x}"))
-            .collect::<String>();
-        sums.push_str(&format!("{imagery:08x}"));
-        sums.push_str(
-            &sources
-                .iter()
-                .map(|s| format!("{:08x}", crc32(s)))
-                .collect::<String>(),
-        );
-        crc32(&sums)
-    })
 }
 fn encode(vertices: &[Vertex]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(vertices.len() * STRIDE);
@@ -110,18 +52,16 @@ fn encode(vertices: &[Vertex]) -> Vec<u8> {
     bytes
 }
 impl Archive {
-    pub fn open(path: &Path, expected: u32) -> std::io::Result<Self> {
+    pub fn open(path: &Path) -> std::io::Result<Self> {
         let mut file = crate::package::Reader::open(path)?;
         let length = file.len()?;
         let mut header = [0u8; 16];
         file.read_exact(&mut header)?;
         let n = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-        if &header[..8] != MAGIC
-            || u32::from_le_bytes(header[8..12].try_into().unwrap()) != expected
-        {
-            return Err(error(
-                "stale city scene archive; run bake-city --location NAME",
-            ));
+        // Bytes 8..12 held a build fingerprint in older archives. Ignore it:
+        // compatibility is defined by the format version, not the producer's code.
+        if &header[..8] != MAGIC {
+            return Err(error("unsupported city scene archive format"));
         }
         if n == 0 || n > 100_000 || 16 + (n * ENTRY_SIZE) as u64 > length {
             return Err(error("invalid scene index size"));
@@ -175,23 +115,19 @@ impl Archive {
         Ok(Self {
             file,
             path: path.to_owned(),
-            key: expected,
             entries,
             bytes_read: 16 + n * ENTRY_SIZE,
             peak_decode_bytes: 0,
         })
     }
     pub fn fork(&self) -> std::io::Result<Self> {
-        Self::open(&self.path, self.key)
+        Self::open(&self.path)
     }
     pub fn open_default() -> std::io::Result<Self> {
         if let Some(path) = std::env::var_os("NFS_CITY_SCENE") {
-            return Self::open(Path::new(&path), signature());
+            return Self::open(Path::new(&path));
         }
-        Self::open(
-            &crate::city_assets::directory().join("scene.pack"),
-            signature(),
-        )
+        Self::open(&crate::city_assets::directory().join("scene.pack"))
     }
     pub fn read_layer(&mut self, index: usize, layer: usize) -> std::io::Result<Vec<Vertex>> {
         let entry = self
@@ -238,7 +174,7 @@ impl Archive {
         Ok(vertices)
     }
 }
-pub fn write(path: &Path, layers: [Vec<Chunk>; 3], key: u32) -> std::io::Result<()> {
+pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
     let mut chunks = std::collections::BTreeMap::<[i32; 2], [Option<Chunk>; 3]>::new();
     for (layer, values) in layers.into_iter().enumerate() {
         for chunk in values {
@@ -282,7 +218,7 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3], key: u32) -> std::io::Result<
     }
     file.seek(SeekFrom::Start(0))?;
     file.write_all(MAGIC)?;
-    file.write_all(&key.to_le_bytes())?;
+    file.write_all(&0u32.to_le_bytes())?; // Reserved; legacy build fingerprint.
     file.write_all(&(entries.len() as u32).to_le_bytes())?;
     for entry in entries {
         for side in entry.bounds {
@@ -323,11 +259,10 @@ pub fn bake_default() -> std::io::Result<()> {
         "Generating city geometry with {} trees...",
         city.landscape.trees.len()
     );
-    let key = signature();
     let layers = crate::scene::city_layers(city);
     println!("Writing city render archive...");
-    write(&path, layers, key)?;
-    let archive = Archive::open(&path, signature())?;
+    write(&path, layers)?;
+    let archive = Archive::open(&path)?;
     let counts: [usize; 3] =
         std::array::from_fn(|layer| archive.entries.iter().map(|e| e.layers[layer].count).sum());
     println!("Baked {} chunks: {} ground, {} detailed building, {} distant building vertices; {:.1} MiB; {:.2}s",archive.entries.len(),counts[0],counts[1],counts[2],crate::package::size(&path)? as f32/1048576.0,started.elapsed().as_secs_f32());
@@ -335,7 +270,7 @@ pub fn bake_default() -> std::io::Result<()> {
     if packaged {
         crate::package::replace_asset(directory, "scene.pack", &path)
             .map_err(|e| error(&e.to_string()))?;
-        Archive::open(&directory.join("scene.pack"), key)?;
+        Archive::open(&directory.join("scene.pack"))?;
     }
     Ok(())
 }
@@ -380,10 +315,9 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ],
-            123,
         )
         .unwrap();
-        let mut archive = Archive::open(&path.0, 123).unwrap();
+        let mut archive = Archive::open(&path.0).unwrap();
         let decoded = archive.read_layer(0, 0).unwrap();
         assert_eq!(decoded.len(), vertices.len());
         for (before, after) in vertices.iter().zip(decoded) {
@@ -408,7 +342,6 @@ mod tests {
         write(
             path,
             std::array::from_fn(|_| crate::chunks::partition(triangle())),
-            123,
         )
         .unwrap();
     }
@@ -416,7 +349,7 @@ mod tests {
     fn archive_loads_only_index_then_requested_layer_and_preserves_geometry() {
         let path = TestFile::new();
         fixture(&path.0);
-        let mut archive = Archive::open(&path.0, 123).unwrap();
+        let mut archive = Archive::open(&path.0).unwrap();
         assert_eq!(archive.peak_decode_bytes, 0);
         assert_eq!(archive.bytes_read, 16 + ENTRY_SIZE);
         assert!((archive.bytes_read as u64) < std::fs::metadata(&path.0).unwrap().len());
@@ -434,11 +367,29 @@ mod tests {
         assert!(archive.read_layer(0, 3).is_err());
     }
     #[test]
-    fn stale_truncated_and_corrupt_archives_fail_explicitly() {
+    fn legacy_build_fingerprints_are_ignored_but_format_versions_are_checked() {
         let path = TestFile::new();
         fixture(&path.0);
-        assert!(Archive::open(&path.0, 124).is_err());
-        let mut archive = Archive::open(&path.0, 123).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path.0)
+            .unwrap();
+        file.seek(SeekFrom::Start(8)).unwrap();
+        file.write_all(&123u32.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+        let archive = Archive::open(&path.0).unwrap();
+        let mut worker = archive.fork().unwrap();
+        assert_eq!(worker.read_layer(0, 0).unwrap().len(), 3);
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(b"CLOPCH99").unwrap();
+        file.flush().unwrap();
+        assert!(Archive::open(&path.0).is_err());
+    }
+    #[test]
+    fn truncated_and_corrupt_archives_fail_explicitly() {
+        let path = TestFile::new();
+        fixture(&path.0);
+        let mut archive = Archive::open(&path.0).unwrap();
         let offset = archive.entries[0].layers[0].offset;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -449,6 +400,6 @@ mod tests {
         file.flush().unwrap();
         assert!(archive.read_layer(0, 0).is_err());
         file.set_len(20).unwrap();
-        assert!(Archive::open(&path.0, 123).is_err());
+        assert!(Archive::open(&path.0).is_err());
     }
 }

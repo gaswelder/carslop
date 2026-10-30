@@ -209,11 +209,10 @@ mod tests {
         crate::scene_archive::write(
             &path,
             std::array::from_fn(|_| crate::chunks::partition(tri.clone())),
-            123,
         )
         .unwrap();
         let p = Prefetch::with_budget(
-            Archive::open(&path, 123).unwrap(),
+            Archive::open(&path).unwrap(),
             3 * std::mem::size_of::<Vertex>(),
         );
         p.plan(vec![(0, 0), (0, 1), (0, 2)]);

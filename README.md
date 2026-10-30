@@ -283,7 +283,11 @@ SQLite is bundled into the executable; no database server is needed.
 ```
 
 New imports publish `.sqlite` packages automatically. `bake-city --location NAME`
-updates the baked scene in the package. Imagery preparation and tree-import
+updates the baked scene in the package after intentional edits to city inputs or
+when you want to adopt new geometry-generation behavior. Published locations use
+their embedded geometry and do not need rebaking after game rebuilds or source
+code changes. Existing packages with build fingerprints remain playable; scene
+format versions and integrity checks still apply. Imagery preparation and tree-import
 commands also accept a `.sqlite` path for `--city-data`; they use a temporary
 working folder and replace the package after a successful update. Allow extra
 disk space during offline edits. Finalized packages need no sidecar files.
