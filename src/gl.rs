@@ -1000,6 +1000,38 @@ fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32
     }
 }
 
+/// Body transform shared by rendering and the rigid bonnet camera mount.
+pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
+    let track = vehicle.track;
+    let (road_pitch, road_roll) = if let Some(city) = track.city() {
+        let h = |dx: f32, dz: f32| {
+            city.drive_height([vehicle.position[0] + dx, vehicle.position[2] + dz])
+        };
+        let (sin, cos) = vehicle.heading.sin_cos();
+        // Sample along this car, never across unrelated city graph edges.
+        (
+            ((h(sin * 1.3, cos * 1.3) - h(-sin * 1.3, -cos * 1.3)) / 2.6).atan(),
+            ((h(cos * 0.8, -sin * 0.8) - h(-cos * 0.8, sin * 0.8)) / 1.6).atan(),
+        )
+    } else {
+        let road = track.project(vehicle.position);
+        let grade = track.at_distance(road.distance + 0.5).point[1]
+            - track.at_distance(road.distance - 0.5).point[1];
+        (
+            (grade * (vehicle.heading - road.heading()).cos()).atan(),
+            0.0,
+        )
+    };
+    let mut body_position = vehicle.position;
+    body_position[1] += vehicle.curb_bump;
+    body_model_matrix(
+        body_position,
+        vehicle.heading,
+        road_pitch + vehicle.body_pitch,
+        road_roll + vehicle.body_roll,
+    )
+}
+
 pub fn model_matrix(car_position: [f32; 3], vehicle_heading: f32, pitch: f32) -> [f32; 16] {
     body_model_matrix(car_position, vehicle_heading, pitch, 0.0)
 }

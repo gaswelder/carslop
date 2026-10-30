@@ -878,34 +878,7 @@ impl App {
                 .draw(self.scene_program, &camera, &self.session.skids);
         }
         for &(vehicle, tint) in &vehicles[..visible_count] {
-            let track = self.session.track();
-            let (road_pitch, road_roll) = if let Some(city) = track.city() {
-                let h = |dx: f32, dz: f32| {
-                    city.drive_height([vehicle.position[0] + dx, vehicle.position[2] + dz])
-                };
-                let (sin, cos) = vehicle.heading.sin_cos();
-                // Sample along this car, never across unrelated city graph edges.
-                (
-                    ((h(sin * 1.3, cos * 1.3) - h(-sin * 1.3, -cos * 1.3)) / 2.6).atan(),
-                    ((h(cos * 0.8, -sin * 0.8) - h(-cos * 0.8, sin * 0.8)) / 1.6).atan(),
-                )
-            } else {
-                let road = track.project(vehicle.position);
-                let grade = track.at_distance(road.distance + 0.5).point[1]
-                    - track.at_distance(road.distance - 0.5).point[1];
-                (
-                    (grade * (vehicle.heading - road.heading()).cos()).atan(),
-                    0.0,
-                )
-            };
-            let mut body_position = vehicle.position;
-            body_position[1] += vehicle.curb_bump;
-            let model = gl::body_model_matrix(
-                body_position,
-                vehicle.heading,
-                road_pitch + vehicle.body_pitch,
-                road_roll + vehicle.body_roll,
-            );
+            let model = gl::vehicle_body_matrix(vehicle);
             self.mesh()
                 .draw(self.scene_program, &camera, &model, tint, vehicle);
         }
@@ -1101,8 +1074,9 @@ mod tests {
         for (label, view) in [
             ("wide", camera::FollowView::Wide),
             ("close", camera::FollowView::Close),
+            ("bonnet", camera::FollowView::Bonnet),
         ] {
-            if app.chase.view() != view {
+            while app.chase.view() != view {
                 app.key_down(Keycode::Tab);
             }
             app.snap_camera();
@@ -1873,7 +1847,7 @@ mod tests {
             assert_contact_pixel_readback(&app);
             assert_particle_pixel_readback(&app);
             for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                if app.chase.view() != view {
+                while app.chase.view() != view {
                     app.key_down(Keycode::Tab);
                 }
                 assert_eq!(app.chase.view(), view);
@@ -1955,7 +1929,7 @@ mod tests {
             }
             assert!(app.session.vehicle.speed < 0.0);
             for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                if app.chase.view() != view {
+                while app.chase.view() != view {
                     app.key_down(Keycode::Tab);
                 }
                 app.render(TICK);
@@ -2006,7 +1980,7 @@ mod tests {
                     assert_contact_pixel_readback(&app);
                 }
                 for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                    if app.chase.view() != view {
+                    while app.chase.view() != view {
                         app.key_down(Keycode::Tab);
                     }
                     for _ in 0..120 {

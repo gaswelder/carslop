@@ -10,6 +10,7 @@ use std::{
 pub enum FollowView {
     Wide,
     Close,
+    Bonnet,
 }
 
 impl FollowView {
@@ -17,6 +18,7 @@ impl FollowView {
         match self {
             Self::Wide => "WIDE",
             Self::Close => "CLOSE",
+            Self::Bonnet => "BONNET",
         }
     }
 
@@ -25,6 +27,7 @@ impl FollowView {
         match self {
             Self::Wide => (9.0, 4.5),
             Self::Close => (5.5, 2.1),
+            Self::Bonnet => (0.0, 0.0),
         }
     }
 }
@@ -43,6 +46,7 @@ pub struct ChaseCamera {
     look_ahead: [f32; 3],
     distance: f32,
     height: f32,
+    bonnet: Pose,
 }
 
 impl ChaseCamera {
@@ -56,6 +60,7 @@ impl ChaseCamera {
             look_ahead: [0.0; 3],
             distance,
             height,
+            bonnet: bonnet_pose(car),
         };
         camera.snap(car);
         camera
@@ -67,12 +72,14 @@ impl ChaseCamera {
 
     pub fn toggle_view(&mut self) {
         self.view = match self.view {
-            FollowView::Wide => FollowView::Close,
+            FollowView::Wide => FollowView::Bonnet,
+            FollowView::Bonnet => FollowView::Close,
             FollowView::Close => FollowView::Wide,
         };
     }
 
     pub fn snap(&mut self, car: &Vehicle) {
+        self.bonnet = bonnet_pose(car);
         self.track = car.track;
         self.anchor = car.position;
         self.heading = car.heading.rem_euclid(TAU);
@@ -85,6 +92,9 @@ impl ChaseCamera {
         if !std::ptr::eq(self.track, car.track) {
             self.snap(car);
             return;
+        }
+        if !frame_time.is_zero() {
+            self.bonnet = bonnet_pose(car);
         }
         let dt = frame_time.as_secs_f32().min(0.25);
         let position_blend = damp(7.0, dt);
@@ -116,6 +126,9 @@ impl ChaseCamera {
     }
 
     pub fn pose(&self) -> Pose {
+        if self.view == FollowView::Bonnet {
+            return self.bonnet;
+        }
         let mut eye = [
             self.anchor[0] - self.heading.sin() * self.distance,
             self.anchor[1] + self.height,
@@ -135,6 +148,19 @@ impl ChaseCamera {
             eye = city.camera_eye([self.anchor[0], self.anchor[1] + 0.5, self.anchor[2]], eye);
         }
         Pose { eye, target }
+    }
+}
+
+// Above the rear of the bonnet, ahead of the windscreen. Keep the body visible
+// below the sightline and use the exact rendered transform, including suspension.
+fn bonnet_pose(car: &Vehicle) -> Pose {
+    let body = crate::gl::vehicle_body_matrix(car);
+    let mount = |height: f32, forward: f32| {
+        std::array::from_fn(|i| body[12 + i] + body[4 + i] * height + body[8 + i] * forward)
+    };
+    Pose {
+        eye: mount(1.15, 0.85),
+        target: mount(1.15, 30.85),
     }
 }
 
@@ -194,6 +220,36 @@ mod tests {
         for i in 0..3 {
             assert!((a[i] - b[i]).abs() < tolerance, "{a:?} != {b:?}");
         }
+    }
+
+    #[test]
+    fn bonnet_cycles_and_stays_attached_during_forward_and_reverse_motion() {
+        let mut v = car();
+        let mut c = ChaseCamera::new(&v);
+        c.toggle_view();
+        assert_eq!(c.view(), FollowView::Wide);
+        c.toggle_view();
+        assert_eq!(c.view(), FollowView::Bonnet);
+        assert_eq!(c.view().label(), "BONNET");
+        for speed in [35.0, -5.0] {
+            v.position[0] += 10.0;
+            v.heading += 0.7;
+            v.speed = speed;
+            v.body_pitch = 0.06;
+            v.body_roll = 0.04;
+            v.curb_bump = 0.1;
+            c.update(&v, Duration::from_millis(16));
+            let pose = c.pose();
+            let body = crate::gl::vehicle_body_matrix(&v);
+            let relative: [f32; 3] = std::array::from_fn(|i| pose.eye[i] - body[12 + i]);
+            let local: [f32; 3] =
+                std::array::from_fn(|axis| (0..3).map(|i| relative[i] * body[axis * 4 + i]).sum());
+            assert_close(local, [0.0, 1.15, 0.85], 0.001);
+            let sight: [f32; 3] = std::array::from_fn(|i| pose.target[i] - pose.eye[i]);
+            assert_close(sight, std::array::from_fn(|i| body[8 + i] * 30.0), 0.001);
+        }
+        c.toggle_view();
+        assert_eq!(c.view(), FollowView::Close);
     }
 
     #[test]
@@ -282,6 +338,7 @@ mod tests {
         c.snap(&v);
         assert_eq!(c.view(), FollowView::Wide);
         assert_close(c.anchor, v.position, 0.001);
+        c.toggle_view();
         c.toggle_view();
         c.snap(&v);
         assert_eq!(c.distance, 5.5);

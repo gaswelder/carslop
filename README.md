@@ -23,6 +23,8 @@ cargo build --release
 ./target/release/nfs5like
 ```
 
+Press **Tab** while driving to cycle **Close → Wide → Bonnet** camera views.
+
 Running without arguments opens the built-in track menu without loading city
 assets. Cities appear only when selected with `--location`. To drive in Nicosia:
 
