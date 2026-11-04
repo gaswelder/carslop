@@ -47,6 +47,7 @@ pub struct Vehicle {
     yaw_rate: f32,
     shift_timer: f32,
     rev_match_timer: f32,
+    neutral_fuel_cut: bool,
     acceleration: [f32; 2], // longitudinal/lateral, filtered for load transfer
     pitch_rate: f32,
     roll_rate: f32,
@@ -93,6 +94,7 @@ impl Vehicle {
             tire_scrub: 0.0,
             shift_timer: 0.0,
             rev_match_timer: 0.0,
+            neutral_fuel_cut: false,
             acceleration: [0.0; 2],
             pitch_rate: 0.0,
             roll_rate: 0.0,
@@ -557,26 +559,64 @@ impl Vehicle {
         self.body_roll += self.roll_rate * dt;
     }
 
+    fn update_neutral_engine(&mut self, throttle: f32, dt: f32) {
+        let peak_torque = self.model.spec().dynamics.peak_torque;
+        // Approximate crank/flywheel inertia; larger engines carry more inertia.
+        let inertia = 0.12 + peak_torque * 0.0006;
+        // Feedback runs once per frame. Substep free revs so limiter cycles and
+        // throttle blips remain consistent at different rendering frame rates.
+        let steps = (dt * 240.0).ceil().max(1.0) as u32;
+        let seconds = dt / steps as f32;
+        for _ in 0..steps {
+            if self.engine_rpm >= REDLINE_RPM {
+                self.neutral_fuel_cut = true;
+            } else if self.engine_rpm <= REDLINE_RPM - 250.0 {
+                self.neutral_fuel_cut = false;
+            }
+            let revs = ((self.engine_rpm - IDLE_RPM) / (REDLINE_RPM - IDLE_RPM)).clamp(0.0, 1.0);
+            let combustion = if self.neutral_fuel_cut {
+                0.0
+            } else {
+                throttle * peak_torque * (1.0 - 0.3 * revs)
+            };
+            // Pumping/friction losses grow with speed. Unlike an RPM target,
+            // a small pedal opening can keep accelerating an unloaded engine.
+            let drag = peak_torque * (0.10 + 0.16 * revs + 0.24 * revs * revs);
+            let rpm_rate = (combustion - drag) / inertia * 60.0 / std::f32::consts::TAU;
+            self.engine_rpm = (self.engine_rpm + rpm_rate * seconds).clamp(IDLE_RPM, REDLINE_RPM);
+        }
+    }
+
     fn update_engine_feedback(&mut self, controls: Controls, dt: f32) {
         let throttle = controls.throttle.clamp(0.0, 1.0);
-        let target_rpm = if self.gear == NEUTRAL_GEAR {
-            // With the clutch disengaged, throttle sets RPM independently of road speed.
-            IDLE_RPM + throttle * (REDLINE_RPM - IDLE_RPM)
-        } else {
-            (self.target_engine_rpm() + self.wheel_spin * throttle * 1800.0)
-                .max(IDLE_RPM + throttle * (2200.0 - IDLE_RPM))
-                .min(REDLINE_RPM)
-        };
         let blip = self.rev_match_timer / REV_MATCH_SECONDS;
-        let response = if blip > 0.0 {
-            22.0
-        } else if self.shift_timer > 0.0 {
-            12.0
+        if self.gear == NEUTRAL_GEAR {
+            self.update_neutral_engine(throttle, dt);
         } else {
-            7.5
+            self.neutral_fuel_cut = false;
+            let target_rpm = (self.target_engine_rpm() + self.wheel_spin * throttle * 1800.0)
+                .max(IDLE_RPM + throttle * (2200.0 - IDLE_RPM))
+                .min(REDLINE_RPM);
+            let response = if blip > 0.0 {
+                22.0
+            } else if self.shift_timer > 0.0 {
+                12.0
+            } else {
+                7.5
+            };
+            self.engine_rpm += (target_rpm - self.engine_rpm) * (dt * response).clamp(0.0, 1.0);
+        }
+        // An unloaded engine uses less sustained load; fuel cuts also reach
+        // the audio layers so the limiter is audible as well as visible.
+        let requested = if self.gear == NEUTRAL_GEAR {
+            if self.neutral_fuel_cut {
+                0.0
+            } else {
+                throttle * 0.55
+            }
+        } else {
+            throttle
         };
-        self.engine_rpm += (target_rpm - self.engine_rpm) * (dt * response).clamp(0.0, 1.0);
-        let requested = controls.throttle.clamp(0.0, 1.0);
         let shift_unload = if self.shift_timer > 0.0 { 0.25 } else { 1.0 };
         // Feed the blip into both recorded load/coast layers and procedural
         // engine voices, without applying extra driving force at the wheels.
@@ -1984,35 +2024,107 @@ mod tests {
     }
 
     #[test]
-    fn neutral_throttle_revs_to_redline_and_release_returns_to_idle() {
+    fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
         let road = track::at_distance(50.0);
         for model in crate::cars::ALL {
             let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
             car.manual = true;
             car.shift(false);
-            for throttle in [0.5, 1.0, 0.0] {
-                let target = IDLE_RPM + throttle * (REDLINE_RPM - IDLE_RPM);
-                for _ in 0..120 {
-                    car.update(
-                        Duration::from_secs_f64(1.0 / 60.0),
-                        Controls {
-                            throttle,
-                            ..Controls::default()
-                        },
-                    );
-                    assert!(car.engine_rpm >= IDLE_RPM && car.engine_rpm <= REDLINE_RPM);
-                }
-                assert!(
-                    (car.engine_rpm - target).abs() < 10.0,
-                    "{model:?}, throttle {throttle}: expected {target} RPM, got {}",
-                    car.engine_rpm
-                );
-                assert_eq!(car.gear, NEUTRAL_GEAR);
-                assert!(car.speed.abs() < 0.01, "neutral must not propel the car");
-                assert_eq!(car.drive_force(0.0), 0.0);
-                assert_eq!(car.turbo_boost, 0.0);
+            let dt = Duration::from_secs_f64(1.0 / 60.0);
+            let pedal = Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            };
+            for _ in 0..6 {
+                car.update(dt, pedal);
             }
+            assert!(car.engine_rpm > IDLE_RPM + 100.0);
+            assert!(car.engine_rpm < 2500.0, "{model:?}: blip jumps too quickly");
+            let mut cuts = 0;
+            let mut recoveries = 0;
+            for _ in 0..300 {
+                let was_cut = car.neutral_fuel_cut;
+                car.update(dt, pedal);
+                cuts += usize::from(!was_cut && car.neutral_fuel_cut);
+                recoveries += usize::from(was_cut && !car.neutral_fuel_cut);
+                assert!((IDLE_RPM..=REDLINE_RPM).contains(&car.engine_rpm));
+            }
+            assert!(cuts > 2 && recoveries > 2, "{model:?}: limiter must cycle");
+            car.update(dt, Controls::default());
+            assert!(
+                car.engine_rpm > 5500.0,
+                "release must retain engine inertia"
+            );
+            for _ in 0..300 {
+                let before = car.engine_rpm;
+                car.update(dt, Controls::default());
+                assert!(car.engine_rpm <= before);
+            }
+            assert_eq!(car.engine_rpm, IDLE_RPM);
+            assert_eq!(car.gear, NEUTRAL_GEAR);
+            assert!(car.speed.abs() < 0.01, "neutral must not propel the car");
+            assert_eq!(car.drive_force(0.0), 0.0);
+            assert_eq!(car.turbo_boost, 0.0);
         }
+    }
+
+    #[test]
+    fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
+        let road = track::at_distance(50.0);
+        for model in crate::cars::ALL {
+            let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
+            car.manual = true;
+            car.gear = NEUTRAL_GEAR;
+            let pedal = Controls {
+                throttle: 0.25,
+                ..Controls::default()
+            };
+            for _ in 0..600 {
+                car.update_engine_feedback(pedal, 1.0 / 60.0);
+            }
+            let stationary = car.engine_rpm;
+            assert!(stationary > 3000.0 && stationary < 4500.0);
+            let mut rolling = Vehicle::new(road.lane_position(0.0), road.heading(), model);
+            rolling.gear = NEUTRAL_GEAR;
+            rolling.engine_rpm = stationary;
+            rolling.speed = 30.0;
+            for _ in 0..120 {
+                car.update_engine_feedback(pedal, 1.0 / 60.0);
+                rolling.update_engine_feedback(pedal, 1.0 / 60.0);
+                assert_eq!(car.engine_rpm, rolling.engine_rpm);
+            }
+            car.gear = 1;
+            car.neutral_fuel_cut = true;
+            car.update_engine_feedback(pedal, 1.0 / 60.0);
+            assert!(!car.neutral_fuel_cut, "engaging a gear clears the limiter");
+            car.reset(road.lane_position(0.0), road.heading());
+            assert!(!car.neutral_fuel_cut);
+        }
+    }
+
+    #[test]
+    fn neutral_blips_are_consistent_across_frame_rates() {
+        let mut results = Vec::new();
+        for hz in [30, 60, 144, 240] {
+            let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::Roadster);
+            car.gear = NEUTRAL_GEAR;
+            for _ in 0..hz / 2 {
+                car.update_engine_feedback(
+                    Controls {
+                        throttle: 1.0,
+                        ..Controls::default()
+                    },
+                    1.0 / hz as f32,
+                );
+            }
+            results.push(car.engine_rpm);
+        }
+        let min = results.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = results.iter().copied().fold(0.0, f32::max);
+        assert!(
+            max - min < 20.0,
+            "frame rates changed blip response: {results:?}"
+        );
     }
 
     #[test]
