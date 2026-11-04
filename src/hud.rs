@@ -386,7 +386,11 @@ impl Hud {
     }
 
     pub fn zoom_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2], steps: f32) {
-        if self.full_map_view.as_mut().is_some_and(|view| view.zoom(steps)) {
+        if self
+            .full_map_view
+            .as_mut()
+            .is_some_and(|view| view.zoom(steps))
+        {
             self.rebuild_full_map(map, heading, viewport);
         }
     }
@@ -528,7 +532,7 @@ impl Hud {
         quad(&mut v, [-0.98, -0.96], [0.98, -0.85], [0.025, 0.05, 0.075]);
         text(
             &mut v,
-            "CLICK OPTIONS / UP-DOWN SECTION / LEFT-RIGHT CHOOSE / ENTER START / Q QUIT",
+            "LEFT LOCATION / RIGHT CAR / UP-DOWN BROWSE / ENTER START / Q QUIT",
             [-0.94, -0.885],
             0.0036,
             white,
@@ -582,13 +586,7 @@ impl Hud {
     }
 }
 
-fn append_full_map(
-    v: &mut Vec<f32>,
-    map: Map<'_>,
-    heading: f32,
-    viewport: [f32; 2],
-    fit: &MapFit,
-) {
+fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32; 2], fit: &MapFit) {
     let white = [0.9, 0.95, 1.0];
     let muted = [0.55, 0.66, 0.70];
     let cyan = [0.15, 0.85, 0.95];

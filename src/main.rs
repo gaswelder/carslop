@@ -559,10 +559,11 @@ impl App {
         self.keys.insert(key);
         if self.session.state == GameState::Menu {
             match key {
-                Keycode::Up => self.menu_focus = (self.menu_focus + 2) % 3,
-                Keycode::Down | Keycode::Tab => self.menu_focus = (self.menu_focus + 1) % 3,
-                Keycode::Left | Keycode::Right | Keycode::Space => {
-                    let direction = if key == Keycode::Left { -1 } else { 1 };
+                Keycode::Left => self.menu_focus = 0,
+                Keycode::Right => self.menu_focus = 1,
+                Keycode::Tab => self.menu_focus = (self.menu_focus + 1) % 3,
+                Keycode::Up | Keycode::Down | Keycode::Space => {
+                    let direction = if key == Keycode::Up { -1 } else { 1 };
                     match self.menu_focus {
                         0 => {
                             self.selected_location = (self.selected_location as i32 + direction)
@@ -2094,7 +2095,7 @@ mod tests {
         app.key_down(Keycode::F7);
         for _ in 0..6 {
             app.menu_focus = 0;
-            app.key_down(Keycode::Right);
+            app.key_down(Keycode::Down);
             app.render(Duration::ZERO);
             assert_ne!(app.session.track().id, TrackId::Engomi);
         }

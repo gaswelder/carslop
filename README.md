@@ -61,7 +61,8 @@ appears on the map; fictional built-in routes have no geographic location.
 
 Running without arguments lists the built-in routes and all imported locations
 without loading city assets. Choose a location, then Start Driving to load it.
-Use Left/Right to browse or click the page arrows for more locations.
+Use Left/Right to focus the location/car lists, then Up/Down to browse.
+Click the page arrows for more locations.
 `--location` preselects a city in the menu. To drive in Nicosia:
 
 ```sh
