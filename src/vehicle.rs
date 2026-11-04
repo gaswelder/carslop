@@ -680,10 +680,17 @@ impl Vehicle {
         // a held key cannot overwhelm the tires, while taps stay responsive.
         // Use a linear input factor: a squared factor can reduce wheel angle
         // as the driver adds steering at road speeds.
+        let dynamics = &self.model.spec().dynamics;
+        // Retain the settled city-speed response, then release the extra lock
+        // restriction progressively from 40 to 80 km/h for ordinary road bends.
+        let road_blend = ((speed.abs() * 3.6 - 40.0) / 40.0).clamp(0.0, 1.0);
+        let road_blend = road_blend * road_blend * (3.0 - 2.0 * road_blend);
+        let falloff = dynamics.steering_low_speed_squared
+            + (dynamics.steering_speed_squared - dynamics.steering_low_speed_squared) * road_blend;
         let lock = 0.54
             / (1.0
                 + speed.abs() / 22.0
-                + self.model.spec().dynamics.steering_speed_squared
+                + falloff
                     * speed.abs()
                     * limited_speed
                     * high_speed
@@ -1266,6 +1273,33 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn kestrels_have_useful_lock_and_cornering_at_city_road_speeds() {
+        for model in crate::cars::ALL
+            .into_iter()
+            .filter(|m| m.spec().road_engine.is_some())
+        {
+            let mut car = level_route_car(track::TrackId::Scenic, model);
+            car.steering = 1.0;
+            assert!(car.steering_angle(80.0 / 3.6).abs() > 0.08);
+            car.steering = 0.0;
+            steering_run(&mut car, 80.0 / 3.6, 0.5, 2.0, 240.0);
+            let lateral_accel = car.yaw_rate.abs() * 80.0 / 3.6;
+            assert!(lateral_accel > 5.5, "{model:?}: cornering {lateral_accel}");
+            let rear_side = car.slip
+                - car.yaw_rate * model.spec().wheelbase * model.spec().dynamics.front_weight;
+            let rear_slip = rear_side.abs().atan2(car.speed.abs());
+            println!(
+                "{model:?}: cornering {lateral_accel}, rear slip {} degrees",
+                rear_slip.to_degrees()
+            );
+            assert!(
+                rear_slip.to_degrees() < 6.0,
+                "{model:?}: uncontrolled rear slip"
+            );
         }
     }
 

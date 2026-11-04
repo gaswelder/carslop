@@ -279,7 +279,9 @@ steering still ramps progressively and reduces lock with speed. Kestrel has
 additional speed-dependent lock reduction, a firmer rear-axle response, and
 forward brake bias so held turns and braking into corners produce progressive
 breakaway rather than abrupt rear sliding.
-Above 60 km/h, the additional steering restriction grows linearly with speed
+Both Kestrels blend from their settled city steering response to a lighter
+restriction between 40 and 80 km/h. Rear axle stiffness keeps turn-in and lift
+controllable. Above 60 km/h, the additional steering restriction grows linearly with speed
 to retain useful lock for faster bends. Adding steering input always increases
 the front-wheel angle, including during a held turn. Brake pressure progressively
 restores the stronger restriction to reserve tire grip while braking into a turn.

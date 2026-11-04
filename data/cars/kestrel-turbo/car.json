@@ -21,11 +21,12 @@
     "brake_bias": 0.61,
     "corner_stiffness": [
       66000,
-      122000
+      132000
     ],
     "peak_torque": 350,
     "suspension_hz": 1.85,
-    "steering_speed_squared": 0.009
+    "steering_speed_squared": 0.0075,
+    "steering_low_speed_squared": 0.009
   },
   "gearbox": {
     "ratios": [

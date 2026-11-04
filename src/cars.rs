@@ -98,6 +98,7 @@ pub struct Dynamics {
     pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
     pub peak_torque: f32,
     pub suspension_hz: f32,
+    pub steering_low_speed_squared: f32,
     pub steering_speed_squared: f32, // additional steering-lock falloff per (m/s)^2
 }
 
@@ -230,6 +231,10 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
             brake_bias: fraction(&d["brake_bias"])?,
             peak_torque: number(&d["peak_torque"])?,
             suspension_hz: number(&d["suspension_hz"])?,
+            steering_low_speed_squared: nonnegative(
+                d.get("steering_low_speed_squared")
+                    .unwrap_or(&d["steering_speed_squared"]),
+            )?,
             steering_speed_squared: nonnegative(&d["steering_speed_squared"])?,
             corner_stiffness: [number(&stiffness[0])?, number(&stiffness[1])?],
         },
@@ -442,13 +447,17 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             ("front_drive", &mut spec.dynamics.front_drive),
             ("brake_bias", &mut spec.dynamics.brake_bias),
             (
+                "steering_low_speed_squared",
+                &mut spec.dynamics.steering_low_speed_squared,
+            ),
+            (
                 "steering_speed_squared",
                 &mut spec.dynamics.steering_speed_squared,
             ),
         ] {
             if let Some(v) = d.get(key) {
                 let n = v.as_f64().ok_or("expected number")? as f32;
-                if !n.is_finite() || n < 0.0 || (key != "steering_speed_squared" && n > 1.0) {
+                if !n.is_finite() || n < 0.0 || (!key.starts_with("steering_") && n > 1.0) {
                     return Err("invalid dynamics value".into());
                 }
                 *target = n;
