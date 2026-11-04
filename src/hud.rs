@@ -1012,8 +1012,8 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
         "RESTART  [R]".into(),
         "LOCATION / CAR  [L]".into(),
         format!("AUDIO: {}  [V]", pause.audio),
-        format!("CAMERA: {}  [TAB]", pause.view),
-        "RECOVER  [C]".into(),
+        format!("CAMERA: {}  [C]", pause.view),
+        "RECOVER  [H]".into(),
     ];
     for (r, label) in PAUSE_BOXES.into_iter().zip(labels) {
         menu_button(v, r, true, false);

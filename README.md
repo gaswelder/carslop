@@ -35,10 +35,10 @@ Choose a location and car, then start free driving.
 | Left / Right | Steer |
 | A / Z | Shift up / down (includes neutral between first and reverse) |
 | Space | Handbrake |
-| Tab | Cycle Close → Wide → Bonnet cameras |
+| C / Tab | Cycle Close → Wide → Bonnet cameras |
 | Esc | Pause / resume, or close the full map and return to driving |
 | R | Restart |
-| C | Recover the car |
+| H | Recover the car |
 | M | Open the full map (pauses driving) |
 | Mouse wheel / + / - | Zoom the full map in / out |
 | L | Return to location and car selection |

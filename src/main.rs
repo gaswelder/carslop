@@ -523,8 +523,8 @@ impl App {
                     hud::PauseAction::Restart => Keycode::R,
                     hud::PauseAction::Selection => Keycode::L,
                     hud::PauseAction::Audio => Keycode::V,
-                    hud::PauseAction::Camera => Keycode::Tab,
-                    hud::PauseAction::Recover => Keycode::C,
+                    hud::PauseAction::Camera => Keycode::C,
+                    hud::PauseAction::Recover => Keycode::H,
                 });
             }
         } else if self.session.state == GameState::Menu {
@@ -670,7 +670,7 @@ impl App {
             }
             Keycode::R if self.session.state == GameState::Menu => self.start_selected(),
             Keycode::R => self.restart(),
-            Keycode::C => {
+            Keycode::H => {
                 let paused = self.session.state == GameState::Paused;
                 if paused {
                     self.session.state = GameState::Driving;
@@ -715,7 +715,7 @@ impl App {
                     audio.muted = !audio.muted;
                 }
             }
-            Keycode::Tab
+            Keycode::C | Keycode::Tab
                 if matches!(self.session.state, GameState::Driving | GameState::Paused) =>
             {
                 self.chase.toggle_view();
