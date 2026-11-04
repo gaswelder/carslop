@@ -622,6 +622,7 @@ impl App {
             },
             self.session.vehicle.heading,
             [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
+            status,
         );
     }
 
