@@ -203,6 +203,7 @@ impl MapFit {
 }
 
 struct FullMapView {
+    copy_status: Option<&'static str>,
     fit: MapFit,
     min_scale: f32,
     max_scale: f32,
@@ -232,6 +233,7 @@ impl FullMapView {
             .min(available[1] / (size[1] * viewport[0] / viewport[1]))
             .min(fit.scale[0]);
         Self {
+            copy_status: None,
             min_scale,
             max_scale: fit.scale[0] * 16.0,
             fit,
@@ -389,10 +391,36 @@ impl Hud {
         }
     }
 
+    pub fn map_copy_status(
+        &mut self,
+        map: Map<'_>,
+        heading: f32,
+        viewport: [f32; 2],
+        status: &'static str,
+    ) {
+        if let Some(view) = self.full_map_view.as_mut() {
+            view.copy_status = Some(status);
+            self.rebuild_full_map(map, heading, viewport);
+        }
+    }
+
     fn rebuild_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
         let view = self.full_map_view.as_ref().expect("full map is open");
         let mut vertices = Vec::new();
+        let hint = view.copy_status.unwrap_or_else(|| {
+            if map
+                .track
+                .city()
+                .and_then(|city| city.google_maps_url(map.player))
+                .is_some()
+            {
+                "C COPY GOOGLE MAPS URL"
+            } else {
+                "NO GOOGLE MAPS LOCATION"
+            }
+        });
         append_full_map(&mut vertices, map, heading, viewport, &view.fit);
+        text(&mut vertices, hint, [-0.90, -0.89], 0.003, [0.9, 0.95, 1.0]);
         // Reuse the uploaded map until it opens again or the zoom changes.
         self.set_vertices(&vertices);
         self.full_map_vertices = (vertices.len() / 6) as i32;

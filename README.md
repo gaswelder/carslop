@@ -71,7 +71,9 @@ off-road driving are labeled accordingly. Built-in routes show their route name.
 
 The full map opens centered on your car at the minimap's scale. Zooming keeps
 the car centered; zoom out to see the entire road network. Reopening the map
-resets the zoom to the minimap's scale.
+resets the zoom to the minimap's scale. On imported maps, press **C** in the full
+map to copy the car’s current location as a Google Maps URL. A confirmation
+appears on the map; fictional built-in routes have no geographic location.
 
 ### Locations
 

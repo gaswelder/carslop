@@ -548,6 +548,7 @@ impl App {
         if self.session.state == GameState::FullMap {
             match key {
                 Keycode::Escape => self.session.state = GameState::Driving,
+                Keycode::C => self.copy_map_location(),
                 Keycode::Plus | Keycode::Equals | Keycode::KpPlus => self.zoom_map(1.0),
                 Keycode::Minus | Keycode::KpMinus => self.zoom_map(-1.0),
                 _ => {}
@@ -595,6 +596,38 @@ impl App {
         } else {
             y
         });
+    }
+
+    fn copy_map_location(&mut self) {
+        let url = self
+            .session
+            .track()
+            .city()
+            .and_then(|city| city.google_maps_url(self.session.vehicle.position));
+        let status = if let Some(url) = url {
+            match self
+                .sdl_context
+                .video()
+                .and_then(|video| video.clipboard().set_clipboard_text(&url))
+            {
+                Ok(()) => "COPIED GOOGLE MAPS URL",
+                Err(error) => {
+                    log::warn!("Cannot copy map location: {error}");
+                    "COPY FAILED - PRESS C TO RETRY"
+                }
+            }
+        } else {
+            "NO GOOGLE MAPS LOCATION"
+        };
+        self.hud.map_copy_status(
+            hud::Map {
+                track: self.session.track(),
+                player: self.session.vehicle.position,
+            },
+            self.session.vehicle.heading,
+            [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
+            status,
+        );
     }
 
     fn zoom_map(&mut self, steps: f32) {

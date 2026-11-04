@@ -23,6 +23,7 @@ pub struct Building {
 }
 #[derive(Debug)]
 pub struct City {
+    origin: Option<[f64; 2]>,
     pub nodes: Vec<[f32; 3]>,
     pub streets: Vec<Street>,
     pub buildings: Vec<Building>,
@@ -244,6 +245,7 @@ impl City {
     }
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let mut city = Self {
+            origin: None,
             nodes: Vec::new(),
             streets: Vec::new(),
             buildings: Vec::new(),
@@ -284,8 +286,21 @@ impl City {
             };
             match fields.first().copied() {
                 Some("origin") => {
-                    f(1)?;
-                    f(2)?;
+                    let latitude: f64 = fields
+                        .get(1)
+                        .ok_or("missing latitude")?
+                        .parse()
+                        .map_err(|_| "invalid latitude")?;
+                    let longitude: f64 = fields
+                        .get(2)
+                        .ok_or("missing longitude")?
+                        .parse()
+                        .map_err(|_| "invalid longitude")?;
+                    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude)
+                    {
+                        return Err("invalid geographic origin".into());
+                    }
+                    city.origin = Some([latitude, longitude]);
                 }
                 Some("bounds") => city.bounds = [[f(1)?, f(2)?], [f(3)?, f(4)?]],
                 Some("n") => city.nodes.push([f(1)?, 0.0, f(2)?]),
@@ -545,6 +560,19 @@ impl City {
         let (_, index, road) = best.expect("city contains roads");
         (index, road)
     }
+    pub fn google_maps_url(&self, position: [f32; 3]) -> Option<String> {
+        let [latitude, longitude] = self.origin?;
+        let longitude_scale = latitude.to_radians().cos();
+        if longitude_scale.abs() < 1e-9 || !position[0].is_finite() || !position[2].is_finite() {
+            return None;
+        }
+        // Invert the OSM compiler's local metres projection (east +X, south +Z).
+        let latitude_at_car = latitude - (position[2] as f64 / 6371000.0).to_degrees();
+        let longitude_at_car =
+            longitude + (position[0] as f64 / (6371000.0 * longitude_scale)).to_degrees();
+        Some(format!("https://www.google.com/maps/search/?api=1&query={latitude_at_car:.7},{longitude_at_car:.7}"))
+    }
+
     /// Label the closest road only while the car is on or beside its surface.
     pub fn street_name(&self, p: [f32; 3]) -> &str {
         let (index, road) = self.project_street(p);
@@ -779,6 +807,32 @@ mod tests {
     }
 
     const CROSS:&str="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
+    #[test]
+    fn google_maps_url_inverts_the_osm_projection() {
+        let city =
+            City::parse(&CROSS.replace("origin 0 0", "origin 35.1654321 33.3256789")).unwrap();
+        assert_eq!(
+            city.google_maps_url([0.0, 100.0, 0.0]).unwrap(),
+            "https://www.google.com/maps/search/?api=1&query=35.1654321,33.3256789"
+        );
+        for [latitude, longitude] in [[35.17_f64, 33.34_f64], [35.15, 33.31]] {
+            let x = (longitude - 33.3256789).to_radians()
+                * 6371000.0
+                * 35.1654321_f64.to_radians().cos();
+            let z = -(latitude - 35.1654321).to_radians() * 6371000.0;
+            let url = city.google_maps_url([x as f32, 0.0, z as f32]).unwrap();
+            assert_eq!(
+                url,
+                format!(
+                    "https://www.google.com/maps/search/?api=1&query={latitude:.7},{longitude:.7}"
+                )
+            );
+        }
+        assert!(city.google_maps_url([f32::NAN, 0.0, 0.0]).is_none());
+        let no_origin = City::parse(&CROSS.replace("origin 0 0\n", "")).unwrap();
+        assert!(no_origin.google_maps_url([0.0; 3]).is_none());
+    }
+
     #[test]
     fn street_labels_follow_the_car_and_preserve_unnamed_roads() {
         let mut city = City::parse(CROSS).unwrap();
