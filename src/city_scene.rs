@@ -1,8 +1,6 @@
 //! Original materials on OSM footprints. No downloaded imagery or map tiles.
 use super::{Builder, Surface};
 use crate::city::{Building, City};
-#[path = "engomi_art.rs"]
-mod engomi_art;
 
 fn cross(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
     (b[0] as f64 - a[0] as f64) * (c[1] as f64 - a[1] as f64)
@@ -198,10 +196,6 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
                 wall,
             );
         }
-        if engomi_art::selected(building) {
-            engomi_art::facade(b, building, a, c, detailed);
-            continue;
-        }
         let length = (c[0] - a[0]).hypot(c[1] - a[1]);
         if !detailed || length < 3.0 {
             continue;
@@ -239,9 +233,6 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
     for triangle in roof_triangles(&building.polygon) {
         let p = triangle.map(|i| [building.polygon[i][0], height, building.polygon[i][1]]);
         b.upward_quad([p[0], p[1], p[2], p[0]], roof);
-    }
-    if engomi_art::selected(building) {
-        engomi_art::rooftop(b, building);
     }
 }
 
@@ -326,53 +317,6 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn reference_block_is_local_and_details_respect_collision_margin() {
-        let city_track = crate::track::TrackId::Engomi.track();
-        let city = city_track.city().unwrap();
-        let selected: Vec<_> = city
-            .buildings
-            .iter()
-            .filter(|b| engomi_art::selected(b))
-            .collect();
-        assert!(selected.len() > 40 && selected.len() < 100);
-        let mut count = 0;
-        for building in selected {
-            let mut mesh = Builder::default();
-            building_mesh(&mut mesh, building, city, true);
-            let mut coarse = Builder::default();
-            building_mesh(&mut coarse, building, city, false);
-            assert!(mesh.vertices.len() > coarse.vertices.len());
-            let roof = building.base_y + building.height;
-            for vertex in mesh.vertices {
-                let p = vertex.position;
-                assert!(p.iter().all(|v| v.is_finite()));
-                if p[1] < roof {
-                    // At most 40 cm of trim, within the existing car-radius inset.
-                    let q = [p[0], p[2]];
-                    let distance = (0..building.polygon.len())
-                        .map(|i| {
-                            let a = building.polygon[i];
-                            let c = building.polygon[(i + 1) % building.polygon.len()];
-                            let d = [c[0] - a[0], c[1] - a[1]];
-                            let t = (((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1])
-                                / (d[0] * d[0] + d[1] * d[1]).max(0.0001))
-                            .clamp(0.0, 1.0);
-                            (q[0] - a[0] - t * d[0]).hypot(q[1] - a[1] - t * d[1])
-                        })
-                        .fold(f32::INFINITY, f32::min);
-                    assert!(building.contains(q) || distance <= 0.401);
-                }
-            }
-            count += coarse
-                .vertices
-                .iter()
-                .filter(|v| v.position[1] > roof + 0.5)
-                .count();
-        }
-        assert!(count > 0, "roof equipment must survive coarse LOD");
-    }
-
     #[test]
     fn distant_buildings_keep_identical_walls_roofs_and_foundations() {
         let city_track = crate::track::TrackId::Engomi.track();

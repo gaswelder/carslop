@@ -228,9 +228,8 @@ The bundled map covers about 289 km² of Nicosia, including Engomi, Strovolos,
 Lakatamia, Aglandjia and Gonyeli. Assets live in `data/locations/nicosia.sqlite`.
 
 OpenStreetMap supplies roads, building footprints, green spaces and street
-furniture. Heights and architectural details are partly estimated, with extra
-detail around the Engomi starting area. Low curbs, pavements and parking areas
-are drivable; buildings remain solid.
+furniture. Heights and architectural details are partly estimated. Low curbs,
+pavements and parking areas are drivable; buildings remain solid.
 
 Bridges, tunnels and some complex buildings are omitted. Some roads remain
 disconnected. One-way rules are not enforced, and city traffic is not simulated.
@@ -715,16 +714,6 @@ Original pilot imagery: Cyprus Department of Lands and Surveys,
 Redistribution permission for the local imagery pack has not been established;
 do not redistribute packages containing this imagery or its derived assets
 unless authorised.
-
-Architectural references:
-
-- [Fereos Architects, Residence in Engomi](https://www.fereos.net/project/residence-in-engomi-nicosia-2/)
-- [Antonis Zenios, E P I A S](https://www.antoniszenios.com/en/properties-for-sale-nicosia/e-p-i-a-s)
-- [Fereos Developers, Hilltop specifications](https://www.fereosdevelopers.com/wp-content/uploads/d004-specifications-iw.pdf)
-
-Architecture is an artistic interpretation, not a reconstruction of individual
-addresses. Downloaded reference photographs are local study material and are not
-distributable game textures.
 
 ## Backlog
 
