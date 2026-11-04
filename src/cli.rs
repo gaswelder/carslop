@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nRun without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nRun without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -18,6 +18,7 @@ enum Command {
     List,
     Bake(String),
     BakeCollision(String),
+    BakeScene(String),
     Source(Vec<OsString>),
     Help,
     Version,
@@ -108,7 +109,7 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             "--location"
                 if matches!(
                     cmd.as_str(),
-                    "play" | "bake-city" | "--bake-city" | "bake-collision"
+                    "play" | "bake-city" | "--bake-city" | "bake-collision" | "bake-scene"
                 ) =>
             {
                 if location.is_some() {
@@ -172,6 +173,9 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
         "bake-city" | "--bake-city" => {
             Command::Bake(location.ok_or_else(|| invalid("bake-city requires --location NAME"))?)
         }
+        "bake-scene" => Command::BakeScene(
+            location.ok_or_else(|| invalid("bake-scene requires --location NAME"))?,
+        ),
         "bake-collision" => Command::BakeCollision(
             location.ok_or_else(|| invalid("bake-collision requires --location NAME"))?,
         ),
@@ -265,6 +269,10 @@ pub fn run() -> Result<Option<bool>> {
         Command::BakeCollision(name) => {
             select(&args.root, &name)?;
             crate::street_surface::bake(crate::city_assets::directory())?;
+        }
+        Command::BakeScene(name) => {
+            select(&args.root, &name)?;
+            crate::scene_archive::bake_default()?;
         }
         Command::Bake(name) => {
             select(&args.root, &name)?;

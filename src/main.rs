@@ -1035,6 +1035,21 @@ mod tests {
             .as_ref()
             .unwrap()
             .preview_junction
+            .or_else(|| {
+                // Binary collision caches omit the text-only review marker.
+                let mut degree = vec![0_u32; city.nodes.len()];
+                for street in &city.streets {
+                    for end in street.ends {
+                        degree[end] += 1;
+                    }
+                }
+                city.nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| degree[*i] >= 3)
+                    .min_by(|(_, a), (_, b)| a[0].hypot(a[2]).total_cmp(&b[0].hypot(b[2])))
+                    .map(|(i, _)| i)
+            })
             .expect("missing junction review location");
         let p = city.nodes[node];
         let camera = gl::chase_camera(

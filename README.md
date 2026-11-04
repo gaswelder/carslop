@@ -65,6 +65,10 @@ Choose a location and car, then start free driving.
 The bonnet camera follows steering immediately and smooths vertical bumps and
 pitch changes to keep the horizon steady.
 
+Imported cities use stable per-building facade styles, varied window layouts,
+frames, shutters, blinds, entrances, and trim. Trees vary in crown shape, lean,
+orientation, and foliage color while staying within their mapped size.
+
 The current street name appears below the minimap while driving. Names come from
 the location’s OSM source, preferring English when available; unnamed roads and
 off-road driving are labeled accordingly. Built-in routes show their route name.
@@ -345,6 +349,9 @@ SQLite is bundled into the executable; no database server is needed.
 # Extract source records or edit a location offline.
 ./target/release/nfs5like unpack-location data/locations/my-city.sqlite /tmp/my-city
 ```
+
+For visual changes, `bake-scene --location NAME` rebuilds the render archive
+without rewriting the collision cache.
 
 New imports publish `.sqlite` packages automatically. `bake-city --location NAME`
 updates the baked scene in the package after intentional edits to city inputs or
