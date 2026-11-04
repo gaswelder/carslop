@@ -1,5 +1,8 @@
 //! Offline union geometry shared by road rendering and collision.
 use std::collections::HashMap;
+#[path = "street_surface_binary.rs"]
+mod binary;
+pub(crate) use binary::bake;
 pub const COLORS: [[f32; 3]; 8] = [
     [0.18, 0.20, 0.22],
     [0.25, 0.26, 0.26],
@@ -78,6 +81,20 @@ impl SourceChecksums {
 }
 
 impl StreetSurface {
+    pub fn load_city(
+        directory: &std::path::Path,
+        source: &str,
+        count: usize,
+    ) -> Result<(Self, RoadPaths, SourceChecksums), String> {
+        binary::load(directory, source, count).map_err(|error| {
+            let name = directory.file_stem().unwrap_or_default().to_string_lossy();
+            format!(
+                "cannot load required collision data {}: {error}; rebuild with bake-collision --location {name}",
+                directory.join("streets.bin").display()
+            )
+        })
+    }
+
     pub fn load(text: &str, source: &str, count: usize) -> Result<(Self, RoadPaths), String> {
         let mut lines = text.lines();
         let header: Vec<_> = lines

@@ -95,11 +95,12 @@ impl Building {
 impl City {
     pub fn engomi() -> Result<Self, String> {
         let source = crate::city_assets::try_read("city.txt")?;
-        let streets = crate::city_assets::try_read("streets.txt")?;
-        let checksums = crate::street_surface::SourceChecksums::new(&source, &streets);
         let mut city = Self::parse(&source)?;
-        let (surfaces, paths) =
-            crate::street_surface::StreetSurface::load(&streets, &source, city.streets.len())?;
+        let (surfaces, paths, checksums) = crate::street_surface::StreetSurface::load_city(
+            crate::city_assets::directory(),
+            &source,
+            city.streets.len(),
+        )?;
         city.length = 0.0;
         city.road_grid.clear();
         for (i, (street, path)) in city.streets.iter_mut().zip(paths).enumerate() {
@@ -642,6 +643,23 @@ pub(crate) fn deflect(velocity: &mut [f32; 2], normal: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "loads the full selected location; run alone for startup profiling"]
+    fn location_startup_profile() {
+        let started = std::time::Instant::now();
+        let city = City::engomi().unwrap();
+        let surfaces = city.surfaces.as_ref().unwrap();
+        eprintln!(
+            "City load: {:.3}s; {} roads, {} buildings, {} triangles, {} curbs, {} trees",
+            started.elapsed().as_secs_f64(),
+            city.streets.len(),
+            city.buildings.len(),
+            surfaces.triangles.len(),
+            surfaces.curbs.len(),
+            city.landscape.trees.len()
+        );
+    }
+
     #[test]
     fn repeated_light_barrier_contacts_preserve_sliding_speed() {
         // Exercise a rotated wall so the response cannot depend on world axes.

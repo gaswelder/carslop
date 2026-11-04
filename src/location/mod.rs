@@ -214,5 +214,7 @@ pub fn compile(options: Options<'_>) -> Result<()> {
         manifest["source_timestamp"] = "mixed snapshots; see source_snapshots".into();
     }
     json(&options.output.join("manifest.json"), manifest)?;
+    println!("Baking collision data...");
+    crate::street_surface::bake(options.output)?;
     Ok(())
 }

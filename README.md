@@ -312,7 +312,22 @@ Each location is one self-contained SQLite file, such as
 `data/locations/nicosia.sqlite`. Geometry chunks and imagery tiles are read on
 demand; the game does not unpack the location or load the whole database.
 Assets are split into independently compressed 256 KiB blocks with checksums.
-Road and collision data currently retain the existing in-memory representation.
+Road collision data requires the lossless binary asset `streets.bin`,
+including prebuilt spatial lookup grids. New imports and `bake-city` generate
+it automatically. To optimize an existing package without rebuilding visuals:
+
+```sh
+./target/release/nfs5like bake-collision --location nicosia
+```
+
+Startup checks the binary data against the city and road sources. Missing,
+outdated or damaged binary data stops loading with a rebuild instruction.
+`./rebuild.sh` builds the release executable and rebuilds collision data for
+Nicosia and Nürburgring from their existing source assets. The script records
+the commands used for this rebuild; run it again after changing road sources.
+Packaged road hashes are checked without decompressing the text. The binary
+asset uses uncompressed, checksummed blocks to reduce startup CPU work; for
+Nicosia it adds about 401 MiB to the package. Road and collision data remain in memory while driving.
 SQLite is bundled into the executable; no database server is needed.
 
 ```sh

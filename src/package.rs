@@ -224,6 +224,23 @@ pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
 pub fn size(path: &Path) -> io::Result<u64> {
     Reader::open(path)?.len()
 }
+/// Packaged sources already have a content hash; checking it needs no decompression.
+pub fn content_hash(path: &Path) -> io::Result<String> {
+    if path.is_file() {
+        return crate::location::sha(path).map_err(err);
+    }
+    let (package, name) = address(path)?;
+    let db = connect(&package, false)?;
+    let hash: String = db
+        .query_row("SELECT sha256 FROM assets WHERE name=?1", [&name], |r| {
+            r.get(0)
+        })
+        .map_err(err)?;
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(err("invalid packaged source hash"));
+    }
+    Ok(hash)
+}
 fn write_asset(db: &Connection, name: &str, path: &Path) -> Result<()> {
     if !safe(name) {
         return Err(invalid("invalid asset name"));
@@ -262,10 +279,17 @@ fn write_asset(db: &Connection, name: &str, path: &Path) -> Result<()> {
         let raw = &buffer[..n];
         sha.update(raw);
         total += n as u64;
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(raw)?;
-        let compressed = encoder.finish()?;
-        let (codec, data) = if compressed.len() + 32 < raw.len() {
+        // Collision data is read in full at startup. Raw blocks avoid spending
+        // seconds decompressing a cache built specifically to speed up loading.
+        let compressed = if name == "streets.bin" {
+            Vec::new()
+        } else {
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder.write_all(raw)?;
+            encoder.finish()?
+        };
+        let (codec, data) = if !compressed.is_empty() && compressed.len() + 32 < raw.len() {
             (1, compressed.as_slice())
         } else {
             (0, raw)
