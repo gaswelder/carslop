@@ -659,6 +659,11 @@ impl Vehicle {
     }
 
     fn steering_angle(&self, speed: f32) -> f32 {
+        // Keep parking manoeuvres close to full lock. Blend the additional
+        // speed limiter in between 18 and 40 km/h; applying speed squared all
+        // the way to zero made even walking-speed turns unnecessarily wide.
+        let blend = ((speed.abs() - 5.0) / 6.0).clamp(0.0, 1.0);
+        let high_speed = blend * blend * (3.0 - 2.0 * blend);
         // Reserve the extra high-speed lock reduction for large inputs so
         // a held key cannot overwhelm the tires, while taps stay responsive.
         let lock = 0.54
@@ -667,6 +672,7 @@ impl Vehicle {
                 + self.model.spec().dynamics.steering_speed_squared
                     * speed
                     * speed
+                    * high_speed
                     * (0.35 + 0.65 * self.steering * self.steering));
         self.steering.signum() * self.steering.abs().powf(1.10) * lock
     }
@@ -1198,6 +1204,33 @@ mod tests {
                 },
             );
             remaining -= step;
+        }
+    }
+
+    #[test]
+    fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
+        for model in crate::cars::ALL {
+            for speed in [-5.0, -3.0, -1.0, 1.0, 3.0, 5.0] {
+                let mut car = level_route_car(track::TrackId::Scenic, model);
+                for steering in [-1.0, 1.0] {
+                    steering_run(&mut car, speed, steering, 5.0, 240.0);
+                    let angle = car.steering_angle(speed).abs();
+                    let parking_lock = car.steering_angle(0.0).abs();
+                    let expected_yaw = speed.abs() * angle.tan() / model.spec().wheelbase;
+                    println!(
+                        "{model:?} at {speed}: lock {angle}, yaw {} expected {expected_yaw}",
+                        car.yaw_rate.abs()
+                    );
+                    assert!(
+                        angle > parking_lock * 0.8,
+                        "{model:?}: parking-speed steering loses too much lock"
+                    );
+                    assert!(
+                        car.yaw_rate.abs() > expected_yaw * 0.75,
+                        "{model:?}: low-speed turn pushes wide of the front wheels"
+                    );
+                }
+            }
         }
     }
 
