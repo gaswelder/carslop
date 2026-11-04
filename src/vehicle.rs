@@ -330,6 +330,15 @@ impl Vehicle {
                     } else {
                         1.0
                     };
+                // Sliding tires retain some sideways authority. Leave a small
+                // part of the friction circle for it during a powered burnout.
+                let drive_share = if axle == 0 {
+                    front_drive
+                } else {
+                    1.0 - front_drive
+                };
+                let spinning = drive.abs() * drive_share > capacity;
+                let limit = if spinning { limit * 0.97 } else { limit };
                 let fx = requested_x[axle].clamp(-limit, limit);
                 let side = if axle == 0 { wheel_side } else { rear_v };
                 let along = if axle == 0 {
@@ -346,8 +355,11 @@ impl Vehicle {
                     * normalized.tanh()
                     * (1.0 - 0.18 * (alpha.abs() / 0.6).clamp(0.0, 1.0))
                     * if locked { 0.18 } else { 1.0 };
-                let scale = (capacity / fx.hypot(fy).max(0.001)).min(1.0);
-                forces[axle] = [fx * scale, fy * scale];
+                // Longitudinal saturation consumes the contact patch's grip.
+                // Scaling an already-clamped drive force together with fy left
+                // spinning tires with substantial lateral grip at full torque.
+                let lateral_capacity = (capacity * capacity - fx * fx).max(0.0).sqrt();
+                forces[axle] = [fx, fy.clamp(-lateral_capacity, lateral_capacity)];
                 if throttle > 0.0 {
                     self.wheel_spin = self.wheel_spin.max(
                         ((requested_x[axle].abs() - capacity) / (spec.mass * 4.0)).clamp(0.0, 1.0),
@@ -897,6 +909,35 @@ mod tests {
                         "ordinary corner entry and lift should not throw the rear out: {speed_kmh}, {input}, {brake}: {peak_slip}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rear_drive_can_sustain_power_donuts_in_both_directions() {
+        for steering in [-1.0, 1.0] {
+            let mut car = level_route_car(track::TrackId::Scenic, CarModel::Muscle);
+            let mut rotation = 0.0;
+            let mut slip = 0.0;
+            let mut speed = 0.0;
+            for tick in 0..2400 {
+                treadmill_tick(
+                    &mut car,
+                    Controls {
+                        throttle: 1.0,
+                        steering,
+                        ..Controls::default()
+                    },
+                );
+                if tick >= 1200 {
+                    rotation += car.yaw_rate / 240.0;
+                    slip += car.slip.abs().atan2(car.speed.abs().max(0.1)) / 1200.0;
+                    speed += car.velocity[0].hypot(car.velocity[1]) / 1200.0;
+                }
+            }
+            println!("steering {steering}: rotation {rotation}, slip {slip}, speed {speed}");
+            assert!(rotation * steering < -std::f32::consts::TAU);
+            assert!(slip > 0.5, "power donuts need sustained rear slip: {slip}");
+            assert!(speed < 12.0, "donuts must stay tight: {speed}");
         }
     }
 
