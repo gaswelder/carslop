@@ -62,6 +62,9 @@ Choose a location and car, then start free driving.
 | L | Return to location and car selection |
 | V | Toggle audio mute |
 
+The bonnet camera follows steering immediately and smooths vertical bumps and
+pitch changes to keep the horizon steady.
+
 The full map opens centered on your car at the minimap's scale. Zooming keeps
 the car centered; zoom out to see the entire road network. Reopening the map
 resets the zoom to the minimap's scale.

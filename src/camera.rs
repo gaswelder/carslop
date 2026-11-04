@@ -47,6 +47,7 @@ pub struct ChaseCamera {
     distance: f32,
     height: f32,
     bonnet: Pose,
+    bonnet_pitch: f32,
 }
 
 impl ChaseCamera {
@@ -61,6 +62,7 @@ impl ChaseCamera {
             distance,
             height,
             bonnet: bonnet_pose(car),
+            bonnet_pitch: sight_pitch(bonnet_pose(car)),
         };
         camera.snap(car);
         camera
@@ -80,6 +82,7 @@ impl ChaseCamera {
 
     pub fn snap(&mut self, car: &Vehicle) {
         self.bonnet = bonnet_pose(car);
+        self.bonnet_pitch = sight_pitch(self.bonnet);
         self.track = car.track.clone();
         self.anchor = car.position;
         self.heading = car.heading.rem_euclid(TAU);
@@ -93,10 +96,17 @@ impl ChaseCamera {
             self.snap(car);
             return;
         }
-        if !frame_time.is_zero() {
-            self.bonnet = bonnet_pose(car);
-        }
         let dt = frame_time.as_secs_f32().min(0.25);
+        if dt > 0.0 {
+            let desired = bonnet_pose(car);
+            // Follow translation and steering immediately; damp the vertical
+            // jolts and pitch that otherwise throw the whole horizon around.
+            let height =
+                self.bonnet.eye[1] + (desired.eye[1] - self.bonnet.eye[1]) * damp(14.0, dt);
+            self.bonnet_pitch += angle(sight_pitch(desired) - self.bonnet_pitch) * damp(8.0, dt);
+            self.bonnet.eye = [desired.eye[0], height, desired.eye[2]];
+            self.bonnet.target = bonnet_target(self.bonnet.eye, car.heading, self.bonnet_pitch);
+        }
         let position_blend = damp(7.0, dt);
         for axis in 0..3 {
             self.anchor[axis] += (car.position[axis] - self.anchor[axis]) * position_blend;
@@ -151,17 +161,31 @@ impl ChaseCamera {
     }
 }
 
-// Above the rear of the bonnet, ahead of the windscreen. Keep the body visible
-// below the sightline and use the exact rendered transform, including suspension.
+// Above the rear of the bonnet, ahead of the windscreen. The mount follows
+// the rendered body; the sightline keeps yaw aligned with the nose and excludes
+// roll so road camber and body lean cannot kick the view sideways.
 fn bonnet_pose(car: &Vehicle) -> Pose {
     let body = crate::gl::vehicle_body_matrix(car);
-    let mount = |height: f32, forward: f32| {
-        std::array::from_fn(|i| body[12 + i] + body[4 + i] * height + body[8 + i] * forward)
-    };
+    let eye = std::array::from_fn(|i| body[12 + i] + body[4 + i] * 0.65 + body[8 + i] * 0.95);
+    let pitch = body[9].atan2(body[8].hypot(body[10])) - 0.08_f32.atan();
     Pose {
-        eye: mount(0.65, 0.95),
-        target: mount(-1.75, 30.95),
+        eye,
+        target: bonnet_target(eye, car.heading, pitch),
     }
+}
+
+fn bonnet_target(eye: [f32; 3], heading: f32, pitch: f32) -> [f32; 3] {
+    let (sin, cos) = pitch.sin_cos();
+    [
+        eye[0] + heading.sin() * cos * 30.0,
+        eye[1] + sin * 30.0,
+        eye[2] + heading.cos() * cos * 30.0,
+    ]
+}
+
+fn sight_pitch(pose: Pose) -> f32 {
+    let sight: [f32; 3] = std::array::from_fn(|i| pose.target[i] - pose.eye[i]);
+    sight[1].atan2(sight[0].hypot(sight[2]))
 }
 
 fn desired_look(car: &Vehicle) -> [f32; 3] {
@@ -240,20 +264,73 @@ mod tests {
             v.curb_bump = 0.1;
             c.update(&v, Duration::from_millis(16));
             let pose = c.pose();
-            let body = crate::gl::vehicle_body_matrix(&v);
-            let relative: [f32; 3] = std::array::from_fn(|i| pose.eye[i] - body[12 + i]);
-            let local: [f32; 3] =
-                std::array::from_fn(|axis| (0..3).map(|i| relative[i] * body[axis * 4 + i]).sum());
-            assert_close(local, [0.0, 0.65, 0.95], 0.001);
+            let desired = bonnet_pose(&v);
+            assert!((pose.eye[0] - desired.eye[0]).abs() < 0.001);
+            assert!((pose.eye[2] - desired.eye[2]).abs() < 0.001);
             let sight: [f32; 3] = std::array::from_fn(|i| pose.target[i] - pose.eye[i]);
-            assert_close(
-                sight,
-                std::array::from_fn(|i| body[8 + i] * 30.0 - body[4 + i] * 2.4),
-                0.001,
-            );
+            assert!(angle(sight[0].atan2(sight[2]) - v.heading).abs() < 0.001);
         }
         c.toggle_view();
         assert_eq!(c.view(), FollowView::Close);
+    }
+
+    #[test]
+    fn bonnet_filters_bump_and_pitch_impulses_without_delaying_steering() {
+        let mut v = car();
+        let mut c = ChaseCamera::new(&v);
+        c.toggle_view();
+        c.toggle_view();
+        let before = c.pose();
+        v.curb_bump = 0.12;
+        v.body_pitch = 0.08;
+        v.body_roll = 0.06;
+        v.heading += 0.2;
+        let raw = bonnet_pose(&v);
+        c.update(&v, Duration::from_secs_f64(1.0 / 60.0));
+        let filtered = c.pose();
+        let raw_height_change = (raw.eye[1] - before.eye[1]).abs();
+        assert!(raw_height_change > 0.05);
+        assert!((filtered.eye[1] - before.eye[1]).abs() < raw_height_change * 0.3);
+        let raw_pitch_change = angle(sight_pitch(raw) - sight_pitch(before)).abs();
+        assert!(raw_pitch_change > 0.05);
+        assert!(angle(sight_pitch(filtered) - sight_pitch(before)).abs() < raw_pitch_change * 0.2);
+        let sight = [
+            filtered.target[0] - filtered.eye[0],
+            filtered.target[2] - filtered.eye[2],
+        ];
+        assert!(angle(sight[0].atan2(sight[1]) - v.heading).abs() < 0.001);
+        v.position[1] += 3.0;
+        v.heading += 1.0;
+        c.update(&v, Duration::ZERO);
+        assert_eq!(c.pose(), filtered);
+        c.snap(&v);
+        assert_eq!(c.pose(), bonnet_pose(&v));
+    }
+
+    #[test]
+    fn bonnet_smoothing_is_frame_rate_independent_and_settles_on_slopes() {
+        let v = car();
+        let mut bumped = car();
+        bumped.curb_bump = 0.1;
+        bumped.body_pitch = 0.1;
+        let run = |fps: u32| {
+            let mut c = ChaseCamera::new(&v);
+            c.toggle_view();
+            c.toggle_view();
+            for _ in 0..fps {
+                c.update(&bumped, Duration::from_secs_f64(1.0 / fps as f64));
+            }
+            c.pose()
+        };
+        let reference = run(30);
+        for fps in [60, 144] {
+            let pose = run(fps);
+            assert_close(pose.eye, reference.eye, 0.001);
+            assert_close(pose.target, reference.target, 0.001);
+        }
+        let desired = bonnet_pose(&bumped);
+        assert_close(reference.eye, desired.eye, 0.001);
+        assert_close(reference.target, desired.target, 0.002);
     }
 
     #[test]
