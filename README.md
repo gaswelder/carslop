@@ -11,7 +11,7 @@ Everything else, including README.md outside of this section, is generated.
 A driving game inspired by NFS5: beautiful cars, pleasant roads, readable handling
 and mechanical personality.
 
-<img src="screenshot.20261030.jpg">
+<img src="screenshot.20261104.jpg">
 
 [Screenshot location: Engomi, Nicosia](https://www.google.com/maps/search/?api=1&query=35.1670537,33.3169556)
 

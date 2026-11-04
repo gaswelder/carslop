@@ -656,9 +656,7 @@ impl App {
                 self.keys.clear();
             }
             Keycode::Return if self.session.state == GameState::Menu => self.start_selected(),
-            Keycode::M
-                if matches!(self.session.state, GameState::Driving | GameState::Paused) =>
-            {
+            Keycode::M if matches!(self.session.state, GameState::Driving | GameState::Paused) => {
                 self.hud.prepare_full_map(
                     hud::Map {
                         track: self.session.track(),
@@ -897,6 +895,34 @@ mod tests {
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         app.key_down(Keycode::Return);
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and the bundled Nicosia map"]
+    fn readme_screenshot() {
+        let mut app = App::new();
+        app.key_down(Keycode::F7);
+        app.start_selected();
+        let city = app.session.track().city().unwrap();
+        let url = city.google_maps_url([0.0; 3]).unwrap();
+        let coords: Vec<f64> = url
+            .split("query=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let (lat, lon) = (coords[0], coords[1]);
+        let x = ((33.3169556_f64 - lon).to_radians() * 6371000.0 * lat.to_radians().cos()) as f32;
+        let z = (-(35.1670537_f64 - lat).to_radians() * 6371000.0) as f32;
+        let road = city.project([x, 0.0, z]);
+        app.session
+            .vehicle
+            .reset([x, road.point[1] + 0.48, z], road.heading());
+        app.snap_camera();
+        app.capture_path = Some("/tmp/carslop-readme.ppm".into());
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
