@@ -396,28 +396,27 @@ Each car has one folder containing its definition and assets:
 data/cars/
   kestrel/
     car.json
-    body.mesh
-    wheel.mesh
+    model.glb
     audio/
   kestrel-turbo/
     car.json
-    body.mesh
-    wheel.mesh
+    model.glb
   muscle/
     car.json
-    body.mesh
-    wheel.mesh
+    model.glb
   club/
     car.json
-    body.mesh
-    wheel.mesh
+    model.glb
 ```
 
-Car designs are runtime assets. Every `car.json` selects its body with `mesh`
-and its wheel with `wheel_mesh`. Replace the assets or edit those paths, then
-restart; rebuilding is unnecessary. Paths are relative to that car's folder.
-Missing or invalid designs stop scene loading with the asset filename and error.
-There is no compiled-in design fallback.
+Car designs are runtime assets. Set `"model": "model.glb"` in `car.json` to
+load a glTF 2.0 binary asset containing the body and four wheels. Replace the
+GLB or edit its path, then restart; rebuilding is unnecessary. Paths are relative
+to that car's folder. Handling, gearing, and sound remain in JSON. Missing or
+invalid required designs stop loading with the asset filename and error;
+invalid extra cars are skipped with a warning. There is no compiled-in design
+fallback. The bundled cars use GLB; their legacy `.mesh` sources remain available
+for the procedural authoring tools and older custom definitions.
 
 Audio loads `data/cars/kestrel/audio/engine.json` and its mono 48 kHz signed
 16-bit little-endian `.pcm` loops once at startup, relative to the working
@@ -435,7 +434,53 @@ independently of mesh loading.
 
 See [Kestrel sound credits and conversion commands](#engine-audio-and-recording-credits).
 
-### Mesh format
+### GLB artwork
+
+Export a static, triangulated glTF 2.0 **GLB** with all geometry in its embedded
+binary buffer. Use meters, Y up, +Z forward, and these unique node names:
+
+| Node | Contents |
+| --- | --- |
+| `body` | Body and attached details |
+| `wheel_rl` | Rear wheel on the negative-X side |
+| `wheel_rr` | Rear wheel on the positive-X side |
+| `wheel_fl` | Front wheel on the negative-X side |
+| `wheel_fr` | Front wheel on the positive-X side |
+
+Each part may contain child meshes. Place each wheel node's origin at its axle;
+its world-space origin supplies the wheel mount. Wheel geometry rotates about
+car-local X and front wheels steer about Y. Node rotations/scales and parent
+transforms are baked into geometry, including inverse-transpose normals and
+mirrored winding. Body geometry uses car-local coordinates, with the car origin
+at the same ride-height reference as the existing cars. Keep JSON `wheelbase`,
+track width, and rolling radius consistent with the artwork: they still control
+physics, while GLB wheel nodes control visual mounts and tire feedback locations.
+
+The importer supports indexed/unindexed triangle meshes, optional normals
+(flat normals are generated when absent), `COLOR_0`, and solid PBR base colors.
+Base color multiplies vertex color. Metallic/roughness values map to the current
+renderer’s finish controls; this is not a full glTF PBR renderer. For selected
+paint tint and the existing glass/metal/lens finishes, add material custom
+properties exported as glTF `extras`, for example:
+
+```json
+{ "extras": { "carslop_material": [1, 0.82] } }
+```
+
+The first value is the finish code documented below; the second is specular
+strength in 0–1. Without these extras, materials keep their authored colors.
+Textures, alpha transparency, skins, morph targets, baked animations, sparse
+accessors, external buffers, and required extensions are rejected with an error.
+Animate wheels through the game's steering/spin logic. Export opaque glass using
+finish code 2 until transparency support is added.
+
+`python3 tools/export_car_glb.py` rebuilds all bundled GLBs from their legacy
+procedural mesh sources and JSON mount dimensions. The body authoring scripts
+also regenerate GLBs after updating their source meshes. GLB's solid colors and
+standard metallic/roughness materials remain viewable in other glTF tools;
+`carslop_material` extras are optional game-specific finish hints.
+
+### Legacy mesh format
 
 Format version 1: eight ASCII bytes `NFSCAR01`, then a little-endian u32 vertex
 count, followed by that many records of eleven little-endian f32 values:
@@ -510,7 +555,7 @@ For example, save this as `data/cars/my-coupe/car.json`:
   "engine_force": 9500,
   "top_speed": 60,
   "half_track": 0.88,
-  "mesh": "my-coupe.mesh",
+  "model": "my-coupe.glb",
   "gearbox": {
     "ratios": [2.833, 1.778, 1.217, 0.962, 0.821],
     "final_drive": 4.428571
@@ -519,11 +564,13 @@ For example, save this as `data/cars/my-coupe/car.json`:
 ```
 
 `base` is required: `kestrel`, `muscle`, or `club`. Other fields inherit that
-base's settings. Omit `mesh` to reuse its body; mesh paths are relative to the
-JSON file and use the format documented above. Custom meshes contain the body
-only; the game adds wheels using `half_track`, `wheel_height`, and `wheelbase`.
-Omit `wheel_mesh` to inherit the base wheel design, or supply a separate wheel mesh.
-Engine sound inherits the base voice.
+base's settings. Omit `model` to reuse its artwork. A replacement GLB must
+contain all five named parts; its path is relative to the JSON file. Engine sound
+inherits the base voice. For legacy artwork, supplying `mesh` or `wheel_mesh`
+switches to the old body/shared-wheel loader; unspecified legacy paths inherit
+from the base. If both `model` and legacy paths are supplied, `model` takes
+precedence. Legacy wheel mounts use `half_track`, `wheel_height`, and `wheelbase`;
+GLB wheel mounts come from the named nodes.
 
 All handling values use SI units (`top_speed` is meters per second). Supported
 scalar overrides are `mass`, `engine_force`, `top_speed`, `brake_force`,

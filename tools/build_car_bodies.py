@@ -257,6 +257,8 @@ def build(kind):
         m.box((-.77, 1.13, -1.25), (.77, 1.18, -1.09), BLACK)
         m.line([(.02, .68, -1.44), (.36, .78, -1.39)], .011, BLACK)
     m.save(ROOT / kind / 'body.mesh')
+    from export_car_glb import export
+    export(ROOT / kind)
     print(f'{kind}: {len(m.vertices)//3:,} triangles')
 
 

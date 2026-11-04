@@ -51,5 +51,6 @@
     "full_boost_rpm": 3800,
     "spool_seconds": 0.85,
     "decay_seconds": 0.3
-  }
+  },
+  "model": "model.glb"
 }

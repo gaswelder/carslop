@@ -42,6 +42,7 @@ pub const WHEEL_RADIUS: f32 = 0.4;
 
 #[derive(Clone)]
 pub struct CarSpec {
+    pub(crate) design: Option<std::sync::Arc<crate::scene::car_glb::Design>>,
     pub mesh: std::path::PathBuf,
     pub wheel_mesh: std::path::PathBuf,
     pub name: &'static str,
@@ -212,10 +213,19 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         .as_array()
         .filter(|a| a.len() == 2)
         .ok_or("expected two stiffness values")?;
-    let spec = CarSpec {
+    let mut spec = CarSpec {
+        design: None,
         turbo: turbo(&v["turbo"])?,
-        mesh: asset_path(path, &v["mesh"])?,
-        wheel_mesh: asset_path(path, &v["wheel_mesh"])?,
+        mesh: v
+            .get("mesh")
+            .map(|v| asset_path(path, v))
+            .transpose()?
+            .unwrap_or_default(),
+        wheel_mesh: v
+            .get("wheel_mesh")
+            .map(|v| asset_path(path, v))
+            .transpose()?
+            .unwrap_or_default(),
         name: text(&v["name"])?,
         description: text(&v["description"])?,
         mass: number(&v["mass"])?,
@@ -263,12 +273,30 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
     if spec.gearbox.downshift_rpm >= spec.gearbox.upshift_rpm {
         return Err("invalid shift thresholds".into());
     }
+    if let Some(model) = v.get("model") {
+        spec.design = Some(load_model(path, model)?);
+    } else if spec.mesh.as_os_str().is_empty() || spec.wheel_mesh.as_os_str().is_empty() {
+        return Err("provide model (.glb), or both mesh and wheel_mesh".into());
+    }
     Ok(spec)
+}
+
+fn load_model(
+    path: &std::path::Path,
+    value: &serde_json::Value,
+) -> Result<std::sync::Arc<crate::scene::car_glb::Design>, String> {
+    let model = asset_path(path, value)?;
+    crate::scene::car_glb::load(&model)
+        .map(std::sync::Arc::new)
+        .map_err(|e| e.to_string())
 }
 
 impl CarModel {
     /// Rear pair first, then front pair. Shared by artwork and tire feedback.
     pub fn wheel_centers(self) -> [[f32; 3]; 4] {
+        if let Some(design) = &self.spec().design {
+            return design.mounts;
+        }
         let half_track = self.spec().half_track;
         let height = self.spec().wheel_height;
         let axle = self.spec().wheelbase * 0.5;
@@ -521,8 +549,15 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     if let Some(value) = object.get("turbo") {
         spec.turbo = turbo(value)?;
     }
-    for mesh in [&spec.mesh, &spec.wheel_mesh] {
-        crate::scene::validate_design(mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
+    if let Some(model) = object.get("model") {
+        spec.design = Some(load_model(path, model)?);
+    } else if object.contains_key("mesh") || object.contains_key("wheel_mesh") {
+        spec.design = None;
+    }
+    if spec.design.is_none() {
+        for mesh in [&spec.mesh, &spec.wheel_mesh] {
+            crate::scene::validate_design(mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
+        }
     }
     Ok(ExtraCar { spec, base })
 }
@@ -552,7 +587,7 @@ mod runtime_tests {
         );
         assert!(!geometry.car_ranges[3].is_empty());
         assert_eq!(
-            geometry.vertices[geometry.wheel_range[3].start as usize].position[0],
+            geometry.vertices[geometry.wheel_range[3][0].start as usize].position[0],
             0.123
         );
         assert_eq!(
@@ -562,11 +597,54 @@ mod runtime_tests {
     }
 
     #[test]
+    fn glb_definitions_support_inheritance_replacement_and_model_only_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("car.json");
+        std::fs::copy(
+            "data/cars/club/model.glb",
+            dir.path().join("replacement.glb"),
+        )
+        .unwrap();
+        std::fs::write(&path, r#"{"base":"club", "mass":950}"#).unwrap();
+        let inherited = load_extra(&path).unwrap().spec;
+        assert!(std::sync::Arc::ptr_eq(
+            inherited.design.as_ref().unwrap(),
+            CarModel::Club.spec().design.as_ref().unwrap()
+        ));
+        // The GLB takes precedence over legacy paths and supplies its own mounts.
+        std::fs::write(
+            &path,
+            r#"{"base":"club", "model":"replacement.glb", "mesh":"absent.mesh", "half_track":2}"#,
+        )
+        .unwrap();
+        let replacement = load_extra(&path).unwrap().spec;
+        assert_eq!(replacement.half_track, 2.);
+        assert_eq!(
+            replacement.design.as_ref().unwrap().mounts[0][0],
+            -CarModel::Club.spec().half_track
+        );
+        let mut definition: serde_json::Value =
+            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+        definition.as_object_mut().unwrap().remove("mesh");
+        definition.as_object_mut().unwrap().remove("wheel_mesh");
+        definition["model"] = serde_json::json!("replacement.glb");
+        std::fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
+        assert!(load_original(&path).unwrap().design.is_some());
+        std::fs::write(dir.path().join("replacement.glb"), b"broken").unwrap();
+        let error = load_original(&path).err().unwrap();
+        assert!(
+            error.contains("replacement.glb") && error.contains("binary glTF"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn gearbox_limit_keeps_neutral_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
-        let original: serde_json::Value =
+        let mut original: serde_json::Value =
             serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+        original.as_object_mut().unwrap().remove("model");
         for count in [254, 255] {
             let ratios: Vec<_> = (1..=count).rev().collect();
             let mut required = original.clone();
@@ -589,8 +667,9 @@ mod runtime_tests {
     fn required_parameters_are_validated() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
-        let original: serde_json::Value =
+        let mut original: serde_json::Value =
             serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+        original.as_object_mut().unwrap().remove("model");
         for (key, value) in [
             ("mass", serde_json::json!(-1)),
             ("half_track", serde_json::Value::Null),
@@ -627,6 +706,7 @@ mod runtime_tests {
             let mut v: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(format!("data/cars/{id}/car.json")).unwrap())
                     .unwrap();
+            v.as_object_mut().unwrap().remove("model");
             if id == "club" {
                 v["mass"] = serde_json::json!(999);
             }

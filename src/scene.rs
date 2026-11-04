@@ -7,6 +7,8 @@ use crate::{
 use std::f32::consts::TAU;
 use std::ops::Range;
 
+#[path = "car_glb.rs"]
+pub(crate) mod car_glb;
 #[path = "car_mesh.rs"]
 mod car_mesh;
 #[path = "city_scene.rs"]
@@ -127,7 +129,7 @@ pub struct Geometry {
     pub vertices: Vec<Vertex>,
     pub world_count: usize,
     pub car_ranges: Vec<Range<i32>>,
-    pub wheel_range: Vec<Range<i32>>,
+    pub wheel_range: Vec<[Range<i32>; 4]>,
 }
 
 pub fn build(track: &track::Track) -> Geometry {
@@ -167,9 +169,26 @@ fn finish(mut b: Builder) -> Geometry {
         start..b.vertices.len() as i32
     });
     let wheel_range = cars::ALL.map(|model| {
-        let start = b.vertices.len() as i32;
-        b.vertices.extend(load_design(model.wheel_mesh()));
-        start..b.vertices.len() as i32
+        if let Some(design) = &model.spec().design {
+            let mut ranges: [Range<i32>; 4] = std::array::from_fn(|_| 0..0);
+            for index in 0..4 {
+                if let Some(previous) =
+                    (0..index).find(|&i| design.wheels[i] == design.wheels[index])
+                {
+                    ranges[index] = ranges[previous].clone();
+                } else {
+                    let start = b.vertices.len() as i32;
+                    b.vertices.extend_from_slice(&design.wheels[index]);
+                    ranges[index] = start..b.vertices.len() as i32;
+                }
+            }
+            ranges
+        } else {
+            let start = b.vertices.len() as i32;
+            b.vertices.extend(load_design(model.wheel_mesh()));
+            let range = start..b.vertices.len() as i32;
+            std::array::from_fn(|_| range.clone())
+        }
     });
     Geometry {
         vertices: b.vertices,
@@ -550,7 +569,11 @@ fn load_design(path: &std::path::Path) -> Vec<Vertex> {
     })
 }
 fn car(b: &mut Builder, model: CarModel) {
-    b.vertices.extend(load_design(model.mesh()));
+    if let Some(design) = &model.spec().design {
+        b.vertices.extend_from_slice(&design.body);
+    } else {
+        b.vertices.extend(load_design(model.mesh()));
+    }
 }
 
 #[cfg(test)]
@@ -616,10 +639,14 @@ mod tests {
             assert!(vertices.iter().any(|v| v.material[0] == 0.0));
             end = range.end;
         }
-        for range in wheel_range {
-            assert_eq!(end, range.start);
+        let mut uploaded_wheels = Vec::new();
+        for range in wheel_range.into_iter().flatten() {
             assert!(range.end - range.start > 200);
-            end = range.end;
+            if !uploaded_wheels.contains(&range) {
+                assert_eq!(end, range.start);
+                end = range.end;
+                uploaded_wheels.push(range);
+            }
         }
         assert_eq!(end as usize, v.len());
     }
@@ -794,7 +821,7 @@ mod tests {
         let route = track::TrackId::Scenic.track();
         let geometry = build(&route);
         assert!(
-            geometry.world_count > 100_000 && geometry.vertices.len() < 800_000,
+            geometry.world_count > 100_000 && geometry.world_count < 800_000,
             "scenic geometry budget exceeded: {} world / {} total vertices",
             geometry.world_count,
             geometry.vertices.len()

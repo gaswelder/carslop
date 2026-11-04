@@ -576,3 +576,7 @@ if __name__ == '__main__':
     build_body()
     build_body(turbo=True)
     build_wheel()
+
+    from export_car_glb import export
+    for name in ('kestrel', 'kestrel-turbo'):
+        export(ROOT / name)
