@@ -39,7 +39,7 @@ Choose a location and car, then start free driving.
 | Esc | Pause / resume, or close the full map and return to driving |
 | R | Restart |
 | H | Recover the car |
-| M | Open the full map (pauses driving) |
+| M | Open / close the full map (pauses driving) |
 | Mouse wheel / + / - | Zoom the full map in / out |
 | L | Return to location and car selection |
 | V | Toggle audio mute |

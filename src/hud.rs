@@ -600,7 +600,7 @@ fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32;
     text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
     let name_size = 0.004_f32.min(0.94 / (map.track.name.chars().count().max(1) as f32 * 6.0));
     text(v, map.track.name, [-0.60, 0.90], name_size, white);
-    text(v, "ESC BACK TO GAME", [0.49, 0.90], 0.004, white);
+    text(v, "M / ESC BACK", [0.49, 0.90], 0.004, white);
 
     let pixel = |p: [f32; 2]| {
         [

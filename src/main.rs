@@ -542,7 +542,7 @@ impl App {
     fn key_down(&mut self, key: Keycode) {
         if self.session.state == GameState::FullMap {
             match key {
-                Keycode::Escape => self.session.state = GameState::Driving,
+                Keycode::Escape | Keycode::M => self.session.state = GameState::Driving,
                 Keycode::C => self.copy_map_location(),
                 Keycode::Plus | Keycode::Equals | Keycode::KpPlus => self.zoom_map(1.0),
                 Keycode::Minus | Keycode::KpMinus => self.zoom_map(-1.0),
@@ -1991,7 +1991,6 @@ mod tests {
                     Keycode::Tab,
                     Keycode::L,
                     Keycode::Return,
-                    Keycode::M,
                     Keycode::Up,
                 ] {
                     app.key_down(key);
@@ -2053,7 +2052,11 @@ mod tests {
                 app.capture_path = None;
                 app.render(Duration::ZERO);
                 assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-                app.key_down(Keycode::Escape);
+                app.key_down(if from == GameState::Driving {
+                    Keycode::M
+                } else {
+                    Keycode::Escape
+                });
                 assert!(app.session.state == GameState::Driving);
                 assert!(app.keys.is_empty());
                 assert_eq!(app.session.vehicle.position, position);
