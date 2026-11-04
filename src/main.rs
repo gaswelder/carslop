@@ -161,15 +161,13 @@ impl Session {
         true
     }
 
-    fn pause_lines(&self, view: &str, audio: &str) -> Vec<String> {
+    fn pause_lines(&self, _view: &str, _audio: &str) -> Vec<String> {
         let car = &self.vehicle;
         let speed = format!(
-            "{:03} KM/H GEAR {} {}",
+            "{:03} KM/H GEAR {}",
             (car.speed.abs() * 3.6) as u32,
-            car.gear_label(),
-            view
+            car.gear_label()
         );
-        let status = format!("AUDIO {audio}");
         vec![
             format!("{} FREE DRIVE", car.model.spec().name),
             format!(
@@ -182,10 +180,7 @@ impl Session {
                     ""
                 }
             ),
-            "A SHIFT UP / Z SHIFT DOWN".into(),
-            "C NEARBY RECOVERY".into(),
             speed,
-            status,
         ]
     }
 }
@@ -627,7 +622,6 @@ impl App {
             },
             self.session.vehicle.heading,
             [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
-            status,
         );
     }
 
@@ -830,7 +824,6 @@ impl App {
                     city: s.track().city().is_some(),
                     view: self.chase.view().label(),
                     audio: audio_status,
-                    load: car.engine_load,
                 }),
             );
         }

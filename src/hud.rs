@@ -161,7 +161,6 @@ pub struct PauseMenu<'a> {
     pub city: bool,
     pub view: &'a str,
     pub audio: &'a str,
-    pub load: f32,
 }
 
 const MAP_CONTENT: [[f32; 2]; 2] = [[0.61, 0.49], [0.95, 0.88]];
@@ -969,23 +968,13 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
         "LEFT / RIGHT: STEER",
         "SPACE: HANDBRAKE",
         "A: SHIFT UP / Z: SHIFT DOWN",
-        "C: RECOVER",
-        "TAB: CAMERA",
-        "V: AUDIO",
-        "Q: QUIT",
+        "M: FULL MAP",
     ]
     .iter()
     .enumerate()
     {
         text(v, entry, [0.12, 0.55 - i as f32 * 0.085], 0.0037, white);
     }
-    text(
-        v,
-        &format!("ENGINE LOAD {:.0} PCT", pause.load.clamp(0.0, 1.0) * 100.0),
-        [0.12, -0.23],
-        0.0032,
-        muted,
-    );
     if pause.city {
         text(
             v,
@@ -1019,12 +1008,12 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
         }
     }
     let labels = [
-        "RESUME".to_string(),
-        "RESTART".into(),
-        "LOCATION / CAR".into(),
-        format!("AUDIO: {}", pause.audio),
-        format!("CAMERA: {}", pause.view),
-        "RECOVER".into(),
+        "RESUME  [ESC]".to_string(),
+        "RESTART  [R]".into(),
+        "LOCATION / CAR  [L]".into(),
+        format!("AUDIO: {}  [V]", pause.audio),
+        format!("CAMERA: {}  [TAB]", pause.view),
+        "RECOVER  [C]".into(),
     ];
     for (r, label) in PAUSE_BOXES.into_iter().zip(labels) {
         menu_button(v, r, true, false);
@@ -1032,7 +1021,7 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
     }
     text(
         v,
-        "ESC RESUME / M MAP / R RESTART / L LOCATION AND CAR / Q QUIT",
+        "CHOOSE AN ACTION ABOVE / Q QUIT",
         [-0.86, -0.755],
         0.0032,
         muted,
