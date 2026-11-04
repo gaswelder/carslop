@@ -42,6 +42,7 @@ pub struct Vehicle {
     pub turbo_boost: f32,      // normalized manifold boost
     pub wheel_phase: [f32; 2], // rear/front axles; cosmetic, never affects physics
     pub tire_scrub: f32,
+    pub brake_lights: bool,
     brake_pressure: f32,
     steering: f32,
     yaw_rate: f32,
@@ -92,6 +93,7 @@ impl Vehicle {
             yaw_rate: 0.0,
             wheel_phase: [0.0; 2],
             tire_scrub: 0.0,
+            brake_lights: false,
             shift_timer: 0.0,
             rev_match_timer: 0.0,
             neutral_fuel_cut: false,
@@ -203,6 +205,9 @@ impl Vehicle {
     }
 
     pub fn update(&mut self, dt: Duration, controls: Controls) -> f32 {
+        // The pedal switch works at rest and in reverse, independently of
+        // hydraulic pressure, engine braking, and the parking brake.
+        self.brake_lights = controls.brake > 0.0;
         let steps = (dt.as_secs_f32() * 240.0).ceil().max(1.0) as u32;
         let seconds = dt.as_secs_f32() / steps as f32;
         let spec = self.model.spec();
@@ -1619,6 +1624,44 @@ mod tests {
             car.speed > 69.9,
             "overspeed should decelerate continuously, not snap to a cap"
         );
+    }
+
+    #[test]
+    fn stop_lights_follow_pedal_at_rest_and_in_reverse() {
+        for model in crate::cars::ALL {
+            let mut car = route_car(track::TrackId::Scenic, model);
+            for reverse in [false, true] {
+                if reverse {
+                    assert!(car.toggle_direction());
+                }
+                assert!(!car.brake_lights);
+                car.update(
+                    Duration::from_millis(20),
+                    Controls {
+                        brake: 0.1,
+                        ..Controls::default()
+                    },
+                );
+                assert!(car.brake_lights);
+                car.update(
+                    Duration::from_millis(20),
+                    Controls {
+                        handbrake: true,
+                        ..Controls::default()
+                    },
+                );
+                assert!(!car.brake_lights);
+            }
+            car.update(
+                Duration::from_millis(20),
+                Controls {
+                    brake: 1.0,
+                    ..Controls::default()
+                },
+            );
+            car.reset(car.position, car.heading);
+            assert!(!car.brake_lights);
+        }
     }
 
     #[test]

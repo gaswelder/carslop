@@ -1374,7 +1374,11 @@ mod tests {
                     }
                     assert_eq!(view.fit.point(player), center);
                     let fit = &view.fit;
-                    for p in track.map_segments().flat_map(|(a, b)| [a, b]).chain([player]) {
+                    for p in track
+                        .map_segments()
+                        .flat_map(|(a, b)| [a, b])
+                        .chain([player])
+                    {
                         let point = fit.point(p);
                         for axis in 0..2 {
                             assert!(point[axis] > FULL_MAP_CONTENT[0][axis]);

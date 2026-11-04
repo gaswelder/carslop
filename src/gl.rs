@@ -50,6 +50,7 @@ uniform vec4 u_contact_axes[2];
 uniform float u_contact_strength;
 uniform vec2 u_fog_range;
 uniform float u_signal_time;
+uniform float u_brake_light;
 uniform int u_city_reference;
 uniform sampler2DArray u_aerial;
 uniform int u_aerial_count;
@@ -178,6 +179,10 @@ void main() {
                 + env * (0.025 + 0.16 * grazing) + vec3(1.0) * glint * 0.4;
         }
         lit = pow(clamp(finish, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
+    if (v_material.x > 4.5 && v_material.x < 5.5) {
+        // Emission remains visible in shade and ignores the selected paint.
+        lit = mix(lit, vec3(1.0, 0.035, 0.012), u_brake_light);
     }
     // Evaluate on the receiving road itself: no floating decal or depth bias.
     lit *= contact_visibility();
@@ -478,8 +483,12 @@ impl Mesh {
             gl::UseProgram(program);
             set_scene_transform(program, camera, model);
             set_tint(program, tint);
+            let brake_light = CString::new("u_brake_light").unwrap();
+            let brake_light = gl::GetUniformLocation(program, brake_light.as_ptr());
+            gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
             let range = &self.car_ranges[car.model.index()];
             gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
+            gl::Uniform1f(brake_light, 0.0);
             set_tint(program, [1.0; 3]);
             for (index, center) in car.model.wheel_centers().into_iter().enumerate() {
                 let front = index >= 2;

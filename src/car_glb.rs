@@ -219,7 +219,7 @@ impl Importer<'_> {
             let values: [f32; 2] = serde_json::from_value(v.clone()).map_err(invalid)?;
             if !values[0].is_finite()
                 || !values[1].is_finite()
-                || !(0.0..=4.0).contains(&values[0])
+                || !(0.0..=5.0).contains(&values[0])
                 || values[0].fract() != 0.0
                 || !(0.0..=1.0).contains(&values[1])
             {

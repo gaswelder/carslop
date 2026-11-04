@@ -479,7 +479,10 @@ finish code 2 until transparency support is added.
 The original wheels have a 0.4 m radius; keep replacement wheels consistent
 with the JSON gearbox rolling radius. `carslop_material` finish code 1 receives
 the selected car tint; code 0 remains untinted. Code 2 selects reflective glass,
-code 3 metal, and code 4 optical lenses, retaining their authored colors. The
+code 3 metal, and code 4 optical lenses, retaining their authored colors. Code 5
+marks brake lenses, which glow red while the foot brake is held, even at rest or
+in reverse. Existing untinted red rear lenses are recognized automatically.
+The parking brake and engine braking do not activate stop lights. The
 second value controls specular strength. Paint uses a clear-coat response, and
 finish materials reflect an analytic daylight sky and ground. Triangle winding
 and normals must face outward. Edit artwork in a glTF-capable modeling tool and

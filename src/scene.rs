@@ -20,7 +20,7 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub color: [f32; 3],
     pub normal: [f32; 3],
-    // Material X: 0 untinted, 1 paint, 2 glass, 3 metal, 4 optical lens;
+    // Material X: 0 untinted, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens;
     // negative values: -1 road receiver, -2 signal lens.
     // Y: specular strength, or encoded signal phase/lens for material -2.
     pub material: [f32; 2],
@@ -548,7 +548,24 @@ fn wheel(b: &mut Builder, x: f32, z: f32) {
     b.vertices.extend(vertices);
 }
 fn car(b: &mut Builder, model: CarModel) {
-    b.vertices.extend_from_slice(&model.spec().design.body);
+    for triangle in model.spec().design.body.chunks_exact(3) {
+        // Older artwork uses untinted red geometry for its rear lenses.
+        // Promote whole triangles so the material tag never interpolates
+        // between finishes. Paint and front/amber/white lenses stay untouched.
+        let rear_lens = triangle.iter().all(|v| {
+            (v.material[0] == 0.0 || v.material[0] == 4.0)
+                && v.position[2] < 0.0
+                && v.color[0] > 0.4
+                && v.color[1] < v.color[0] * 0.25
+                && v.color[2] < v.color[0] * 0.25
+        });
+        b.vertices.extend(triangle.iter().copied().map(|mut v| {
+            if rear_lens {
+                v.material[0] = 5.0;
+            }
+            v
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -662,6 +679,27 @@ mod tests {
         assert!(muscle[0] > roadster[0] && roadster[0] > club[0]);
         assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
         assert!(club[1] > muscle[1] && muscle[1] > roadster[1]);
+    }
+
+    #[test]
+    fn every_car_has_stop_lenses_on_both_rear_corners() {
+        for model in cars::ALL {
+            let mut b = Builder::default();
+            car(&mut b, model);
+            for side in [-1.0, 1.0] {
+                assert!(
+                    b.vertices.iter().any(|v| {
+                        v.material[0] == 5.0 && v.position[0] * side > 0.2 && v.position[2] < 0.0
+                    }),
+                    "missing rear stop lens: {model:?}, side {side}"
+                );
+            }
+            assert!(b
+                .vertices
+                .iter()
+                .all(|v| v.material[0] != 5.0 || v.position[2] < 0.0));
+            assert!(b.vertices.iter().any(|v| v.material[0] == 1.0));
+        }
     }
 
     #[test]

@@ -1331,6 +1331,61 @@ mod tests {
         ));
     }
 
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; compares rear lamp pixels with the pedal up/down"]
+    fn stop_lights_renderer() {
+        let app = App::new();
+        for model in cars::ALL {
+            let mut car = vehicle::Vehicle::new(app.session.vehicle.position, 0.0, model);
+            let p = car.position;
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: [p[0], p[1] + 1.2, p[2] - 5.0],
+                    target: [p[0], p[1] + 0.25, p[2]],
+                },
+            );
+            let matrix = gl::model_matrix(p, 0.0, 0.0);
+            let mut frames = Vec::new();
+            for pressed in [false, true, false] {
+                car.brake_lights = pressed;
+                gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+                gl::clear_screen();
+                app.mesh()
+                    .draw(app.scene_program, &camera, &matrix, [0.1, 0.3, 0.8], &car);
+                let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+                unsafe {
+                    ::gl::ReadBuffer(::gl::BACK);
+                    ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
+                    ::gl::ReadPixels(
+                        0,
+                        0,
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        ::gl::RGB,
+                        ::gl::UNSIGNED_BYTE,
+                        pixels.as_mut_ptr().cast(),
+                    );
+                }
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                frames.push(pixels);
+            }
+            let brightened = frames[0]
+                .chunks_exact(3)
+                .zip(frames[1].chunks_exact(3))
+                .filter(|(off, on)| on[0] > off[0].saturating_add(20) && on[0] > 220 && on[1] < 80)
+                .count();
+            assert!(
+                brightened > 100,
+                "stop lamps did not brighten: {model:?}, {brightened} pixels"
+            );
+            assert_eq!(
+                frames[0], frames[2],
+                "lamps must return to their unlit finish"
+            );
+        }
+    }
+
     /// Export repeatable front/rear/side views for reviewing silhouette and shading.
     #[test]
     #[ignore = "requires SDL3/OpenGL; exports PPM previews to NFS_CAR_PREVIEW_DIR"]
