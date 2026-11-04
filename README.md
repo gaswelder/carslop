@@ -370,6 +370,10 @@ steering still ramps progressively and reduces lock with speed. Kestrel has
 additional speed-dependent lock reduction, a firmer rear-axle response, and
 forward brake bias so held turns and braking into corners produce progressive
 breakaway rather than abrupt rear sliding.
+Above 60 km/h, the additional steering restriction grows linearly with speed
+to retain useful lock for faster bends. Adding steering input always increases
+the front-wheel angle, including during a held turn. Brake pressure progressively
+restores the stronger restriction to reserve tire grip while braking into a turn.
 
 Engine torque varies with RPM, passes through the selected gear and final drive,
 and is interrupted during gear changes. Closed-throttle engine braking

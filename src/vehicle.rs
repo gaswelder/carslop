@@ -664,16 +664,25 @@ impl Vehicle {
         // the way to zero made even walking-speed turns unnecessarily wide.
         let blend = ((speed.abs() - 5.0) / 6.0).clamp(0.0, 1.0);
         let high_speed = blend * blend * (3.0 - 2.0 * blend);
+        // Above 60 km/h grow the extra restriction linearly. Continuing the
+        // quadratic falloff takes away too much lock on faster road bends.
+        let road_speed = speed.abs().min(60.0 / 3.6);
+        // Braking needs more of the tire budget. Smoothly restore the original
+        // restriction with pedal pressure to keep trail braking settled.
+        let braking = (self.brake_pressure / 0.35).clamp(0.0, 1.0);
+        let limited_speed = road_speed + (speed.abs() - road_speed) * braking;
         // Reserve the extra high-speed lock reduction for large inputs so
         // a held key cannot overwhelm the tires, while taps stay responsive.
+        // Use a linear input factor: a squared factor can reduce wheel angle
+        // as the driver adds steering at road speeds.
         let lock = 0.54
             / (1.0
                 + speed.abs() / 22.0
                 + self.model.spec().dynamics.steering_speed_squared
-                    * speed
-                    * speed
+                    * speed.abs()
+                    * limited_speed
                     * high_speed
-                    * (0.35 + 0.65 * self.steering * self.steering));
+                    * (0.35 + 0.65 * self.steering.abs()));
         self.steering.signum() * self.steering.abs().powf(1.10) * lock
     }
 
@@ -1230,6 +1239,56 @@ mod tests {
                         "{model:?}: low-speed turn pushes wide of the front wheels"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
+        for model in crate::cars::ALL {
+            let mut car = level_route_car(track::TrackId::Scenic, model);
+            for speed_kmh in [40.0, 80.0, 120.0, 200.0] {
+                for direction in [-1.0, 1.0] {
+                    let mut previous = 0.0;
+                    for step in 1..=100 {
+                        car.steering = direction * step as f32 / 100.0;
+                        let angle = car.steering_angle(speed_kmh / 3.6).abs();
+                        assert!(
+                            angle > previous,
+                            "{model:?} at {speed_kmh} km/h: more input reduced wheel angle"
+                        );
+                        previous = angle;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn road_speed_held_steering_has_useful_cornering_authority() {
+        for model in crate::cars::ALL {
+            for input in [-1.0, 1.0] {
+                let mut car = level_route_car(track::TrackId::Scenic, model);
+                let speed = 80.0 / 3.6;
+                car.velocity = [car.heading.sin() * speed, car.heading.cos() * speed];
+                let start = car.heading;
+                for _ in 0..240 {
+                    treadmill_tick(
+                        &mut car,
+                        Controls {
+                            steering: input,
+                            ..Controls::default()
+                        },
+                    );
+                }
+                let turn = crate::track::angle(car.velocity[0].atan2(car.velocity[1]) - start)
+                    .abs()
+                    .to_degrees();
+                assert!(
+                    turn > 16.0,
+                    "{model:?}: held steering at 80 km/h only turns the velocity by {turn:.2} degrees in a second"
+                );
+                assert!(car.yaw_rate * input < 0.0);
             }
         }
     }
