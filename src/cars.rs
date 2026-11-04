@@ -42,9 +42,7 @@ pub const WHEEL_RADIUS: f32 = 0.4;
 
 #[derive(Clone)]
 pub struct CarSpec {
-    pub(crate) design: Option<std::sync::Arc<crate::scene::car_glb::Design>>,
-    pub mesh: std::path::PathBuf,
-    pub wheel_mesh: std::path::PathBuf,
+    pub(crate) design: std::sync::Arc<crate::scene::car_glb::Design>,
     pub name: &'static str,
     pub description: &'static str,
     pub mass: f32,
@@ -53,8 +51,6 @@ pub struct CarSpec {
     pub brake_force: f32,
     pub lateral_force: f32,
     pub wheelbase: f32,
-    pub half_track: f32,
-    pub wheel_height: f32,
     pub steering_response: f32,
     pub dynamics: Dynamics,
     pub gearbox: Gearbox,
@@ -213,19 +209,9 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         .as_array()
         .filter(|a| a.len() == 2)
         .ok_or("expected two stiffness values")?;
-    let mut spec = CarSpec {
-        design: None,
+    let spec = CarSpec {
+        design: load_model(path, &v["model"])?,
         turbo: turbo(&v["turbo"])?,
-        mesh: v
-            .get("mesh")
-            .map(|v| asset_path(path, v))
-            .transpose()?
-            .unwrap_or_default(),
-        wheel_mesh: v
-            .get("wheel_mesh")
-            .map(|v| asset_path(path, v))
-            .transpose()?
-            .unwrap_or_default(),
         name: text(&v["name"])?,
         description: text(&v["description"])?,
         mass: number(&v["mass"])?,
@@ -235,8 +221,6 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         lateral_force: number(&v["lateral_force"])?,
         wheelbase: number(&v["wheelbase"])?,
         steering_response: number(&v["steering_response"])?,
-        half_track: number(&v["half_track"])?,
-        wheel_height: signed(&v["wheel_height"])?,
         dynamics: Dynamics {
             front_weight: fraction(&d["front_weight"])?,
             cg_height: number(&d["cg_height"])?,
@@ -273,11 +257,6 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
     if spec.gearbox.downshift_rpm >= spec.gearbox.upshift_rpm {
         return Err("invalid shift thresholds".into());
     }
-    if let Some(model) = v.get("model") {
-        spec.design = Some(load_model(path, model)?);
-    } else if spec.mesh.as_os_str().is_empty() || spec.wheel_mesh.as_os_str().is_empty() {
-        return Err("provide model (.glb), or both mesh and wheel_mesh".into());
-    }
     Ok(spec)
 }
 
@@ -294,18 +273,7 @@ fn load_model(
 impl CarModel {
     /// Rear pair first, then front pair. Shared by artwork and tire feedback.
     pub fn wheel_centers(self) -> [[f32; 3]; 4] {
-        if let Some(design) = &self.spec().design {
-            return design.mounts;
-        }
-        let half_track = self.spec().half_track;
-        let height = self.spec().wheel_height;
-        let axle = self.spec().wheelbase * 0.5;
-        [
-            [-half_track, height, -axle],
-            [half_track, height, -axle],
-            [-half_track, height, axle],
-            [half_track, height, axle],
-        ]
+        self.spec().design.mounts
     }
 
     pub fn index(self) -> usize {
@@ -376,12 +344,6 @@ impl CarModel {
             _ => self,
         }
     }
-    pub fn mesh(self) -> &'static std::path::Path {
-        &self.spec().mesh
-    }
-    pub fn wheel_mesh(self) -> &'static std::path::Path {
-        &self.spec().wheel_mesh
-    }
 }
 fn asset_path(
     definition: &std::path::Path,
@@ -390,7 +352,7 @@ fn asset_path(
     let name = value
         .as_str()
         .filter(|s| !s.trim().is_empty())
-        .ok_or("expected nonempty mesh path")?;
+        .ok_or("expected nonempty GLB model path")?;
     Ok(definition.parent().unwrap().join(name))
 }
 
@@ -462,8 +424,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
         brake_force,
         lateral_force,
         wheelbase,
-        steering_response,
-        half_track
+        steering_response
     );
     if let Some(d) = object.get("dynamics") {
         let d = d.as_object().ok_or("expected dynamics object")?;
@@ -537,27 +498,11 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             })
         };
     }
-    if let Some(v) = object.get("wheel_height") {
-        spec.wheel_height = signed(v)?;
-    }
-    if let Some(v) = object.get("mesh") {
-        spec.mesh = asset_path(path, v)?;
-    }
-    if let Some(v) = object.get("wheel_mesh") {
-        spec.wheel_mesh = asset_path(path, v)?;
-    }
     if let Some(value) = object.get("turbo") {
         spec.turbo = turbo(value)?;
     }
     if let Some(model) = object.get("model") {
-        spec.design = Some(load_model(path, model)?);
-    } else if object.contains_key("mesh") || object.contains_key("wheel_mesh") {
-        spec.design = None;
-    }
-    if spec.design.is_none() {
-        for mesh in [&spec.mesh, &spec.wheel_mesh] {
-            crate::scene::validate_design(mesh).map_err(|e| format!("{}: {e}", mesh.display()))?;
-        }
+        spec.design = load_model(path, model)?;
     }
     Ok(ExtraCar { spec, base })
 }
@@ -608,28 +553,21 @@ mod runtime_tests {
         std::fs::write(&path, r#"{"base":"club", "mass":950}"#).unwrap();
         let inherited = load_extra(&path).unwrap().spec;
         assert!(std::sync::Arc::ptr_eq(
-            inherited.design.as_ref().unwrap(),
-            CarModel::Club.spec().design.as_ref().unwrap()
+            &inherited.design,
+            &CarModel::Club.spec().design
         ));
-        // The GLB takes precedence over legacy paths and supplies its own mounts.
-        std::fs::write(
-            &path,
-            r#"{"base":"club", "model":"replacement.glb", "mesh":"absent.mesh", "half_track":2}"#,
-        )
-        .unwrap();
+        // A replacement GLB supplies its own wheel mounts.
+        std::fs::write(&path, r#"{"base":"club", "model":"replacement.glb"}"#).unwrap();
         let replacement = load_extra(&path).unwrap().spec;
-        assert_eq!(replacement.half_track, 2.);
         assert_eq!(
-            replacement.design.as_ref().unwrap().mounts[0][0],
-            -CarModel::Club.spec().half_track
+            replacement.design.mounts[0][0],
+            CarModel::Club.wheel_centers()[0][0]
         );
         let mut definition: serde_json::Value =
             serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
-        definition.as_object_mut().unwrap().remove("mesh");
-        definition.as_object_mut().unwrap().remove("wheel_mesh");
         definition["model"] = serde_json::json!("replacement.glb");
         std::fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
-        assert!(load_original(&path).unwrap().design.is_some());
+        assert!(!load_original(&path).unwrap().design.body.is_empty());
         std::fs::write(dir.path().join("replacement.glb"), b"broken").unwrap();
         let error = load_original(&path).err().unwrap();
         assert!(
@@ -644,7 +582,8 @@ mod runtime_tests {
         let path = dir.path().join("car.json");
         let mut original: serde_json::Value =
             serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
-        original.as_object_mut().unwrap().remove("model");
+        original["model"] =
+            serde_json::json!(std::fs::canonicalize("data/cars/club/model.glb").unwrap());
         for count in [254, 255] {
             let ratios: Vec<_> = (1..=count).rev().collect();
             let mut required = original.clone();
@@ -669,10 +608,11 @@ mod runtime_tests {
         let path = dir.path().join("car.json");
         let mut original: serde_json::Value =
             serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
-        original.as_object_mut().unwrap().remove("model");
+        original["model"] =
+            serde_json::json!(std::fs::canonicalize("data/cars/club/model.glb").unwrap());
         for (key, value) in [
             ("mass", serde_json::json!(-1)),
-            ("half_track", serde_json::Value::Null),
+            ("model", serde_json::Value::Null),
             ("gearbox", serde_json::json!({"ratios": []})),
         ] {
             let mut invalid = original.clone();
@@ -690,23 +630,17 @@ mod runtime_tests {
         for id in ["kestrel", "muscle", "club"] {
             let folder = cars.join(id);
             std::fs::create_dir_all(&folder).unwrap();
-            for name in ["body", "wheel"] {
-                let mut bytes = std::fs::read(format!("data/cars/{id}/{name}.mesh")).unwrap();
-                if id == "club" && name == "body" {
-                    bytes[12..16].copy_from_slice(&7.25_f32.to_le_bytes());
-                }
-                if name == "wheel" {
-                    bytes[12..16].copy_from_slice(&0.123_f32.to_le_bytes());
-                }
-                std::fs::write(folder.join(format!("{name}.mesh")), bytes).unwrap();
-            }
+            std::fs::copy(
+                format!("data/cars/{id}/model.glb"),
+                folder.join("model.glb"),
+            )
+            .unwrap();
         }
 
         for id in ["kestrel", "muscle", "club"] {
             let mut v: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(format!("data/cars/{id}/car.json")).unwrap())
                     .unwrap();
-            v.as_object_mut().unwrap().remove("model");
             if id == "club" {
                 v["mass"] = serde_json::json!(999);
             }
@@ -718,6 +652,59 @@ mod runtime_tests {
         }
 
         std::fs::create_dir_all(cars.join("new")).unwrap();
+        // Edit the GLB in a runtime-only package to exercise geometry and pivots.
+        let mut asset = std::fs::read("data/cars/club/model.glb").unwrap();
+        let parsed = gltf::Gltf::from_slice(&asset).unwrap();
+        let json_len = u32::from_le_bytes(asset[12..16].try_into().unwrap()) as usize;
+        let binary_start = 28 + json_len;
+        let mut edits = Vec::new();
+        for (mesh, value) in parsed.meshes().zip([7.25_f32, 0.123]) {
+            let primitive = mesh.primitives().next().unwrap();
+            let first = primitive
+                .reader(|_| parsed.blob.as_deref())
+                .read_indices()
+                .unwrap()
+                .into_u32()
+                .next()
+                .unwrap() as usize;
+            let positions = primitive.get(&gltf::Semantic::Positions).unwrap();
+            let view = positions.view().unwrap();
+            edits.push((
+                binary_start
+                    + view.offset()
+                    + positions.offset()
+                    + first * view.stride().unwrap_or(positions.size()),
+                value,
+            ));
+        }
+        drop(parsed);
+        for (offset, value) in edits {
+            asset[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&asset[20..20 + json_len]).unwrap();
+        for node in document["nodes"].as_array_mut().unwrap() {
+            if node["name"] == "wheel_rl" {
+                node["translation"][0] = serde_json::json!(-0.99);
+            }
+        }
+        let mut json = serde_json::to_vec(&document).unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let mut replacement = Vec::new();
+        for value in [
+            0x46546c67_u32,
+            2,
+            (28 + json.len() + asset.len() - binary_start) as u32,
+            json.len() as u32,
+            0x4e4f534a,
+        ] {
+            replacement.extend(value.to_le_bytes());
+        }
+        replacement.extend(json);
+        replacement.extend_from_slice(&asset[binary_start - 8..]);
+        std::fs::write(cars.join("new/model.glb"), replacement).unwrap();
         std::fs::create_dir_all(cars.join("bad")).unwrap();
         std::fs::create_dir_all(cars.join("notes")).unwrap();
         std::fs::write(cars.join("ignored.json"), "{}").unwrap();
@@ -725,29 +712,24 @@ mod runtime_tests {
             cars.join("new/car.json"),
             r#"{
             "base": "club", "name": "NEW CAR", "mass": 1234,
-            "half_track": 0.99, "gearbox": {"ratios": [3, 2, 1]}
+            "model": "model.glb", "gearbox": {"ratios": [3, 2, 1]}
         }"#,
         )
         .unwrap();
         std::fs::write(cars.join("bad/car.json"), r#"{"base":"club","mass":-1}"#).unwrap();
-        for (folder, field, contents) in [
-            ("missing_body", "mesh", None),
-            ("missing_wheel", "wheel_mesh", None),
-            ("corrupt_body", "mesh", Some(b"invalid mesh".as_slice())),
-            (
-                "corrupt_wheel",
-                "wheel_mesh",
-                Some(b"invalid mesh".as_slice()),
-            ),
+        for (folder, contents) in [
+            ("missing_model", None),
+            ("corrupt_model", Some(b"invalid model".as_slice())),
         ] {
             let folder = cars.join(folder);
             std::fs::create_dir_all(&folder).unwrap();
             if let Some(bytes) = contents {
-                std::fs::write(folder.join("bad.mesh"), bytes).unwrap();
+                std::fs::write(folder.join("bad.glb"), bytes).unwrap();
             }
             std::fs::write(
                 folder.join("car.json"),
-                serde_json::to_vec(&serde_json::json!({"base":"club", field: "bad.mesh"})).unwrap(),
+                serde_json::to_vec(&serde_json::json!({"base":"club", "model": "bad.glb"}))
+                    .unwrap(),
             )
             .unwrap();
         }

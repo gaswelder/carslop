@@ -38,9 +38,5 @@
     "upshift_rpm": 6000.0,
     "downshift_rpm": 2400.0
   },
-  "half_track": 0.95,
-  "wheel_height": -0.02,
-  "mesh": "body.mesh",
-  "wheel_mesh": "wheel.mesh",
   "model": "model.glb"
 }

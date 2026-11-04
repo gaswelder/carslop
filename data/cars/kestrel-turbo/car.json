@@ -40,10 +40,6 @@
     "upshift_rpm": 6200,
     "downshift_rpm": 2700
   },
-  "half_track": 0.98,
-  "wheel_height": -0.02,
-  "mesh": "body.mesh",
-  "wheel_mesh": "wheel.mesh",
   "base": "kestrel",
   "turbo": {
     "off_boost_fraction": 0.6,

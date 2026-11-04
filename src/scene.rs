@@ -9,8 +9,6 @@ use std::ops::Range;
 
 #[path = "car_glb.rs"]
 pub(crate) mod car_glb;
-#[path = "car_mesh.rs"]
-mod car_mesh;
 #[path = "city_scene.rs"]
 mod city_scene;
 #[path = "road_furniture.rs"]
@@ -169,26 +167,18 @@ fn finish(mut b: Builder) -> Geometry {
         start..b.vertices.len() as i32
     });
     let wheel_range = cars::ALL.map(|model| {
-        if let Some(design) = &model.spec().design {
-            let mut ranges: [Range<i32>; 4] = std::array::from_fn(|_| 0..0);
-            for index in 0..4 {
-                if let Some(previous) =
-                    (0..index).find(|&i| design.wheels[i] == design.wheels[index])
-                {
-                    ranges[index] = ranges[previous].clone();
-                } else {
-                    let start = b.vertices.len() as i32;
-                    b.vertices.extend_from_slice(&design.wheels[index]);
-                    ranges[index] = start..b.vertices.len() as i32;
-                }
+        let design = &model.spec().design;
+        let mut ranges: [Range<i32>; 4] = std::array::from_fn(|_| 0..0);
+        for index in 0..4 {
+            if let Some(previous) = (0..index).find(|&i| design.wheels[i] == design.wheels[index]) {
+                ranges[index] = ranges[previous].clone();
+            } else {
+                let start = b.vertices.len() as i32;
+                b.vertices.extend_from_slice(&design.wheels[index]);
+                ranges[index] = start..b.vertices.len() as i32;
             }
-            ranges
-        } else {
-            let start = b.vertices.len() as i32;
-            b.vertices.extend(load_design(model.wheel_mesh()));
-            let range = start..b.vertices.len() as i32;
-            std::array::from_fn(|_| range.clone())
         }
+        ranges
     });
     Geometry {
         vertices: b.vertices,
@@ -550,30 +540,15 @@ fn scenery(b: &mut Builder, track: &track::Track) {
 
 #[cfg(test)]
 fn wheel(b: &mut Builder, x: f32, z: f32) {
-    let mut vertices = load_design(CarModel::Roadster.wheel_mesh());
+    let mut vertices = CarModel::Roadster.spec().design.wheels[0].clone();
     for vertex in &mut vertices {
         vertex.position[0] += x;
         vertex.position[2] += z;
     }
     b.vertices.extend(vertices);
 }
-pub(crate) fn validate_design(path: &std::path::Path) -> std::io::Result<()> {
-    car_mesh::load(path).map(|_| ())
-}
-fn load_design(path: &std::path::Path) -> Vec<Vertex> {
-    car_mesh::load(path).unwrap_or_else(|error| {
-        panic!(
-            "Cannot load required car design {}: {error}",
-            path.display()
-        )
-    })
-}
 fn car(b: &mut Builder, model: CarModel) {
-    if let Some(design) = &model.spec().design {
-        b.vertices.extend_from_slice(&design.body);
-    } else {
-        b.vertices.extend(load_design(model.mesh()));
-    }
+    b.vertices.extend_from_slice(&model.spec().design.body);
 }
 
 #[cfg(test)]

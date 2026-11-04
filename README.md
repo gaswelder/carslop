@@ -415,8 +415,7 @@ GLB or edit its path, then restart; rebuilding is unnecessary. Paths are relativ
 to that car's folder. Handling, gearing, and sound remain in JSON. Missing or
 invalid required designs stop loading with the asset filename and error;
 invalid extra cars are skipped with a warning. There is no compiled-in design
-fallback. The bundled cars use GLB; their legacy `.mesh` sources remain available
-for the procedural authoring tools and older custom definitions.
+fallback. GLB is the only supported car artwork format.
 
 Audio loads `data/cars/kestrel/audio/engine.json` and its mono 48 kHz signed
 16-bit little-endian `.pcm` loops once at startup, relative to the working
@@ -474,39 +473,21 @@ accessors, external buffers, and required extensions are rejected with an error.
 Animate wheels through the game's steering/spin logic. Export opaque glass using
 finish code 2 until transparency support is added.
 
-`python3 tools/export_car_glb.py` rebuilds all bundled GLBs from their legacy
-procedural mesh sources and JSON mount dimensions. The body authoring scripts
-also regenerate GLBs after updating their source meshes. GLB's solid colors and
-standard metallic/roughness materials remain viewable in other glTF tools;
-`carslop_material` extras are optional game-specific finish hints.
-
-### Legacy mesh format
-
-Format version 1: eight ASCII bytes `NFSCAR01`, then a little-endian u32 vertex
-count, followed by that many records of eleven little-endian f32 values:
-position XYZ, color RGB, normal XYZ, material XY. Each three records form a
-triangle. Coordinates are meters, Y up, +Z forward. No indices or textures.
-
-Bodies use car-local coordinates. Wheel meshes are centered on the axle at the
-origin and rotate about X; the game positions and animates four copies using the
-car's wheel mounts. Colors, normals, and material values are stored in each mesh.
-The original wheel has a 0.4 m radius; keep replacement wheels at that radius to
-match the shared wheel animation/feedback calibration. Paint material X = 1
-receives the selected car tint; X = 0 remains untinted. Kestrel also uses X = 2
-for reflective glass, X = 3 for metal, and X = 4 for optical lenses; these retain
-their authored colours. Material Y controls specular strength. Paint uses a
-clear-coat response, and the finish materials reflect an analytic daylight sky
-and ground (not live scene reflections). Triangle winding and normals must face outward.
+The original wheels have a 0.4 m radius; keep replacement wheels consistent
+with the JSON gearbox rolling radius. `carslop_material` finish code 1 receives
+the selected car tint; code 0 remains untinted. Code 2 selects reflective glass,
+code 3 metal, and code 4 optical lenses, retaining their authored colors. The
+second value controls specular strength. Paint uses a clear-coat response, and
+finish materials reflect an analytic daylight sky and ground. Triangle winding
+and normals must face outward. Edit artwork in a glTF-capable modeling tool and
+export directly to GLB.
 
 Kestrel has continuous sculpted wings and shoulders, a tucked-under sill, open
 wheel arches with recessed liners, a curved fastback roof, thin framed glazing,
 tilted fluted headlamps, wraparound signals, chrome and rubber bumpers, panel
 shutlines, wipers, fuel flap, rear cooling grille and a hollow exhaust tip.
 Its five-petal alloy wheels have polished lips, recessed centres, lug nuts and
-rounded, grooved tires. Rebuild both Kestrel bodies and their wheels with
-`python3 tools/build_kestrel.py`; this uses Python's standard library and the
-shared mesh writer in `tools/build_car_bodies.py`. It preserves all tuning,
-wheel mounts and the 0.4 m rolling radius.
+rounded, grooved tires.
 
 To inspect the actual game renderer from front, rear and side, including closer
 detail views (requires SDL3/OpenGL):
@@ -519,21 +500,18 @@ Muscle and Club have authored body shells with smooth panel normals, open wheel
 arches, inset glazing, window seals, mirrors, door seams, grilles and separate
 light lenses. Muscle retains its long fastback, twin bonnet scoops and quad
 headlights; Club retains its tall hatch, rectangular lamps and roof spoiler.
-Regenerate these two body assets with `python3 tools/build_car_bodies.py` from
-the repository root. The generator uses only Python's standard library; it
-does not alter tuning, wheels, or either Kestrel design.
 
 ### Tuning existing cars
 
 `data/cars/kestrel/car.json`, `data/cars/muscle/car.json`, and
 `data/cars/club/car.json` are the required runtime parameter
 files for the original cars. Edit them and restart the executable to change
-names, handling, power/drag, gearbox, or wheel placement without rebuilding.
+names, handling, power/drag, gearbox, or the selected GLB without rebuilding.
 These files contain complete definitions; custom cars inherit their current
 values. Missing or invalid required files stop loading with the filename and
 error, rather than silently using compiled-in tuning. Ship these files with
-all builds. `half_track` sets lateral wheel spacing; `wheel_height` sets the
-wheel-center Y coordinate in meters. Body and wheel artwork are external mesh assets selected by the same JSON file.
+all builds. `model` selects the GLB containing the body and four wheel nodes;
+edit wheel placement through those nodes in the GLB.
 
 ### Adding cars without recompiling
 
@@ -554,7 +532,6 @@ For example, save this as `data/cars/my-coupe/car.json`:
   "mass": 1100,
   "engine_force": 9500,
   "top_speed": 60,
-  "half_track": 0.88,
   "model": "my-coupe.glb",
   "gearbox": {
     "ratios": [2.833, 1.778, 1.217, 0.962, 0.821],
@@ -566,11 +543,7 @@ For example, save this as `data/cars/my-coupe/car.json`:
 `base` is required: `kestrel`, `muscle`, or `club`. Other fields inherit that
 base's settings. Omit `model` to reuse its artwork. A replacement GLB must
 contain all five named parts; its path is relative to the JSON file. Engine sound
-inherits the base voice. For legacy artwork, supplying `mesh` or `wheel_mesh`
-switches to the old body/shared-wheel loader; unspecified legacy paths inherit
-from the base. If both `model` and legacy paths are supplied, `model` takes
-precedence. Legacy wheel mounts use `half_track`, `wheel_height`, and `wheelbase`;
-GLB wheel mounts come from the named nodes.
+inherits the base voice. Wheel mounts come from the named GLB nodes.
 
 All handling values use SI units (`top_speed` is meters per second). Supported
 scalar overrides are `mass`, `engine_force`, `top_speed`, `brake_force`,
@@ -606,7 +579,7 @@ and rear haunches, a swept whale-tail rear spoiler with a rounded rubber edge,
 a recessed spoiler grille, deeper front chin, black window trim and impact-bumper
 strips. No Porsche artwork or badges are used. Both variants share the new
 five-petal wheel design; engine recordings are inherited from the original
-Kestrel. Each package keeps its own generated body and wheel mesh.
+Kestrel. Each package keeps its own GLB artwork.
 
 Reference: [Porsche's 1975 Turbo 3.0 museum specification](https://newsroom.porsche.com/dam/jcr%3A3c07547c-36bc-4e00-825c-5ac2bbe10805/Datenblatt%20911%20Turbo%203.0%20Coup%C3%A9.pdf.PDF)
 lists 191 kW / 260 PS, 1140 kg, 250 km/h, and 5.5 seconds to 100 km/h.
