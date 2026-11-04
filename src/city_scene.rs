@@ -121,7 +121,8 @@ pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
     // The compiler partitions these surfaces, so gutters and street classes
     // meet along shared edges rather than overlapping coplanar strips.
     let colors = crate::street_surface::COLORS;
-    let heights = [0.05, 0.05, 0.05, 0.05, 0.07, 0.14, 0.14, 0.08];
+    let pavement = surfaces.pavement_height;
+    let heights = [0.05, 0.05, 0.05, 0.05, 0.07, pavement, pavement, 0.08];
     for triangle in &surfaces.triangles {
         let style = triangle.style;
         field.drape(triangle.points, |mut p| {
@@ -133,7 +134,7 @@ pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
     }
     for curb in &surfaces.curbs {
         let [a, c] = curb.ends;
-        let top = if curb.style == 2 { 0.08 } else { 0.14 };
+        let top = if curb.style == 2 { 0.08 } else { pavement };
         for pair in city.ground_segment(a, c).windows(2) {
             let a = pair[0];
             let c = pair[1];

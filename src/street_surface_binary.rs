@@ -182,6 +182,7 @@ pub(super) fn load(directory: &Path, source: &str, roads: usize) -> io::Result<L
     }
     Ok((
         StreetSurface {
+            pavement_height: super::DEFAULT_PAVEMENT_HEIGHT,
             triangles,
             curbs,
             triangles_grid,

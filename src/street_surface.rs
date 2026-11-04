@@ -13,6 +13,7 @@ pub const COLORS: [[f32; 3]; 8] = [
     [0.66, 0.64, 0.56],
     [0.56, 0.51, 0.40],
 ];
+pub const DEFAULT_PAVEMENT_HEIGHT: f32 = 0.14;
 const CELL: f32 = 32.0;
 type RoadPaths = Vec<Vec<[f32; 3]>>;
 #[derive(Debug)]
@@ -28,6 +29,7 @@ pub struct Curb {
 }
 #[derive(Debug)]
 pub struct StreetSurface {
+    pub pavement_height: f32,
     pub triangles: Vec<SurfaceTriangle>,
     pub curbs: Vec<Curb>,
     #[cfg(test)]
@@ -113,6 +115,7 @@ impl StreetSurface {
             );
         }
         let mut result = Self {
+            pavement_height: DEFAULT_PAVEMENT_HEIGHT,
             triangles: Vec::new(),
             curbs: Vec::new(),
             #[cfg(test)]
@@ -263,7 +266,7 @@ impl StreetSurface {
     }
     pub fn paving_height(&self, p: [f32; 2]) -> Option<f32> {
         self.triangle_at(p, false).map(|t| match t.style {
-            5 | 6 => 0.14,
+            5 | 6 => self.pavement_height,
             7 => 0.08,
             _ => 0.05,
         })
@@ -285,6 +288,7 @@ impl StreetSurface {
             - self.paving_height(b).unwrap_or(0.005))
         .abs()
         .max(0.03);
+        // Cap the bump and speed penalty so taller pavements stay climbable.
         Some((normal, rise.min(0.09)))
     }
 }

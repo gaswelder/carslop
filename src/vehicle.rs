@@ -1473,7 +1473,7 @@ mod tests {
                 let outside = [q[0] - curb.inward[0] * 0.2, q[1] - curb.inward[1] * 0.2];
                 if !surfaces.contains(inside)
                     || surfaces.contains(outside)
-                    || surfaces.paving_height(outside) != Some(0.14)
+                    || surfaces.paving_height(outside) != Some(surfaces.pavement_height)
                 {
                     return None;
                 }

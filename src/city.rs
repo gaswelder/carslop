@@ -169,11 +169,21 @@ impl City {
             },
             Err(error) => log::warn!("Cannot open street names: {error}"),
         }
-        let (surfaces, paths, checksums) = crate::street_surface::StreetSurface::load_city(
+        let (mut surfaces, paths, checksums) = crate::street_surface::StreetSurface::load_city(
             crate::city_assets::directory(),
             &source,
             city.streets.len(),
         )?;
+        let manifest: serde_json::Value =
+            serde_json::from_str(&crate::city_assets::try_read("manifest.json")?)
+                .map_err(|e| format!("invalid location manifest: {e}"))?;
+        if let Some(height) = manifest.get("pavement_height_metres") {
+            let height = height
+                .as_f64()
+                .filter(|h| (0.08..=0.25).contains(h))
+                .ok_or("pavement_height_metres must be between 0.08 and 0.25")?;
+            surfaces.pavement_height = height as f32;
+        }
         city.length = 0.0;
         city.road_grid.clear();
         for (i, (street, path)) in city.streets.iter_mut().zip(paths).enumerate() {
@@ -956,7 +966,11 @@ mod tests {
             assert_eq!(city.constrain(&mut p, &mut velocity), 0.0);
             assert!((p[0] - q[0]).hypot(p[2] - q[1]) < 0.001);
             assert!(
-                (p[1] - city.height(q) - 0.57).abs() < 0.001,
+                (p[1]
+                    - city.height(q)
+                    - (0.48 + city.surfaces.as_ref().unwrap().pavement_height - 0.05))
+                    .abs()
+                    < 0.001,
                 "q={q:?} offset={} style={}",
                 p[1] - city.height(q),
                 triangle.style
