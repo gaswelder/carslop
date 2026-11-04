@@ -96,7 +96,7 @@ void main() {
             if (all(greaterThanEqual(uv,vec2(0.0))) && all(lessThan(uv,vec2(1.0)))) {
                 vec3 colour=texture(u_aerial,vec3(vec2(u_aerial_uv.x)+uv*u_aerial_uv.y,float(u_aerial_layers[i]))).rgb;
                 float road=min(min(distance(v_color,vec3(0.18,0.20,0.22)),distance(v_color,vec3(0.25,0.26,0.26))),min(distance(v_color,vec3(0.32,0.31,0.28)),distance(v_color,vec3(0.42,0.43,0.40))));
-                if (road<0.006) colour*=0.65;
+                if (road<0.006) colour*=0.55;
                 float fog=smoothstep(u_fog_range.x,u_fog_range.y,length(u_eye-v_world));
                 o=vec4(mix(colour*contact_visibility(),vec3(0.57,0.73,0.80),fog),1.0);
                 return;
