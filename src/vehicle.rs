@@ -164,10 +164,6 @@ impl Vehicle {
             (gear, true) => (gear + 1).min(self.model.spec().gearbox.gears()),
             (gear, false) => gear - 1,
         };
-        // Direction changes require the whole vehicle to be nearly stopped.
-        if (next == 0 || self.gear == 0) && self.velocity[0].hypot(self.velocity[1]) > 0.5 {
-            return;
-        }
         if next != self.gear {
             let previous = self.gear;
             self.gear = next;
@@ -474,7 +470,15 @@ impl Vehicle {
         } else {
             g.ratios[self.gear.saturating_sub(1).min(g.gears() - 1) as usize]
         };
-        let rpm = g.rpm(speed, self.gear).max(2200.0);
+        // While rolling against the selected gear, the clutch slips and drive
+        // torque opposes motion. Reverse's speed limit applies only backwards.
+        let driven_speed = if self.direction == Direction::Reverse {
+            -speed
+        } else {
+            speed
+        }
+        .max(0.0);
+        let rpm = g.rpm(driven_speed, self.gear).max(2200.0);
         // Broad torque plateau with weaker idle and redline torque. The clutch
         // slips at launch; gearing subsequently sets wheel force and shift loss.
         let torque_factor = if rpm < 3500.0 {
@@ -492,7 +496,7 @@ impl Vehicle {
         };
         let force = force * self.boost_power_fraction();
         if self.direction == Direction::Reverse {
-            force * (1.0 - (speed.abs() / REVERSE_SPEED).powi(2)).max(0.0)
+            force * (1.0 - (driven_speed / REVERSE_SPEED).powi(2)).max(0.0)
         } else if rpm >= REDLINE_RPM {
             0.0
         } else if let Some(engine) = &spec.road_engine {
@@ -820,10 +824,8 @@ mod tests {
         assert_eq!(car.engine_brake_force(10.0), 0.0);
         car.velocity = [2.0, 0.0];
         car.shift(false);
-        assert_eq!(car.gear_label(), "N");
-        car.velocity = [0.0; 2];
-        car.shift(false);
         assert_eq!(car.gear_label(), "R");
+        assert_eq!(car.velocity, [2.0, 0.0]);
         car.shift(true);
         assert_eq!(car.gear_label(), "N");
         car.shift(true);
@@ -835,6 +837,49 @@ mod tests {
         car.reset([0.0; 3], 0.0);
         assert!(car.manual);
         assert_eq!(car.gear, 1);
+    }
+
+    #[test]
+    fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
+        for model in crate::cars::ALL {
+            for initial_speed in [12.0, -4.0] {
+                let mut car = level_route_car(track::TrackId::Scenic, model);
+                car.manual = true;
+                if initial_speed < 0.0 {
+                    car.shift(false);
+                    car.shift(false);
+                }
+                car.velocity = [car.heading.sin(), car.heading.cos()]
+                    .map(|component| component * initial_speed);
+                car.refresh_speed();
+                let velocity = car.velocity;
+                let heading = car.heading;
+                // Both directions pass through neutral while still moving.
+                car.shift(initial_speed < 0.0);
+                assert_eq!(car.gear, NEUTRAL_GEAR);
+                assert_eq!(car.velocity, velocity);
+                car.shift(initial_speed < 0.0);
+                assert_eq!(car.gear, if initial_speed > 0.0 { 0 } else { 1 });
+                assert_eq!(car.velocity, velocity);
+                assert_eq!(car.heading, heading);
+                assert!(car.drive_force(initial_speed) > 0.0);
+                for _ in 0..240 * 8 {
+                    treadmill_tick(
+                        &mut car,
+                        Controls {
+                            throttle: 1.0,
+                            ..Controls::default()
+                        },
+                    );
+                }
+                assert!(
+                    car.speed * initial_speed < 0.0,
+                    "{model:?} must pull away in the selected direction: {} -> {}",
+                    initial_speed,
+                    car.speed
+                );
+            }
+        }
     }
 
     #[test]
