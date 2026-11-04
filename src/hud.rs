@@ -367,6 +367,11 @@ impl Hud {
             text(&mut v, "N", [0.94, 0.86], 0.0035, white);
         }
         text(&mut v, "M FULL MAP", [0.60, 0.435], 0.0032, white);
+        let street = map
+            .track
+            .city()
+            .map_or(map.track.name, |city| city.street_name(map.player));
+        append_street_name(&mut v, street);
         if let Some(pause) = pause {
             append_pause(&mut v, pause);
         }
@@ -1044,6 +1049,43 @@ fn line(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 3])
     }
 }
 
+fn append_street_name(v: &mut Vec<f32>, name: &str) {
+    let name = name.to_uppercase();
+    // Bound the label to two lines at a readable size, including long OSM names.
+    let chars: Vec<_> = name.chars().collect();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < chars.len() && lines.len() < 2 {
+        let mut end = (start + 24).min(chars.len());
+        if end < chars.len() {
+            if let Some(space) = chars[start..end].iter().rposition(|ch| *ch == ' ') {
+                if space > 0 {
+                    end = start + space;
+                }
+            }
+        }
+        let mut line: String = chars[start..end].iter().collect();
+        start = end;
+        while start < chars.len() && chars[start] == ' ' {
+            start += 1;
+        }
+        if lines.len() == 1 && start < chars.len() {
+            line = line.chars().take(21).collect::<String>() + "...";
+        }
+        lines.push(line);
+    }
+    quad(v, [0.59, 0.28], [0.97, 0.40], [0.025, 0.05, 0.075]);
+    for (i, line) in lines.iter().enumerate() {
+        text(
+            v,
+            line,
+            [0.605, 0.38 - i as f32 * 0.05],
+            0.0024,
+            [0.9, 0.95, 1.0],
+        );
+    }
+}
+
 fn text(v: &mut Vec<f32>, value: &str, origin: [f32; 2], size: f32, color: [f32; 3]) {
     for (index, ch) in value.chars().enumerate() {
         for (row, bits) in glyph(ch).iter().enumerate() {
@@ -1059,7 +1101,39 @@ fn text(v: &mut Vec<f32>, value: &str, origin: [f32; 2], size: f32, color: [f32;
 }
 
 pub(crate) fn glyph(ch: char) -> [u8; 7] {
+    let ch = match ch {
+        'Α' | 'Ά' | 'Á' | 'À' | 'Â' | 'Ä' => 'A',
+        'Β' => 'B',
+        'Ε' | 'Έ' | 'É' | 'È' | 'Ê' => 'E',
+        'Ζ' => 'Z',
+        'Η' | 'Ή' => 'H',
+        'Ι' | 'Ί' | 'Ϊ' | 'İ' | 'Í' => 'I',
+        'Κ' => 'K',
+        'Μ' => 'M',
+        'Ν' => 'N',
+        'Ο' | 'Ό' | 'Ó' | 'Ö' => 'O',
+        'Ρ' => 'P',
+        'Τ' => 'T',
+        'Υ' | 'Ύ' | 'Ϋ' => 'Y',
+        'Χ' => 'X',
+        'Ü' | 'Ú' => 'U',
+        'Ç' => 'C',
+        'Ş' => 'S',
+        'Ğ' => 'G',
+        _ => ch,
+    };
     match ch {
+        'Γ' => [31, 16, 16, 16, 16, 16, 16],
+        'Δ' => [4, 10, 10, 17, 17, 17, 31],
+        'Θ' => [14, 17, 17, 31, 17, 17, 14],
+        'Λ' => [4, 10, 10, 17, 17, 17, 17],
+        'Ξ' => [31, 0, 0, 14, 0, 0, 31],
+        'Π' => [31, 17, 17, 17, 17, 17, 17],
+        'Σ' => [31, 16, 8, 4, 8, 16, 31],
+        'Φ' => [4, 14, 21, 21, 21, 14, 4],
+        'Ψ' => [21, 21, 21, 14, 4, 4, 4],
+        'Ω' | 'Ώ' => [14, 17, 17, 17, 10, 10, 27],
+        '\'' => [4, 4, 0, 0, 0, 0, 0],
         'A' => [14, 17, 17, 31, 17, 17, 17],
         'B' => [30, 17, 17, 30, 17, 17, 30],
         'C' => [14, 17, 16, 16, 16, 17, 14],
@@ -1110,6 +1184,27 @@ pub(crate) fn glyph(ch: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn street_label_stays_inside_its_panel_for_long_and_local_names() {
+        for name in [
+            "Main Street",
+            "Οδός Αρχιεπισκόπου Μακαρίου Γ",
+            &"LONG STREET NAME ".repeat(30),
+            &"X".repeat(200),
+        ] {
+            let mut vertices = Vec::new();
+            append_street_name(&mut vertices, name);
+            assert!(!vertices.is_empty());
+            for vertex in vertices.chunks_exact(6) {
+                assert!((0.59..=0.97).contains(&vertex[0]));
+                assert!((0.28..=0.40).contains(&vertex[1]));
+            }
+        }
+        for ch in "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩΆΈΉΊΌΎΏ".chars() {
+            assert_ne!(glyph(ch), [0; 7], "missing glyph {ch}");
+        }
+    }
 
     #[test]
     fn location_pages_hit_only_visible_entries() {

@@ -65,6 +65,10 @@ Choose a location and car, then start free driving.
 The bonnet camera follows steering immediately and smooths vertical bumps and
 pitch changes to keep the horizon steady.
 
+The current street name appears below the minimap while driving. Names come from
+the location’s OSM source, preferring English when available; unnamed roads and
+off-road driving are labeled accordingly. Built-in routes show their route name.
+
 The full map opens centered on your car at the minimap's scale. Zooming keeps
 the car centered; zoom out to see the entire road network. Reopening the map
 resets the zoom to the minimap's scale.

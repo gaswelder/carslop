@@ -6,6 +6,7 @@ const CELL: f32 = 32.0;
 #[derive(Debug)]
 pub struct Street {
     pub ends: [usize; 2],
+    way: Option<i64>,
     pub width: f32,
     pub oneway: i8,
     pub length: f32,
@@ -31,6 +32,7 @@ pub struct City {
     pub landscape: crate::landscape::Landscape,
     pub elevation: Option<crate::elevation::HeightField>,
     pub surfaces: Option<crate::street_surface::StreetSurface>,
+    street_names: HashMap<i64, String>,
     road_grid: HashMap<(i32, i32), Vec<usize>>,
     building_grid: HashMap<(i32, i32), Vec<usize>>,
 }
@@ -92,10 +94,80 @@ impl Building {
         best
     }
 }
+
+/// Read just way labels, without building the full OSM geometry again.
+fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, String>, String> {
+    use quick_xml::{events::Event, Reader};
+    let mut reader = Reader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut names = HashMap::new();
+    let mut way = None;
+    let mut labels = [String::new(), String::new(), String::new()];
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|e| e.to_string())?
+        {
+            Event::Start(e) if e.name().as_ref() == "way" => {
+                way = None;
+                labels.iter_mut().for_each(String::clear);
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| e.to_string())?;
+                    if attr.key.as_ref() == "id" {
+                        way = attr.value.parse().ok();
+                    }
+                }
+            }
+            Event::Start(e) | Event::Empty(e) if way.is_some() && e.name().as_ref() == "tag" => {
+                let mut key = String::new();
+                let mut value = String::new();
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| e.to_string())?;
+                    let decoded = attr
+                        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                        .map_err(|e| e.to_string())?;
+                    match attr.key.as_ref() {
+                        "k" => key = decoded.into_owned(),
+                        "v" => value = decoded.into_owned(),
+                        _ => {}
+                    }
+                }
+                let index = match key.as_str() {
+                    "name:en" => Some(0),
+                    "name" => Some(1),
+                    "ref" => Some(2),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    labels[index] = value.trim().to_owned();
+                }
+            }
+            Event::End(e) if e.name().as_ref() == "way" => {
+                if let Some(id) = way.take() {
+                    if let Some(label) = labels.iter().find(|label| !label.is_empty()) {
+                        names.insert(id, label.clone());
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(names)
+}
+
 impl City {
     pub fn engomi() -> Result<Self, String> {
         let source = crate::city_assets::try_read("city.txt")?;
         let mut city = Self::parse(&source)?;
+        match crate::package::Reader::open(&crate::city_assets::directory().join("source.osm")) {
+            Ok(source) => match read_street_names(std::io::BufReader::new(source)) {
+                Ok(names) => city.street_names = names,
+                Err(error) => log::warn!("Cannot load street names: {error}"),
+            },
+            Err(error) => log::warn!("Cannot open street names: {error}"),
+        }
         let (surfaces, paths, checksums) = crate::street_surface::StreetSurface::load_city(
             crate::city_assets::directory(),
             &source,
@@ -181,6 +253,7 @@ impl City {
             surfaces: None,
             elevation: None,
             landscape: crate::landscape::Landscape::default(),
+            street_names: HashMap::new(),
             road_grid: HashMap::new(),
             building_grid: HashMap::new(),
         };
@@ -238,6 +311,7 @@ impl City {
                     }
                     city.streets.push(Street {
                         ends,
+                        way: fields.get(5).and_then(|id| id.parse().ok()),
                         width,
                         oneway,
                         length,
@@ -429,9 +503,12 @@ impl City {
             .unwrap()
     }
     pub fn project(&self, p: [f32; 3]) -> RoadSample {
+        self.project_street(p).1
+    }
+    fn project_street(&self, p: [f32; 3]) -> (usize, RoadSample) {
         let origin = cell([p[0], p[2]]);
         let mut seen = std::collections::HashSet::new();
-        let mut best: Option<(f32, RoadSample)> = None;
+        let mut best: Option<(f32, usize, RoadSample)> = None;
         let limit = (self
             .bounds
             .iter()
@@ -451,7 +528,7 @@ impl City {
                             if seen.insert(i) {
                                 let candidate = self.projected(i, p);
                                 if best.is_none_or(|b| candidate.0 < b.0) {
-                                    best = Some(candidate);
+                                    best = Some((candidate.0, i, candidate.1));
                                 }
                             }
                         }
@@ -461,11 +538,25 @@ impl City {
             // Indexed path bounds carry a 32 m margin, so unvisited cells
             // cannot hide a closer road once this distance is reached.
             if best.is_some_and(|b| b.0 <= (radius + 1) as f32 * CELL) {
-                return best.unwrap().1;
+                let (_, index, road) = best.unwrap();
+                return (index, road);
             }
         }
-        best.expect("city contains roads").1
+        let (_, index, road) = best.expect("city contains roads");
+        (index, road)
     }
+    /// Label the closest road only while the car is on or beside its surface.
+    pub fn street_name(&self, p: [f32; 3]) -> &str {
+        let (index, road) = self.project_street(p);
+        if (p[0] - road.point[0]).hypot(p[2] - road.point[2]) > road.width * 0.5 + 5.0 {
+            return "OFF ROAD";
+        }
+        self.streets[index]
+            .way
+            .and_then(|id| self.street_names.get(&id))
+            .map_or("UNNAMED ROAD", String::as_str)
+    }
+
     /// Signed distance among nearby footprints; infinity when none is nearby.
     pub fn building_clearance(&self, p: [f32; 2]) -> f32 {
         self.building_grid
@@ -688,6 +779,26 @@ mod tests {
     }
 
     const CROSS:&str="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
+    #[test]
+    fn street_labels_follow_the_car_and_preserve_unnamed_roads() {
+        let mut city = City::parse(CROSS).unwrap();
+        let osm = br#"<osm>
+            <way id="1"><tag k="name" v="Local name"/><tag k="name:en" v="Main &amp; First"/></way>
+            <way id="2"><tag k="ref" v="B12"/></way>
+            <way id="3"><tag k="name" v="   "/></way>
+        </osm>"#;
+        city.street_names = read_street_names(&osm[..]).unwrap();
+        assert_eq!(city.street_name([-20.0, 0.5, 2.0]), "Main & First");
+        assert_eq!(city.street_name([2.0, 0.5, 20.0]), "B12");
+        assert_eq!(city.street_name([25.0, 0.5, 25.0]), "OFF ROAD");
+        city.street_names.remove(&2);
+        assert_eq!(city.street_name([2.0, 0.5, 20.0]), "UNNAMED ROAD");
+        assert!(!city.street_names.contains_key(&3));
+        let local = "<osm><way id=\"1\"><tag k=\"name\" v=\"Οδός\"/></way></osm>";
+        assert_eq!(read_street_names(local.as_bytes()).unwrap()[&1], "Οδός");
+        assert!(read_street_names(&b"<osm><way id='1'"[..]).is_err());
+    }
+
     #[test]
     fn branches_are_open_and_dead_ends_do_not_join_other_streets() {
         let city = City::parse(CROSS).unwrap();
