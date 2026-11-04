@@ -13,6 +13,8 @@ and mechanical personality.
 
 <img src="screenshot.20261030.jpg">
 
+[Screenshot location: Engomi, Nicosia](https://www.google.com/maps/search/?api=1&query=35.1670537,33.3169556)
+
 ## Contents
 
 - [Build and play](#build-and-play)
