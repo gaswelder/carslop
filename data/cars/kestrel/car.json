@@ -18,14 +18,14 @@
     "track_width": 1.46,
     "yaw_inertia": 1450.0,
     "front_drive": 0.0,
-    "brake_bias": 0.61,
+    "brake_bias": 0.67,
     "corner_stiffness": [
       56000.0,
-      105000.0
+      125000.0
     ],
     "peak_torque": 155.0,
     "suspension_hz": 1.65,
-    "steering_speed_squared": 0.01
+    "steering_speed_squared": 0.016
   },
   "gearbox": {
     "ratios": [

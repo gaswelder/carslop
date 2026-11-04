@@ -603,10 +603,15 @@ impl Vehicle {
     }
 
     fn steering_angle(&self, speed: f32) -> f32 {
+        // Reserve the extra high-speed lock reduction for large inputs so
+        // a held key cannot overwhelm the tires, while taps stay responsive.
         let lock = 0.54
             / (1.0
                 + speed.abs() / 22.0
-                + self.model.spec().dynamics.steering_speed_squared * speed * speed);
+                + self.model.spec().dynamics.steering_speed_squared
+                    * speed
+                    * speed
+                    * (0.35 + 0.65 * self.steering * self.steering));
         self.steering.signum() * self.steering.abs().powf(1.10) * lock
     }
 
@@ -813,6 +818,44 @@ mod tests {
                     peak_slip < 3.0,
                     "40 km/h turn should remain controllable: {input}, {throttle}, {peak_slip}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn kestrel_rear_stays_settled_through_corner_entry_and_lift() {
+        for speed_kmh in [40.0, 60.0, 90.0, 120.0] {
+            for input in [-1.0, -0.5, 0.5, 1.0] {
+                for brake in [0.0, 0.35] {
+                    let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+                    car.velocity =
+                        [car.heading.sin(), car.heading.cos()].map(|v| v * speed_kmh / 3.6);
+                    let mut peak_slip: f32 = 0.0;
+                    for tick in 0..720 {
+                        treadmill_tick(
+                            &mut car,
+                            Controls {
+                                steering: input,
+                                throttle: if tick < 360 { 0.35 } else { 0.0 },
+                                brake: if tick < 360 { 0.0 } else { brake },
+                                ..Controls::default()
+                            },
+                        );
+                        // Measure the rear contact patch: the center of mass
+                        // moves sideways naturally during a tight, gripped turn.
+                        let rear_side = car.slip
+                            - car.yaw_rate
+                                * car.model.spec().wheelbase
+                                * car.model.spec().dynamics.front_weight;
+                        peak_slip = peak_slip
+                            .max(rear_side.abs().atan2(car.speed.abs().max(2.5)).to_degrees());
+                    }
+                    println!(
+                        "{speed_kmh} km/h, steering {input}, brake {brake}: {peak_slip:.2} deg"
+                    );
+                    assert!(peak_slip < 6.0,
+                        "ordinary corner entry and lift should not throw the rear out: {speed_kmh}, {input}, {brake}: {peak_slip}");
+                }
             }
         }
     }

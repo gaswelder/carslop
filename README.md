@@ -349,8 +349,9 @@ and the handbrake locks the rear axle. Foot braking retains ABS-like regulation.
 Tire forces peak and soften into sliding grip, so front and rear breakaway and
 countersteering arise from forces rather than a target rotation rate. Keyboard
 steering still ramps progressively and reduces lock with speed. Kestrel has
-additional speed-dependent lock reduction and a firmer rear-axle response so
-holding a steering key at city speeds does not provoke abrupt oversteer.
+additional speed-dependent lock reduction, a firmer rear-axle response, and
+forward brake bias so held turns and braking into corners produce progressive
+breakaway rather than abrupt rear sliding.
 
 Engine torque varies with RPM, passes through the selected gear and final drive,
 and is interrupted during gear changes. Closed-throttle engine braking
