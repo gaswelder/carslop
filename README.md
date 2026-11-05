@@ -90,24 +90,212 @@ Built-in tracks need no city files. For city play, keep its `data/locations/NAME
 package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 
-## Maps and car development
+## Import and maintain maps
 
-See the [development guide](docs/guide.md) for city imports, imagery preparation,
-location packages, vehicle physics, car assets, tuning, and engine audio credits.
+Locations are offline SQLite packages in `data/locations/`. Keep the package
+beside the game; map source files are only needed for imports and rebuilding.
+
+1. Download an `.osm.pbf` region from [Geofabrik](https://download.geofabrik.de/).
+2. Download matching [Skadi elevation tiles](https://registry.opendata.aws/terrain-tiles/).
+   A tile is named for its southwest whole-degree corner: Nicosia uses
+   [N35E033.hgt.gz](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
+   Keep adjacent tiles together when importing across tile boundaries.
+3. Extract a small area, then import it with the same bounds, in
+   **south, west, north, east** order:
+
+```sh
+./target/release/nfs5like extract-region cyprus.osm.pbf /tmp/engomi.osm \
+  --bbox 35.156 33.312 35.168 33.328
+./target/release/nfs5like add-location engomi-demo --source /tmp/engomi.osm \
+  --bbox 35.156 33.312 35.168 33.328 --elevation N35E033.hgt.gz
+./target/release/nfs5like play --location engomi-demo
+```
+
+An existing complete OSM XML export can skip extraction. PBF and Overpass JSON
+cannot be passed directly to `add-location`. Names use letters, digits, `-`, `_`,
+start with a letter or digit, and contain at most 64 characters. Existing
+locations are never overwritten by import; use a new name to replace source data.
+
+```sh
+# Rebuild visuals and collision data after editing a location's inputs.
+./target/release/nfs5like bake-city --location nicosia
+# Rebuild just one cache.
+./target/release/nfs5like bake-scene --location nicosia
+./target/release/nfs5like bake-collision --location nicosia
+# Inspect, extract or package a location.
+./target/release/nfs5like verify-location data/locations/nicosia.sqlite
+./target/release/nfs5like unpack-location data/locations/nicosia.sqlite /tmp/nicosia
+./target/release/nfs5like pack-location /tmp/my-city data/locations/my-city.sqlite
+```
+
+`./rebuild.sh` builds the release executable and refreshes collision data for
+bundled maps. New imports bake visuals automatically. Packages retain source
+XML, elevation, imagery, metadata and checksummed geometry; they stream geometry
+and imagery during play. Missing or stale collision data produces a rebuild
+instruction. No database server is needed.
+
+### Imagery and trees
+
+```sh
+# Download imagery for the whole city and infer additional trees.
+./target/release/nfs5like prepare-city-imagery \
+  --city-data data/locations/nicosia.sqlite --work-dir /tmp/nicosia-imagery
+./target/release/nfs5like bake-scene --location nicosia
+```
+
+Use `--limit-blocks 2` for a sample without changing city assets. Reusing the
+work directory resumes downloads; allow several GB of temporary storage.
+World Imagery dates and sharpness vary. These imagery packages have not been
+cleared for redistribution; see [credits](#credits-and-distribution).
+
+For manually reviewed trees, run `preview-trees`, open the output `review.html`,
+review candidates and download the accepted GeoJSON, then run
+`import-imagery-trees` followed by `bake-scene`. Roads, buildings, duplicate trees
+and out-of-bounds candidates are excluded. Estimated crowns can mistake shrubs
+or shadows for trees; original OSM trees are preserved.
+
+## Car assets and handling
+
+Each car has `data/cars/NAME/car.json` and `model.glb`. Restart after editing.
+The three base definitions are complete; extra folders inherit from `kestrel`,
+`muscle` or `club` and are discovered at startup. Invalid extra cars are skipped
+with a warning; invalid required cars stop loading with the filename and error.
+
+```json
+{
+  "base": "kestrel",
+  "name": "MY COUPE",
+  "description": "CUSTOM ROAD COUPE",
+  "mass": 1100,
+  "model": "model.glb"
+}
+```
+
+Omit `model` to inherit the base artwork. Paths are relative to the car folder.
+Handling uses SI units; `top_speed` is m/s. Scalar overrides: `mass`,
+`engine_force`, `top_speed`, `brake_force`, `lateral_force`, `wheelbase`,
+`steering_response`. `dynamics` accepts `front_weight`, `cg_height`, `track_width`,
+`yaw_inertia`, `front_drive` (0 rear, 1 front), `brake_bias`, `corner_stiffness`
+(front/rear pair), `peak_torque`, `suspension_hz`, `steering_speed_squared` and
+`steering_low_speed_squared`. `gearbox` accepts descending `ratios`, `final_drive`,
+`rolling_radius`, `reverse_ratio`, `upshift_rpm`, `downshift_rpm`.
+`road_engine` sets `wheel_power_watts` and `drag_accel`, or `null` to disable it.
+`turbo` accepts `off_boost_fraction`, `spool_start_rpm`, `full_boost_rpm`,
+`spool_seconds`, `decay_seconds`, or `null` for a naturally aspirated engine.
+
+The simulation integrates axle tire forces at up to 240 Hz, including load
+transfer, combined braking/cornering grip, engine braking and shift interruptions.
+A revved launch releases finite flywheel energy through the clutch. Sprung body
+pitch, roll and heave react to terrain; rendered wheels have 14 cm compression
+and 16 cm droop. This uses two axle tire models and one vertical chassis degree
+of freedom. Vehicle tuning is for gameplay, not a certified vehicle simulation.
+Level-ground automatic 0–100 times are about 6.83 s (Kestrel) and 5.30 s (Turbo).
+
+### GLB format
+
+Export static triangulated glTF 2.0 GLB: meters, Y up, +Z forward, one embedded
+buffer, opaque materials, and these uniquely named parts:
+
+| Node | Contents |
+| --- | --- |
+| `body` | Body and attached details |
+| `wheel_rl`, `wheel_rr` | Rear wheels, negative/positive X |
+| `wheel_fl`, `wheel_fr` | Front wheels, negative/positive X |
+
+Wheel origins supply axle mounts. Wheels spin about local X; front wheels steer
+about Y. Hierarchical transforms and inverse-transpose normals are baked on load.
+Match the car JSON's wheelbase and rolling radius to the artwork. Indexed and
+unindexed triangles, normals, vertex colors and solid PBR colors are supported.
+Textures, alpha transparency, skins, animations, morph targets, sparse accessors,
+external buffers and required extensions are rejected.
+
+Material extras `{"carslop_material": [CODE, GLOSS]}` select a finish; gloss is
+0–1. Codes: 0 fixed color, 1 tintable paint, 2 glass, 3 metal, 4 optical lens,
+5 brake lens. Brake lenses emit red under the foot brake, including at rest and
+in reverse. Engine braking and the handbrake do not illuminate stop lights.
+Without extras, solid colors and metallic/roughness factors supply the finish.
+Normals and triangle winding must face outward.
 
 ## Development
 
-Run tests:
-
 ```sh
 cargo test
+# Render car views (requires SDL3/OpenGL).
+NFS_CAR_PREVIEW_DIR=/tmp/car-preview cargo test kestrel_art_preview -- --ignored --test-threads=1
+# Render the suspension test sequence to /tmp/carslop-suspension-preview.
+cargo test suspension_bump_preview -- --ignored --test-threads=1
 ```
 
-Rebuild the bundled city's visuals after renderer changes:
+## Engine audio credits
+
+The active bank (`engine.json` and `flat6-*.pcm`) uses excerpts from a real
+**Porsche 911 SC, 1981, 3.0 litre flat-six**, recorded by **Pole Position Production**.
+It is shared by Kestrel and Kestrel Turbo.
+
+- Recording: `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`
+- Collection: Sonniss #GameAudioGDC 2016, Pole Position Production — Porsche 911 SC 1981.
+- [Producer's recording description](https://pole.se/the-iconic-sound-of-a-porsche-911-sc-from-1981/)
+- [Official free bundle](https://sonniss.com/gameaudiogdc/)
+- [Individual-file download mirror](https://ftpmirror.your.org/pub/misc/sonniss2016/individual/Pole%20Position%20Production%20-%20Porsche%20911%20SC%201981/Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav)
+- Original SHA-256: `eacab443a8ece1b3f4874604f7dfd7337176648ebb1ab5a5e88cd9fcaf348aee`
+- Retrieved: 2026-10-30.
+- [Sonniss GDC bundle license](https://sonniss.com/gdc-bundle-license/), version 2.0,
+  effective 2026-08-27. Copyright remains with the respective rights holders.
+
+The license permits modification and use in personal/commercial games. These
+assets are licensed game content, **not CC0 or part of the code's license**.
+Distribute them within this game; do not redistribute them as a sound library,
+sample pack, project template, or standalone sound files. The original long take
+is kept in ignored `artifacts/audio/source/`, outside the shipped game assets.
+
+### Editing and calibration
+
+`tools/build_engine_audio.py` extracts distinct sections at six RPM regions,
+resamples to mono 48 kHz, removes handling rumble below 30 Hz, rolls off above
+12 kHz, matches levels with peak headroom, and chooses matching loop seams.
+Each runtime PCM is signed 16-bit little-endian without a header. The manifest
+records excerpt times, measured firing frequencies, overlap lengths and gains.
+No samples from NFS or other games are used.
+
+| Blend anchor | Load excerpt start | Coast excerpt start | Approx. source RPM, load/coast |
+| --- | --- | --- | --- |
+| 1,150 | 276 s | 276 s | 1,148 / 1,148 |
+| 2,000 | 10 s | 100 s | 2,205 / 1,905 |
+| 2,600 | 150 s | 134 s | 2,513 / 2,578 |
+| 3,500 | 192 s | 235 s | 3,606 / 3,423 |
+| 4,400 | 303 s | 363 s | 4,472 / 4,156 |
+| 5,100 | 395 s | 450 s | 5,012 / 5,029 |
+
+RPM is estimated from the six-cylinder firing harmonic, not synchronized
+tachometer data. Load/coast labels identify heavier/lighter exhaust sections
+selected from the same driving take; throttle state was not supplied by the
+recordist. Idle shares one excerpt between both states. The last recording is
+pitched upward for the game's 6,500 RPM redline; no dedicated 6,500 RPM capture
+is claimed. This is a naturally aspirated SC recording, not a recording of a
+930 Turbo. The turbo airflow layer is synthesized separately.
+
+To reproduce the bank, download the original to the ignored artifacts folder,
+then run from the repository root (Python requires NumPy/SciPy; ffmpeg required):
 
 ```sh
-./target/release/nfs5like bake-city --location nicosia
+python3 tools/build_engine_audio.py artifacts/audio/source/porsche-911-sc-1981.wav
 ```
+
+### Retained legacy recordings (unused)
+
+- `engine-source.wav` and `roadster-engine.pcm`: domasx2,
+  [racing car engine sound loops](https://opengameart.org/content/racing-car-engine-sound-loops),
+  `loop_0.wav`, [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+  The PCM derivative is mono 48 kHz signed 16-bit, high-passed at 28 Hz.
+- `engine-load-source.wav` / `engine-coast-source.wav` and their `.pcm` derivatives:
+  `Acc_05570.wav` / `Dec_05581.wav`, DerMeehdrescher / Meehdrescher Studios,
+  [Generic V8 Engine Sound](https://opengameart.org/content/generic-v8-engine-sound),
+  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+  Originals and derivatives retain this license. Changes: mono downmix, 30 Hz
+  high-pass, 48 kHz signed 16-bit raw export; runtime pitch/filter/crossfade.
+  Retrieved 2026-10-30.
+
+Other engine voices, tire noise, rolling noise and turbo airflow are procedural.
 
 ## Credits and distribution
 
@@ -136,20 +324,3 @@ Redistribution permission for the local imagery pack has not been established;
 do not redistribute packages containing this imagery or its derived assets
 unless authorised.
 
-## Backlog
-
-### World
-
-- [ ] Make Nicosia the default location.
-- [ ] Add a downloader for arbitrary cities.
-- [ ] Show real-world coordinates in game to identify locations.
-
-### Cars
-
-- [ ] Review handbrake side-sliding realism.
-- [ ] Add a Mazda Demio.
-
-
-### Sound
-
-- [ ] Improve engine realism with dedicated mid-RPM recordings.

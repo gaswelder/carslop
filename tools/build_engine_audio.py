@@ -2,7 +2,7 @@
 """Build Kestrel's RPM bank from the Sonniss GDC 2016 Porsche 911 SC take.
 
 Requires Python 3, NumPy, SciPy and ffmpeg. The original recording stays outside
-the game assets; see data/cars/kestrel/audio/CREDITS.md for its source/license.
+the game assets; see README.md for its source/license.
 Run: python3 tools/build_engine_audio.py path/to/original.wav
 """
 import argparse
