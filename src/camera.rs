@@ -208,7 +208,7 @@ mod tests {
     use crate::cars::CarModel;
 
     fn car() -> Vehicle {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster)
     }
 
@@ -348,7 +348,10 @@ mod tests {
             c.update(&v, Duration::from_secs_f64(1.0 / 60.0));
         }
         assert!((c.distance - 9.0).abs() < 0.01 && (c.height - 4.5).abs() < 0.01);
-        v.position = track::at_distance(120.0).lane_position(0.0);
+        v.position = track::TrackId::Compact
+            .track()
+            .at_distance(120.0)
+            .lane_position(0.0);
         c.snap(&v);
         assert_eq!(c.view(), FollowView::Wide);
         assert_close(c.anchor, v.position, 0.001);
@@ -423,7 +426,9 @@ mod tests {
                 c.toggle_view();
             }
             for i in 0..600 {
-                let road = track::at_distance(i as f32 * track::length() / 600.0);
+                let road = track::TrackId::Compact
+                    .track()
+                    .at_distance(i as f32 * track::TrackId::Compact.track().length() / 600.0);
                 v.position = road.lane_position(1.4);
                 v.heading = road.heading();
                 v.speed = 20.0;
@@ -435,7 +440,10 @@ mod tests {
                     .iter()
                     .chain(pose.target.iter())
                     .all(|x| x.is_finite()));
-                assert!(pose.eye[1] >= track::project(pose.eye).point[1] + 1.499);
+                assert!(
+                    pose.eye[1]
+                        >= track::TrackId::Compact.track().project(pose.eye).point[1] + 1.499
+                );
                 let gap = (0..3)
                     .map(|i| (pose.eye[i] - pose.target[i]).powi(2))
                     .sum::<f32>();

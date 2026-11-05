@@ -1444,7 +1444,7 @@ mod tests {
     }
 
     fn car() -> Vehicle {
-        let start = track::at_distance(5.0);
+        let start = track::TrackId::Compact.track().at_distance(5.0);
         Vehicle::new(
             start.lane_position(0.0),
             start.heading(),
@@ -2197,7 +2197,7 @@ mod tests {
 
     #[test]
     fn wall_response_preserves_tangential_motion_and_height() {
-        let sample = track::at_distance(50.0);
+        let sample = track::TrackId::Compact.track().at_distance(50.0);
         let mut v = Vehicle::new(
             sample.lane_position(4.0),
             sample.heading(),
@@ -2209,7 +2209,14 @@ mod tests {
             sample.tangent[1] * 8.0 + normal[1] * 4.0,
         ];
         assert!(v.resolve_road() > 0.0);
-        assert!(track::project(v.position).offset.abs() < 2.3);
+        assert!(
+            track::TrackId::Compact
+                .track()
+                .project(v.position)
+                .offset
+                .abs()
+                < 2.3
+        );
         assert!((v.position[1] - sample.point[1] - 0.48).abs() < 0.2);
         assert!(dot(v.velocity, sample.tangent) > 6.0);
     }
@@ -2235,7 +2242,7 @@ mod tests {
 
     #[test]
     fn models_have_distinct_acceleration_braking_and_grip() {
-        let sample = track::at_distance(50.0);
+        let sample = track::TrackId::Compact.track().at_distance(50.0);
         let results = crate::cars::ALL.map(|model| {
             let make = || Vehicle::new(sample.lane_position(0.0), sample.heading(), model);
             let mut accelerating = make();
@@ -2281,7 +2288,7 @@ mod tests {
 
     #[test]
     fn model_speed_limits_and_gearboxes_are_used() {
-        let sample = track::at_distance(50.0);
+        let sample = track::TrackId::Compact.track().at_distance(50.0);
         let speeds = crate::cars::ALL.map(|model| {
             let mut v = Vehicle::new(sample.lane_position(0.0), sample.heading(), model);
             // Reuse a short straight patch as a test treadmill, not a gameplay feature.
@@ -2315,7 +2322,7 @@ mod tests {
 
     #[test]
     fn unequal_mass_contact_conserves_momentum_and_moves_light_car_more() {
-        let sample = track::at_distance(50.0);
+        let sample = track::TrackId::Compact.track().at_distance(50.0);
         let mut heavy = Vehicle::new(
             sample.lane_position(0.8),
             sample.heading(),
@@ -2412,7 +2419,7 @@ mod tests {
 
     #[test]
     fn sprung_body_motion_responds_to_braking_throttle_and_cornering() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let mut braking = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
         braking.velocity = road.tangent.map(|v| v * 20.0);
         braking.refresh_speed();
@@ -2507,7 +2514,7 @@ mod tests {
 
     #[test]
     fn update_reports_road_impacts_without_losing_substep_peaks() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let mut v = Vehicle::new(road.lane_position(2.3), road.heading(), CarModel::Roadster);
         v.velocity = road.normal().map(|x| x * 5.0);
         let impact = v.update(Duration::from_millis(16), Controls::default());
@@ -2517,7 +2524,7 @@ mod tests {
 
     #[test]
     fn downshifts_blip_engine_while_braking_and_then_return_to_coast() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         for model in crate::cars::ALL {
             for manual in [false, true] {
                 let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
@@ -2565,7 +2572,7 @@ mod tests {
 
     #[test]
     fn rev_matching_excludes_upshifts_neutral_reverse_and_idle() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
         car.manual = true;
         car.gear = 3;
@@ -2588,7 +2595,7 @@ mod tests {
 
     #[test]
     fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         for model in crate::cars::ALL {
             let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
             car.manual = true;
@@ -2633,7 +2640,7 @@ mod tests {
 
     #[test]
     fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         for model in crate::cars::ALL {
             let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
             car.manual = true;
@@ -2692,7 +2699,7 @@ mod tests {
 
     #[test]
     fn engine_feedback_smooths_rpm_load_and_shift_unload() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
         assert_eq!(car.engine_rpm, IDLE_RPM);
         assert_eq!(car.engine_load, 0.0);
@@ -2755,7 +2762,7 @@ mod tests {
 
     #[test]
     fn every_car_can_reverse_brake_and_drive_forward_again() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         for model in crate::cars::ALL {
             let mut v = Vehicle::new(road.lane_position(0.0), road.heading(), model);
             assert!(v.toggle_direction());

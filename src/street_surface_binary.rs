@@ -320,7 +320,7 @@ pub(crate) fn bake(directory: &Path) -> crate::location::Result<()> {
 mod tests {
     use super::*;
     fn fixture(root: &Path) -> String {
-        let source = "CITY 1\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0\n";
+        let source = "CITY 2\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0\n";
         std::fs::write(root.join("city.txt"), source).unwrap();
         let streets = format!(
             "STREETS 1 1 {:08x}\nj 0\np 0 3 0 0 10 1 20 0\nt 0 0 0 20 0 0 20\nt 4 20 0 20 20 0 20\nc 0 0 0 20 0 0 1\n",

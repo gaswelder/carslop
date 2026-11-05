@@ -550,24 +550,7 @@ fn wheel(b: &mut Builder, x: f32, z: f32) {
     b.vertices.extend(vertices);
 }
 fn car(b: &mut Builder, model: CarModel) {
-    for triangle in model.spec().design.body.chunks_exact(3) {
-        // Older artwork uses untinted red geometry for its rear lenses.
-        // Promote whole triangles so the material tag never interpolates
-        // between finishes. Paint and front/amber/white lenses stay untouched.
-        let rear_lens = triangle.iter().all(|v| {
-            (v.material[0] == 0.0 || v.material[0] == 4.0)
-                && v.position[2] < 0.0
-                && v.color[0] > 0.4
-                && v.color[1] < v.color[0] * 0.25
-                && v.color[2] < v.color[0] * 0.25
-        });
-        b.vertices.extend(triangle.iter().copied().map(|mut v| {
-            if rear_lens {
-                v.material[0] = 5.0;
-            }
-            v
-        }));
-    }
+    b.vertices.extend_from_slice(&model.spec().design.body);
 }
 
 #[cfg(test)]

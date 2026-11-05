@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn footprints_are_finite_bounded_and_match_each_car() {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let footprints = cars::ALL.map(|model| {
             let car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
             let shadow = ContactShadow::new(&car);
@@ -111,12 +111,16 @@ mod tests {
     fn contacts_follow_elevated_route_and_recovery_without_history() {
         for model in cars::ALL {
             for i in 0..120 {
-                let road = track::at_distance(i as f32 * track::length() / 120.0);
+                let road = track::TrackId::Compact
+                    .track()
+                    .at_distance(i as f32 * track::TrackId::Compact.track().length() / 120.0);
                 let mut car = Vehicle::new(road.lane_position(1.4), road.heading(), model);
                 let shadow = ContactShadow::new(&car);
                 let p = [car.position[0], road.point[1] + 0.05, car.position[2]];
                 assert!((shadow.opacity_at(p) - STRENGTH).abs() < 0.0001);
-                let elsewhere = track::at_distance(road.distance + track::length() * 0.5);
+                let elsewhere = track::TrackId::Compact
+                    .track()
+                    .at_distance(road.distance + track::TrackId::Compact.track().length() * 0.5);
                 car.reset(elsewhere.lane_position(0.0), elsewhere.heading());
                 assert_eq!(ContactShadow::new(&car).opacity_at(p), 0.0);
             }

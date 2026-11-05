@@ -298,7 +298,7 @@ fn importer_retains_separate_networks_and_filters_access_and_crossing_structures
     assert_eq!((avenue.width, avenue.kind, avenue.lanes), (8., 0, 3));
     assert!(m.metres([35.162, 33.320]).iter().all(|n| n.abs() < 1e-8));
     assert!((m.metres([35.163, 33.320])[1] + 111.195).abs() < 0.01);
-    // New locations intentionally use their crop centre, rather than the legacy global Engomi origin.
+    // New locations intentionally use their crop centre, rather than a fixed global origin.
     let larger = osm::compile(&s, Some([35.156, 33.312, 35.176, 33.336])).unwrap();
     assert_eq!(larger.origin, [35.166, 33.324]);
 }

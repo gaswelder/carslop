@@ -129,7 +129,9 @@ mod tests {
         assert!(high.surf < coast.surf && high.wind > coast.wind);
         assert!(Levels::at(shore, 25.0).wind > coast.wind);
         for i in 0..300 {
-            let road = track::at_distance(i as f32 * track::length() / 300.0);
+            let road = track::TrackId::Compact
+                .track()
+                .at_distance(i as f32 * track::TrackId::Compact.track().length() / 300.0);
             let levels = Levels::at(road.lane_position(1.4), 40.0);
             assert!((0.0..=1.0).contains(&levels.wind) && (0.0..=1.0).contains(&levels.surf));
         }

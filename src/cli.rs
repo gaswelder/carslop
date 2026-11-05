@@ -110,12 +110,7 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             "--location"
                 if matches!(
                     cmd.as_str(),
-                    "play"
-                        | "bake-city"
-                        | "--bake-city"
-                        | "bake-collision"
-                        | "bake-scene"
-                        | "circuit-only"
+                    "play" | "bake-city" | "bake-collision" | "bake-scene" | "circuit-only"
                 ) =>
             {
                 if location.is_some() {
@@ -179,7 +174,7 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
         "circuit-only" => Command::CircuitOnly(
             location.ok_or_else(|| invalid("circuit-only requires --location NAME"))?,
         ),
-        "bake-city" | "--bake-city" => {
+        "bake-city" => {
             Command::Bake(location.ok_or_else(|| invalid("bake-city requires --location NAME"))?)
         }
         "bake-scene" => Command::BakeScene(
@@ -367,6 +362,7 @@ mod tests {
             Command::Play(Some("limassol".into()))
         );
         assert!(args(&["--bake-city"]).is_err());
+        assert!(args(&["--bake-city", "--location", "nicosia"]).is_err());
         assert!(args(&["bake-city"]).is_err());
         assert_eq!(
             args(&["bake-city", "--location", "nicosia"])

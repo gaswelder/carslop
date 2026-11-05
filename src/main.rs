@@ -2092,14 +2092,14 @@ mod tests {
     #[test]
     fn free_recovery_is_nearby_unpenalized_and_preserves_facing_direction() {
         let mut s = Session::on_track(CarModel::Muscle, TrackId::Compact);
-        let road = track::at_distance(120.0);
+        let road = track::TrackId::Compact.track().at_distance(120.0);
         s.vehicle.reset(
             road.lane_position(1.4),
             road.heading() + std::f32::consts::PI,
         );
         s.vehicle.toggle_direction();
         assert!(s.recover());
-        let recovered = track::project(s.vehicle.position);
+        let recovered = track::TrackId::Compact.track().project(s.vehicle.position);
         assert!((recovered.distance - 120.0).abs() < 0.1);
         assert!(recovered.offset.abs() < 0.01);
         assert!((s.vehicle.heading - road.heading()).cos() < -0.9);

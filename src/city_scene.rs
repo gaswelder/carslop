@@ -537,7 +537,7 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
 mod tests {
     use super::*;
     fn small_city() -> City {
-        City::parse("CITY 1\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
+        City::parse("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
     }
 
     #[test]

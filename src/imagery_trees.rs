@@ -159,7 +159,7 @@ mod tests {
     fn import_is_repeatable_preserves_mapped_trees_and_rechecks_conflicts() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let city="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
+        let city="CITY 2\norigin 0 0\nbounds -50 -50 50 50\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
         let streets = format!(
             "STREETS 1 1 {:08x}\nt 0 -20 -2 20 -2 20 2\nt 0 -20 -2 20 2 -20 2\n",
             crate::street_surface::crc32(city)

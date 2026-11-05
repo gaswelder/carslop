@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn reads_matching_map_surfaces_and_preserves_pavement() {
         let temp = tempfile::tempdir().unwrap();
-        let city="CITY 1\norigin 35.162 33.32\nbounds -50 -50 50 50\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
+        let city="CITY 2\norigin 35.162 33.32\nbounds -50 -50 50 50\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
         fs::write(temp.path().join("city.txt"), city).unwrap();
         let header = format!("STREETS 1 1 {:08x}\n", crate::street_surface::crc32(city));
         let mesh = "t 0 -20 -2 20 -2 20 2\nt 0 -20 -2 20 2 -20 2\nt 4 -20 3 20 3 20 6\n";

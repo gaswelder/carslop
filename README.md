@@ -276,7 +276,7 @@ OSM/elevation sources, keeping only `highway=raceway` roads. It retains building
 and landscape. This replaces the package atomically after a successful bake.
 
 `--location` selects an imported package name; it preselects the menu rather
-than immediately starting driving. `--bake-city` is a legacy alias for `bake-city`.
+than immediately starting driving.
 
 ```text
 Usage: nfs5like [COMMAND]
@@ -444,20 +444,6 @@ then run from the repository root (Python requires NumPy/SciPy; ffmpeg required)
 ```sh
 python3 tools/build_engine_audio.py artifacts/audio/source/porsche-911-sc-1981.wav
 ```
-
-### Retained legacy recordings (unused)
-
-- `engine-source.wav` and `roadster-engine.pcm`: domasx2,
-  [racing car engine sound loops](https://opengameart.org/content/racing-car-engine-sound-loops),
-  `loop_0.wav`, [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
-  The PCM derivative is mono 48 kHz signed 16-bit, high-passed at 28 Hz.
-- `engine-load-source.wav` / `engine-coast-source.wav` and their `.pcm` derivatives:
-  `Acc_05570.wav` / `Dec_05581.wav`, DerMeehdrescher / Meehdrescher Studios,
-  [Generic V8 Engine Sound](https://opengameart.org/content/generic-v8-engine-sound),
-  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
-  Originals and derivatives retain this license. Changes: mono downmix, 30 Hz
-  high-pass, 48 kHz signed 16-bit raw export; runtime pitch/filter/crossfade.
-  Retrieved 2026-10-30.
 
 Other engine voices, tire noise, rolling noise and turbo airflow are procedural.
 

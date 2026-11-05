@@ -207,7 +207,7 @@ mod tests {
     use crate::cars::CarModel;
 
     fn car(offset: f32) -> Vehicle {
-        let road = track::at_distance(50.0);
+        let road = track::TrackId::Compact.track().at_distance(50.0);
         let mut car = Vehicle::new(
             road.lane_position(offset),
             road.heading(),

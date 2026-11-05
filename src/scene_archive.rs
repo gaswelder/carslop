@@ -58,9 +58,7 @@ impl Archive {
         let mut header = [0u8; 16];
         file.read_exact(&mut header)?;
         let n = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-        // Bytes 8..12 held a build fingerprint in older archives. Ignore it:
-        // compatibility is defined by the format version, not the producer's code.
-        if &header[..8] != MAGIC {
+        if &header[..8] != MAGIC || header[8..12] != [0; 4] {
             return Err(error("unsupported city scene archive format"));
         }
         if n == 0 || n > 100_000 || 16 + (n * ENTRY_SIZE) as u64 > length {
@@ -220,7 +218,7 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
     }
     file.seek(SeekFrom::Start(0))?;
     file.write_all(MAGIC)?;
-    file.write_all(&0u32.to_le_bytes())?; // Reserved; legacy build fingerprint.
+    file.write_all(&0u32.to_le_bytes())?; // Reserved.
     file.write_all(&(entries.len() as u32).to_le_bytes())?;
     for entry in entries {
         for side in entry.bounds {
@@ -370,7 +368,7 @@ mod tests {
         assert!(archive.read_layer(0, 3).is_err());
     }
     #[test]
-    fn legacy_build_fingerprints_are_ignored_but_format_versions_are_checked() {
+    fn nonzero_reserved_fields_and_unsupported_formats_are_rejected() {
         let path = TestFile::new();
         fixture(&path.0);
         let mut file = std::fs::OpenOptions::new()
@@ -380,9 +378,9 @@ mod tests {
         file.seek(SeekFrom::Start(8)).unwrap();
         file.write_all(&123u32.to_le_bytes()).unwrap();
         file.flush().unwrap();
-        let archive = Archive::open(&path.0).unwrap();
-        let mut worker = archive.fork().unwrap();
-        assert_eq!(worker.read_layer(0, 0).unwrap().len(), 3);
+        assert!(Archive::open(&path.0).is_err());
+        file.seek(SeekFrom::Start(8)).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
         file.write_all(b"CLOPCH99").unwrap();
         file.flush().unwrap();

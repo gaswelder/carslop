@@ -297,7 +297,7 @@ impl City {
             building_grid: HashMap::new(),
         };
         let mut lines = text.lines();
-        if !matches!(lines.next(), Some("CITY 1" | "CITY 2")) {
+        if !matches!(lines.next(), Some("CITY 2")) {
             return Err("unsupported city format".into());
         }
         for line in lines {
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(velocity, departing);
     }
 
-    const CROSS:&str="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
+    const CROSS:&str="CITY 2\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
     #[test]
     fn building_labels_use_names_not_plot_references_and_respect_occlusion() {
         let source = br#"<osm><way id="1"><tag k="building" v="yes"/><tag k="name" v="Local"/><tag k="name:en" v="City Hall"/></way><way id="2"><tag k="building" v="yes"/><tag k="ref" v="PLOT 2"/></way></osm>"#;
@@ -1216,8 +1216,8 @@ mod tests {
     #[test]
     fn invalid_map_records_fail_clearly() {
         assert!(City::parse("CITY 2").is_err());
-        assert!(City::parse("CITY 1\nn NaN 0").is_err());
-        assert!(City::parse("CITY 1\nr 0 1 8 0 1").is_err());
+        assert!(City::parse("CITY 2\nn NaN 0").is_err());
+        assert!(City::parse("CITY 2\nr 0 1 8 0 1").is_err());
     }
     #[test]
     fn compiled_street_paths_render_and_collide_on_the_same_surface() {

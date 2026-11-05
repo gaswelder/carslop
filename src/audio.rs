@@ -807,7 +807,7 @@ mod tests {
     #[test]
     fn reverse_pitch_increases_with_backwards_speed() {
         for model in crate::cars::ALL {
-            let road = crate::track::at_distance(50.0);
+            let road = crate::track::TrackId::Compact.track().at_distance(50.0);
             let mut car =
                 crate::vehicle::Vehicle::new(road.lane_position(0.0), road.heading(), model);
             car.toggle_direction();

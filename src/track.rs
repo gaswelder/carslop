@@ -560,20 +560,6 @@ impl Track {
 
 // Compact-route fixtures retained for existing regression tests, never selected globally.
 #[cfg(test)]
-pub fn length() -> f32 {
-    TrackId::Compact.track().length()
-}
-#[cfg(test)]
-pub fn at_distance(distance: f32) -> RoadSample {
-    TrackId::Compact.track().at_distance(distance)
-}
-#[cfg(test)]
-pub fn project(position: [f32; 3]) -> RoadSample {
-    TrackId::Compact.track().project(position)
-}
-
-/// Normalize a heading difference to [-PI, PI).
-#[cfg(test)]
 pub fn angle(value: f32) -> f32 {
     (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
@@ -622,14 +608,20 @@ mod tests {
 
     #[test]
     fn route_is_closed_and_projection_follows_elevation() {
-        assert!(length() > 180.0);
+        assert!(TrackId::Compact.track().length() > 180.0);
         for distance in [0.0, 20.0, 50.0, 100.0, 160.0] {
-            let sample = at_distance(distance);
-            let projected = project(sample.lane_position(1.0));
+            let sample = TrackId::Compact.track().at_distance(distance);
+            let projected = TrackId::Compact.track().project(sample.lane_position(1.0));
             assert!((projected.point[1] - sample.point[1]).abs() < 0.15);
             assert!((projected.offset - 1.0).abs() < 0.15);
         }
-        assert_eq!(at_distance(0.0).point, at_distance(length()).point);
+        assert_eq!(
+            TrackId::Compact.track().at_distance(0.0).point,
+            TrackId::Compact
+                .track()
+                .at_distance(TrackId::Compact.track().length())
+                .point
+        );
     }
 
     #[test]
@@ -703,9 +695,9 @@ mod tests {
                 assert!((indexed.point[1] - exact.point[1]).abs() < 0.001);
             }
         }
-        let compact_length = length();
+        let compact_length = TrackId::Compact.track().length();
         assert!(scenic.length() > compact_length * 7.0);
-        assert_eq!(length(), compact_length);
+        assert_eq!(TrackId::Compact.track().length(), compact_length);
     }
 
     #[test]

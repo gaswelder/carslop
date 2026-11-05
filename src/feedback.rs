@@ -147,7 +147,7 @@ mod tests {
     use crate::cars::CarModel;
 
     fn sliding(distance: f32) -> Vehicle {
-        let road = track::at_distance(distance);
+        let road = track::TrackId::Compact.track().at_distance(distance);
         let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
         car.tire_scrub = 0.9;
         car
@@ -190,7 +190,13 @@ mod tests {
         assert_eq!(before.len(), 12);
         for v in &before {
             assert!(v.position.iter().all(|x| x.is_finite()));
-            assert!((v.position[1] - track::project(v.position).point[1] - 0.078).abs() < 0.1);
+            assert!(
+                (v.position[1]
+                    - track::TrackId::Compact.track().project(v.position).point[1]
+                    - 0.078)
+                    .abs()
+                    < 0.1
+            );
         }
         marks.advance(Duration::from_secs(9));
         assert!(marks.vertices()[0].color[0] > before[0].color[0]);
