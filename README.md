@@ -196,7 +196,7 @@ not light the stop lamps. A revved launch releases finite flywheel energy throug
 pitch, roll and heave react to terrain; rendered wheels have 14 cm compression
 and 16 cm droop. This uses two axle tire models and one vertical chassis degree
 of freedom. Vehicle tuning is for gameplay, not a certified vehicle simulation.
-Level-ground automatic 0–100 times are about 6.83 s (Kestrel) and 5.30 s (Turbo).
+Level-ground automatic 0–100 times are about 6.83 s (1964 Borsch 11) and 5.30 s (Turbo).
 
 ### Fictional car artwork
 
@@ -368,7 +368,7 @@ cargo test suspension_bump_preview -- --ignored --test-threads=1
 
 The active bank (`engine.json` and `flat6-*.pcm`) uses excerpts from a real
 **Porsche 911 SC, 1981, 3.0 litre flat-six**, recorded by **Pole Position Production**.
-It is shared by Kestrel and Kestrel Turbo.
+It is shared by 1964 Borsch 11 and Kestrel Turbo.
 
 - Recording: `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`
 - Collection: Sonniss #GameAudioGDC 2016, Pole Position Production — Porsche 911 SC 1981.
