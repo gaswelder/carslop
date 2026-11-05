@@ -165,7 +165,7 @@ impl Session {
 struct App {
     // Audio and GL resources are dropped before their owning SDL context.
     audio: Option<audio::EngineAudio>,
-    meshes: [Option<gl::Mesh>; 3],
+    meshes: Vec<Option<gl::Mesh>>,
     skid_renderer: gl::SkidRenderer,
     particle_renderer: gl::ParticleRenderer,
     hud: hud::Hud,
@@ -245,6 +245,9 @@ impl App {
                 locations.len() - 1
             }
         });
+        let selected_location = track::selected_file()
+            .and_then(|id| locations.iter().position(|entry| entry.track == id))
+            .unwrap_or(selected_location);
         let mut session = Session::new(CarModel::Roadster);
         session.state = GameState::Menu;
         let _ = window.set_title(session.track().name);
@@ -272,7 +275,7 @@ impl App {
             _gl_context: gl_context,
             program,
             scene_program,
-            meshes: track::ALL.map(|_| None),
+            meshes: (0..3).map(|_| None).collect(),
             skid_renderer,
             particle_renderer,
             hud,
@@ -306,6 +309,8 @@ impl App {
             let _ = city_assets::select(previous);
             return;
         }
+        self.meshes
+            .resize_with(self.meshes.len().max(entry.track.index() + 1), || None);
         if changed || self.meshes[entry.track.index()].is_none() {
             match gl::Mesh::new(&entry.track.track()) {
                 Ok(mesh) => self.meshes[entry.track.index()] = Some(mesh),
@@ -329,6 +334,8 @@ impl App {
 
     fn ensure_mesh(&mut self) {
         let track = self.session.track();
+        self.meshes
+            .resize_with(self.meshes.len().max(track.id.index() + 1), || None);
         let slot = &mut self.meshes[track.id.index()];
         if slot.is_none() {
             if track.id == TrackId::Engomi {
@@ -2258,6 +2265,34 @@ mod tests {
         app.key_down(Keycode::Escape);
         app.menu_click(410.0, 382.0);
         assert!(app.session.state == GameState::Menu);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; starts and renders a circuit created after compilation"]
+    fn runtime_track_renderer() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"version":1,"name":"Runtime Circuit","width":9,"points":[[0,0,0],[100,2,0],[100,4,100],[0,1,100]]}"#).unwrap();
+        let (id, name) = track::register_file(file.path()).unwrap();
+        let mut app = App::with_location(false);
+        app.locations.push(city_assets::MenuLocation {
+            name: name.into(),
+            track: id,
+            path: None,
+        });
+        app.selected_location = app.locations.len() - 1;
+        app.start_selected();
+        assert_eq!(app.session.track().id, id);
+        assert!(app.session.state == GameState::Driving);
+        assert_eq!(app.session.track().width, 9.0);
+        for _ in 0..120 {
+            app.session.tick(vehicle::Controls {
+                throttle: 1.0,
+                ..Default::default()
+            });
+        }
+        app.render(Duration::ZERO);
+        assert!(app.session.vehicle.position.iter().all(|v| v.is_finite()));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
 
     #[test]

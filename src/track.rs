@@ -10,9 +10,89 @@ pub enum TrackId {
     Compact,
     Scenic,
     Engomi,
+    File(usize),
 }
 
 pub const ALL: [TrackId; 3] = [TrackId::Compact, TrackId::Scenic, TrackId::Engomi];
+
+struct RuntimeTrack {
+    path: std::path::PathBuf,
+    name: &'static str,
+    width: f32,
+    points: Vec<[f32; 3]>,
+    track: OnceLock<Result<std::sync::Arc<Track>, String>>,
+}
+fn runtime_tracks() -> &'static std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>> {
+    static TRACKS: OnceLock<std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>>> = OnceLock::new();
+    TRACKS.get_or_init(Default::default)
+}
+/// Register a data-only closed circuit. Spline and render geometry load on selection.
+pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), String> {
+    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    let mut tracks = runtime_tracks().write().unwrap();
+    if let Some(index) = tracks.iter().position(|t| t.path == path) {
+        return Ok((TrackId::File(index), tracks[index].name));
+    }
+    let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    if v["version"].as_u64() != Some(1) {
+        return Err("track version must be 1".into());
+    }
+    let name = v["name"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty() && s.chars().count() <= 80)
+        .ok_or("track needs a name of 1..80 characters")?;
+    let width = match v.get("width") {
+        None => ROAD_WIDTH,
+        Some(value) => value.as_f64().ok_or("track width must be a number")? as f32,
+    };
+    if !width.is_finite() || !(2.0..=30.0).contains(&width) {
+        return Err("track width must be 2..30 metres".into());
+    }
+    let points: Vec<[f32; 3]> =
+        serde_json::from_value(v["points"].clone()).map_err(|e| e.to_string())?;
+    if !(4..=4096).contains(&points.len())
+        || points
+            .iter()
+            .flatten()
+            .any(|p| !p.is_finite() || p.abs() > 1_000_000.0)
+    {
+        return Err("track needs 4..4096 finite XYZ points within one million metres".into());
+    }
+    let mut perimeter = 0.0;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let distance = (a[0] - b[0]).hypot(a[2] - b[2]);
+        if distance < 0.5 {
+            return Err("adjacent track points must be at least 0.5 metres apart in XZ".into());
+        }
+        perimeter += distance;
+    }
+    if perimeter > 50_000.0 {
+        return Err("track control perimeter exceeds 50 km".into());
+    }
+    let name = Box::leak(name.trim().to_uppercase().into_boxed_str());
+    let index = tracks.len();
+    tracks.push(std::sync::Arc::new(RuntimeTrack {
+        path,
+        name,
+        width,
+        points,
+        track: OnceLock::new(),
+    }));
+    Ok((TrackId::File(index), name))
+}
+static SELECTED_FILE: OnceLock<TrackId> = OnceLock::new();
+pub fn select_file(path: &std::path::Path) -> Result<(), String> {
+    let (id, _) = register_file(path)?;
+    SELECTED_FILE
+        .set(id)
+        .map_err(|_| "track already selected".into())
+}
+pub fn selected_file() -> Option<TrackId> {
+    SELECTED_FILE.get().copied()
+}
 
 // Preserve the original compact route and its sampling exactly.
 pub const ROAD_POINTS: [[f32; 3]; 12] = [
@@ -97,6 +177,7 @@ impl TrackId {
             Self::Compact => 0,
             Self::Scenic => 1,
             Self::Engomi => 2,
+            Self::File(index) => 3 + index,
         }
     }
 
@@ -115,6 +196,24 @@ impl TrackId {
         // and concurrent requests cannot allocate multiple copies of a large city.
         static BUILD: Mutex<()> = Mutex::new(());
         Ok(match self {
+            Self::File(index) => {
+                let definition = runtime_tracks()
+                    .read()
+                    .unwrap()
+                    .get(index)
+                    .cloned()
+                    .ok_or("unknown runtime track")?;
+                definition
+                    .track
+                    .get_or_init(|| {
+                        let mut track =
+                            Track::build_width(self, &definition.points, definition.width)?;
+                        track.name = definition.name;
+                        Ok(std::sync::Arc::new(track))
+                    })
+                    .clone()?
+            }
+
             Self::Compact => COMPACT
                 .get_or_init(|| Arc::new(Track::build(self, &ROAD_POINTS)))
                 .clone(),
@@ -263,6 +362,18 @@ impl Track {
         }
     }
     fn build(id: TrackId, controls: &[[f32; 3]]) -> Self {
+        Self::build_width(
+            id,
+            controls,
+            if id == TrackId::Scenic {
+                8.0
+            } else {
+                ROAD_WIDTH
+            },
+        )
+        .expect("invalid built-in route")
+    }
+    fn build_width(id: TrackId, controls: &[[f32; 3]], width: f32) -> Result<Self, String> {
         let mut points = Vec::new();
         let n = controls.len();
         for segment in 0..n {
@@ -295,10 +406,9 @@ impl Track {
             let a = points[i];
             let b = points[(i + 1) % points.len()];
             let length = (b[0] - a[0]).hypot(b[2] - a[2]);
-            assert!(
-                length.is_finite() && length > 0.0001,
-                "degenerate route segment"
-            );
+            if !length.is_finite() || length <= 0.0001 {
+                return Err("degenerate route spline segment".into());
+            }
             distances.push(total);
             lengths.push(length);
             tangents.push([(b[0] - a[0]) / length, (b[2] - a[2]) / length]);
@@ -326,7 +436,7 @@ impl Track {
             } else {
                 "COASTAL LOOP"
             },
-            width: if scenic { 8.0 } else { ROAD_WIDTH },
+            width,
             bounds,
             #[cfg(test)]
             speed_scale: if scenic { 1.6 } else { 1.0 },
@@ -358,7 +468,7 @@ impl Track {
                 ]
             })
             .collect();
-        track
+        Ok(track)
     }
 
     #[cfg(test)]
@@ -470,6 +580,44 @@ pub fn angle(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_circuit_loads_without_a_compiled_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("hills.track.json");
+        std::fs::write(&path, r#"{"version":1,"name":"Hills","width":11,"points":[[0,0,0],[100,2,0],[100,4,100],[0,1,100]]}"#).unwrap();
+        let (id, name) = super::register_file(&path).unwrap();
+        assert_eq!(name, "HILLS");
+        assert!(matches!(id, super::TrackId::File(_)));
+        assert_eq!(id, super::register_file(&path).unwrap().0);
+        let track = id.try_track().unwrap();
+        assert_eq!(track.width, 11.0);
+        assert!(track.city().is_none());
+        assert!(std::sync::Arc::ptr_eq(&track, &id.try_track().unwrap()));
+        assert!(track.length() > 400.0);
+        for sample in track.centerline() {
+            assert!(sample.iter().all(|v| v.is_finite()));
+            let road = track.project(*sample);
+            assert_eq!(road.width, 11.0);
+            assert!(road.point.iter().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn runtime_circuit_rejects_invalid_definitions() {
+        for data in [
+            r#"{"version":2}"#,
+            r#"{"version":1,"name":"bad","width":"wide","points":[]}"#,
+            r#"{"version":1,"name":"bad","width":0,"points":[]}"#,
+            r#"{"version":1,"name":"bad","points":[[0,0,0],[1,0,0],[1,0,1]]}"#,
+            r#"{"version":1,"name":"bad","points":[[0,0,0],[0,1,0],[1,0,1],[2,0,2]]}"#,
+            r#"{"version":1,"name":"bad","points":[[0,0,0],[20000,0,0],[20000,0,20000],[0,0,20000]]}"#,
+        ] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), data).unwrap();
+            assert!(super::register_file(file.path()).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

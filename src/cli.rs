@@ -249,6 +249,11 @@ pub fn run() -> Result<Option<bool>> {
         Command::Version => println!("nfs5like {}", env!("CARGO_PKG_VERSION")),
         Command::Play(location) => {
             if let Some(name) = location {
+                let file = args.root.join(format!("{name}.track.json"));
+                if file.is_file() {
+                    crate::track::select_file(&file).map_err(invalid)?;
+                    return Ok(Some(false));
+                }
                 select(&args.root, &name)?;
                 return Ok(Some(true));
             }

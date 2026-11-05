@@ -67,6 +67,22 @@ pub fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
         .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| !n.starts_with('.') && n.ends_with(".track.json"))
+        {
+            match crate::track::register_file(&path) {
+                Ok((track, name)) => locations.push(MenuLocation {
+                    name: name.into(),
+                    track,
+                    path: None,
+                }),
+                Err(error) => log::warn!("Cannot load track {}: {error}", path.display()),
+            }
+            continue;
+        }
         let package = crate::package::is_package(&path) && path.is_file();
         if !package
             && !(path.is_dir()
@@ -164,6 +180,19 @@ pub fn read(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_finds_new_data_only_circuits_and_skips_broken_files() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("new.track.json");
+        std::fs::write(&path, r#"{"version":1,"name":"New Circuit","points":[[0,0,0],[100,0,0],[100,0,100],[0,0,100]]}"#).unwrap();
+        std::fs::write(root.path().join("broken.track.json"), b"{}").unwrap();
+        let entries = discover(root.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].name, "NEW CIRCUIT");
+        assert!(entries[1].path.is_none());
+        assert!(entries[1].track.try_track().unwrap().city().is_none());
+    }
 
     #[test]
     fn discovery_lists_packages_and_folders_without_loading_maps() {

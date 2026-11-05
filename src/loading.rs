@@ -16,7 +16,13 @@ pub fn prepare(
     sdl: &sdl3::Sdl,
 ) -> bool {
     if id != TrackId::Engomi {
-        return true;
+        return match id.try_track() {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!("Cannot load track: {error}");
+                false
+            }
+        };
     }
     let started = Instant::now();
     let title = window.title().to_owned();

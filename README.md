@@ -97,6 +97,25 @@ Use `./target/release/nfs5like --help` for command syntax.
 
 ## Import and maintain maps
 
+Authored circuits can be added without recompiling: place a `NAME.track.json`
+file in `data/locations/` (or `--locations-dir`), restart the game, and select it
+in the location menu. `play --location NAME` also preselects it. For example:
+
+```json
+{
+  "version": 1,
+  "name": "Hillside Circuit",
+  "width": 8.0,
+  "points": [[0, 0, 0], [120, 2, 0], [120, 5, 120], [0, 1, 120]]
+}
+```
+
+Points are XYZ metres; Y is elevation. The spline closes automatically, so omit
+a repeated closing point. Use 4–4096 points, road widths of 2–30 metres, and a
+control perimeter up to 50 km. The game generates road geometry, scenery,
+collision and minimap data at runtime. Imported city packages also need no
+recompilation; their bake commands run through the existing executable.
+
 Locations are offline SQLite packages in `data/locations/`. Keep the package
 beside the game; map source files are only needed for imports and rebuilding.
 
