@@ -50,18 +50,11 @@ pub struct MenuLocation {
     pub path: Option<PathBuf>,
 }
 fn built_in_locations() -> Vec<MenuLocation> {
-    vec![
-        MenuLocation {
-            name: "COASTAL HIGHWAY".into(),
-            track: crate::track::TrackId::Scenic,
-            path: None,
-        },
-        MenuLocation {
-            name: "COASTAL LOOP".into(),
-            track: crate::track::TrackId::Compact,
-            path: None,
-        },
-    ]
+    vec![MenuLocation {
+        name: "COASTAL HIGHWAY".into(),
+        track: crate::track::TrackId::Scenic,
+        path: None,
+    }]
 }
 /// Discover names and paths without reading map assets or building tracks.
 pub fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
@@ -183,14 +176,14 @@ mod tests {
         std::fs::create_dir(root.path().join("empty")).unwrap();
         std::fs::write(root.path().join("notes.txt"), b"ignore").unwrap();
         let locations = discover(root.path()).unwrap();
-        assert_eq!(locations.len(), 4);
-        assert_eq!(locations[2].name, "ALPHA CITY");
-        assert_eq!(locations[3].name, "ZEBRA");
-        assert_eq!(locations[2].path.as_deref(), Some(folder.as_path()));
+        assert_eq!(locations.len(), 3);
+        assert_eq!(locations[1].name, "ALPHA CITY");
+        assert_eq!(locations[2].name, "ZEBRA");
+        assert_eq!(locations[1].path.as_deref(), Some(folder.as_path()));
         std::fs::write(root.path().join("alpha_city.sqlite"), b"package preferred").unwrap();
         let locations = discover(root.path()).unwrap();
-        assert_eq!(locations.len(), 4);
-        assert!(locations[2].path.as_ref().unwrap().is_file());
-        assert_eq!(discover(&root.path().join("missing")).unwrap().len(), 2);
+        assert_eq!(locations.len(), 3);
+        assert!(locations[1].path.as_ref().unwrap().is_file());
+        assert_eq!(discover(&root.path().join("missing")).unwrap().len(), 1);
     }
 }

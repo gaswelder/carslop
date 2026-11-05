@@ -62,7 +62,7 @@ appears on the map; fictional built-in routes have no geographic location.
 
 ### Locations
 
-Running without arguments lists the built-in routes and all imported locations
+Running without arguments lists Coastal Highway and all imported locations
 without loading city assets. Choose a location, then Start Driving to load it.
 Use Left/Right to focus the location/car lists, then Up/Down to browse.
 Click the page arrows for more locations.
@@ -86,7 +86,7 @@ This is a free-drive map with generated scenery. Circuit bridge sections follow
 the terrain surface; banking, bridge decks and circuit-specific barriers are
 not reconstructed.
 
-Built-in tracks need no city files. For city play, keep its `data/locations/NAME.sqlite`
+Coastal Highway needs no city files. For city play, keep its `data/locations/NAME.sqlite`
 package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 

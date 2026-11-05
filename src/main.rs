@@ -234,7 +234,7 @@ impl App {
         gl_attr.set_depth_size(24);
         let events = sdl_context.event_pump().expect("failed to get event pump");
         let mut window = video
-            .window("Coastal Loop", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
+            .window("Cars LOP", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
             .opengl()
             .build()
             .expect("failed to create window");
@@ -836,7 +836,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(city) = cli::run()? else {
         return Ok(());
     };
-    info!("Coastal Loop: starting");
+    info!("Cars LOP: starting");
     App::with_location(city).run()
 }
 
@@ -2147,10 +2147,10 @@ mod tests {
             assert_ne!(app.session.track().id, TrackId::Engomi);
         }
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
-        app.menu_action(hud::MenuAction::Choice(1));
+        app.menu_action(hud::MenuAction::Choice(0));
         assert_eq!(app.session.track().id, TrackId::Scenic);
         app.key_down(Keycode::Return);
-        assert_eq!(app.session.track().id, TrackId::Compact);
+        assert_eq!(app.session.track().id, TrackId::Scenic);
         assert!(app.session.state == GameState::Driving);
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
         app.render(Duration::ZERO);

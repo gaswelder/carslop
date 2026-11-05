@@ -4,13 +4,13 @@ use crate::{
 };
 use std::ffi::CString;
 
-pub const LOCATIONS: [TrackId; 3] = [TrackId::Scenic, TrackId::Compact, TrackId::Engomi];
+pub const LOCATIONS: [TrackId; 2] = [TrackId::Scenic, TrackId::Engomi];
 #[cfg(test)]
 pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
     if city_enabled {
         &LOCATIONS
     } else {
-        &LOCATIONS[..2]
+        &LOCATIONS[..1]
     }
 }
 const CHOICES_PER_PAGE: usize = 3;
@@ -1278,11 +1278,7 @@ mod tests {
 
     #[test]
     fn main_menu_click_targets_cover_all_locations_cars_and_start() {
-        for (y, id) in [
-            (0.57, TrackId::Scenic),
-            (0.445, TrackId::Compact),
-            (0.32, TrackId::Engomi),
-        ] {
+        for (y, id) in [(0.57, TrackId::Scenic), (0.445, TrackId::Engomi)] {
             assert_eq!(menu_hit_test(-0.5, y), Some(MenuAction::Location(id)));
         }
         for (index, car) in crate::cars::ALL
