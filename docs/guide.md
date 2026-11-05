@@ -290,8 +290,9 @@ restores the stronger restriction to reserve tire grip while braking into a turn
 Engine torque varies with RPM, passes through the selected gear and final drive,
 and is interrupted during gear changes. Closed-throttle engine braking
 also depends on gearing. Kestrel retains its wheel-power/drag limit; the other
-cars use their torque curves against route-specific road load. Wheelspin feedback reflects
-driven-axle saturation, but there is no independent wheel angular-inertia solver.
+cars use their torque curves against route-specific road load. A brake-held launch opens the clutch so the engine can rev. Releasing the
+brake, or selecting first from revved neutral, releases finite flywheel energy
+through the driven tires. Wheelspin feedback reflects driven-axle saturation, but there is no independent wheel angular-inertia solver.
 
 A damped spring supports chassis height and permits unloading, flight, and
 landing over changes in ground height. Pitch and roll respond to acceleration

@@ -89,7 +89,7 @@ impl TireParticles {
             .previous
             .is_some_and(|p| (p[0] - car.position[0]).hypot(p[2] - car.position[2]) > 4.0);
         emitter.previous = Some(car.position);
-        if jumped || motion < 3.0 {
+        if jumped || (motion < 3.0 && car.wheel_spin < 0.15) {
             emitter.credit = [0.0; 2];
             return;
         }
@@ -260,6 +260,18 @@ mod tests {
                 (puff.position[1] - track.project(puff.position).point[1] - 0.18).abs() < 0.001
             );
         }
+    }
+
+    #[test]
+    fn spinning_tires_emit_smoke_before_the_car_has_pulled_away() {
+        let mut car = car(0.0);
+        car.velocity = [0.0; 2];
+        car.speed = 0.0;
+        car.wheel_spin = 0.8;
+        let mut particles = TireParticles::default();
+        emit(&mut particles, &car, 30);
+        assert!(!particles.puffs.is_empty());
+        assert!(particles.puffs.iter().all(|p| p.kind == Kind::Smoke));
     }
 
     #[test]

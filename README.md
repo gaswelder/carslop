@@ -44,6 +44,9 @@ Choose a location and car, then start free driving.
 | L | Return to location and car selection |
 | V | Toggle audio mute |
 
+For a burnout start, hold Up + Down at rest to rev with the clutch open, then
+release Down while holding Up. A revved neutral-to-first shift also works.
+
 The bonnet camera follows steering immediately and smooths vertical bumps and
 pitch changes to keep the horizon steady.
 

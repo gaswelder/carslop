@@ -54,7 +54,9 @@ pub struct Vehicle {
     roll_rate: f32,
     vertical_speed: f32,
     suspension_initialized: bool,
-    wheel_spin: f32,
+    pub wheel_spin: f32,
+    clutch_open: bool,
+    launch_energy: f32, // stored flywheel energy released through the clutch (joules)
     axle_load: [f32; 2],
 }
 
@@ -103,6 +105,8 @@ impl Vehicle {
             vertical_speed: 0.0,
             suspension_initialized: false,
             wheel_spin: 0.0,
+            clutch_open: false,
+            launch_energy: 0.0,
             axle_load: [0.0; 2],
         }
     }
@@ -175,6 +179,9 @@ impl Vehicle {
                 Direction::Drive
             };
             self.shift_timer = 0.16;
+            if previous == NEUTRAL_GEAR && matches!(next, 0 | 1) {
+                self.launch_energy = self.flywheel_energy();
+            }
             self.begin_rev_match(previous);
         }
     }
@@ -300,7 +307,20 @@ impl Vehicle {
             let wheel_side = front_v * cos - longitudinal * sin;
             let throttle = controls.throttle.clamp(0.0, 1.0);
             self.update_turbo(seconds, throttle, longitudinal);
-            let drive = self.drive_force(longitudinal) * throttle * direction;
+            // At rest the brake holds the car while the automatic clutch opens
+            // for a launch. Releasing the brake feeds stored flywheel energy
+            // into the driven wheels; it is a finite impulse, not extra power.
+            self.clutch_open = matches!(self.gear, 0 | 1)
+                && longitudinal.abs() < 2.0
+                && controls.brake > 0.5
+                && throttle > 0.5
+                && !controls.handbrake;
+            let launch = self.launch_force(seconds, longitudinal, throttle);
+            let drive = if self.clutch_open {
+                0.0
+            } else {
+                (self.drive_force(longitudinal) * throttle + launch) * direction
+            };
             let engine_braking = (1.0 - throttle) * self.engine_brake_force(longitudinal);
             let brake = self.brake_pressure * brake_accel * spec.mass;
             let front_drive = dynamics.front_drive;
@@ -387,7 +407,7 @@ impl Vehicle {
                 new_longitudinal = 0.0;
             }
             if longitudinal.abs() < 0.1
-                && throttle == 0.0
+                && (throttle == 0.0 || self.clutch_open)
                 && (brake
                     + if controls.handbrake {
                         spec.mass * 5.5
@@ -458,7 +478,7 @@ impl Vehicle {
         let sliding = ((self.slip.abs() - 0.8) / 3.0).clamp(0.0, 1.0);
         let braking = if controls.handbrake { 0.8 } else { 0.0 };
         self.tire_scrub =
-            sliding.max(braking).max(self.wheel_spin) * ((motion - 1.5) / 2.5).clamp(0.0, 1.0);
+            (sliding.max(braking) * ((motion - 1.5) / 2.5).clamp(0.0, 1.0)).max(self.wheel_spin);
         impact
     }
 
@@ -467,6 +487,33 @@ impl Vehicle {
             || self.track.project(self.position).point[1],
             |city| city.drive_height([self.position[0], self.position[2]]),
         ) + 0.48
+    }
+
+    fn flywheel_energy(&self) -> f32 {
+        let inertia = 0.12 + self.model.spec().dynamics.peak_torque * 0.0006;
+        let omega = self.engine_rpm * std::f32::consts::TAU / 60.0;
+        let clutch_rpm = 2200.0 * std::f32::consts::TAU / 60.0;
+        (0.5 * inertia * (omega * omega - clutch_rpm * clutch_rpm)).max(0.0)
+    }
+
+    fn launch_force(&mut self, dt: f32, speed: f32, throttle: f32) -> f32 {
+        if self.clutch_open || self.gear == NEUTRAL_GEAR || self.shift_timer > 0.0 {
+            return 0.0;
+        }
+        if !matches!(self.gear, 0 | 1) || speed.abs() > 15.0 || throttle < 0.1 {
+            self.launch_energy = 0.0;
+            return 0.0;
+        }
+        let spec = self.model.spec();
+        let clutch_speed = spec
+            .gearbox
+            .speed_at_rpm(self.engine_rpm, self.gear)
+            .abs()
+            .max(speed.abs())
+            .max(3.0);
+        let force = (self.launch_energy / 0.20 / clutch_speed).min(spec.mass * 6.0) * throttle;
+        self.launch_energy = (self.launch_energy - force * clutch_speed * dt).max(0.0);
+        force
     }
 
     fn drive_force(&self, speed: f32) -> f32 {
@@ -616,8 +663,9 @@ impl Vehicle {
     fn update_engine_feedback(&mut self, controls: Controls, dt: f32) {
         let throttle = controls.throttle.clamp(0.0, 1.0);
         let blip = self.rev_match_timer / REV_MATCH_SECONDS;
-        if self.gear == NEUTRAL_GEAR {
+        if self.gear == NEUTRAL_GEAR || self.clutch_open {
             self.update_neutral_engine(throttle, dt);
+            self.launch_energy = self.flywheel_energy();
         } else {
             self.neutral_fuel_cut = false;
             let target_rpm = (self.target_engine_rpm() + self.wheel_spin * throttle * 1800.0)
@@ -634,7 +682,7 @@ impl Vehicle {
         }
         // An unloaded engine uses less sustained load; fuel cuts also reach
         // the audio layers so the limiter is audible as well as visible.
-        let requested = if self.gear == NEUTRAL_GEAR {
+        let requested = if self.gear == NEUTRAL_GEAR || self.clutch_open {
             if self.neutral_fuel_cut {
                 0.0
             } else {
@@ -1046,6 +1094,66 @@ mod tests {
                 car.speed > 8.0,
                 "recovering grip must not simply stop the car"
             );
+        }
+    }
+
+    #[test]
+    fn revved_launch_spins_driven_wheels_then_hooks_up() {
+        for (model, neutral) in crate::cars::ALL
+            .into_iter()
+            .flat_map(|m| [(m, false), (m, true)])
+        {
+            let mut car = level_route_car(track::TrackId::Scenic, model);
+            if neutral {
+                car.gear = NEUTRAL_GEAR;
+            }
+            for _ in 0..180 {
+                treadmill_tick(
+                    &mut car,
+                    Controls {
+                        throttle: 1.0,
+                        brake: 1.0,
+                        ..Controls::default()
+                    },
+                );
+            }
+            assert!(car.speed.abs() < 0.02, "{model:?}: brake must hold launch");
+            assert!(
+                car.engine_rpm > 3500.0,
+                "{model:?}: engine must rev with clutch open"
+            );
+            if neutral {
+                car.shift(true);
+            }
+            let energy = car.launch_energy;
+            let mut peak_spin: f32 = 0.0;
+            for _ in 0..240 {
+                treadmill_tick(
+                    &mut car,
+                    Controls {
+                        throttle: 1.0,
+                        ..Controls::default()
+                    },
+                );
+                peak_spin = peak_spin.max(car.wheel_spin);
+            }
+            println!(
+                "{model:?}: launch spin {peak_spin}, energy {energy}, speed {}",
+                car.speed
+            );
+            assert!(peak_spin > 0.15, "{model:?}: launch never breaks traction");
+            assert!(car.speed > 1.0, "{model:?}: burnout must launch the car");
+            assert!(
+                car.launch_energy < energy * 0.2,
+                "flywheel boost must be spent"
+            );
+            for _ in 0..480 {
+                treadmill_tick(&mut car, Controls::default());
+            }
+            assert!(car.wheel_spin < 0.01);
+            car.reset(car.position, car.heading);
+            assert_eq!(car.launch_energy, 0.0);
+            assert!(!car.clutch_open);
         }
     }
 
