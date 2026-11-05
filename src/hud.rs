@@ -307,11 +307,29 @@ fn clip_line(
         std::array::from_fn(|i| a[i] + delta[i] * end),
     ])
 }
-fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, color: [f32; 3]) {
-    let min = std::array::from_fn(|i| (point[i] - size).max(MAP_CONTENT[0][i]));
-    let max = std::array::from_fn(|i| (point[i] + size).min(MAP_CONTENT[1][i]));
-    if min[0] < max[0] && min[1] < max[1] {
-        quad(v, min, max, color);
+fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, aspect: f32, color: [f32; 3]) {
+    if (0..2).any(|i| point[i] < MAP_CONTENT[0][i] || point[i] > MAP_CONTENT[1][i]) {
+        return;
+    }
+    // A bordered navigation chevron. Pixel aspect keeps its silhouette consistent.
+    for (scale, ink) in [
+        (1.3, [0.015, 0.025, 0.035]),
+        (1.0, [0.95, 0.98, 1.0]),
+        (0.72, color),
+    ] {
+        let shape = [[0.0, 1.35], [-0.8, -1.0], [0.0, -0.55], [0.8, -1.0]];
+        let points = shape.map(|p| {
+            [
+                (point[0] + p[0] * size * scale).clamp(MAP_CONTENT[0][0], MAP_CONTENT[1][0]),
+                (point[1] + p[1] * size * scale * aspect)
+                    .clamp(MAP_CONTENT[0][1], MAP_CONTENT[1][1]),
+            ]
+        });
+        for i in [1, 2] {
+            for p in [points[0], points[i], points[i + 1]] {
+                v.extend_from_slice(&[p[0], p[1], 0.0, ink[0], ink[1], ink[2]]);
+            }
+        }
     }
 }
 
@@ -387,7 +405,13 @@ impl Hud {
                 line(&mut v, a, b, width, [0.4, 0.49, 0.52]);
             }
         }
-        map_marker(&mut v, fit.point(map.player), 0.013, [1.0, 0.25, 0.12]);
+        map_marker(
+            &mut v,
+            fit.point(map.player),
+            0.014,
+            fit.scale[1] / fit.scale[0],
+            [0.15, 0.85, 0.95],
+        );
 
         let street = map
             .track
@@ -1349,9 +1373,9 @@ mod tests {
         assert!(clip_map_line([0.0, 0.0], [2.0, 0.0], 0.006).is_none());
         assert!(clip_map_line([0.8, 0.0], [0.8, 2.0], 0.006).is_some());
         let mut v = Vec::new();
-        map_marker(&mut v, [2.0, 2.0], 0.013, [1.0, 0.0, 0.0]);
+        map_marker(&mut v, [2.0, 2.0], 0.013, 1.0, [1.0, 0.0, 0.0]);
         assert!(v.is_empty());
-        map_marker(&mut v, [0.95, 0.88], 0.013, [1.0, 0.0, 0.0]);
+        map_marker(&mut v, [0.95, 0.88], 0.013, 1.0, [1.0, 0.0, 0.0]);
         assert!(!v.is_empty());
         for p in v.as_chunks::<6>().0 {
             assert!(p[0] >= MAP_CONTENT[0][0] && p[0] <= MAP_CONTENT[1][0]);
