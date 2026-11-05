@@ -16,8 +16,8 @@ pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
 }
 const CHOICES_PER_PAGE: usize = 3;
 fn choice_box(index: usize, left: f32) -> [f32; 4] {
-    let top = -0.02 - index as f32 * 0.125;
-    [left, top - 0.10, left + 0.88, top]
+    let top = -0.02 - index as f32 * 0.17;
+    [left, top - 0.145, left + 0.72, top]
 }
 fn location_box(index: usize) -> [f32; 4] {
     choice_box(index, -0.92)
@@ -25,7 +25,7 @@ fn location_box(index: usize) -> [f32; 4] {
 fn car_box(index: usize) -> [f32; 4] {
     choice_box(index, 0.06)
 }
-const START_BOX: [f32; 4] = [-0.92, -0.65, 0.94, -0.50];
+const START_BOX: [f32; 4] = [-0.92, -0.77, 0.78, -0.62];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     #[cfg(test)]
@@ -44,10 +44,10 @@ pub struct MainMenu<'a> {
 }
 fn page_hit_test(x: f32, y: f32, left: f32) -> Option<i32> {
     if (0.09..=0.19).contains(&y) {
-        if (left + 0.43..=left + 0.52).contains(&x) {
+        if (left + 0.34..=left + 0.43).contains(&x) {
             return Some(-1);
         }
-        if (left + 0.76..=left + 0.88).contains(&x) {
+        if (left + 0.62..=left + 0.72).contains(&x) {
             return Some(1);
         }
     }
@@ -496,8 +496,8 @@ impl Hud {
         for left in [-0.96, 0.02] {
             quad(
                 &mut v,
-                [left, -0.42],
-                [left + 0.96, 0.21],
+                [left, -0.55],
+                [left + 0.80, 0.21],
                 [0.025, 0.05, 0.075],
             );
         }
@@ -540,19 +540,19 @@ impl Hud {
             );
         }
         menu_button(&mut v, START_BOX, true, menu.focus == 2);
-        text(&mut v, "START DRIVING", [-0.19, -0.54], 0.005, cyan);
+        text(&mut v, "START DRIVING", [-0.27, -0.66], 0.005, cyan);
         if menu.locations[menu.selected].track == TrackId::Engomi {
             text(
                 &mut v,
                 "OPENSTREETMAP CONTRIBUTORS / ODBL",
-                [-0.92, -0.73],
+                [-0.92, -0.83],
                 0.0025,
                 muted,
             );
             text(
                 &mut v,
                 "TERRAIN: MAPZEN / USGS / EU COPERNICUS",
-                [-0.92, -0.77],
+                [-0.92, -0.87],
                 0.0025,
                 muted,
             );
@@ -560,7 +560,7 @@ impl Hud {
                 text(
                     &mut v,
                     crate::aerial::attribution_label(),
-                    [-0.92, -0.81],
+                    [-0.92, -0.91],
                     0.0024,
                     muted,
                 );
@@ -569,7 +569,7 @@ impl Hud {
         text(
             &mut v,
             "LEFT LOCATION / RIGHT CAR / UP-DOWN BROWSE / ENTER START / Q QUIT",
-            [-0.92, -0.91],
+            [-0.92, -0.96],
             0.0032,
             white,
         );
@@ -718,12 +718,12 @@ fn choice_header(v: &mut Vec<f32>, label: &str, left: f32, selected: usize, coun
             selected / CHOICES_PER_PAGE + 1,
             count.div_ceil(CHOICES_PER_PAGE)
         ),
-        [left + 0.55, 0.14],
+        [left + 0.44, 0.14],
         0.0033,
         cyan,
     );
-    text(v, "<", [left + 0.46, 0.14], 0.0035, cyan);
-    text(v, ">", [left + 0.80, 0.14], 0.0035, cyan);
+    text(v, "<", [left + 0.36, 0.14], 0.0035, cyan);
+    text(v, ">", [left + 0.65, 0.14], 0.0035, cyan);
 }
 fn choice_button(v: &mut Vec<f32>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
     menu_button(v, r, selected, focused && selected);
@@ -1230,24 +1230,24 @@ mod tests {
         );
         assert_eq!(location_menu_hit_test(-0.5, -0.195, 3, 4), None);
         assert_eq!(
-            location_menu_hit_test(-0.45, 0.14, 0, 4),
+            location_menu_hit_test(-0.55, 0.14, 0, 4),
             Some(MenuAction::Page(-1))
         );
         assert_eq!(
-            location_menu_hit_test(-0.07, 0.14, 0, 4),
+            location_menu_hit_test(-0.25, 0.14, 0, 4),
             Some(MenuAction::Page(1))
         );
-        assert_eq!(location_menu_hit_test(-0.30, 0.14, 0, 4), None);
+        assert_eq!(location_menu_hit_test(-0.45, 0.14, 0, 4), None);
         assert_eq!(
-            location_menu_hit_test(-0.5, -0.32, 0, 4),
+            location_menu_hit_test(-0.5, -0.43, 0, 4),
             Some(MenuAction::Choice(2))
         );
         assert_eq!(
-            location_menu_hit_test(-0.41, 0.14, 0, 4),
+            location_menu_hit_test(-0.51, 0.14, 0, 4),
             Some(MenuAction::Page(-1))
         );
         assert_eq!(
-            location_menu_hit_test(-0.1, 0.14, 0, 4),
+            location_menu_hit_test(-0.23, 0.14, 0, 4),
             Some(MenuAction::Page(1))
         );
     }
@@ -1267,11 +1267,11 @@ mod tests {
                 );
             }
             assert_eq!(
-                selection_menu_hit_test(0.52, 0.14, 0, 4, car),
+                selection_menu_hit_test(0.43, 0.14, 0, 4, car),
                 Some(MenuAction::CarPage(-1))
             );
             assert_eq!(
-                selection_menu_hit_test(0.87, 0.14, 0, 4, car),
+                selection_menu_hit_test(0.73, 0.14, 0, 4, car),
                 Some(MenuAction::CarPage(1))
             );
         }
@@ -1293,8 +1293,8 @@ mod tests {
                 Some(MenuAction::Car(car))
             );
         }
-        assert_eq!(menu_hit_test(-0.5, -0.35), None);
-        assert_eq!(menu_hit_test(-0.5, -0.575), Some(MenuAction::Start));
+        assert_eq!(menu_hit_test(-0.5, -0.36), None);
+        assert_eq!(menu_hit_test(-0.5, -0.69), Some(MenuAction::Start));
         assert_eq!(menu_hit_test(0.5, 0.2), None);
         assert_eq!(menu_hit_test(-0.5, -0.8), None);
     }
