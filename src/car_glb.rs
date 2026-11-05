@@ -10,6 +10,7 @@ pub(crate) struct Design {
     pub body: Vec<Vertex>,
     pub wheels: [Vec<Vertex>; 4],
     pub mounts: [[f32; 3]; 4],
+    pub wheel_radii: [f32; 4],
 }
 fn invalid(message: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
@@ -95,9 +96,17 @@ fn decode(bytes: &[u8]) -> io::Result<Design> {
     }
     let [body, rl, rr, fl, fr] = importer.vertices;
     let mounts = std::array::from_fn(|i| importer.origins[i + 1].unwrap().to_array());
+    let wheels = [rl, rr, fl, fr];
+    let wheel_radii = std::array::from_fn(|i| {
+        wheels[i]
+            .iter()
+            .map(|v| v.position[1].hypot(v.position[2]))
+            .fold(0.0, f32::max)
+    });
     Ok(Design {
         body,
-        wheels: [rl, rr, fl, fr],
+        wheels,
+        wheel_radii,
         mounts,
     })
 }

@@ -299,8 +299,11 @@ brake, or selecting first from revved neutral, releases finite flywheel energy
 through the driven tires. Wheelspin feedback reflects driven-axle saturation, but there is no independent wheel angular-inertia solver.
 
 A damped spring supports chassis height and permits unloading, flight, and
-landing over changes in ground height. Pitch and roll respond to acceleration
-through damped springs; curb impacts retain their small feedback bump. This is
+landing over changes in ground height. Pitch and roll follow both acceleration
+and road angle through damped springs; curb impacts retain their small feedback
+bump. Each rendered wheel follows its own ground contact, with 14 cm compression and 16 cm droop relative
+to the sprung body. Tire radii come from the loaded artwork, so the wheels can
+move in their arches while the chassis heaves, pitches, and rolls. This is
 an axle model with one vertical chassis degree of freedom, not four independent
 suspension corners or a full 3D rigid body. Collision shapes and damage modeling
 remain simplified.

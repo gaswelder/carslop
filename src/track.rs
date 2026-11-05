@@ -164,6 +164,15 @@ impl Track {
         flat
     }
 
+    #[cfg(test)]
+    pub fn bump_test_track(&self) -> Self {
+        let mut road = self.flat_test_track();
+        for (point, distance) in road.points.iter_mut().zip(&road.distances) {
+            point[1] = 0.14 * (-((distance - 55.0) / 1.0).powi(2)).exp();
+        }
+        road
+    }
+
     fn engomi() -> Result<Self, String> {
         let city = crate::city::City::engomi()?;
         Ok(Self {

@@ -35,6 +35,8 @@ pub struct Vehicle {
     pub slip: f32,
     pub body_pitch: f32,
     pub body_roll: f32,
+    pub suspension_pitch: f32,
+    pub suspension_roll: f32,
     pub curb_bump: f32,
     pub engine_rpm: f32,
     pub engine_load: f32,
@@ -52,6 +54,7 @@ pub struct Vehicle {
     acceleration: [f32; 2], // longitudinal/lateral, filtered for load transfer
     pitch_rate: f32,
     roll_rate: f32,
+    suspension_rates: [f32; 2],
     vertical_speed: f32,
     suspension_initialized: bool,
     pub wheel_spin: f32,
@@ -72,7 +75,7 @@ impl Vehicle {
         model: CarModel,
         track: std::sync::Arc<track::Track>,
     ) -> Self {
-        Self {
+        let mut car = Self {
             model,
             track,
             position,
@@ -85,6 +88,8 @@ impl Vehicle {
             slip: 0.0,
             body_pitch: 0.0,
             body_roll: 0.0,
+            suspension_pitch: 0.0,
+            suspension_roll: 0.0,
             curb_bump: 0.0,
             engine_rpm: IDLE_RPM,
             engine_load: 0.0,
@@ -102,13 +107,18 @@ impl Vehicle {
             acceleration: [0.0; 2],
             pitch_rate: 0.0,
             roll_rate: 0.0,
+            suspension_rates: [0.0; 2],
             vertical_speed: 0.0,
             suspension_initialized: false,
             wheel_spin: 0.0,
             clutch_open: false,
             launch_energy: 0.0,
             axle_load: [0.0; 2],
-        }
+        };
+        let (pitch, roll) = car.ground_angles();
+        car.suspension_pitch = pitch;
+        car.suspension_roll = roll;
+        car
     }
 
     pub fn reset(&mut self, position: [f32; 3], heading: f32) {
@@ -619,6 +629,34 @@ impl Vehicle {
             * (speed.abs() / 2.0).clamp(0.0, 1.0)
     }
 
+    fn ground_angles(&self) -> (f32, f32) {
+        let (sin, cos) = self.heading.sin_cos();
+        let h = |dx: f32, dz: f32| {
+            let p = [
+                self.position[0] + dx,
+                self.position[1],
+                self.position[2] + dz,
+            ];
+            self.track.city().map_or_else(
+                || self.track.project(p).point[1],
+                |c| c.drive_height([p[0], p[2]]),
+            )
+        };
+        let length = self.model.spec().wheelbase;
+        let width = self.model.spec().dynamics.track_width;
+        (
+            ((h(sin * length * 0.5, cos * length * 0.5)
+                - h(-sin * length * 0.5, -cos * length * 0.5))
+                / length)
+                .atan()
+                .clamp(-0.35, 0.35),
+            ((h(cos * width * 0.5, -sin * width * 0.5) - h(-cos * width * 0.5, sin * width * 0.5))
+                / width)
+                .atan()
+                .clamp(-0.25, 0.25),
+        )
+    }
+
     fn update_body_motion(&mut self, dt: f32) {
         let d = &self.model.spec().dynamics;
         let target_pitch = (self.acceleration[0] * d.cg_height / 80.0).clamp(-0.10, 0.10);
@@ -630,6 +668,21 @@ impl Vehicle {
             (omega * omega * (target_roll - self.body_roll) - 1.4 * omega * self.roll_rate) * dt;
         self.body_pitch += self.pitch_rate * dt;
         self.body_roll += self.roll_rate * dt;
+        // The sprung body follows terrain through damped angular springs.
+        // Wheels follow the contact surface independently in the renderer.
+        let (pitch, roll) = if self.axle_load.iter().sum::<f32>() > 0.0 {
+            self.ground_angles()
+        } else {
+            (self.suspension_pitch, self.suspension_roll)
+        };
+        for (axis, target, angle) in [
+            (0, pitch, &mut self.suspension_pitch),
+            (1, roll, &mut self.suspension_roll),
+        ] {
+            let rate = &mut self.suspension_rates[axis];
+            *rate += (omega * omega * (target - *angle) - 1.4 * omega * *rate) * dt;
+            *angle += *rate * dt;
+        }
     }
 
     fn update_neutral_engine(&mut self, throttle: f32, dt: f32) {
@@ -1231,6 +1284,47 @@ mod tests {
                 );
             }
             assert!(car.axle_load[0] > static_front * 1.05);
+        }
+    }
+
+    #[test]
+    fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
+        let run = |hz: u32| {
+            let track = std::sync::Arc::new(track::TrackId::Scenic.track().bump_test_track());
+            let road = track.at_distance(50.0);
+            let mut car = Vehicle::on_track(
+                road.lane_position(0.0),
+                road.heading(),
+                CarModel::Roadster,
+                track,
+            );
+            car.velocity = road.tangent.map(|v| v * 8.0);
+            let mut peak_pitch: f32 = 0.0;
+            let mut peak_heave: f32 = 0.0;
+            for _ in 0..hz * 3 {
+                car.update(
+                    Duration::from_secs_f64(1.0 / hz as f64),
+                    Controls::default(),
+                );
+                peak_pitch = peak_pitch.max(car.suspension_pitch.abs());
+                peak_heave = peak_heave.max((car.position[1] - 0.48).abs());
+            }
+            println!(
+                "{hz} Hz: bump pitch {peak_pitch}, heave {peak_heave}, final {}",
+                car.position[1]
+            );
+            assert!(peak_pitch > 0.01 && peak_pitch < 0.15);
+            assert!(peak_heave > 0.025 && peak_heave < 0.25);
+            assert!((car.position[1] - car.ride_height()).abs() < 0.003);
+            assert!(car.suspension_pitch.abs() < 0.002);
+            assert!(car.suspension_roll.abs() < 0.002);
+            (peak_pitch, peak_heave)
+        };
+        let reference = run(240);
+        for hz in [30, 60, 144] {
+            let sample = run(hz);
+            assert!((sample.0 - reference.0).abs() < 0.005);
+            assert!((sample.1 - reference.1).abs() < 0.01);
         }
     }
 

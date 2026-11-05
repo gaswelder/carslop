@@ -490,11 +490,8 @@ impl Mesh {
             gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
             gl::Uniform1f(brake_light, 0.0);
             set_tint(program, [1.0; 3]);
-            for (index, center) in car.model.wheel_centers().into_iter().enumerate() {
-                let front = index >= 2;
-                let steer = if front { car.front_wheel_angle() } else { 0.0 };
-                let matrix =
-                    wheel_matrix(*model, center, steer, car.wheel_phase[usize::from(front)]);
+            for index in 0..4 {
+                let matrix = vehicle_wheel_matrix(car, *model, index);
                 set_scene_transform(program, camera, &matrix);
                 gl::DrawArrays(
                     GL_TRIANGLES,
@@ -1055,33 +1052,13 @@ fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32
 
 /// Body transform shared by rendering and the bonnet camera mount.
 pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
-    let track = &vehicle.track;
-    let (road_pitch, road_roll) = if let Some(city) = track.city() {
-        let h = |dx: f32, dz: f32| {
-            city.drive_height([vehicle.position[0] + dx, vehicle.position[2] + dz])
-        };
-        let (sin, cos) = vehicle.heading.sin_cos();
-        // Sample along this car, never across unrelated city graph edges.
-        (
-            ((h(sin * 1.3, cos * 1.3) - h(-sin * 1.3, -cos * 1.3)) / 2.6).atan(),
-            ((h(cos * 0.8, -sin * 0.8) - h(-cos * 0.8, sin * 0.8)) / 1.6).atan(),
-        )
-    } else {
-        let road = track.project(vehicle.position);
-        let grade = track.at_distance(road.distance + 0.5).point[1]
-            - track.at_distance(road.distance - 0.5).point[1];
-        (
-            (grade * (vehicle.heading - road.heading()).cos()).atan(),
-            0.0,
-        )
-    };
     let mut body_position = vehicle.position;
     body_position[1] += vehicle.curb_bump;
     body_model_matrix(
         body_position,
         vehicle.heading,
-        road_pitch + vehicle.body_pitch,
-        road_roll + vehicle.body_roll,
+        vehicle.suspension_pitch + vehicle.body_pitch,
+        vehicle.suspension_roll + vehicle.body_roll,
     )
 }
 
@@ -1122,6 +1099,28 @@ pub fn body_model_matrix(
         car_position[2],
         1.0,
     ]
+}
+
+fn vehicle_wheel_matrix(car: &crate::vehicle::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
+    let mut center = car.model.wheel_centers()[index];
+    let mounted: [f32; 3] = std::array::from_fn(|i| {
+        body[i] * center[0] + body[4 + i] * center[1] + body[8 + i] * center[2] + body[12 + i]
+    });
+    let ground = car.track.city().map_or_else(
+        || car.track.project(mounted).point[1],
+        |city| city.drive_height([mounted[0], mounted[2]]),
+    );
+    let radius = car.model.spec().design.wheel_radii[index];
+    // Bounded compression/droop keeps tires following bumps while the body
+    // heaves and tilts on its springs. Airborne wheels stop at full extension.
+    center[1] += ((ground + radius - mounted[1]) / body[5].abs().max(0.5)).clamp(-0.16, 0.14);
+    let front = index >= 2;
+    wheel_matrix(
+        body,
+        center,
+        if front { car.front_wheel_angle() } else { 0.0 },
+        car.wheel_phase[usize::from(front)],
+    )
 }
 
 fn wheel_matrix(body: [f32; 16], center: [f32; 3], steer: f32, spin: f32) -> [f32; 16] {
@@ -1297,6 +1296,46 @@ mod tests {
                         .sqrt();
                     assert!((radius - crate::cars::WHEEL_RADIUS).abs() < 0.0001);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
+        let track = std::sync::Arc::new(crate::track::TrackId::Scenic.track().bump_test_track());
+        let road = track.at_distance(54.0);
+        let mut car = crate::vehicle::Vehicle::on_track(
+            road.lane_position(0.0),
+            road.heading(),
+            crate::cars::CarModel::Roadster,
+            track,
+        );
+        car.suspension_pitch = 0.0;
+        car.suspension_roll = 0.0;
+        let body = vehicle_body_matrix(&car);
+        let wheel_y: [f32; 4] = std::array::from_fn(|i| {
+            let matrix = vehicle_wheel_matrix(&car, body, i);
+            let center = transform(matrix, [0.0; 3]);
+            let ground = car.track.project(center).point[1];
+            assert!((center[1] - car.model.spec().design.wheel_radii[i] - ground).abs() < 0.005);
+            center[1]
+        });
+        assert!(
+            wheel_y[2] - wheel_y[0] > 0.05,
+            "front and rear wheels must travel independently"
+        );
+        for height in [-1.0, 1.0] {
+            let mut displaced = body;
+            displaced[13] += height;
+            for (i, mount) in car.model.wheel_centers().into_iter().enumerate() {
+                let nominal = transform(displaced, mount);
+                let wheel = transform(vehicle_wheel_matrix(&car, displaced, i), [0.0; 3]);
+                let travel = wheel[1] - nominal[1];
+                let expected = if height < 0.0 { 0.14 } else { -0.16 };
+                assert!(
+                    (travel - expected).abs() < 0.001,
+                    "suspension travel must stop at its limit"
+                );
             }
         }
     }

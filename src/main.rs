@@ -895,6 +895,56 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires SDL3/OpenGL; renders a suspension bump sequence"]
+    fn suspension_bump_preview() {
+        let app = App::with_location(false);
+        let track = std::sync::Arc::new(TrackId::Scenic.track().bump_test_track());
+        let mesh = gl::Mesh::new(&track).unwrap();
+        let road = track.at_distance(50.0);
+        let mut car = vehicle::Vehicle::on_track(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::Roadster,
+            track,
+        );
+        car.velocity = road.tangent.map(|v| v * 8.0);
+        let directory = std::path::Path::new("/tmp/carslop-suspension-preview");
+        std::fs::create_dir_all(directory).unwrap();
+        for frame in 0..60 {
+            car.update(Duration::from_secs_f64(1.0 / 30.0), Controls::default());
+            let p = car.position;
+            let (sin, cos) = car.heading.sin_cos();
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: [
+                        p[0] + cos * 6.5 + sin * 1.5,
+                        2.35,
+                        p[2] - sin * 6.5 + cos * 1.5,
+                    ],
+                    target: [p[0], 0.65, p[2]],
+                },
+            );
+            gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+            gl::clear_screen();
+            mesh.draw_ground(
+                app.scene_program,
+                &camera,
+                &[shadows::ContactShadow::new(&car)],
+            );
+            mesh.draw(
+                app.scene_program,
+                &camera,
+                &gl::vehicle_body_matrix(&car),
+                [0.6, 0.12, 0.065],
+                &car,
+            );
+            capture_frame(&directory.join(format!("frame-{frame:03}.ppm")));
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
+    }
+
+    #[test]
     #[ignore = "requires SDL3/OpenGL and the bundled Nicosia map"]
     fn readme_screenshot() {
         let mut app = App::new();
