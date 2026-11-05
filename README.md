@@ -51,8 +51,8 @@ The bonnet camera is fixed to the rendered body and follows its steering,
 pitch, roll and vertical suspension movement.
 
 The current street name appears in large text at the bottom center while driving. Names come from
-the location’s OSM source, preferring English when available; unnamed roads and
-off-road driving are labeled accordingly. Built-in routes show their route name.
+the location’s OSM source, preferring English when available. Unnamed roads are
+labeled accordingly; the street label clears when driving off road. Built-in routes show their route name.
 
 Named OSM buildings have facade-mounted storefront signs, preferring `name:en`
 and falling back to the local name. Signs face the closest street and use world

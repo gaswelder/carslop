@@ -618,7 +618,7 @@ impl City {
     pub fn street_name(&self, p: [f32; 3]) -> &str {
         let (index, road) = self.project_street(p);
         if (p[0] - road.point[0]).hypot(p[2] - road.point[2]) > road.width * 0.5 + 5.0 {
-            return "OFF ROAD";
+            return "";
         }
         self.streets[index]
             .way
@@ -960,7 +960,7 @@ mod tests {
         city.street_names = read_street_names(&osm[..]).unwrap();
         assert_eq!(city.street_name([-20.0, 0.5, 2.0]), "Main & First");
         assert_eq!(city.street_name([2.0, 0.5, 20.0]), "B12");
-        assert_eq!(city.street_name([25.0, 0.5, 25.0]), "OFF ROAD");
+        assert_eq!(city.street_name([25.0, 0.5, 25.0]), "");
         city.street_names.remove(&2);
         assert_eq!(city.street_name([2.0, 0.5, 20.0]), "UNNAMED ROAD");
         assert!(!city.street_names.contains_key(&3));
