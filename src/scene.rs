@@ -717,6 +717,19 @@ mod tests {
     }
 
     #[test]
+    fn kestrel_uses_its_original_clear_reverse_lenses() {
+        let mut b = Builder::default();
+        car(&mut b, CarModel::Roadster);
+        let lenses: Vec<_> = b.vertices.iter().filter(|v| v.material[0] == 6.0).collect();
+        assert!(lenses.len() >= 60);
+        for v in lenses {
+            assert!(v.position[0].abs() < 0.47);
+            assert!((-2.10..-2.07).contains(&v.position[2]));
+            assert!(v.color[0] > 0.8 && v.color[1] > 0.8 && v.color[2] > 0.8);
+        }
+    }
+
+    #[test]
     fn roadster_reference_mesh_has_authored_lights_arches_and_trim() {
         let mut b = Builder::default();
         car(&mut b, CarModel::Roadster);
