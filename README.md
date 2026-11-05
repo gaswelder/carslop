@@ -216,6 +216,114 @@ in reverse. Engine braking and the handbrake do not illuminate stop lights.
 Without extras, solid colors and metallic/roughness factors supply the finish.
 Normals and triangle winding must face outward.
 
+## Commands and options
+
+All commands run from the game executable. With no command, `play` opens the
+selection menu. Global options can appear before or after the command.
+`--location` selects an imported package name; it preselects the menu rather
+than immediately starting driving. `--bake-city` is a legacy alias for `bake-city`.
+
+```text
+Usage: nfs5like [COMMAND]
+
+Commands:
+  play [--location NAME]                  Open the game (default command)
+  add-location NAME --source FILE.osm     Import a local OSM XML extract
+      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds
+      --elevation TILE.hgt[.gz]
+  list-locations                         List imported locations
+  bake-city --location NAME             Rebuild render and collision data
+  bake-collision --location NAME        Rebuild collision data only
+  bake-scene --location NAME            Rebuild visual geometry only
+
+  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]
+  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm
+  build-aerial-tiles --image FILE --export FILE --output DIR
+      [--size 512] [--gutter 8] [--preview-output DIR]
+
+  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]
+
+  import-imagery-trees --candidates FILE.geojson --city-data DIR
+
+  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]
+
+  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder
+  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing
+  verify-location FILE.sqlite             Verify every asset and block
+
+Global options:
+  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)
+  -h, --help                              Show help
+  -V, --version                           Show version
+
+Locations are stored under data/locations (or --locations-dir).
+Run without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.
+```
+
+| Flag | Meaning / default |
+| --- | --- |
+| `--locations-dir PATH` | Location store; overrides `NFS_LOCATIONS_DIR`. Default: `data/locations` beside the executable, working directory, then build source tree. |
+| `--location NAME` | Imported package for `play` and bake commands; required by bake commands. |
+| `--source FILE.osm` | Required OSM XML input to `add-location`. |
+| `--elevation TILE.hgt[.gz]` | Required elevation tile; adjacent tiles are found in the same directory. |
+| `--bbox S W N E` | Decimal-degree crop. Import defaults to OSM bounds; `extract-region` defaults to `35.10 33.25 35.23 33.47` (Nicosia). |
+| `--image FILE` | Source image for aerial tiling or tree preview. |
+| `--export FILE` | Image export metadata JSON containing Web Mercator `extent`. |
+| `--output DIR` | Output tiles/tree-review directory; required for those tools. |
+| `--size N` | Aerial tile core size in pixels; default 512. |
+| `--gutter N` | Repeated border pixels for seamless aerial filtering; default 8. |
+| `--preview-output DIR` | Also write `image.rgb` and `georef.txt` for the aerial rendering preview. |
+| `--osm FILE.osm` | Optional mapped-tree overlay in `preview-trees`. |
+| `--city-data PATH` | Location directory or SQLite package; optional in tree preview, required by imagery preparation/import. |
+| `--candidates FILE.geojson` | Reviewed tree candidates for `import-imagery-trees`. |
+| `--work-dir DIR` | Download/cache directory for city imagery; required. |
+| `--limit-blocks N` | Positive sample limit; downloads without changing the playable package. |
+| `-h`, `--help` | Display help. |
+| `-V`, `--version` | Display executable version. |
+
+The audio preparation helper accepts
+`python3 tools/build_engine_audio.py SOURCE.wav [--output DIR]`; output defaults
+to `data/cars/kestrel/audio`. Its `-h` / `--help` shows usage.
+
+## Environment variables
+
+These are the environment settings read by the project. Presence switches are
+enabled by setting the variable to any value, including `0`; unset them to
+restore normal behavior. `play --location` takes precedence over `NFS_CITY_DATA`.
+
+| Variable | Purpose / default |
+| --- | --- |
+| `NFS_LOCATIONS_DIR` | Location store; overridden by `--locations-dir`. |
+| `NFS_CITY_DATA` | Explicit location directory or `.sqlite` package for default-city loading and tests; otherwise the store's `nicosia` package. |
+| `NFS_CITY_SCENE` | Override the baked `scene.pack` path; normally read from the selected package. |
+| `NFS_AERIAL_DATA` | Override aerial asset directory; defaults to the selected location's `aerial` assets. |
+| `NFS_NO_AERIAL` | Presence disables aerial imagery. |
+| `RUST_LOG` | `env_logger` filter, e.g. `info` or `nfs5like=debug`; unset uses its default error level. |
+
+Preview variables only affect the corresponding `cargo test ... -- --ignored`
+commands. Graphics previews need an SDL3/OpenGL display.
+
+| Variable | Test / output |
+| --- | --- |
+| `NFS_AUDIO_PREVIEW` | Required output WAV for `recorded_driving_preview`. |
+| `NFS_TIRE_PREVIEW` | Required output WAV for `tire_squeal_preview`. |
+| `NFS_CITY_PREVIEW_DIR` | `engomi_renderer_smoke` output directory; `/tmp/engomi-preview`. |
+| `NFS_CAR_PREVIEW_DIR` | Required car image directory for `kestrel_art_preview`. |
+| `NFS_FURNITURE_PREVIEW_DIR` | `road_furniture_renderer_smoke` output; `/tmp/furniture-preview`. |
+| `NFS_LOADING_PREVIEW` | Loading-screen PPM; `/tmp/location-loading.ppm`. |
+| `NFS_MAP_PREVIEW_DIR` | Full-map test output; `/tmp/full-map-preview`. |
+| `NFS_MENU_PREVIEW` | Optional startup-menu PPM path. |
+| `NFS_IMPORTED_PREVIEW` | Optional imported-location PPM path; requires `NFS_CITY_DATA`. |
+| `NFS_AERIAL_PREVIEW_DIR` | Required directory containing `image.rgb` and `georef.txt` for `aerial_drape_preview`. |
+| `NFS_AERIAL_RAW` | Presence selects raw aerial draping in that preview rather than the hybrid surface. |
+| `NFS_VALIDATED_CITY` | Required completed import for the full Nicosia import acceptance test. |
+| `NFS_TEST_RUNTIME_CAR` | Internal subprocess switch for the runtime car catalog probe; normally unset. |
+| `NFS_TEST_LOCATION_CACHE` | Internal fixture directory for location-cache subprocess tests; normally unset. |
+
+Cargo supplies `CARGO_MANIFEST_DIR` and `CARGO_PKG_VERSION` at build time;
+they are not runtime configuration. Standard platform SDL/audio/video settings
+remain available through those libraries.
+
 ## Development
 
 ```sh
