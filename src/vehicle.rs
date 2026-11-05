@@ -331,15 +331,20 @@ impl Vehicle {
                     } else {
                         1.0
                     };
-                // Sliding tires retain some sideways authority. Leave a small
-                // part of the friction circle for it during a powered burnout.
+                // Sliding tires retain some sideways authority. Reserve enough of the
+                // friction circle for it during a powered burnout.
                 let drive_share = if axle == 0 {
                     front_drive
                 } else {
                     1.0 - front_drive
                 };
                 let spinning = drive.abs() * drive_share > capacity;
-                let limit = if spinning { limit * 0.97 } else { limit };
+                let limit = if spinning {
+                    let sideways = (self.slip.abs() / 2.0).clamp(0.0, 1.0);
+                    limit * (0.97 - 0.05 * sideways)
+                } else {
+                    limit
+                };
                 let fx = requested_x[axle].clamp(-limit, limit);
                 let side = if axle == 0 { wheel_side } else { rear_v };
                 let along = if axle == 0 {
@@ -354,7 +359,7 @@ impl Vehicle {
                 let normalized = stiffness * alpha / capacity.max(1.0);
                 let fy = -capacity
                     * normalized.tanh()
-                    * (1.0 - 0.18 * (alpha.abs() / 0.6).clamp(0.0, 1.0))
+                    * (1.0 - 0.08 * (alpha.abs() / 0.6).clamp(0.0, 1.0))
                     * if locked { 0.18 } else { 1.0 };
                 // Longitudinal saturation consumes the contact patch's grip.
                 // Scaling an already-clamped drive force together with fy left
@@ -991,7 +996,7 @@ mod tests {
             let mut rotation = 0.0;
             let mut slip = 0.0;
             let mut speed = 0.0;
-            for tick in 0..2400 {
+            for tick in 0..2640 {
                 treadmill_tick(
                     &mut car,
                     Controls {
@@ -1002,14 +1007,45 @@ mod tests {
                 );
                 if tick >= 1200 {
                     rotation += car.yaw_rate / 240.0;
-                    slip += car.slip.abs().atan2(car.speed.abs().max(0.1)) / 1200.0;
-                    speed += car.velocity[0].hypot(car.velocity[1]) / 1200.0;
+                    slip += car.slip.abs().atan2(car.speed.abs().max(0.1)) / 1440.0;
+                    speed += car.velocity[0].hypot(car.velocity[1]) / 1440.0;
                 }
             }
             println!("steering {steering}: rotation {rotation}, slip {slip}, speed {speed}");
             assert!(rotation * steering < -std::f32::consts::TAU);
-            assert!(slip > 0.5, "power donuts need sustained rear slip: {slip}");
+            assert!(
+                (0.25..1.0).contains(&slip),
+                "power donuts need controlled rear slip: {slip}"
+            );
             assert!(speed < 12.0, "donuts must stay tight: {speed}");
+        }
+    }
+
+    #[test]
+    fn tires_regain_direction_after_lifting_out_of_a_slide() {
+        for model in crate::cars::ALL {
+            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let h = car.heading;
+            car.velocity = [
+                h.sin() * 15.0 + h.cos() * 6.0,
+                h.cos() * 15.0 - h.sin() * 6.0,
+            ];
+            car.yaw_rate = 0.5;
+            for _ in 0..480 {
+                treadmill_tick(&mut car, Controls::default());
+            }
+            let rear_side = car.slip
+                - car.yaw_rate * model.spec().wheelbase * model.spec().dynamics.front_weight;
+            let angle = rear_side.abs().atan2(car.speed.abs().max(2.5)).to_degrees();
+            assert!(angle < 3.0, "{model:?}: slide persists after lift: {angle}");
+            assert!(
+                car.yaw_rate.abs() < 0.15,
+                "{model:?}: rotation persists after lift"
+            );
+            assert!(
+                car.speed > 8.0,
+                "recovering grip must not simply stop the car"
+            );
         }
     }
 

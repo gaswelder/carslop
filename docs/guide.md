@@ -273,7 +273,8 @@ Acceleration and braking transfer load between axles. Lateral transfer reduces
 available grip through tire load sensitivity. Drive, braking, and cornering
 share each axle's friction budget; hard acceleration can saturate driven tires,
 and the handbrake locks the rear axle. Foot braking retains ABS-like regulation.
-Tire forces peak and soften into sliding grip, so front and rear breakaway and
+Spinning tires reserve part of the friction circle for lateral control.
+Tire forces peak with a modest falloff into sliding grip, so front and rear breakaway and
 countersteering arise from forces rather than a target rotation rate. Keyboard
 steering still ramps progressively and reduces lock with speed. Kestrel has
 additional speed-dependent lock reduction, a firmer rear-axle response, and
