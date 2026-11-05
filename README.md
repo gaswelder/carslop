@@ -50,7 +50,7 @@ release Down while holding Up. A revved neutral-to-first shift also works.
 The bonnet camera is fixed to the rendered body and follows its steering,
 pitch, roll and vertical suspension movement.
 
-The current street name appears below the minimap while driving. Names come from
+The current street name appears in large text at the bottom center while driving. Names come from
 the location’s OSM source, preferring English when available; unnamed roads and
 off-road driving are labeled accordingly. Built-in routes show their route name.
 

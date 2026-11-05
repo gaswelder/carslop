@@ -1081,7 +1081,7 @@ fn append_street_name(v: &mut Vec<f32>, name: &str) {
     let mut lines = Vec::new();
     let mut start = 0;
     while start < chars.len() && lines.len() < 2 {
-        let mut end = (start + 24).min(chars.len());
+        let mut end = (start + 32).min(chars.len());
         if end < chars.len() {
             if let Some(space) = chars[start..end].iter().rposition(|ch| *ch == ' ') {
                 if space > 0 {
@@ -1095,19 +1095,25 @@ fn append_street_name(v: &mut Vec<f32>, name: &str) {
             start += 1;
         }
         if lines.len() == 1 && start < chars.len() {
-            line = line.chars().take(21).collect::<String>() + "...";
+            line = line.chars().take(29).collect::<String>() + "...";
         }
         lines.push(line);
     }
-    quad(v, [0.59, 0.28], [0.97, 0.40], [0.025, 0.05, 0.075]);
+    if lines.is_empty() {
+        return;
+    }
+    let size = 0.0043;
+    let top = -0.89 + (lines.len() - 1) as f32 * 0.075;
+    let width = lines.iter().map(|s| s.chars().count()).max().unwrap_or(0) as f32 * 6.0 * size;
+    quad(
+        v,
+        [-width * 0.5 - 0.018, -0.96],
+        [width * 0.5 + 0.018, top + 0.025],
+        [0.025, 0.05, 0.075],
+    );
     for (i, line) in lines.iter().enumerate() {
-        text(
-            v,
-            line,
-            [0.605, 0.38 - i as f32 * 0.05],
-            0.0024,
-            [0.9, 0.95, 1.0],
-        );
+        let x = -(line.chars().count() as f32) * 3.0 * size;
+        text(v, line, [x, top - i as f32 * 0.075], size, [0.9, 0.95, 1.0]);
     }
 }
 
@@ -1222,8 +1228,8 @@ mod tests {
             append_street_name(&mut vertices, name);
             assert!(!vertices.is_empty());
             for vertex in vertices.chunks_exact(6) {
-                assert!((0.59..=0.97).contains(&vertex[0]));
-                assert!((0.28..=0.40).contains(&vertex[1]));
+                assert!((-0.46..=0.46).contains(&vertex[0]));
+                assert!((-0.97..=-0.76).contains(&vertex[1]));
             }
         }
         for ch in "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩΆΈΉΊΌΎΏ".chars() {
