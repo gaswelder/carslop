@@ -83,9 +83,8 @@ Grand Prix circuit and their racing connections, with surrounding scenery:
 ./target/release/nfs5like play --location nurburgring
 ```
 
-Its package is `data/locations/nurburgring.sqlite`, built from the
-[Geofabrik Rheinland-Pfalz extract](https://download.geofabrik.de/europe/germany/rheinland-pfalz.html)
-with Skadi N50E006 and N50E007 elevation. Bounds: `50.315 6.910 50.390 7.015`.
+Its package is `data/locations/nurburgring.sqlite`.
+Bounds: `50.315 6.910 50.390 7.015`.
 This is a free-drive map with generated scenery. Circuit bridge sections follow
 the terrain surface; banking, bridge decks and circuit-specific barriers are
 not reconstructed.
@@ -221,7 +220,7 @@ Level-ground automatic 0–100 times are about 6.83 s (1964 Borsch 11) and 5.30 
 
 1991 Agolf GTI is an original three-door hot-hatch design with four round lamps,
 red grille trim and mesh wheels, inspired by the
-[Golf II GTI](https://www.volkswagen-newsroom.com/en/golf-2-gti-19841991-19502).
+Golf II GTI.
 Its proportions, handling and badging are game assets rather than factory data.
 Rebuild it with `python3 tools/build_fictional_cars.py agolf [--output FILE.glb]`;
 without `--output`, the tool writes `data/cars/club/model.glb`. `-h` / `--help`
@@ -229,14 +228,14 @@ shows usage. The script uses only Python's standard library.
 
 1969 Mosquito SS is an original long-bonnet, short-deck V8 coupe with twin
 stripes, round headlamps, triple rear lamps and five-spoke wheels, inspired by
-[GM's 1969 Camaro SS reference](https://www.gm.com/heritage/collection/chevrolet/1969-chevrolet-camaro-ss).
+GM's 1969 Camaro SS reference.
 It uses a four-speed rear-drive tune. Rebuild its artwork with
 `python3 tools/build_fictional_cars.py mosquito [--output FILE.glb]`; the default
 output is `data/cars/muscle/model.glb`.
 
 2016 Pitsunda 2 is an original five-door commuter hatch with a swept front,
 shield grille, slim headlamps and split-spoke wheels, inspired by
-[Mazda's Demio/Mazda2 design](https://newsroom.mazda.com/en/publicity/release/2014/201407/140717a.html).
+Mazda's Demio/Mazda2 design.
 It has a 1.3-litre-style petrol tune, front-wheel drive and six forward gears.
 Rebuild with `python3 tools/build_fictional_cars.py pitsunda [--output FILE.glb]`;
 the default output is `data/cars/pitsunda-2/model.glb`.
@@ -369,28 +368,6 @@ cargo test kestrel_art_preview -- --ignored --test-threads=1
 cargo test suspension_bump_preview -- --ignored --test-threads=1
 ```
 
-## Engine audio credits
-
-The active bank (`engine.json` and `flat6-*.pcm`) uses excerpts from a real
-**Porsche 911 SC, 1981, 3.0 litre flat-six**, recorded by **Pole Position Production**.
-It is shared by 1964 Borsch 11 and 1973 Borsch 30 Turbo.
-
-- Recording: `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`
-- Collection: Sonniss #GameAudioGDC 2016, Pole Position Production — Porsche 911 SC 1981.
-- [Producer's recording description](https://pole.se/the-iconic-sound-of-a-porsche-911-sc-from-1981/)
-- [Official free bundle](https://sonniss.com/gameaudiogdc/)
-- [Individual-file download mirror](https://ftpmirror.your.org/pub/misc/sonniss2016/individual/Pole%20Position%20Production%20-%20Porsche%20911%20SC%201981/Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav)
-- Original SHA-256: `eacab443a8ece1b3f4874604f7dfd7337176648ebb1ab5a5e88cd9fcaf348aee`
-- Retrieved: 2026-10-30.
-- [Sonniss GDC bundle license](https://sonniss.com/gdc-bundle-license/), version 2.0,
-  effective 2026-08-27. Copyright remains with the respective rights holders.
-
-The license permits modification and use in personal/commercial games. These
-assets are licensed game content, **not CC0 or part of the code's license**.
-Distribute them within this game; do not redistribute them as a sound library,
-sample pack, project template, or standalone sound files. The original long take
-is kept in ignored `artifacts/audio/source/`, outside the shipped game assets.
-
 ### Editing and calibration
 
 `tools/build_engine_audio.py` extracts distinct sections at six RPM regions,
@@ -428,28 +405,25 @@ Other engine voices, tire noise, rolling noise and turbo airflow are procedural.
 
 ## Credits and distribution
 
-Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
-Saved OSM sources and OSM-derived map databases are distributed under ODbL 1.0;
-game code and original generated materials are separate. Preserve attribution
-and source provenance when sharing city assets. The bundled map uses the
-[Geofabrik Cyprus extract](https://download.geofabrik.de/europe/cyprus.html);
-source records are stored inside the package as `manifest.json` and
-`sources/manifest.json`.
-
-Elevation: [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/),
-using the [Skadi N35E033 tile](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
-Terrain data courtesy of USGS; European terrain produced using Copernicus data
-and information funded by the European Union (EU-DEM). See the provider's
-[source attribution and licensing](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
-Local source records are stored as `elevation/heightfield.json` inside the package.
-
-City-wide imagery: Esri World Imagery — Source: Esri, Vantor, Earthstar
-Geographics, and the GIS User Community. See the
-[provider service](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer).
-
-Original pilot imagery: Cyprus Department of Lands and Surveys,
-[Orthoimagery 2019 WebMercator service](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
-Redistribution permission for the local imagery pack has not been established;
-do not redistribute packages containing this imagery or its derived assets
-unless authorised.
-
+- **Maps:** © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright),
+  ODbL 1.0; extracts from Geofabrik ([Cyprus](https://download.geofabrik.de/europe/cyprus.html),
+  [Rheinland-Pfalz](https://download.geofabrik.de/europe/germany/rheinland-pfalz.html)).
+  Preserve attribution and source provenance when sharing derived map databases.
+- **Elevation:** [Mapzen/Skadi](https://registry.opendata.aws/terrain-tiles/),
+  USGS and EU-funded Copernicus EU-DEM; [source attribution and licenses](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
+- **Imagery:** [Esri World Imagery](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer)
+  — Esri, Vantor, Earthstar Geographics and the GIS User Community;
+  pilot imagery from [Cyprus DLS Orthoimagery 2019](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
+  Redistribution permission is unconfirmed; do not redistribute imagery or
+  derived assets without authorization.
+- **Engine audio:** Pole Position Production's [1981 Porsche 911 SC recording](https://pole.se/the-iconic-sound-of-a-porsche-911-sc-from-1981/),
+  `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`,
+  from [Sonniss GDC 2016](https://sonniss.com/gameaudiogdc/), under the
+  [Sonniss GDC bundle license](https://sonniss.com/gdc-bundle-license/).
+  Modified load/coast excerpts are licensed game content, separate from the
+  code license; distribute within the game, never as standalone recordings,
+  sample packs, sound libraries or project templates.
+- **Car design references:** [Volkswagen Golf II GTI](https://www.volkswagen-newsroom.com/en/golf-2-gti-19841991-19502),
+  [Chevrolet Camaro SS](https://www.gm.com/heritage/collection/chevrolet/1969-chevrolet-camaro-ss),
+  [Mazda Demio/Mazda2](https://newsroom.mazda.com/en/publicity/release/2014/201407/140717a.html).
+  Models are original generated artwork.
