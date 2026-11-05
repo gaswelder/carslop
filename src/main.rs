@@ -945,6 +945,38 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires SDL3/OpenGL and Nicosia; renders a limestone facade"]
+    fn limestone_facade_preview() {
+        let mut app = App::new();
+        app.key_down(Keycode::F7);
+        app.start_selected();
+        let city = app.session.track().city().unwrap();
+        let building = city.buildings.iter().find(|b| b.id == 1020326527).unwrap();
+        let [a, c] = [building.polygon[0], building.polygon[1]];
+        let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+        let mid = [
+            (a[0] + c[0]) * 0.5,
+            building.base_y + 3.3,
+            (a[1] + c[1]) * 0.5,
+        ];
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: [
+                    mid[0] + (c[1] - a[1]) / length * 17.0,
+                    mid[1] + 4.5,
+                    mid[2] - (c[0] - a[0]) / length * 17.0,
+                ],
+                target: mid,
+            },
+        );
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        capture_frame(std::path::Path::new("/tmp/carslop-limestone.ppm"));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
     #[ignore = "requires SDL3/OpenGL and the bundled Nicosia map"]
     fn readme_screenshot() {
         let mut app = App::new();

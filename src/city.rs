@@ -570,6 +570,10 @@ impl City {
         let (_, index, road) = best.expect("city contains roads");
         (index, road)
     }
+    pub fn geographic_origin(&self) -> Option<[f64; 2]> {
+        self.origin
+    }
+
     pub fn google_maps_url(&self, position: [f32; 3]) -> Option<String> {
         let [latitude, longitude] = self.origin?;
         let longitude_scale = latitude.to_radians().cos();

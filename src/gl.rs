@@ -52,6 +52,7 @@ uniform vec2 u_fog_range;
 uniform float u_signal_time;
 uniform float u_brake_light;
 uniform int u_city_reference;
+uniform int u_limestone;
 uniform sampler2DArray u_aerial;
 uniform int u_aerial_count;
 uniform vec4 u_aerial_bounds[48];
@@ -84,6 +85,22 @@ vec3 asphalt_texture(vec3 color) {
     vec2 edge = min(fract(p / 5.0), 1.0 - fract(p / 5.0));
     float patch = step(0.88, surface_hash(cell)) * smoothstep(0.015, 0.035, min(edge.x, edge.y));
     return color * (1.0 + grain * 0.22 + aggregate * 0.10 + weather * 0.12 - patch * 0.09);
+}
+vec3 limestone_texture(vec3 color, vec3 normal) {
+    vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
+    vec2 p = vec2(dot(v_world, tangent), v_world.y);
+    float row = floor(p.y / 0.38);
+    vec2 uv = vec2(p.x + mod(row, 2.0) * 0.5, p.y / 0.38);
+    vec2 edge = min(fract(uv), 1.0 - fract(uv)) * vec2(1.0, 0.38);
+    float aa = max(fwidth(uv.x), fwidth(uv.y) * 0.38);
+    float mortar = 1.0 - smoothstep(0.008, 0.014 + aa, min(edge.x, edge.y));
+    float block = surface_hash(floor(uv));
+    float pores = surface_hash(floor(p * 65.0));
+    float fine = 1.0 - smoothstep(0.35, 1.5, length(fwidth(p * 65.0)));
+    vec3 stone = color * vec3(1.03, 0.99, 0.91)
+        * (0.94 + 0.10 * block + 0.06 * (surface_noise(p * 4.0) - 0.5));
+    stone *= 1.0 - step(0.93, pores) * 0.20 * fine;
+    return mix(stone, color * vec3(0.84, 0.82, 0.75), mortar * 0.65);
 }
 float contact_visibility() {
     if (v_material.x > -0.5) return 1.0;
@@ -137,6 +154,11 @@ void main() {
     float paint_mask = step(0.5, v_material.x) * (1.0 - step(1.5, v_material.x));
     vec3 paint = v_color * mix(vec3(1.0), u_tint, paint_mask);
     if (asphalt_mask() > 0.5) paint = asphalt_texture(paint);
+    if (u_limestone == 1 && abs(n.y) < 0.35 && abs(v_material.x) < 0.01
+        && v_material.y < 0.05 && v_color.r > 0.65 && v_color.b > 0.55
+        && v_color.r > v_color.b * 1.02) {
+        paint = limestone_texture(paint, n);
+    }
     vec3 ambient = mix(vec3(0.25, 0.27, 0.23), vec3(0.53, 0.61, 0.67), n.y * 0.5 + 0.5);
     float diffuse = max(dot(n, sun), 0.0);
     float highlight = pow(max(dot(n, normalize(sun + view)), 0.0), 48.0)
@@ -415,6 +437,7 @@ pub struct Mesh {
     visible_chunks: std::cell::Cell<usize>,
     car_ranges: Vec<std::ops::Range<i32>>,
     wheel_range: Vec<[std::ops::Range<i32>; 4]>,
+    limestone_region: bool,
 }
 
 impl Drop for Mesh {
@@ -479,7 +502,14 @@ impl Mesh {
                 wheel_range,
             )
         };
+        let limestone_region = track
+            .city()
+            .and_then(|c| c.geographic_origin())
+            .is_some_and(|[lat, lon]| {
+                (35.10..35.24).contains(&lat) && (33.24..33.48).contains(&lon)
+            });
         Ok(Mesh {
+            limestone_region,
             vao,
             vbo,
             ground_vertex_count,
@@ -510,6 +540,8 @@ impl Mesh {
             gl::UseProgram(program);
             set_scene_transform(program, camera, model);
             set_tint(program, tint);
+            let stone = CString::new("u_limestone").unwrap();
+            gl::Uniform1i(gl::GetUniformLocation(program, stone.as_ptr()), 0);
             let brake_light = CString::new("u_brake_light").unwrap();
             let brake_light = gl::GetUniformLocation(program, brake_light.as_ptr());
             gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
@@ -592,6 +624,11 @@ impl Mesh {
             if let Some(aerial) = self.aerial.borrow_mut().as_mut() {
                 aerial.bind(program, camera.eye);
             }
+            let stone = CString::new("u_limestone").unwrap();
+            gl::Uniform1i(
+                gl::GetUniformLocation(program, stone.as_ptr()),
+                self.limestone_region as i32,
+            );
             let name = CString::new("u_city_reference").unwrap();
             gl::Uniform1i(
                 gl::GetUniformLocation(program, name.as_ptr()),
