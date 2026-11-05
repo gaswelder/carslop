@@ -331,7 +331,8 @@ impl Vehicle {
             } else {
                 (self.drive_force(longitudinal) * throttle + launch) * direction
             };
-            let engine_braking = (1.0 - throttle) * self.engine_brake_force(longitudinal);
+            let closed_throttle = ((0.15 - throttle) / 0.15).clamp(0.0, 1.0);
+            let engine_braking = closed_throttle * self.engine_brake_force(longitudinal);
             let brake = self.brake_pressure * brake_accel * spec.mass;
             let front_drive = dynamics.front_drive;
             let requested_x = [
@@ -610,7 +611,7 @@ impl Vehicle {
     }
 
     fn engine_brake_force(&self, speed: f32) -> f32 {
-        if self.gear == NEUTRAL_GEAR {
+        if self.gear == NEUTRAL_GEAR || self.clutch_open {
             return 0.0;
         }
         let g = &self.model.spec().gearbox;
@@ -620,13 +621,20 @@ impl Vehicle {
             g.ratios[self.gear.saturating_sub(1).min(g.gears() - 1) as usize]
         };
         let rpm = g.rpm(speed, self.gear);
+        // Regulate overrun torque as lateral tire demand rises, just as foot
+        // braking is regulated: lifting in a bend must not lock the driven axle.
+        let lateral_demand = (self.acceleration[1].abs()
+            / (self.model.spec().lateral_force / self.model.spec().mass))
+            .clamp(0.0, 1.0);
         self.model.spec().dynamics.peak_torque
-            * 0.10
+            * 0.24
+            * (1.0 - 0.70 * lateral_demand)
             * (rpm / 3500.0).clamp(0.0, 1.5)
             * ratio
             * g.final_drive
             / g.rolling_radius
             * (speed.abs() / 2.0).clamp(0.0, 1.0)
+            * if self.shift_timer > 0.0 { 0.15 } else { 1.0 }
     }
 
     fn ground_angles(&self) -> (f32, f32) {
@@ -1243,6 +1251,35 @@ mod tests {
     }
 
     #[test]
+    fn lifting_in_gear_slows_the_car_more_than_neutral_without_brake_lights() {
+        for model in crate::cars::ALL {
+            let coast = |gear| {
+                let mut car = level_route_car(track::TrackId::Scenic, model);
+                car.manual = true;
+                car.gear = gear;
+                let road = car.track.at_distance(50.0);
+                car.velocity = road.tangent.map(|v| v * 12.0);
+                for _ in 0..240 {
+                    treadmill_tick(&mut car, Controls::default());
+                }
+                assert!(
+                    !car.brake_lights,
+                    "engine braking must not illuminate stop lights"
+                );
+                car.speed
+            };
+            let first = coast(1);
+            let third = coast(3);
+            let neutral = coast(NEUTRAL_GEAR);
+            println!("{model:?} 1s lift: first {first}, third {third}, neutral {neutral}");
+            assert!(
+                first < third - 0.2 && third < neutral - 0.1,
+                "gearing must make engine braking useful"
+            );
+        }
+    }
+
+    #[test]
     fn gearing_changes_wheel_force_and_engine_braking() {
         let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
         car.gear = 1;
@@ -1780,6 +1817,7 @@ mod tests {
         let bump = car.curb_bump;
         car.update(Duration::ZERO, Controls::default());
         assert_eq!(car.curb_bump, bump);
+        car.gear = NEUTRAL_GEAR; // isolate curb drag from intentional engine braking
         car.update(Duration::from_millis(250), Controls::default());
         assert!(car.curb_bump < bump * 0.1);
         assert!(

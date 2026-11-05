@@ -190,7 +190,9 @@ Handling uses SI units; `top_speed` is m/s. Scalar overrides: `mass`,
 
 The simulation integrates axle tire forces at up to 240 Hz, including load
 transfer, combined braking/cornering grip, engine braking and shift interruptions.
-A revved launch releases finite flywheel energy through the clutch. Sprung body
+Release the accelerator while in gear for engine braking; lower gears slow
+the car more strongly. Neutral and an open clutch disconnect it, and it does
+not light the stop lamps. A revved launch releases finite flywheel energy through the clutch. Sprung body
 pitch, roll and heave react to terrain; rendered wheels have 14 cm compression
 and 16 cm droop. This uses two axle tire models and one vertical chassis degree
 of freedom. Vehicle tuning is for gameplay, not a certified vehicle simulation.
