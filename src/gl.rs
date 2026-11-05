@@ -51,6 +51,7 @@ uniform float u_contact_strength;
 uniform vec2 u_fog_range;
 uniform float u_signal_time;
 uniform float u_brake_light;
+uniform float u_reverse_light;
 uniform int u_city_reference;
 uniform int u_limestone;
 uniform sampler2DArray u_aerial;
@@ -232,6 +233,9 @@ void main() {
     if (v_material.x > 4.5 && v_material.x < 5.5) {
         // Emission remains visible in shade and ignores the selected paint.
         lit = mix(lit, vec3(1.0, 0.035, 0.012), u_brake_light);
+    }
+    if (v_material.x > 5.5 && v_material.x < 6.5) {
+        lit = mix(lit, vec3(1.0, 1.0, 0.94), u_reverse_light);
     }
     // Evaluate on the receiving road itself: no floating decal or depth bias.
     lit *= contact_visibility();
@@ -545,9 +549,13 @@ impl Mesh {
             let brake_light = CString::new("u_brake_light").unwrap();
             let brake_light = gl::GetUniformLocation(program, brake_light.as_ptr());
             gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
+            let reverse_light = CString::new("u_reverse_light").unwrap();
+            let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
+            gl::Uniform1f(reverse_light, if car.gear == 0 { 1.0 } else { 0.0 });
             let range = &self.car_ranges[car.model.index()];
             gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
             gl::Uniform1f(brake_light, 0.0);
+            gl::Uniform1f(reverse_light, 0.0);
             set_tint(program, [1.0; 3]);
             for index in 0..4 {
                 let matrix = vehicle_wheel_matrix(car, *model, index);

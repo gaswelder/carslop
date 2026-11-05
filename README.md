@@ -216,7 +216,8 @@ external buffers and required extensions are rejected.
 
 Material extras `{"carslop_material": [CODE, GLOSS]}` select a finish; gloss is
 0–1. Codes: 0 fixed color, 1 tintable paint, 2 glass, 3 metal, 4 optical lens,
-5 brake lens. Brake lenses emit red under the foot brake, including at rest and
+5 brake lens, 6 reverse lens. Reverse lenses glow white whenever reverse is
+selected, including while stopped; neutral extinguishes them. Brake lenses emit red under the foot brake, including at rest and
 in reverse. Engine braking and the handbrake do not illuminate stop lights.
 Without extras, solid colors and metallic/roughness factors supply the finish.
 Normals and triangle winding must face outward.
