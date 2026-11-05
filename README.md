@@ -8,8 +8,7 @@ Everything else, including README.md outside of this section, is generated.
 
 --- human info ends ---
 
-A driving game inspired by NFS5: beautiful cars, pleasant roads, readable handling
-and mechanical personality.
+A driving game inspired by NFS5.
 
 <img src="screenshot.20261104.jpg">
 
@@ -17,15 +16,17 @@ and mechanical personality.
 
 ## Build and play
 
-Requires Rust and the platform's SDL3/OpenGL libraries. The game and map tools
-are one executable.
+Requires Rust, SDL3 and OpenGL. Run commands from the repository root.
 
 ```sh
 cargo build --release
 ./target/release/nfs5like
 ```
 
-Choose a location and car, then start free driving.
+Choose a car and location in the menu. Bundled locations are Nicosia,
+Nürburgring and Coastal Highway; play works offline.
+Use `--help` for the command reference and `--locations-dir PATH` for another
+location store. `play --location NAME` preselects a location.
 
 ### Controls
 
@@ -47,142 +48,69 @@ Choose a location and car, then start free driving.
 For a burnout start, hold Up + Down at rest to rev with the clutch open, then
 release Down while holding Up. A revved neutral-to-first shift also works.
 
-The bonnet camera is fixed to the rendered body and follows its steering,
-pitch, roll and vertical suspension movement.
+Press **C** in the full map to copy the car's Google Maps location.
 
-The current street name appears in large text at the bottom center while driving. Names come from
-the location’s OSM source, preferring English when available. Unnamed roads are
-labeled accordingly; the street label clears when driving off road. Built-in routes show their route name.
+## Add and maintain locations
 
-Named OSM buildings have facade-mounted storefront signs, preferring `name:en`
-and falling back to the local name. Signs face the closest street and use world
-geometry, so they follow perspective and are hidden by buildings and terrain.
-
-The full map opens centered on your car at the minimap's scale. Zooming keeps
-the car centered; zoom out to see the entire road network. Reopening the map
-resets the zoom to the minimap's scale. On imported maps, press **C** in the full
-map to copy the car’s current location as a Google Maps URL. A confirmation
-appears on the map; fictional built-in routes have no geographic location.
-
-### Locations
-
-Running without arguments lists Coastal Highway and all imported locations
-without loading city assets. Choose a location, then Start Driving to load it.
-Use Left/Right to focus the location/car lists, then Up/Down to browse.
-Click the page arrows for more locations.
-`--location` preselects a city in the menu. To drive in Nicosia:
-
-```sh
-./target/release/nfs5like play --location nicosia
-```
-
-Nürburgring is also available as an offline location, covering the Nordschleife,
-Grand Prix circuit and their racing connections, with surrounding scenery:
-
-```sh
-./target/release/nfs5like play --location nurburgring
-```
-
-Its package is `data/locations/nurburgring.sqlite`.
-Bounds: `50.315 6.910 50.390 7.015`.
-This is a free-drive map with generated scenery. Circuit bridge sections follow
-the terrain surface; banking, bridge decks and circuit-specific barriers are
-not reconstructed.
-
-Coastal Highway combines coastal straights, open sweeps, climbing S bends and
-opposing mountain hairpins. It needs no city files. For city play, keep its `data/locations/NAME.sqlite`
-package beside the executable. Play works offline.
-Use `./target/release/nfs5like --help` for command syntax.
-
-## Import and maintain maps
-
-Authored circuits can be added without recompiling: place a `NAME.track.json`
-file in `data/locations/` (or `--locations-dir`), restart the game, and select it
-in the location menu. `play --location NAME` also preselects it. For example:
-
-```json
-{
-  "version": 1,
-  "name": "Hillside Circuit",
-  "width": 8.0,
-  "points": [[0, 0, 0], [120, 2, 0], [120, 5, 120], [0, 1, 120]]
-}
-```
-
-Points are XYZ metres; Y is elevation. The spline closes automatically, so omit
-a repeated closing point. Use 4–4096 points, road widths of 2–30 metres, and a
-control perimeter up to 50 km. The game generates road geometry, scenery,
-collision and minimap data at runtime. Imported city packages also need no
-recompilation; their bake commands run through the existing executable.
-
-Locations are offline SQLite packages in `data/locations/`. Keep the package
-beside the game; map source files are only needed for imports and rebuilding.
-
-1. Download an `.osm.pbf` region from [Geofabrik](https://download.geofabrik.de/).
-2. Download matching [Skadi elevation tiles](https://registry.opendata.aws/terrain-tiles/).
-   A tile is named for its southwest whole-degree corner: Nicosia uses
-   [N35E033.hgt.gz](https://elevation-tiles-prod.s3.amazonaws.com/skadi/N35/N35E033.hgt.gz).
-   Keep adjacent tiles together when importing across tile boundaries.
-3. Extract a small area, then import it with the same bounds, in
-   **south, west, north, east** order:
+Put imported `NAME.sqlite` packages in `data/locations/`, or the chosen location
+store, and restart. To import OSM XML with matching HGT elevation tiles:
 
 ```sh
 ./target/release/nfs5like extract-region cyprus.osm.pbf /tmp/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328
 ./target/release/nfs5like add-location engomi-demo --source /tmp/engomi.osm \
   --bbox 35.156 33.312 35.168 33.328 --elevation N35E033.hgt.gz
-./target/release/nfs5like play --location engomi-demo
 ```
 
-An existing complete OSM XML export can skip extraction. PBF and Overpass JSON
-cannot be passed directly to `add-location`. Names use letters, digits, `-`, `_`,
-start with a letter or digit, and contain at most 64 characters. Existing
-locations are never overwritten by import; use a new name to replace source data.
+Bounds use south, west, north, east order. Names contain letters, digits, `-`
+and `_`, start with a letter or digit, and have at most 64 characters. Imports
+require a new name. Keep neighboring HGT tiles together when crossing tile
+boundaries. Nicosia uses `N35E033`; Nürburgring uses `N50E006` and `N50E007`.
+
+For an authored circuit, add `NAME.track.json` to the same store:
+
+```json
+{
+  "version": 1,
+  "name": "Hillside Circuit",
+  "width": 8,
+  "points": [[0, 0, 0], [120, 2, 0], [120, 5, 120], [0, 1, 120]]
+}
+```
+
+Use 4–4096 XYZ points in metres, a width of 2–30 metres and a control perimeter
+up to 50 km. Omit the closing point. No recompilation is needed.
+
+After editing imported source assets:
 
 ```sh
-# Rebuild visuals and collision data after editing a location's inputs.
 ./target/release/nfs5like bake-city --location nicosia
-# Rebuild just one cache.
+# Or rebuild only visuals / collision:
 ./target/release/nfs5like bake-scene --location nicosia
 ./target/release/nfs5like bake-collision --location nicosia
-# Inspect, extract or package a location.
-./target/release/nfs5like verify-location data/locations/nicosia.sqlite
-./target/release/nfs5like unpack-location data/locations/nicosia.sqlite /tmp/nicosia
-./target/release/nfs5like pack-location /tmp/my-city data/locations/my-city.sqlite
 ```
 
-`./rebuild.sh` builds the release executable and refreshes collision data for
-bundled maps. New imports bake visuals automatically. Packages retain source
-XML, elevation, imagery, metadata and checksummed geometry; they stream geometry
-and imagery during play. Missing or stale collision data produces a rebuild
-instruction. No database server is needed.
+`pack-location`, `unpack-location` and `verify-location` maintain packages.
+`circuit-only --location NAME` replaces a map with its racing roads.
+`./rebuild.sh` rebuilds the release executable and bundled collision data.
 
-### Imagery and trees
+To prepare imagery and trees:
 
 ```sh
-# Download imagery for the whole city and infer additional trees.
 ./target/release/nfs5like prepare-city-imagery \
   --city-data data/locations/nicosia.sqlite --work-dir /tmp/nicosia-imagery
 ./target/release/nfs5like bake-scene --location nicosia
 ```
 
-Use `--limit-blocks 2` for a sample without changing city assets. Reusing the
-work directory resumes downloads; allow several GB of temporary storage.
-World Imagery dates and sharpness vary. These imagery packages have not been
-cleared for redistribution; see [credits](#credits-and-distribution).
+Reuse the work directory to resume. `--limit-blocks 2` makes a sample without
+changing the playable package. For manual tree review, use `preview-trees`,
+review its `review.html`, then pass the accepted GeoJSON to
+`import-imagery-trees` and rebuild visuals.
 
-For manually reviewed trees, run `preview-trees`, open the output `review.html`,
-review candidates and download the accepted GeoJSON, then run
-`import-imagery-trees` followed by `bake-scene`. Roads, buildings, duplicate trees
-and out-of-bounds candidates are excluded. Estimated crowns can mistake shrubs
-or shadows for trees; original OSM trees are preserved.
+## Car assets
 
-## Car assets and handling
-
-Each car has `data/cars/NAME/car.json` and `model.glb`. Restart after editing.
-The three base definitions are complete; extra folders inherit from `kestrel`,
-`muscle` or `club` and are discovered at startup. Invalid extra cars are skipped
-with a warning; invalid required cars stop loading with the filename and error.
+Edit `data/cars/NAME/car.json` and `model.glb`, then restart. Additional car folders
+can inherit from `kestrel`, `muscle` or `club`:
 
 ```json
 {
@@ -194,27 +122,9 @@ with a warning; invalid required cars stop loading with the filename and error.
 }
 ```
 
-Omit `model` to inherit the base artwork. Paths are relative to the car folder.
-Handling uses SI units; `top_speed` is m/s. Scalar overrides: `mass`,
-`engine_force`, `top_speed`, `brake_force`, `lateral_force`, `wheelbase`,
-`steering_response`. `dynamics` accepts `front_weight`, `cg_height`, `track_width`,
-`yaw_inertia`, `front_drive` (0 rear, 1 front), `brake_bias`, `corner_stiffness`
-(front/rear pair), `peak_torque`, `suspension_hz`, `steering_speed_squared` and
-`steering_low_speed_squared`. `gearbox` accepts descending `ratios`, `final_drive`,
-`rolling_radius`, `reverse_ratio`, `upshift_rpm`, `downshift_rpm`.
-`road_engine` sets `wheel_power_watts` and `drag_accel`, or `null` to disable it.
-`turbo` accepts `off_boost_fraction`, `spool_start_rpm`, `full_boost_rpm`,
-`spool_seconds`, `decay_seconds`, or `null` for a naturally aspirated engine.
-
-The simulation integrates axle tire forces at up to 240 Hz, including load
-transfer, combined braking/cornering grip, engine braking and shift interruptions.
-Release the accelerator while in gear for engine braking; lower gears slow
-the car more strongly. Neutral and an open clutch disconnect it, and it does
-not light the stop lamps. A revved launch releases finite flywheel energy through the clutch. Sprung body
-pitch, roll and heave react to terrain; rendered wheels have 14 cm compression
-and 16 cm droop. This uses two axle tire models and one vertical chassis degree
-of freedom. Vehicle tuning is for gameplay, not a certified vehicle simulation.
-Level-ground automatic 0–100 times are about 6.83 s (1964 Borsch 11) and 5.30 s (Turbo).
+Omit `model` to inherit artwork; paths are relative to the car folder. Use the
+base JSON definitions as tuning references. Measurements use SI units;
+`top_speed` is metres per second.
 
 ### Fictional car artwork
 
@@ -240,168 +150,41 @@ It has a 1.3-litre-style petrol tune, front-wheel drive and six forward gears.
 Rebuild with `python3 tools/build_fictional_cars.py pitsunda [--output FILE.glb]`;
 the default output is `data/cars/pitsunda-2/model.glb`.
 
-### GLB format
+### GLB export
 
-Export static triangulated glTF 2.0 GLB: meters, Y up, +Z forward, one embedded
-buffer, opaque materials, and these uniquely named parts:
+Export static triangulated glTF 2.0 GLB: metres, Y up, +Z forward, one embedded
+buffer and opaque materials. Name parts `body`, `wheel_rl`, `wheel_rr`,
+`wheel_fl`, `wheel_fr`. Left/right wheels use negative/positive X.
+Wheel origins are axle mounts; wheels spin about X and steer about Y.
+Match JSON wheelbase and rolling radius to the artwork.
 
-| Node | Contents |
-| --- | --- |
-| `body` | Body and attached details |
-| `wheel_rl`, `wheel_rr` | Rear wheels, negative/positive X |
-| `wheel_fl`, `wheel_fr` | Front wheels, negative/positive X |
-
-Wheel origins supply axle mounts. Wheels spin about local X; front wheels steer
-about Y. Hierarchical transforms and inverse-transpose normals are baked on load.
-Match the car JSON's wheelbase and rolling radius to the artwork. Indexed and
-unindexed triangles, normals, vertex colors and solid PBR colors are supported.
-Textures, alpha transparency, skins, animations, morph targets, sparse accessors,
-external buffers and required extensions are rejected.
-
-Material extras `{"carslop_material": [CODE, GLOSS]}` select a finish; gloss is
-0–1. Codes: 0 fixed color, 1 tintable paint, 2 glass, 3 metal, 4 optical lens,
-5 brake lens, 6 reverse lens. Reverse lenses glow white whenever reverse is
-selected, including while stopped; neutral extinguishes them. Brake lenses emit red under the foot brake, including at rest and
-in reverse. Engine braking and the handbrake do not illuminate stop lights.
-Without extras, solid colors and metallic/roughness factors supply the finish.
-Normals and triangle winding must face outward.
-
-## Commands and options
-
-All commands run from the game executable. With no command, `play` opens the
-selection menu. Global options can appear before or after the command.
-`circuit-only --location NAME` rebuilds an existing package from its preserved
-OSM/elevation sources, keeping only `highway=raceway` roads. It retains buildings
-and landscape. This replaces the package atomically after a successful bake.
-
-`--location` selects an imported package name; it preselects the menu rather
-than immediately starting driving.
-
-```text
-Usage: nfs5like [COMMAND]
-
-Commands:
-  play [--location NAME]                  Open the game (default command)
-  add-location NAME --source FILE.osm     Import a local OSM XML extract
-      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds
-      --elevation TILE.hgt[.gz]
-  list-locations                         List imported locations
-  circuit-only --location NAME          Keep racing roads; rebuild package
-  bake-city --location NAME             Rebuild render and collision data
-  bake-collision --location NAME        Rebuild collision data only
-  bake-scene --location NAME            Rebuild visual geometry only
-
-  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]
-  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm
-  build-aerial-tiles --image FILE --export FILE --output DIR
-
-  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]
-
-  import-imagery-trees --candidates FILE.geojson --city-data DIR
-
-  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]
-
-  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder
-  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing
-  verify-location FILE.sqlite             Verify every asset and block
-
-Global options:
-  --locations-dir PATH                    Location store
-  -h, --help                              Show help
-  -V, --version                           Show version
-
-Locations are stored under data/locations (or --locations-dir).
-Run without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.
-```
-
-| Flag | Meaning / default |
-| --- | --- |
-| `--locations-dir PATH` | Location store. Default: `data/locations` beside the executable, working directory, then build source tree. |
-| `--location NAME` | Imported package for `play` and bake commands; required by bake and `circuit-only` commands. |
-| `--source FILE.osm` | Required OSM XML input to `add-location`. |
-| `--elevation TILE.hgt[.gz]` | Required elevation tile; adjacent tiles are found in the same directory. |
-| `--bbox S W N E` | Decimal-degree crop. Import defaults to OSM bounds; `extract-region` defaults to `35.10 33.25 35.23 33.47` (Nicosia). |
-| `--image FILE` | Source image for aerial tiling or tree preview. |
-| `--export FILE` | Image export metadata JSON containing Web Mercator `extent`. |
-| `--output DIR` | Output tiles/tree-review directory; required for those tools. |
-| `--osm FILE.osm` | Optional mapped-tree overlay in `preview-trees`. |
-| `--city-data PATH` | Location directory or SQLite package; optional in tree preview, required by imagery preparation/import. |
-| `--candidates FILE.geojson` | Reviewed tree candidates for `import-imagery-trees`. |
-| `--work-dir DIR` | Download/cache directory for city imagery; required. |
-| `--limit-blocks N` | Positive sample limit; downloads without changing the playable package. |
-| `-h`, `--help` | Display help. |
-| `-V`, `--version` | Display executable version. |
-
-The audio preparation helper accepts
-`python3 tools/build_engine_audio.py SOURCE.wav [--output DIR]`; output defaults
-to `data/cars/kestrel/audio`. Its `-h` / `--help` shows usage.
-
-## Environment variables
-
-Asset paths come from the selected location. Use `--locations-dir` to select
-a different location store. Preview tests write to their documented temporary paths.
-
-| Variable | Purpose / default |
-| --- | --- |
-| `RUST_LOG` | `env_logger` filter, e.g. `info` or `nfs5like=debug`; unset uses its default error level. |
-
-The following inputs are used only by tests. Graphics previews need an
-SDL3/OpenGL display.
-
-| Variable | Test / output |
-| --- | --- |
-| `VALIDATED_CITY` | Required completed import for the full Nicosia import acceptance test. |
-| `TEST_RUNTIME_CAR` | Internal subprocess switch for the runtime car catalog probe; normally unset. |
-| `TEST_LOCATION_CACHE` | Internal fixture directory for location-cache subprocess tests; normally unset. |
-
-Cargo supplies `CARGO_MANIFEST_DIR` and `CARGO_PKG_VERSION` at build time;
-they are not runtime configuration. Standard platform SDL/audio/video settings
-remain available through those libraries.
+Use vertex colours or solid PBR materials; textures, transparency, animation,
+skinning, morphs, sparse accessors and external buffers are unsupported.
+Material extras `{"carslop_material": [CODE, GLOSS]}` use gloss 0–1 and codes:
+0 fixed colour, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens,
+6 reverse lens. Normals and winding must face outward.
 
 ## Development
 
 ```sh
 cargo test
-# Render car views to /tmp/car-preview (requires SDL3/OpenGL).
+# Graphics tests require SDL3/OpenGL; car views go to /tmp/car-preview.
 cargo test kestrel_art_preview -- --ignored --test-threads=1
-# Render the suspension test sequence to /tmp/carslop-suspension-preview.
-cargo test suspension_bump_preview -- --ignored --test-threads=1
 ```
 
-### Editing and calibration
+Preview tests write to temporary paths shown in their source. `RUST_LOG` controls
+logging. Test-only inputs are `VALIDATED_CITY` (full-import fixture),
+`TEST_RUNTIME_CAR` and `TEST_LOCATION_CACHE` (subprocess fixtures).
 
-`tools/build_engine_audio.py` extracts distinct sections at six RPM regions,
-resamples to mono 48 kHz, removes handling rumble below 30 Hz, rolls off above
-12 kHz, matches levels with peak headroom, and chooses matching loop seams.
-Each runtime PCM is signed 16-bit little-endian without a header. The manifest
-records excerpt times, measured firing frequencies, overlap lengths and gains.
-No samples from NFS or other games are used.
-
-| Blend anchor | Load excerpt start | Coast excerpt start | Approx. source RPM, load/coast |
-| --- | --- | --- | --- |
-| 1,150 | 276 s | 276 s | 1,148 / 1,148 |
-| 2,000 | 10 s | 100 s | 2,205 / 1,905 |
-| 2,600 | 150 s | 134 s | 2,513 / 2,578 |
-| 3,500 | 192 s | 235 s | 3,606 / 3,423 |
-| 4,400 | 303 s | 363 s | 4,472 / 4,156 |
-| 5,100 | 395 s | 450 s | 5,012 / 5,029 |
-
-RPM is estimated from the six-cylinder firing harmonic, not synchronized
-tachometer data. Load/coast labels identify heavier/lighter exhaust sections
-selected from the same driving take; throttle state was not supplied by the
-recordist. Idle shares one excerpt between both states. The last recording is
-pitched upward for the game's 6,500 RPM redline; no dedicated 6,500 RPM capture
-is claimed. This is a naturally aspirated SC recording, not a recording of a
-930 Turbo. The turbo airflow layer is synthesized separately.
-
-To reproduce the bank, download the original to the ignored artifacts folder,
-then run from the repository root (Python requires NumPy/SciPy; ffmpeg required):
+Asset helpers:
 
 ```sh
-python3 tools/build_engine_audio.py artifacts/audio/source/porsche-911-sc-1981.wav
+python3 tools/build_fictional_cars.py --help
+python3 tools/build_engine_audio.py SOURCE.wav
 ```
 
-Other engine voices, tire noise, rolling noise and turbo airflow are procedural.
+The audio helper requires NumPy, SciPy and ffmpeg. Source recordings belong in
+ignored `artifacts/audio/source/`.
 
 ## Credits and distribution
 
