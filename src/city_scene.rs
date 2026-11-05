@@ -171,18 +171,10 @@ fn tinted(color: [f32; 3], gain: f32) -> [f32; 3] {
 fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bool) {
     // These are regional art variations, rather than surveyed OSM materials.
     let palette = [
-        [0.91, 0.90, 0.83],
-        [0.80, 0.82, 0.80],
-        [0.87, 0.79, 0.65],
-        [0.74, 0.79, 0.81],
-        [0.91, 0.85, 0.75],
-        [0.82, 0.72, 0.65],
-        [0.86, 0.87, 0.79],
-        [0.73, 0.76, 0.71],
-        [0.88, 0.81, 0.76],
-        [0.78, 0.77, 0.69],
-        [0.94, 0.92, 0.86],
-        [0.80, 0.83, 0.84],
+        [0.94, 0.93, 0.90], // white concrete
+        [0.94, 0.90, 0.80], // cream
+        [0.83, 0.77, 0.65], // beige
+        [0.95, 0.90, 0.68], // pale yellow
     ];
     let id = building.id;
     let seed = visual_seed(id, 1);
