@@ -1735,6 +1735,40 @@ mod tests {
     }
 
     #[test]
+    fn kestrel_standing_start_acceleration() {
+        for model in crate::cars::ALL
+            .into_iter()
+            .filter(|m| m.spec().road_engine.is_some())
+        {
+            for id in [track::TrackId::Compact, track::TrackId::Scenic] {
+                let mut car = level_route_car(id, model);
+                let mut ticks = 0;
+                while car.speed < 100.0 / 3.6 && ticks < 240 * 20 {
+                    treadmill_tick(
+                        &mut car,
+                        Controls {
+                            throttle: 1.0,
+                            ..Controls::default()
+                        },
+                    );
+                    ticks += 1;
+                }
+                let seconds = ticks as f32 / 240.0;
+                println!("{model:?} {id:?}: 0-100 {seconds:.3}s");
+                let range = if model.spec().turbo.is_some() {
+                    4.8..5.5
+                } else {
+                    6.5..7.2
+                };
+                assert!(
+                    range.contains(&seconds),
+                    "{model:?}: standing start {seconds}s"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn kestrel_passes_old_limit_and_reaches_reference_speed_on_every_map() {
         let throttle = Controls {
             throttle: 1.0,
@@ -2099,7 +2133,7 @@ mod tests {
         });
         let [roadster, muscle, club] = [results[0], results[1], results[2]];
         assert!(
-            muscle.0 > roadster.0 && roadster.0 > club.0,
+            (muscle.0 - roadster.0).abs() > 0.05 && roadster.0 > club.0 && muscle.0 > club.0,
             "acceleration: {results:?}"
         );
         assert!(

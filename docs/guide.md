@@ -287,6 +287,10 @@ to retain useful lock for faster bends. Adding steering input always increases
 the front-wheel angle, including during a held turn. Brake pressure progressively
 restores the stronger restriction to reserve tire grip while braking into a turn.
 
+Level-ground standing starts with automatic shifts reach 100 km/h in about
+6.83 s for Kestrel and 5.30 s for Kestrel Turbo. These are simulation regression
+measurements; slopes, steering, and manual shifts change the result.
+
 Engine torque varies with RPM, passes through the selected gear and final drive,
 and is interrupted during gear changes. Closed-throttle engine braking
 also depends on gearing. Kestrel retains its wheel-power/drag limit; the other
