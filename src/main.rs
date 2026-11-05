@@ -765,6 +765,8 @@ impl App {
                 car.heading + self.preview_angle,
                 self.session.track().city(),
             )
+        } else if self.chase.view() == camera::FollowView::Bonnet {
+            gl::bonnet_camera(aspect, self.chase.pose(), car)
         } else {
             gl::chase_camera(aspect, self.chase.pose())
         };

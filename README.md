@@ -47,8 +47,8 @@ Choose a location and car, then start free driving.
 For a burnout start, hold Up + Down at rest to rev with the clutch open, then
 release Down while holding Up. A revved neutral-to-first shift also works.
 
-The bonnet camera follows steering immediately and smooths vertical bumps and
-pitch changes to keep the horizon steady.
+The bonnet camera is fixed to the rendered body and follows its steering,
+pitch, roll and vertical suspension movement.
 
 The current street name appears below the minimap while driving. Names come from
 the location’s OSM source, preferring English when available; unnamed roads and

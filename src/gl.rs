@@ -1070,6 +1070,21 @@ pub fn chase_camera(aspect: f32, pose: crate::camera::Pose) -> Camera {
     camera_at(aspect, pose.eye, pose.target, 0.0)
 }
 
+pub fn bonnet_camera(
+    aspect: f32,
+    pose: crate::camera::Pose,
+    car: &crate::vehicle::Vehicle,
+) -> Camera {
+    let body = vehicle_body_matrix(car);
+    camera_at_up(
+        aspect,
+        pose.eye,
+        pose.target,
+        0.0,
+        [body[4], body[5], body[6]],
+    )
+}
+
 pub fn garage_camera(
     aspect: f32,
     position: [f32; 3],
@@ -1094,8 +1109,17 @@ pub fn garage_camera(
 }
 
 fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32) -> Camera {
+    camera_at_up(aspect, eye, target, horizontal_shift, [0.0, 1.0, 0.0])
+}
+fn camera_at_up(
+    aspect: f32,
+    eye: [f32; 3],
+    target: [f32; 3],
+    horizontal_shift: f32,
+    up_axis: [f32; 3],
+) -> Camera {
     let forward = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
-    let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
+    let right = normalize(cross(forward, up_axis));
     let up = cross(right, forward);
     let view = [
         right[0],
@@ -1376,6 +1400,40 @@ mod tests {
                     assert!((radius - crate::cars::WHEEL_RADIUS).abs() < 0.0001);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
+        let track = crate::track::TrackId::Scenic.track();
+        let road = track.spawn();
+        let mut car = crate::vehicle::Vehicle::on_track(
+            road.lane_position(0.0),
+            road.heading(),
+            crate::cars::CarModel::Roadster,
+            track,
+        );
+        let mut chase = crate::camera::ChaseCamera::new(&car);
+        chase.toggle_view();
+        chase.toggle_view();
+        let point = [0.3, 0.25, 1.6];
+        let reference = bonnet_camera(16.0 / 9.0, chase.pose(), &car)
+            .project(transform(vehicle_body_matrix(&car), point))
+            .unwrap();
+        for i in 1..5 {
+            car.heading += 0.7;
+            car.position[1] += 0.2;
+            car.body_pitch = i as f32 * 0.03;
+            car.body_roll = i as f32 * 0.025;
+            car.curb_bump = 0.08;
+            chase.update(&car, std::time::Duration::from_millis(16));
+            let actual = bonnet_camera(16.0 / 9.0, chase.pose(), &car)
+                .project(transform(vehicle_body_matrix(&car), point))
+                .unwrap();
+            assert!(
+                (actual[0] - reference[0]).abs() < 0.0001
+                    && (actual[1] - reference[1]).abs() < 0.0001
+            );
         }
     }
 
