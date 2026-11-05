@@ -789,6 +789,7 @@ impl App {
                     track: s.track(),
                     player: car.position,
                 },
+                car.heading,
                 hud::Gauges {
                     rpm: car.engine_rpm,
                     redline_rpm: vehicle::REDLINE_RPM,

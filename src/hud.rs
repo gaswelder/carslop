@@ -176,6 +176,7 @@ struct MapFit {
     center: [f32; 2],
     scale: [f32; 2],
     north_up: bool,
+    heading: Option<f32>,
     content: [[f32; 2]; 2],
 }
 impl MapFit {
@@ -185,23 +186,34 @@ impl MapFit {
             center: [player[0], player[2]],
             scale: [x_scale, x_scale * viewport[0] / viewport[1]],
             north_up: track.city().is_some(),
+            heading: None,
             content: MAP_CONTENT,
         }
     }
     fn world_bounds(&self) -> [[f32; 2]; 2] {
-        let x = (self.content[1][0] - self.content[0][0]) * 0.5 / self.scale[0];
-        let z = (self.content[1][1] - self.content[0][1]) * 0.5 / self.scale[1];
+        let mut x = (self.content[1][0] - self.content[0][0]) * 0.5 / self.scale[0];
+        let mut z = (self.content[1][1] - self.content[0][1]) * 0.5 / self.scale[1];
+        if let Some(heading) = self.heading {
+            let (sin, cos) = heading.sin_cos();
+            (x, z) = (x * cos.abs() + z * sin.abs(), x * sin.abs() + z * cos.abs());
+        }
         [
             [self.center[0] - x, self.center[1] - z],
             [self.center[0] + x, self.center[1] + z],
         ]
     }
     fn point(&self, p: [f32; 3]) -> [f32; 2] {
+        let dx = p[0] - self.center[0];
+        let dz = p[2] - self.center[1];
+        let [x, y] = if let Some(heading) = self.heading {
+            let (sin, cos) = heading.sin_cos();
+            [dx * cos - dz * sin, dx * sin + dz * cos]
+        } else {
+            [dx, dz * if self.north_up { -1.0 } else { 1.0 }]
+        };
         [
-            (self.content[0][0] + self.content[1][0]) * 0.5
-                + (p[0] - self.center[0]) * self.scale[0],
-            (self.content[0][1] + self.content[1][1]) * 0.5
-                + (p[2] - self.center[1]) * self.scale[1] * if self.north_up { -1.0 } else { 1.0 },
+            (self.content[0][0] + self.content[1][0]) * 0.5 + x * self.scale[0],
+            (self.content[0][1] + self.content[1][1]) * 0.5 + y * self.scale[1],
         ]
     }
 }
@@ -340,9 +352,15 @@ impl Hud {
         }
     }
 
-    pub fn draw(&self, program: u32, map: Map<'_>, gauges: Gauges, pause: Option<PauseMenu<'_>>) {
+    pub fn draw(
+        &self,
+        program: u32,
+        map: Map<'_>,
+        heading: f32,
+        gauges: Gauges,
+        pause: Option<PauseMenu<'_>>,
+    ) {
         let mut v = Vec::new();
-        let white = [0.9, 0.95, 1.0];
         let mut viewport = [0_i32; 4];
         unsafe {
             gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
@@ -353,11 +371,12 @@ impl Hud {
             [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
         );
         quad(&mut v, [0.59, 0.47], [0.97, 0.90], [0.025, 0.05, 0.075]);
-        let fit = MapFit::new(
+        let mut fit = MapFit::new(
             map.track,
             map.player,
             [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
         );
+        fit.heading = Some(heading);
         let width = if map.track.city().is_some() {
             0.0025
         } else {
@@ -369,9 +388,7 @@ impl Hud {
             }
         }
         map_marker(&mut v, fit.point(map.player), 0.013, [1.0, 0.25, 0.12]);
-        if map.track.city().is_some() {
-            text(&mut v, "N", [0.94, 0.86], 0.0035, white);
-        }
+
         let street = map
             .track
             .city()
@@ -1271,6 +1288,35 @@ mod tests {
             assert_eq!(pause_hit_test(x, y), Some(action));
         }
         assert_eq!(pause_hit_test(0.0, 0.5), None);
+    }
+
+    #[test]
+    fn minimap_heading_keeps_forward_up_and_queries_rotated_corners() {
+        let track = TrackId::Compact.track();
+        for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
+            let mut fit = MapFit::new(&track, [0.0; 3], [1280.0, 720.0]);
+            fit.heading = Some(heading);
+            let center = fit.point([0.0; 3]);
+            let forward = fit.point([heading.sin() * 30.0, 0.0, heading.cos() * 30.0]);
+            assert!((forward[0] - center[0]).abs() < 0.00001);
+            assert!(forward[1] > center[1]);
+            let bounds = fit.world_bounds();
+            for x in [MAP_CONTENT[0][0], MAP_CONTENT[1][0]] {
+                for y in [MAP_CONTENT[0][1], MAP_CONTENT[1][1]] {
+                    let right = (x - center[0]) / fit.scale[0];
+                    let ahead = (y - center[1]) / fit.scale[1];
+                    let world = [
+                        right * heading.cos() + ahead * heading.sin(),
+                        -right * heading.sin() + ahead * heading.cos(),
+                    ];
+                    for i in 0..2 {
+                        assert!(
+                            world[i] >= bounds[0][i] - 0.001 && world[i] <= bounds[1][i] + 0.001
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
