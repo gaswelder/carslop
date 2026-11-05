@@ -122,9 +122,6 @@ impl Archive {
         Self::open(&self.path)
     }
     pub fn open_default() -> std::io::Result<Self> {
-        if let Some(path) = std::env::var_os("NFS_CITY_SCENE") {
-            return Self::open(Path::new(&path));
-        }
         Self::open(&crate::city_assets::directory().join("scene.pack"))
     }
     pub fn read_layer(&mut self, index: usize, layer: usize) -> std::io::Result<Vec<Vertex>> {

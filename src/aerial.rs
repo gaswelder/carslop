@@ -119,22 +119,15 @@ fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 pub fn source_available() -> bool {
-    std::env::var_os("NFS_NO_AERIAL").is_none()
-        && crate::package::exists(
-            &std::env::var_os("NFS_AERIAL_DATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
-                .join("tiles.txt"),
-        )
+    crate::package::exists(&crate::city_assets::directory().join("aerial/tiles.txt"))
 }
 pub fn attribution_label() -> &'static str {
     static LABEL: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<PathBuf, &'static &'static str>>,
     > = std::sync::OnceLock::new();
     crate::city_assets::cached::<&'static str>(&LABEL, || {
-        let path = std::env::var_os("NFS_AERIAL_DATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| crate::city_assets::directory().join("aerial"))
+        let path = crate::city_assets::directory()
+            .join("aerial")
             .join("source.json");
         let metadata = crate::package::read(&path)
             .ok()
@@ -167,12 +160,7 @@ pub struct Aerial {
 }
 impl Aerial {
     pub fn open() -> Option<Self> {
-        if std::env::var_os("NFS_NO_AERIAL").is_some() {
-            return None;
-        }
-        let directory = std::env::var_os("NFS_AERIAL_DATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| crate::city_assets::directory().join("aerial"));
+        let directory = crate::city_assets::directory().join("aerial");
         let path = directory.join("tiles.txt");
         if !crate::package::exists(&path) {
             return None;

@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild package\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n      [--size 512] [--gutter 8] [--preview-output DIR]\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store (also NFS_LOCATIONS_DIR)\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nRun without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild package\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nRun without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -28,11 +28,8 @@ struct Args {
     command: Command,
     root: PathBuf,
 }
-fn root() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("NFS_LOCATIONS_DIR") {
-        return Ok(p.into());
-    }
-    Ok(crate::city_assets::default_locations_directory())
+fn root() -> PathBuf {
+    crate::city_assets::default_locations_directory()
 }
 
 fn valid_name(s: &str) -> bool {
@@ -236,7 +233,7 @@ impl Drop for Pending {
 }
 /// Returns true when the game should be opened, after resolving its location.
 pub fn run() -> Result<Option<bool>> {
-    let args = parse(std::env::args_os().skip(1).collect(), root()?)?;
+    let args = parse(std::env::args_os().skip(1).collect(), root())?;
     crate::city_assets::configure_locations(&args.root)?;
     match args.command {
         Command::Source(values) => crate::source_tools::run(values)?,

@@ -512,9 +512,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "exports a WAV preview; set NFS_AUDIO_PREVIEW to the output path"]
+    #[ignore = "exports a WAV preview to the temporary directory"]
     fn recorded_driving_preview() {
-        let path = std::env::var_os("NFS_AUDIO_PREVIEW").expect("set NFS_AUDIO_PREVIEW");
+        let path = std::env::temp_dir().join("carslop-audio.wav");
         let mut synth = Synth::default();
         let mut pcm = Vec::new();
         let mut peak = 0.0_f32;
@@ -782,9 +782,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "exports isolated tire WAV; set NFS_TIRE_PREVIEW to the output path"]
+    #[ignore = "exports isolated tire WAV to the temporary directory"]
     fn tire_squeal_preview() {
-        let path = std::env::var_os("NFS_TIRE_PREVIEW").expect("set NFS_TIRE_PREVIEW");
+        let path = std::env::temp_dir().join("carslop-tires.wav");
         let mut tires = TireSound::default();
         let mut pcm = Vec::new();
         for i in 0..(RATE as usize * 12) {

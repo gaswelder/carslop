@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires NFS_CITY_DATA pointing to a location with baked collision data"]
+    #[ignore = "requires a location with baked collision data"]
     fn full_collision_cache_matches_source() {
         let root = crate::city_assets::directory();
         let source = crate::package::read_to_string(root.join("city.txt")).unwrap();

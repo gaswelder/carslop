@@ -493,15 +493,7 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
         } else if arg.to_string_lossy().starts_with('-') {
             let key = arg.to_str().ok_or_else(|| invalid("invalid option"))?;
             let valid = match command {
-                "build-aerial-tiles" => [
-                    "--image",
-                    "--export",
-                    "--output",
-                    "--size",
-                    "--gutter",
-                    "--preview-output",
-                ]
-                .contains(&key),
+                "build-aerial-tiles" => ["--image", "--export", "--output"].contains(&key),
                 "prepare-city-imagery" => {
                     ["--city-data", "--work-dir", "--limit-blocks"].contains(&key)
                 }
@@ -592,46 +584,13 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
                     .map(Path::new)
                     .ok_or_else(|| invalid(format!("missing {key}")))
             };
-            let number = |key, default| -> Result<u32> {
-                options
-                    .get(key)
-                    .map(|v| {
-                        v.to_str()
-                            .ok_or_else(|| invalid("invalid number"))?
-                            .parse()
-                            .map_err(Into::into)
-                    })
-                    .unwrap_or(Ok(default))
-            };
             aerial(
                 path("--image")?,
                 path("--export")?,
                 path("--output")?,
-                number("--size", 512)?,
-                number("--gutter", 8)?,
+                512,
+                8,
             )?;
-            if let Some(dir) = options.get("--preview-output") {
-                let dir = Path::new(dir);
-                fs::create_dir_all(dir)?;
-                let im = image::ImageReader::open(path("--image")?)?
-                    .decode()?
-                    .to_rgb8();
-                let v: serde_json::Value = serde_json::from_slice(&fs::read(path("--export")?)?)?;
-                let e = &v["extent"];
-                fs::write(dir.join("image.rgb"), im.as_raw())?;
-                fs::write(
-                    dir.join("georef.txt"),
-                    format!(
-                        "{} {} {} {} {} {}\n",
-                        im.width(),
-                        im.height(),
-                        e["xmin"],
-                        e["ymin"],
-                        e["xmax"],
-                        e["ymax"]
-                    ),
-                )?;
-            }
             Ok(())
         }
         _ => Err(invalid("invalid source tool arguments; see --help")),
@@ -711,6 +670,9 @@ mod tests {
     #[test]
     fn source_command_arguments() {
         let args = |a: &[&str]| run(a.iter().map(Into::into).collect());
+        for removed in ["--size", "--gutter", "--preview-output"] {
+            assert!(args(&["build-aerial-tiles", removed, "1"]).is_err());
+        }
         assert!(args(&["extract-region", "a", "b", "--bbox", "NaN", "0", "1", "1"]).is_err());
         assert!(args(&["merge-osm", "a", "b"]).is_err());
         assert!(args(&["build-aerial-tiles", "--image", "a", "--image", "b"]).is_err());

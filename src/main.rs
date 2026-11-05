@@ -855,20 +855,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires SDL3/OpenGL and NFS_CITY_DATA pointing to an imported, baked location"]
+    #[ignore = "requires SDL3/OpenGL and a baked Nicosia location"]
     fn imported_location_renderer_smoke() {
-        assert!(
-            std::env::var_os("NFS_CITY_DATA").is_some(),
-            "select an imported location"
-        );
         let mut app = App::with_location(true);
         assert_ne!(app.session.track().id, TrackId::Engomi);
         app.start_selected();
         assert_eq!(app.session.track().id, TrackId::Engomi);
         app.session.state = GameState::Menu;
-        if let Some(path) = std::env::var_os("NFS_IMPORTED_PREVIEW") {
-            app.capture_path = Some(path.into());
-        }
+        app.capture_path = Some(std::env::temp_dir().join("carslop-imported.ppm"));
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         app.key_down(Keycode::Return);
@@ -1061,11 +1055,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires SDL3/OpenGL; exports Engomi views to NFS_CITY_PREVIEW_DIR"]
+    #[ignore = "requires SDL3/OpenGL; exports city views to /tmp/engomi-preview"]
     fn engomi_renderer_smoke() {
-        let directory = std::path::PathBuf::from(
-            std::env::var("NFS_CITY_PREVIEW_DIR").unwrap_or_else(|_| "/tmp/engomi-preview".into()),
-        );
+        let directory = std::path::PathBuf::from("/tmp/engomi-preview");
         std::fs::create_dir_all(&directory).unwrap();
         let mut app = App::new();
         let loading = std::time::Instant::now();
@@ -1411,10 +1403,7 @@ mod tests {
     #[test]
     #[ignore = "requires SDL3/OpenGL; previews mapped signs and verifies animated signal pixels"]
     fn road_furniture_renderer_smoke() {
-        let directory = std::path::PathBuf::from(
-            std::env::var("NFS_FURNITURE_PREVIEW_DIR")
-                .unwrap_or_else(|_| "/tmp/furniture-preview".into()),
-        );
+        let directory = std::path::PathBuf::from("/tmp/furniture-preview");
         std::fs::create_dir_all(&directory).unwrap();
         let mut app = App::new();
         app.key_down(Keycode::F7);
@@ -1516,8 +1505,7 @@ mod tests {
     #[ignore = "requires SDL3/OpenGL; captures the location loading screen"]
     fn location_loading_renderer_smoke() {
         let mut app = App::with_location(false);
-        let path = std::env::var("NFS_LOADING_PREVIEW")
-            .unwrap_or_else(|_| "/tmp/location-loading.ppm".into());
+        let path = "/tmp/location-loading.ppm";
         loading::draw(
             &app.window,
             "NICOSIA",
@@ -1652,11 +1640,10 @@ mod tests {
 
     /// Export repeatable front/rear/side views for reviewing silhouette and shading.
     #[test]
-    #[ignore = "requires SDL3/OpenGL; exports PPM previews to NFS_CAR_PREVIEW_DIR"]
+    #[ignore = "requires SDL3/OpenGL; exports PPM previews to /tmp/car-preview"]
     fn kestrel_art_preview() {
         use std::io::Write;
-        let directory = std::env::var("NFS_CAR_PREVIEW_DIR")
-            .expect("set NFS_CAR_PREVIEW_DIR to an output directory");
+        let directory = "/tmp/car-preview";
         std::fs::create_dir_all(&directory).unwrap();
         let app = App::new();
         for car_model in cars::ALL {
@@ -2158,9 +2145,7 @@ mod tests {
         app.key_down(Keycode::M);
         assert!(app.session.state == GameState::Menu);
         app.key_down(Keycode::Return);
-        let directory = std::path::PathBuf::from(
-            std::env::var("NFS_MAP_PREVIEW_DIR").unwrap_or_else(|_| "/tmp/full-map-preview".into()),
-        );
+        let directory = std::path::PathBuf::from("/tmp/full-map-preview");
         std::fs::create_dir_all(&directory).unwrap();
         for id in track::ALL {
             app.session = Session::on_track(CarModel::Roadster, id);
@@ -2300,7 +2285,7 @@ mod tests {
     fn no_city_startup_renderer_smoke() {
         let mut app = App::with_location(false);
         assert!(app.locations.len() >= 2);
-        app.capture_path = std::env::var_os("NFS_MENU_PREVIEW").map(Into::into);
+        app.capture_path = Some(std::env::temp_dir().join("carslop-menu.ppm"));
         app.render(Duration::ZERO);
         app.capture_path = None;
         if cars::ALL.len() > 3 {

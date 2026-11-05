@@ -114,7 +114,6 @@ pub fn menu_locations() -> Vec<MenuLocation> {
     let root = LOCATIONS
         .get()
         .cloned()
-        .or_else(|| std::env::var_os("NFS_LOCATIONS_DIR").map(PathBuf::from))
         .unwrap_or_else(default_locations_directory);
     match discover(&root) {
         Ok(locations) => locations,
@@ -151,13 +150,9 @@ pub fn directory() -> &'static Path {
     }
     static DIRECTORY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIRECTORY.get_or_init(|| {
-        if let Some(path) = std::env::var_os("NFS_CITY_DATA") {
-            return path.into();
-        }
         let root = LOCATIONS
             .get()
             .cloned()
-            .or_else(|| std::env::var_os("NFS_LOCATIONS_DIR").map(PathBuf::from))
             .unwrap_or_else(default_locations_directory);
         let package = root.join("nicosia.sqlite");
         if package.is_file() {
