@@ -1030,6 +1030,21 @@ pub struct Camera {
     eye: [f32; 3],
     particle_view: crate::particles::View,
 }
+impl Camera {
+    pub fn eye(&self) -> [f32; 3] {
+        self.eye
+    }
+    pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
+        let m = self.view_projection;
+        let w = m[3] * point[0] + m[7] * point[1] + m[11] * point[2] + m[15];
+        if w <= 0.1 {
+            return None;
+        }
+        Some(std::array::from_fn(|i| {
+            (m[i] * point[0] + m[i + 4] * point[1] + m[i + 8] * point[2] + m[i + 12]) / w
+        }))
+    }
+}
 
 pub fn set_signal_time(program: u32, seconds: f32) {
     let name = CString::new("u_signal_time").unwrap();

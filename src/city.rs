@@ -34,6 +34,7 @@ pub struct City {
     pub elevation: Option<crate::elevation::HeightField>,
     pub surfaces: Option<crate::street_surface::StreetSurface>,
     street_names: HashMap<i64, String>,
+    building_names: HashMap<u64, String>,
     road_grid: HashMap<(i32, i32), Vec<usize>>,
     building_grid: HashMap<(i32, i32), Vec<usize>>,
 }
@@ -97,11 +98,21 @@ impl Building {
 }
 
 /// Read just way labels, without building the full OSM geometry again.
+struct OsmLabels {
+    streets: HashMap<i64, String>,
+    buildings: HashMap<u64, String>,
+}
+#[cfg(test)]
 fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, String>, String> {
+    read_osm_labels(source).map(|labels| labels.streets)
+}
+fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
     use quick_xml::{events::Event, Reader};
     let mut reader = Reader::from_reader(source);
     let mut buffer = Vec::new();
     let mut names = HashMap::new();
+    let mut buildings = HashMap::new();
+    let mut building = false;
     let mut way = None;
     let mut labels = [String::new(), String::new(), String::new()];
     loop {
@@ -111,6 +122,7 @@ fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, Strin
         {
             Event::Start(e) if e.name().as_ref() == "way" => {
                 way = None;
+                building = false;
                 labels.iter_mut().for_each(String::clear);
                 for attr in e.attributes() {
                     let attr = attr.map_err(|e| e.to_string())?;
@@ -133,6 +145,9 @@ fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, Strin
                         _ => {}
                     }
                 }
+                if key == "building" {
+                    building = !matches!(value.as_str(), "" | "no");
+                }
                 let index = match key.as_str() {
                     "name:en" => Some(0),
                     "name" => Some(1),
@@ -145,6 +160,11 @@ fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, Strin
             }
             Event::End(e) if e.name().as_ref() == "way" => {
                 if let Some(id) = way.take() {
+                    if building {
+                        if let Some(label) = labels[..2].iter().find(|s| !s.is_empty()) {
+                            buildings.insert(id as u64, label.clone());
+                        }
+                    }
                     if let Some(label) = labels.iter().find(|label| !label.is_empty()) {
                         names.insert(id, label.clone());
                     }
@@ -155,7 +175,10 @@ fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, Strin
         }
         buffer.clear();
     }
-    Ok(names)
+    Ok(OsmLabels {
+        streets: names,
+        buildings,
+    })
 }
 
 impl City {
@@ -163,8 +186,11 @@ impl City {
         let source = crate::city_assets::try_read("city.txt")?;
         let mut city = Self::parse(&source)?;
         match crate::package::Reader::open(&crate::city_assets::directory().join("source.osm")) {
-            Ok(source) => match read_street_names(std::io::BufReader::new(source)) {
-                Ok(names) => city.street_names = names,
+            Ok(source) => match read_osm_labels(std::io::BufReader::new(source)) {
+                Ok(labels) => {
+                    city.street_names = labels.streets;
+                    city.building_names = labels.buildings;
+                }
                 Err(error) => log::warn!("Cannot load street names: {error}"),
             },
             Err(error) => log::warn!("Cannot open street names: {error}"),
@@ -266,6 +292,7 @@ impl City {
             elevation: None,
             landscape: crate::landscape::Landscape::default(),
             street_names: HashMap::new(),
+            building_names: HashMap::new(),
             road_grid: HashMap::new(),
             building_grid: HashMap::new(),
         };
@@ -724,6 +751,65 @@ impl City {
         position[1] = self.drive_height([position[0], position[2]]) + 0.48;
         impact
     }
+    pub fn building_name(&self, id: u64) -> Option<&str> {
+        self.building_names.get(&id).map(String::as_str)
+    }
+    pub fn nearby_building_labels(&self, eye: [f32; 3]) -> Vec<(u64, &str, [f32; 3], f32)> {
+        let mut ids = std::collections::HashSet::new();
+        let a = cell([eye[0] - 180.0, eye[2] - 180.0]);
+        let b = cell([eye[0] + 180.0, eye[2] + 180.0]);
+        for x in a.0..=b.0 {
+            for z in a.1..=b.1 {
+                if let Some(items) = self.building_grid.get(&(x, z)) {
+                    ids.extend(items.iter().copied());
+                }
+            }
+        }
+        let mut labels: Vec<_> = ids
+            .into_iter()
+            .filter_map(|i| {
+                let building = &self.buildings[i];
+                let name = self.building_name(building.id)?;
+                let n = building.polygon.len() as f32;
+                let x = building.polygon.iter().map(|p| p[0]).sum::<f32>() / n;
+                let z = building.polygon.iter().map(|p| p[1]).sum::<f32>() / n;
+                let distance = (x - eye[0]).hypot(z - eye[2]);
+                (distance < 180.0).then_some((
+                    building.id,
+                    name,
+                    [x, building.base_y + building.height + 1.5, z],
+                    distance,
+                ))
+            })
+            .collect();
+        labels.sort_by(|a, b| a.3.total_cmp(&b.3).then(a.0.cmp(&b.0)));
+        labels.truncate(32);
+        labels
+    }
+    pub fn building_label_visible(&self, eye: [f32; 3], anchor: [f32; 3], target: u64) -> bool {
+        let steps = ((eye[0] - anchor[0]).hypot(eye[2] - anchor[2]) / 1.0)
+            .ceil()
+            .max(1.0) as usize;
+        for step in 1..steps {
+            let t = step as f32 / steps as f32;
+            let p: [f32; 3] = std::array::from_fn(|i| eye[i] + (anchor[i] - eye[i]) * t);
+            if self
+                .building_grid
+                .get(&cell([p[0], p[2]]))
+                .is_some_and(|ids| {
+                    ids.iter().any(|i| {
+                        let b = &self.buildings[*i];
+                        b.id != target && p[1] < b.base_y + b.height && b.contains([p[0], p[2]])
+                    })
+                })
+                || p[1] < self.height([p[0], p[2]])
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn camera_eye(&self, anchor: [f32; 3], eye: [f32; 3]) -> [f32; 3] {
         let length = (eye[0] - anchor[0]).hypot(eye[2] - anchor[2]);
         let steps = (length / 0.35).ceil().max(1.0) as usize;
@@ -821,6 +907,22 @@ mod tests {
     }
 
     const CROSS:&str="CITY 1\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
+    #[test]
+    fn building_labels_use_names_not_plot_references_and_respect_occlusion() {
+        let source = br#"<osm><way id="1"><tag k="building" v="yes"/><tag k="name" v="Local"/><tag k="name:en" v="City Hall"/></way><way id="2"><tag k="building" v="yes"/><tag k="ref" v="PLOT 2"/></way></osm>"#;
+        let labels = read_osm_labels(&source[..]).unwrap();
+        assert_eq!(labels.buildings[&1], "City Hall");
+        assert!(!labels.buildings.contains_key(&2));
+        let mut city = City::parse(CROSS).unwrap();
+        city.building_names = labels.buildings;
+        let eye = [0.0, 2.0, -20.0];
+        let labels = city.nearby_building_labels(eye);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].1, "City Hall");
+        assert!(city.building_label_visible(eye, labels[0].2, 1));
+        assert!(!city.building_label_visible([13.0, 2.0, 0.0], [13.0, 2.0, 30.0], 999));
+    }
+
     #[test]
     fn google_maps_url_inverts_the_osm_projection() {
         let city =

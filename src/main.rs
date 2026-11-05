@@ -808,6 +808,10 @@ impl App {
                 },
             );
         } else {
+            if s.state == GameState::Driving {
+                self.hud
+                    .draw_building_labels(self.program, s.track(), &camera);
+            }
             self.hud.draw(
                 self.program,
                 hud::Map {
@@ -942,6 +946,48 @@ mod tests {
             capture_frame(&directory.join(format!("frame-{frame:03}.ppm")));
             assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         }
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and Nicosia; renders an OSM building label"]
+    fn building_billboard_preview() {
+        let mut app = App::new();
+        app.key_down(Keycode::F7);
+        app.start_selected();
+        let city = app.session.track().city().unwrap();
+        let building = city
+            .buildings
+            .iter()
+            .filter(|b| city.building_name(b.id).is_some())
+            .min_by(|a, b| {
+                let distance = |b: &city::Building| b.polygon[0][0].hypot(b.polygon[0][1]);
+                distance(a).total_cmp(&distance(b))
+            })
+            .expect("map needs a named building");
+        let [a, b] = [building.polygon[0], building.polygon[1]];
+        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let middle = [
+            (a[0] + b[0]) * 0.5,
+            building.base_y + building.height * 0.6,
+            (a[1] + b[1]) * 0.5,
+        ];
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: [
+                    middle[0] + (b[1] - a[1]) / length * 25.0,
+                    middle[1] + 2.0,
+                    middle[2] - (b[0] - a[0]) / length * 25.0,
+                ],
+                target: middle,
+            },
+        );
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        app.hud
+            .draw_building_labels(app.program, app.session.track(), &camera);
+        capture_frame(std::path::Path::new("/tmp/carslop-building-labels.ppm"));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
 
     #[test]
