@@ -66,8 +66,14 @@ mod tests {
             assert_eq!(shadow.origin, car.position);
             shadow.axes
         });
-        // Wheel tracks may change independently of body length during art work.
-        assert!(footprints[1][2] > footprints[0][2] && footprints[1][2] > footprints[2][2]);
+        // The new cars use different track widths; every contact must still
+        // fit inside the projected footprint, regardless of model ordering.
+        for model in cars::ALL {
+            for wheel in model.wheel_centers() {
+                assert!(wheel[0].abs() < footprints[model.index()][2]);
+                assert!(wheel[2].abs() < footprints[model.index()][3] - 0.3);
+            }
+        }
         assert!(footprints[1][3] > footprints[0][3] && footprints[0][3] > footprints[2][3]);
     }
 

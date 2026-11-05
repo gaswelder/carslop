@@ -4,6 +4,7 @@ use crate::{
 };
 use std::ffi::CString;
 
+#[cfg(test)]
 pub const LOCATIONS: [TrackId; 2] = [TrackId::Scenic, TrackId::Engomi];
 #[cfg(test)]
 pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
@@ -27,6 +28,7 @@ fn car_box(index: usize) -> [f32; 4] {
 const START_BOX: [f32; 4] = [-0.92, -0.65, 0.94, -0.50];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    #[cfg(test)]
     Location(TrackId),
     Choice(usize),
     Page(i32),
@@ -94,6 +96,7 @@ pub fn selection_menu_hit_test(
     }
     location_menu_hit_test(x, y, selected, count)
 }
+#[cfg(test)]
 pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
     let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
     for (i, id) in LOCATIONS.into_iter().enumerate() {

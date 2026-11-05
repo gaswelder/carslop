@@ -215,6 +215,13 @@ It uses a four-speed rear-drive tune. Rebuild its artwork with
 `python3 tools/build_fictional_cars.py mosquito [--output FILE.glb]`; the default
 output is `data/cars/muscle/model.glb`.
 
+2016 Pitsunda 2 is an original five-door commuter hatch with a swept front,
+shield grille, slim headlamps and split-spoke wheels, inspired by
+[Mazda's Demio/Mazda2 design](https://newsroom.mazda.com/en/publicity/release/2014/201407/140717a.html).
+It has a 1.3-litre-style petrol tune, front-wheel drive and six forward gears.
+Rebuild with `python3 tools/build_fictional_cars.py pitsunda [--output FILE.glb]`;
+the default output is `data/cars/pitsunda-2/model.glb`.
+
 ### GLB format
 
 Export static triangulated glTF 2.0 GLB: meters, Y up, +Z forward, one embedded

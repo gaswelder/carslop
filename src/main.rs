@@ -445,6 +445,7 @@ impl App {
             return;
         }
         match action {
+            #[cfg(test)]
             hud::MenuAction::Location(id) => {
                 if let Some(index) = self.locations.iter().position(|entry| entry.track == id) {
                     self.selected_location = index;

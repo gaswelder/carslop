@@ -644,15 +644,21 @@ mod tests {
     }
 
     #[test]
-    fn car_keeps_original_footprint_and_road_clearance() {
-        let mut b = Builder::default();
+    fn car_body_fits_clearance_and_axle_overhangs() {
         for model in cars::ALL {
+            let mut b = Builder::default();
             car(&mut b, model);
-        }
-        for v in b.vertices {
-            assert!(v.position[0].abs() < 1.4);
-            assert!(v.position[2].abs() < 2.2);
-            assert!(v.position[1] >= -0.421 && v.position[1] <= 1.25);
+            let wheels = model.wheel_centers();
+            let rear = wheels[0][2].min(wheels[1][2]);
+            let front = wheels[2][2].max(wheels[3][2]);
+            for v in b.vertices {
+                assert!(v.position[0].abs() < crate::track::CAR_RADIUS);
+                assert!(
+                    v.position[2] > rear - 1.2 && v.position[2] < front + 1.2,
+                    "{model:?}: excessive overhang"
+                );
+                assert!(v.position[1] >= -0.421 && v.position[1] <= 1.25);
+            }
         }
     }
 
@@ -676,9 +682,15 @@ mod tests {
             std::array::from_fn::<_, 3, _>(|i| max[i] - min[i])
         });
         let [roadster, muscle, club] = [extents[0], extents[1], extents[2]];
-        assert!(muscle[0] > roadster[0] && roadster[0] > club[0]);
+        assert!(muscle[0] > club[0] && roadster[0] > club[0]);
         assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
-        assert!(club[1] > muscle[1] && muscle[1] > roadster[1]);
+        assert!(club[1] > muscle[1]);
+        let commuter = extents[cars::ALL
+            .into_iter()
+            .find(|m| m.spec().name == "2016 PITSUNDA 2")
+            .unwrap()
+            .index()];
+        assert!(commuter[1] > club[1] && commuter[2] < muscle[2]);
     }
 
     #[test]

@@ -210,6 +210,7 @@ impl Vehicle {
         };
     }
 
+    #[cfg(test)]
     pub fn gear_label(&self) -> String {
         if self.gear == NEUTRAL_GEAR {
             return "N".into();

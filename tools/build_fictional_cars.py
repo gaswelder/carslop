@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build original fictional car GLBs from parametric surfaces; no external assets.
 
-Usage: python3 tools/build_fictional_cars.py {agolf,mosquito} [--output FILE.glb]
+Usage: python3 tools/build_fictional_cars.py {agolf,mosquito,pitsunda} [--output FILE.glb]
 """
 import argparse
 import json
@@ -73,13 +73,14 @@ class Mesh:
         for ids in [(0,3,2,1),(4,5,6,7),(0,4,7,3),(1,2,6,5),(0,1,5,4),(3,7,6,2)]:
             self.quad([p[i] for i in ids], material, color)
 
-    def disc(self, center, radius, material, color, axis='z', ring=0.0):
+    def disc(self, center, radius, material, color, axis='z', ring=0.0, floor_y=None):
         for i in range(48):
             a, b = i*2*PI/48, (i+1)*2*PI/48
             def p(t, r):
                 if axis == 'z':
                     return (center[0]+r*math.cos(t), center[1]+r*math.sin(t), center[2])
-                return (center[0], center[1]+r*math.cos(t), center[2]+r*math.sin(t))
+                y = center[1]+r*math.cos(t)
+                return (center[0], max(y, floor_y) if floor_y is not None else y, center[2]+r*math.sin(t))
             if ring:
                 self.quad([p(a,ring), p(a,radius), p(b,radius), p(b,ring)], material, color)
             else:
@@ -112,7 +113,7 @@ class Coachwork:
         w, center, shoulder = profile(self.stations, z)
         return (w*q, center+(shoulder-center)*math.sin(q*PI/2)**2+.012*(1-q*q), z)
 
-    def skin(self, hatch=False, arches=PAINT, rub_strip=True):
+    def skin(self, hatch=False, arches=PAINT, rub_strip=True, doors=3):
         b = self.mesh
         lo, hi = self.stations[0][0], self.stations[-1][0]
         b.patch(32, 112, lambda u,v:self.deck(u*2-1, lo+(hi-lo)*v), PAINT, WHITE)
@@ -147,7 +148,7 @@ class Coachwork:
                     return (side*(w-.23*v),self.cy+r*math.sin(a),z)
                 b.patch(48,4,lining,RUBBER,(.018,.021,.025))
                 w = profile(self.stations, axle)[0]
-                b.disc((side*(w-.22),self.cy,axle),self.radius+.04,RUBBER,(.018,.021,.025),'x')
+                b.disc((side*(w-.22),self.cy,axle),self.radius+.04,RUBBER,(.018,.021,.025),'x',floor_y=-.31)
         for z in [lo,hi]:
             b.patch(32, 12, lambda u,v:(self.deck(u*2-1,z)[0], -.31+(self.deck(u*2-1,z)[1]+.31)*v,z), PAINT, WHITE)
         clo, chi = self.cabin[0][0], self.cabin[-1][0]
@@ -163,7 +164,7 @@ class Coachwork:
             q = abs(u*2-1)
             rear = clo+.10 < z < self.cabin[1][0]-.05 and q < .84
             front = self.cabin[-2][0]+.08 < z < chi-.08 and q < .85
-            side = (.885 if hatch else .70) < q < .985 and clo+.20 < z < chi-.22 and abs(z+.22)>.055
+            side = (.885 if hatch else .82) < q < .985 and clo+.20 < z < chi-.22 and abs(z+.22)>.055
             return GLASS if rear or front or side else PAINT
         b.patch(56, 96, greenhouse, glazing, lambda u,v:(.08,.13,.15) if glazing(u,v)==GLASS else WHITE)
         # Sills, rub strips, door seams, handles and mirror housings.
@@ -172,10 +173,11 @@ class Coachwork:
             b.box((side*w-.012,-.21,-.95),(side*w+.012,-.15,.88),RUBBER,DARK)
             if rub_strip:
                 b.box((side*(w+.008)-.012,.11,-1.15),(side*(w+.008)+.012,.14,1.12),RUBBER,DARK)
-            for z in [-.88,.75]:
+            for z in ([-.88,.75] if doors==3 else [-1.2,-.25,.75]):
                 y = profile(self.stations,z)[2]
                 b.box((side*w-.003,-.15,z-.003),(side*w+.003,y,z+.003),RUBBER,(.07,.065,.06))
-            b.box((side*(w+.015)-.012,.24,-.65),(side*(w+.015)+.012,.265,-.49),RUBBER,DARK)
+            for z in ([-.65] if doors==3 else [-.90,-.05]):
+                b.box((side*(w+.015)-.012,.24,z),(side*(w+.015)+.012,.265,z+.16),RUBBER,DARK)
             b.box((side*(w+.035)-.06,.32,.60),(side*(w+.035)+.06,.39,.75),PAINT,WHITE)
             b.box((side*(w+.035)-.045,.333,.594),(side*(w+.035)+.045,.378,.603),METAL,(.4,.48,.5))
 
@@ -191,10 +193,10 @@ def wheel(radius, width, side, style):
     face = side*(width*.5+.002)
     b.disc((face,0,0),radius*.83,METAL,CHROME,'x',radius*.76)
     b.disc((face-side*.012,0,0),radius*.76,RUBBER,(.065,.075,.08),'x')
-    count = 8 if style=='mesh' else 5
+    count = 8 if style=='mesh' else (7 if style=='modern' else 5)
     for i in range(count):
         a = i*2*PI/count
-        for offset in ([-.28,.28] if style=='mesh' else [0]):
+        for offset in ([-.28,.28] if style=='mesh' else ([-.075,.075] if style=='modern' else [0])):
             inner = (math.cos(a)*radius*.19,math.sin(a)*radius*.19)
             outer = (math.cos(a+offset)*radius*.77,math.sin(a+offset)*radius*.77)
             d = unit((0,outer[0]-inner[0],outer[1]-inner[1]))
@@ -329,6 +331,64 @@ def mosquito():
     return b,axles,.33,.77,'classic'
 
 
+def pitsunda():
+    b = Mesh()
+    stations=[(-2.03,.68,.30,.33),(-1.70,.80,.38,.44),(-1.27,.85,.36,.49),
+              (-.65,.81,.32,.40),(.45,.80,.27,.37),(1.30,.85,.23,.43),
+              (1.78,.78,.17,.30),(2.03,.57,.15,.23)]
+    axles=[-1.27,1.30]
+    cabin=[(-1.82,.67,.42),(-1.00,.68,1.02),(-.15,.65,1.03),(.28,.65,.94),(.90,.70,.30)]
+    shell=Coachwork(b,stations,axles,.295,cabin)
+    shell.skin(rub_strip=False,doors=5)
+    # Swept lamps, chrome wings and a deep shield grille distinguish the nose.
+    grille=[(-.43,.20,2.034),(.43,.20,2.034),(.39,-.02,2.055),(.20,-.22,2.065),(-.20,-.22,2.065),(-.39,-.02,2.055)]
+    center=(0,-.01,2.07)
+    for i in range(len(grille)):
+        b.triangle([center,grille[i],grille[(i+1)%len(grille)]],METAL,CHROME)
+    inner=[(x*.94,y*.92,z+.005) for x,y,z in grille]
+    for i in range(len(inner)):
+        b.triangle([(0,-.01,2.077),inner[i],inner[(i+1)%len(inner)]],RUBBER,DARK)
+    for i in range(9):
+        y=-.17+i*.039
+        w=.23+(y+.17)*.48
+        b.box((-w,y,2.078),(w,y+.004,2.082),RUBBER,(.065,.075,.08))
+    b.disc((0,.07,2.086),.056,METAL,CHROME,ring=.045)
+    badge(b,'P',(0,.07,2.089),.009)
+    for side in [-1,1]:
+        outline=[]
+        for x,z in [(side*.43,2.055),(side*.76,1.90),(side*.78,1.74),(side*.49,1.96)]:
+            y=shell.deck(x/profile(stations,z)[0],z)[1]+.012
+            outline.append((x,y,z))
+        b.quad(outline,METAL,CHROME)
+        c=tuple(sum(p[k] for p in outline)/4 for k in range(3))
+        light=[tuple(c[k]+(p[k]-c[k])*.91+(0.005 if k==2 else 0) for k in range(3)) for p in outline]
+        b.quad(light,LENS,(.65,.73,.77))
+        b.box((side*.52-.075,-.22,2.041),(side*.52+.075,-.10,2.057),RUBBER,DARK)
+        b.disc((side*.52,-.158,2.065),.034,LENS,(.74,.78,.74))
+        # A narrow painted crease follows the side surface rather than a rub strip.
+        def crease(u,v):
+            z=-1.15+2.35*u
+            w,_,top=profile(stations,z)
+            y=.18+.06*u+v*.006
+            fraction=(y+.31)/(top+.31)
+            x=side*(w-.045*(1-fraction)**2+.003)
+            return (x,y,z)
+        b.patch(64,1,crease,PAINT,(.97,.97,.97))
+        # High wraparound rear lamps and an inset clear reversing section.
+        rear=[(side*.45,.33,-2.05),(side*.78,.40,-1.83),(side*.80,.28,-1.90),(side*.50,.25,-2.055)]
+        b.quad(rear,BRAKE,(.76,.025,.025))
+        x=side*.56
+        b.box((x-.045,.31,-2.062),(x+.045,.345,-2.055),REVERSE,(.45,.48,.48))
+    b.box((-.60,-.24,-2.055),(.60,-.16,-2.02),RUBBER,DARK)
+    b.box((-.20,-.12,-2.078),(.20,-.025,-2.055),METAL,(.67,.68,.62))
+    badge(b,'PITSUNDA',(0,-.075,-2.081),.0067)
+    badge(b,'2',(.40,.20,-2.056),.010)
+    # Rear hatch spoiler and a separate high-level stop strip.
+    b.box((-.59,.90,-1.30),(.59,.95,-1.14),PAINT,WHITE)
+    b.box((-.26,.901,-1.307),(.26,.914,-1.302),BRAKE,(.65,.025,.025))
+    return b,axles,.295,.735,'modern'
+
+
 def export(path, body, axles, radius, track, style):
     blob=bytearray()
     doc={'asset':{'version':'2.0','generator':'Cars LOP fictional coachwork'},'scene':0,
@@ -373,8 +433,8 @@ def export(path, body, axles, radius, track, style):
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('car',choices=['agolf','mosquito'])
+    parser.add_argument('car',choices=['agolf','mosquito','pitsunda'])
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()
-    builder, folder = {'agolf': (agolf,'club'), 'mosquito': (mosquito,'muscle')}[args.car]
+    builder, folder = {'agolf': (agolf,'club'), 'mosquito': (mosquito,'muscle'), 'pitsunda': (pitsunda,'pitsunda-2')}[args.car]
     export(args.output or ROOT/f'data/cars/{folder}/model.glb',*builder())
