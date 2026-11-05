@@ -80,12 +80,14 @@ vec3 asphalt_texture(vec3 color) {
     vec2 p = v_world.xz;
     float fine_fade = 1.0 - smoothstep(0.35, 1.5, length(fwidth(p * 75.0)));
     float grain = (surface_hash(floor(p * 75.0)) - 0.5) * fine_fade;
-    float aggregate = surface_noise(p * 9.0) - 0.5;
+    float aggregate_fade = 1.0 - smoothstep(0.5, 2.0, length(fwidth(p * 24.0)));
+    float aggregate = (surface_noise(p * 24.0) - 0.5) * aggregate_fade;
+    float coarse = surface_noise(p * 7.0) - 0.5;
     float weather = surface_noise(p * 0.38) - 0.5;
     vec2 cell = floor(p / 5.0);
     vec2 edge = min(fract(p / 5.0), 1.0 - fract(p / 5.0));
     float patch = step(0.88, surface_hash(cell)) * smoothstep(0.015, 0.035, min(edge.x, edge.y));
-    return color * (1.0 + grain * 0.22 + aggregate * 0.10 + weather * 0.12 - patch * 0.09);
+    return color * (1.0 + grain * 0.65 + aggregate * 0.48 + coarse * 0.18 + weather * 0.12 - patch * 0.09);
 }
 vec3 concrete_texture(vec3 color, vec3 normal) {
     vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
