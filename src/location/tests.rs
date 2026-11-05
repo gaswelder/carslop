@@ -291,3 +291,32 @@ fn runtime_location_failure_and_eviction_probe() {
         &crate::track::TrackId::Engomi.try_track().unwrap()
     ));
 }
+
+#[test]
+fn circuit_filter_excludes_public_and_service_roads_but_preserves_scenery() {
+    let temp = Temp::new();
+    let path = temp.0.join("source.osm");
+    fs::write(&path, FIXTURE.replace("</osm>", "<way id=\"999\"><nd ref=\"1\"/><nd ref=\"2\"/><tag k=\"highway\" v=\"raceway\"/></way></osm>")).unwrap();
+    let mut source = osm::read(&path).unwrap();
+    let buildings = source
+        .ways
+        .values()
+        .filter(|w| !w.tag("building").is_empty())
+        .count();
+    retain_raceways(&mut source).unwrap();
+    assert!(source
+        .ways
+        .values()
+        .all(|w| matches!(w.tag("highway"), "" | "raceway")));
+    assert_eq!(
+        source
+            .ways
+            .values()
+            .filter(|w| !w.tag("building").is_empty())
+            .count(),
+        buildings
+    );
+    assert!(source.ways.contains_key(&999));
+    source.ways.remove(&999);
+    assert!(retain_raceways(&mut source).is_err());
+}

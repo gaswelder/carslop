@@ -73,7 +73,7 @@ Click the page arrows for more locations.
 ```
 
 Nürburgring is also available as an offline location, covering the Nordschleife,
-Grand Prix circuit, connecting lanes and surrounding roads:
+Grand Prix circuit and their racing connections, with surrounding scenery:
 
 ```sh
 ./target/release/nfs5like play --location nurburgring
@@ -221,6 +221,10 @@ Normals and triangle winding must face outward.
 
 All commands run from the game executable. With no command, `play` opens the
 selection menu. Global options can appear before or after the command.
+`circuit-only --location NAME` rebuilds an existing package from its preserved
+OSM/elevation sources, keeping only `highway=raceway` roads. It retains buildings
+and landscape. This replaces the package atomically after a successful bake.
+
 `--location` selects an imported package name; it preselects the menu rather
 than immediately starting driving. `--bake-city` is a legacy alias for `bake-city`.
 
@@ -233,6 +237,7 @@ Commands:
       [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds
       --elevation TILE.hgt[.gz]
   list-locations                         List imported locations
+  circuit-only --location NAME          Keep racing roads; rebuild package
   bake-city --location NAME             Rebuild render and collision data
   bake-collision --location NAME        Rebuild collision data only
   bake-scene --location NAME            Rebuild visual geometry only
@@ -264,7 +269,7 @@ Run without a command to browse all locations. Maps load only after Start Drivin
 | Flag | Meaning / default |
 | --- | --- |
 | `--locations-dir PATH` | Location store; overrides `NFS_LOCATIONS_DIR`. Default: `data/locations` beside the executable, working directory, then build source tree. |
-| `--location NAME` | Imported package for `play` and bake commands; required by bake commands. |
+| `--location NAME` | Imported package for `play` and bake commands; required by bake and `circuit-only` commands. |
 | `--source FILE.osm` | Required OSM XML input to `add-location`. |
 | `--elevation TILE.hgt[.gz]` | Required elevation tile; adjacent tiles are found in the same directory. |
 | `--bbox S W N E` | Decimal-degree crop. Import defaults to OSM bounds; `extract-region` defaults to `35.10 33.25 35.23 33.47` (Nicosia). |

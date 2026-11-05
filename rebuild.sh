@@ -5,4 +5,5 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 cargo build --release --offline --target-dir ./target
 ./target/release/nfs5like --locations-dir ./data/locations bake-collision --location nicosia
+./target/release/nfs5like --locations-dir ./data/locations circuit-only --location nurburgring
 ./target/release/nfs5like --locations-dir ./data/locations bake-collision --location nurburgring

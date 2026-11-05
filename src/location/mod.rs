@@ -175,8 +175,23 @@ pub struct Options<'a> {
     pub elevation: &'a Path,
 }
 pub fn compile(options: Options<'_>) -> Result<()> {
+    compile_filtered(options, false)
+}
+fn retain_raceways(source: &mut Source) -> Result<()> {
+    if !source.ways.values().any(|w| w.tag("highway") == "raceway") {
+        return Err(invalid("source contains no racing circuit"));
+    }
+    source
+        .ways
+        .retain(|_, w| matches!(w.tag("highway"), "" | "raceway"));
+    Ok(())
+}
+fn compile_filtered(options: Options<'_>, circuit_only: bool) -> Result<()> {
     println!("Reading OSM XML...");
-    let source = osm::read(options.source)?;
+    let mut source = osm::read(options.source)?;
+    if circuit_only {
+        retain_raceways(&mut source)?;
+    }
     let map = osm::compile(&source, options.bbox)?;
     fs::create_dir_all(options.output.join("elevation"))?;
     let city = osm::write(&map, options.output)?;
@@ -196,7 +211,7 @@ pub fn compile(options: Options<'_>) -> Result<()> {
         map.origin[1] + map.bounds[2].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
     ];
     let mut manifest = serde_json::json!({
-        "name":options.name,"origin_lat_lon":map.origin,"bounds_metres":map.bounds,
+        "name":options.name,"raceways_only":circuit_only,"origin_lat_lon":map.origin,"bounds_metres":map.bounds,
         "bbox_south_west_north_east":[south_west[0],south_west[1],north_east[0],north_east[1]],
         "source_timestamp":source.timestamp,"source_file":"source.osm","source_sha256":sha(options.source)?,
         "package_sha256":sha(&options.output.join("city.txt"))?,
@@ -217,4 +232,56 @@ pub fn compile(options: Options<'_>) -> Result<()> {
     println!("Baking collision data...");
     crate::street_surface::bake(options.output)?;
     Ok(())
+}
+
+/// Rebuild an existing location using only its racing roads, preserving scenery
+/// and source provenance. Package editing publishes atomically after baking.
+pub fn circuit_only(path: &Path) -> Result<()> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&crate::package::read(&path.join("manifest.json"))?)?;
+    if manifest["raceways_only"] == true {
+        println!("Location already contains racing roads only");
+        return Ok(());
+    }
+    crate::package::edit(path, |folder| {
+        let temp = tempfile::tempdir()?;
+        let output = temp.path().join("circuit");
+        let mut tiles = fs::read_dir(folder.join("elevation"))?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        tiles.sort();
+        let elevation = tiles
+            .into_iter()
+            .find(|p| {
+                p.to_string_lossy().ends_with(".hgt") || p.to_string_lossy().ends_with(".hgt.gz")
+            })
+            .ok_or_else(|| invalid("location has no preserved HGT elevation tile"))?;
+        let bbox = serde_json::from_value(manifest["bbox_south_west_north_east"].clone())?;
+        compile_filtered(
+            Options {
+                source: &folder.join("source.osm"),
+                output: &output,
+                name: manifest["name"].as_str().unwrap_or("circuit"),
+                bbox: Some(bbox),
+                elevation: &elevation,
+            },
+            true,
+        )?;
+        crate::city_assets::select(output.clone())?;
+        crate::scene_archive::bake_default()?;
+        fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+            fs::create_dir_all(to)?;
+            for entry in fs::read_dir(from)? {
+                let entry = entry?;
+                let target = to.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_tree(&entry.path(), &target)?;
+                } else {
+                    fs::copy(entry.path(), target)?;
+                }
+            }
+            Ok(())
+        }
+        copy_tree(&output, folder)
+    })
 }
