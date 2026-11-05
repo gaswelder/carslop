@@ -128,12 +128,12 @@ pub struct Gauges {
 }
 
 const PAUSE_BOXES: [[f32; 4]; 6] = [
-    [-0.86, -0.67, -0.32, -0.53],
-    [-0.27, -0.67, 0.27, -0.53],
-    [0.32, -0.67, 0.86, -0.53],
-    [-0.86, -0.45, -0.32, -0.33],
-    [-0.27, -0.45, 0.27, -0.33],
-    [0.32, -0.45, 0.86, -0.33],
+    [-0.68, 0.06, -0.04, 0.20],
+    [0.04, 0.06, 0.68, 0.20],
+    [-0.68, -0.13, -0.04, 0.01],
+    [0.04, -0.13, 0.68, 0.01],
+    [-0.68, -0.32, -0.04, -0.18],
+    [0.04, -0.32, 0.68, -0.18],
 ];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PauseAction {
@@ -160,7 +160,6 @@ pub fn pause_hit_test(x: f32, y: f32) -> Option<PauseAction> {
         })
 }
 pub struct PauseMenu<'a> {
-    pub lines: &'a [String],
     pub city: bool,
     pub view: &'a str,
     pub audio: &'a str,
@@ -1006,61 +1005,8 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
 fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
     let white = [0.9, 0.95, 1.0];
     let cyan = [0.15, 0.85, 0.95];
-    let muted = [0.55, 0.66, 0.70];
-    quad(v, [-0.94, -0.83], [0.94, 0.91], [0.025, 0.05, 0.075]);
-    quad(v, [-0.94, 0.88], [0.94, 0.91], cyan);
-    text(v, "PAUSED", [-0.86, 0.79], 0.008, cyan);
-    text(v, "SESSION", [-0.86, 0.65], 0.004, muted);
-    text(v, "CONTROLS", [0.12, 0.65], 0.004, muted);
-    for (i, entry) in pause.lines.iter().enumerate() {
-        let size = 0.0042_f32.min(0.76 / (entry.chars().count().max(1) as f32 * 6.0));
-        text(v, entry, [-0.86, 0.55 - i as f32 * 0.09], size, white);
-    }
-    for (i, entry) in [
-        "UP: ACCELERATE",
-        "DOWN: BRAKE",
-        "LEFT / RIGHT: STEER",
-        "SPACE: HANDBRAKE",
-        "A: SHIFT UP / Z: SHIFT DOWN",
-        "M: FULL MAP",
-    ]
-    .iter()
-    .enumerate()
-    {
-        text(v, entry, [0.12, 0.55 - i as f32 * 0.085], 0.0037, white);
-    }
-    if pause.city {
-        text(
-            v,
-            "MAP DATA: OPENSTREETMAP CONTRIBUTORS",
-            [-0.86, -0.08],
-            0.0029,
-            muted,
-        );
-        text(
-            v,
-            "OPENSTREETMAP.ORG/COPYRIGHT / ODBL",
-            [-0.86, -0.14],
-            0.0029,
-            muted,
-        );
-        text(
-            v,
-            "TERRAIN: MAPZEN / USGS / EU COPERNICUS",
-            [-0.86, -0.20],
-            0.0027,
-            muted,
-        );
-        if crate::aerial::source_available() {
-            text(
-                v,
-                crate::aerial::attribution_label(),
-                [-0.86, -0.26],
-                0.0027,
-                muted,
-            );
-        }
-    }
+    quad(v, [-0.76, -0.55], [0.76, 0.55], [0.025, 0.05, 0.075]);
+    text(v, "PAUSED", [-0.68, 0.43], 0.009, cyan);
     let labels = [
         "RESUME  [ESC]".to_string(),
         "RESTART  [R]".into(),
@@ -1071,15 +1017,26 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
     ];
     for (r, label) in PAUSE_BOXES.into_iter().zip(labels) {
         menu_button(v, r, true, false);
-        text(v, &label, [r[0] + 0.025, r[3] - 0.04], 0.0032, white);
+        text(v, &label, [r[0] + 0.025, r[3] - 0.045], 0.0032, white);
     }
-    text(
-        v,
-        "CHOOSE AN ACTION ABOVE / Q QUIT",
-        [-0.86, -0.755],
-        0.0032,
-        muted,
-    );
+    if pause.city {
+        text(
+            v,
+            "OPENSTREETMAP CONTRIBUTORS / ODBL",
+            [-0.68, -0.41],
+            0.0025,
+            [0.55, 0.66, 0.70],
+        );
+        if crate::aerial::source_available() {
+            text(
+                v,
+                crate::aerial::attribution_label(),
+                [-0.68, -0.47],
+                0.0022,
+                [0.55, 0.66, 0.70],
+            );
+        }
+    }
 }
 
 fn quad(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
@@ -1355,12 +1312,12 @@ mod tests {
     #[test]
     fn pause_buttons_match_their_visible_actions() {
         for (x, y, action) in [
-            (-0.59, -0.60, PauseAction::Resume),
-            (0.0, -0.60, PauseAction::Restart),
-            (0.59, -0.60, PauseAction::Selection),
-            (-0.59, -0.39, PauseAction::Audio),
-            (0.0, -0.39, PauseAction::Camera),
-            (0.59, -0.39, PauseAction::Recover),
+            (-0.36, 0.13, PauseAction::Resume),
+            (0.36, 0.13, PauseAction::Restart),
+            (-0.36, -0.06, PauseAction::Selection),
+            (0.36, -0.06, PauseAction::Audio),
+            (-0.36, -0.25, PauseAction::Camera),
+            (0.36, -0.25, PauseAction::Recover),
         ] {
             assert_eq!(pause_hit_test(x, y), Some(action));
         }

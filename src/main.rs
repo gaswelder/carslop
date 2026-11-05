@@ -160,29 +160,6 @@ impl Session {
         self.recoveries += 1;
         true
     }
-
-    fn pause_lines(&self, _view: &str, _audio: &str) -> Vec<String> {
-        let car = &self.vehicle;
-        let speed = format!(
-            "{:03} KM/H GEAR {}",
-            (car.speed.abs() * 3.6) as u32,
-            car.gear_label()
-        );
-        vec![
-            format!("{} FREE DRIVE", car.model.spec().name),
-            format!(
-                "{} {:.2} KM{}",
-                self.track().name,
-                self.track().length() / 1000.0,
-                if self.track().city().is_some() {
-                    " ROADS"
-                } else {
-                    ""
-                }
-            ),
-            speed,
-        ]
-    }
 }
 
 struct App {
@@ -794,11 +771,6 @@ impl App {
             Some(_) => "ON",
             None => "UNAVAILABLE",
         };
-        let lines = if s.state == GameState::Paused {
-            s.pause_lines(self.chase.view().label(), audio_status)
-        } else {
-            Vec::new()
-        };
         if in_menu {
             self.hud.draw_menu(
                 self.program,
@@ -827,7 +799,6 @@ impl App {
                     gear: car.gear,
                 },
                 (s.state == GameState::Paused).then_some(hud::PauseMenu {
-                    lines: &lines,
                     city: s.track().city().is_some(),
                     view: self.chase.view().label(),
                     audio: audio_status,
@@ -898,6 +869,28 @@ mod tests {
         app.key_down(Keycode::Return);
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; renders and checks the compact pause menu"]
+    fn pause_menu_preview() {
+        let mut app = App::with_location(false);
+        app.start_selected();
+        app.key_down(Keycode::Escape);
+        let view = app.chase.view();
+        app.menu_click(410.0, 450.0);
+        assert_ne!(app.chase.view(), view);
+        let recovered = app.session.recoveries;
+        app.menu_click(870.0, 450.0);
+        assert_eq!(app.session.recoveries, recovered + 1);
+        assert!(app.session.state == GameState::Paused);
+        app.capture_path = Some("/tmp/carslop-pause.ppm".into());
+        app.render(Duration::ZERO);
+        app.menu_click(410.0, 313.0);
+        assert!(app.session.state == GameState::Driving);
+        app.key_down(Keycode::Escape);
+        app.menu_click(410.0, 382.0);
+        assert!(app.session.state == GameState::Menu);
     }
 
     #[test]
@@ -1134,19 +1127,19 @@ mod tests {
         assert_eq!(app.session.vehicle.position, position);
         app.render(Duration::ZERO);
         let view = app.chase.view();
-        app.menu_click(640.0, 500.0);
+        app.menu_click(410.0, 450.0);
         assert_ne!(app.chase.view(), view);
         assert!(app.session.state == GameState::Paused);
         let recovered = app.session.recoveries;
-        app.menu_click(1018.0, 500.0);
+        app.menu_click(870.0, 450.0);
         assert_eq!(app.session.recoveries, recovered + 1);
         assert!(app.session.state == GameState::Paused);
         if let Some(audio) = &app.audio {
             let muted = audio.muted;
-            app.menu_click(262.0, 500.0);
+            app.menu_click(870.0, 382.0);
             assert_ne!(app.audio.as_ref().unwrap().muted, muted);
         }
-        app.menu_click(262.0, 576.0);
+        app.menu_click(410.0, 313.0);
         assert!(app.session.state == GameState::Driving);
         // Repeatable reference-block street and facade reviews.
         let city = app.session.track().city().unwrap();
@@ -2037,7 +2030,7 @@ mod tests {
     }
 
     #[test]
-    fn free_recovery_and_pause_info_use_selected_route() {
+    fn free_recovery_uses_selected_route() {
         for id in track::ALL {
             let mut s = Session::on_track(CarModel::Muscle, id);
             let road = s.track().at_distance(s.track().length() * 0.5);
@@ -2047,12 +2040,6 @@ mod tests {
             assert!((recovered.distance - road.distance).abs() < 0.1);
             assert!(recovered.offset.abs() < 0.01);
             assert_eq!(s.track().id, id);
-            let lines = s.pause_lines("WIDE", "ON");
-            assert!(lines.iter().any(|line| line.contains(s.track().name)
-                && line.contains(&format!("{:.2} KM", s.track().length() / 1000.0))));
-            assert!(!lines.iter().any(|line| line.starts_with("TIME ")
-                || line.starts_with("LAP ")
-                || line.starts_with("BEST ")));
         }
     }
 
@@ -2256,7 +2243,7 @@ mod tests {
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         app.key_down(Keycode::Escape);
-        app.menu_click(1018.0, 576.0);
+        app.menu_click(410.0, 382.0);
         assert!(app.session.state == GameState::Menu);
     }
 
@@ -2308,7 +2295,7 @@ mod tests {
     }
 
     #[test]
-    fn free_drive_pause_info_and_reverse_have_no_race_statistics() {
+    fn free_drive_pauses_and_can_reverse() {
         let mut s = Session::new(CarModel::Roadster);
         s.vehicle.toggle_direction();
         for _ in 0..20 {
@@ -2328,12 +2315,5 @@ mod tests {
         }
         assert_eq!(s.vehicle.position, position);
         assert_eq!(s.vehicle.wheel_phase, phase);
-        let lines = s.pause_lines("CLOSE", "ON");
-        assert!(lines[0].contains("FREE DRIVE"));
-        assert!(lines.iter().any(|s| s.contains("GEAR R")));
-        assert!(!lines.iter().any(|s| s.starts_with("TIME ")
-            || s.starts_with("LAP ")
-            || s.starts_with("BEST ")
-            || s.contains("POS ")));
     }
 }
