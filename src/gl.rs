@@ -1108,12 +1108,17 @@ pub fn garage_camera(
     let eye = city.map_or(eye, |city| {
         city.camera_eye([position[0], position[1] + 0.5, position[2]], eye)
     });
-    camera_at(
+    let mut camera = camera_at(
         aspect,
         eye,
         [position[0], position[1] + 0.25, position[2]],
-        0.43,
-    )
+        0.0,
+    );
+    // Keep the preview above the two selection columns.
+    for col in 0..4 {
+        camera.view_projection[col * 4 + 1] += 0.52 * camera.view_projection[col * 4 + 3];
+    }
+    camera
 }
 
 fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32) -> Camera {
