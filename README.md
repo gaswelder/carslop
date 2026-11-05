@@ -368,7 +368,7 @@ cargo test suspension_bump_preview -- --ignored --test-threads=1
 
 The active bank (`engine.json` and `flat6-*.pcm`) uses excerpts from a real
 **Porsche 911 SC, 1981, 3.0 litre flat-six**, recorded by **Pole Position Production**.
-It is shared by 1964 Borsch 11 and Kestrel Turbo.
+It is shared by 1964 Borsch 11 and 1973 Borsch 30 Turbo.
 
 - Recording: `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`
 - Collection: Sonniss #GameAudioGDC 2016, Pole Position Production — Porsche 911 SC 1981.
