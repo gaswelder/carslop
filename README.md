@@ -86,7 +86,8 @@ This is a free-drive map with generated scenery. Circuit bridge sections follow
 the terrain surface; banking, bridge decks and circuit-specific barriers are
 not reconstructed.
 
-Coastal Highway needs no city files. For city play, keep its `data/locations/NAME.sqlite`
+Coastal Highway combines coastal straights, open sweeps, climbing S bends and
+opposing mountain hairpins. It needs no city files. For city play, keep its `data/locations/NAME.sqlite`
 package beside the executable. Play works offline.
 Use `./target/release/nfs5like --help` for command syntax.
 

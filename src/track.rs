@@ -32,15 +32,30 @@ pub const ROAD_POINTS: [[f32; 3]; 12] = [
 
 // Separately authored road: coast straight, climbing bends, ridge, western
 // sweep, and a tighter descending return. World units are metres.
-const SCENIC_POINTS: [[f32; 3]; 21] = [
+const SCENIC_POINTS: &[[f32; 3]] = &[
     [0.0, 3.0, -300.0],
     [160.0, 3.0, -300.0],
     [300.0, 5.0, -250.0],
     [365.0, 10.0, -150.0],
     [350.0, 18.0, -30.0],
     [290.0, 24.0, 60.0],
-    [235.0, 28.0, 150.0],
-    [260.0, 32.0, 230.0],
+    [235.0, 28.0, 140.0],
+    // Mountain hairpin: a clockwise reversal with a climbing entry.
+    [235.0, 28.8, 170.0],
+    [238.75, 29.1, 184.0],
+    [249.0, 29.4, 194.25],
+    [263.0, 29.7, 198.0],
+    [277.0, 30.0, 194.25],
+    [287.25, 30.3, 184.0],
+    [291.0, 30.6, 170.0],
+    [291.0, 31.0, 140.0],
+    // Opposing tight bend returns to a fast, open ridge sweep.
+    [298.0, 31.6, 122.0],
+    [316.0, 32.0, 115.0],
+    [334.0, 32.4, 122.0],
+    [341.0, 32.8, 140.0],
+    [341.0, 32.0, 195.0],
+    [300.0, 30.5, 270.0],
     [200.0, 29.0, 310.0],
     [80.0, 22.0, 345.0],
     [-50.0, 14.0, 330.0],
@@ -104,7 +119,7 @@ impl TrackId {
                 .get_or_init(|| Arc::new(Track::build(self, &ROAD_POINTS)))
                 .clone(),
             Self::Scenic => SCENIC
-                .get_or_init(|| Arc::new(Track::build(self, &SCENIC_POINTS)))
+                .get_or_init(|| Arc::new(Track::build(self, SCENIC_POINTS)))
                 .clone(),
             Self::Engomi => {
                 let path = crate::city_assets::directory().to_path_buf();
@@ -470,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn scenic_route_has_real_scale_moderate_grades_and_distinct_data() {
+    fn scenic_route_has_real_scale_moderate_grades_and_smooth_hairpins() {
         let scenic = TrackId::Scenic.track();
         assert!(
             (1500.0..3000.0).contains(&scenic.length()),
@@ -492,8 +507,39 @@ mod tests {
             let heading = scenic.tangents[i][0].atan2(scenic.tangents[i][1]);
             let j = (i + 1) % scenic.points.len();
             let next = scenic.tangents[j][0].atan2(scenic.tangents[j][1]);
-            assert!(crate::track::angle(next - heading).abs() / scenic.lengths[i] < 0.06);
+            assert!(crate::track::angle(next - heading).abs() / scenic.lengths[i] < 0.11);
         }
+    }
+
+    #[test]
+    fn highway_includes_straights_sweeps_and_opposing_hairpins() {
+        let road = TrackId::Scenic.track();
+        let mut left: f32 = 0.0;
+        let mut right: f32 = 0.0;
+        let mut straight = 0;
+        let mut sweeping = 0;
+        for i in 0..road.points.len() {
+            let j = (i + 1) % road.points.len();
+            let a = road.tangents[i][0].atan2(road.tangents[i][1]);
+            let b = road.tangents[j][0].atan2(road.tangents[j][1]);
+            let curvature = angle(b - a) / road.lengths[i];
+            left = left.max(curvature);
+            right = right.min(curvature);
+            straight += usize::from(curvature.abs() < 0.002);
+            sweeping += usize::from((0.008..0.025).contains(&curvature.abs()));
+        }
+        println!(
+            "highway: length {}, curvature {right}..{left}",
+            road.length()
+        );
+        assert!(
+            left > 0.035 && right < -0.035,
+            "include hairpins in both directions"
+        );
+        assert!(
+            straight > 100 && sweeping > 100,
+            "retain useful straights and medium turns"
+        );
     }
 
     #[test]
