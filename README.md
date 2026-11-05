@@ -351,9 +351,9 @@ SDL3/OpenGL display.
 
 | Variable | Test / output |
 | --- | --- |
-| `NFS_VALIDATED_CITY` | Required completed import for the full Nicosia import acceptance test. |
-| `NFS_TEST_RUNTIME_CAR` | Internal subprocess switch for the runtime car catalog probe; normally unset. |
-| `NFS_TEST_LOCATION_CACHE` | Internal fixture directory for location-cache subprocess tests; normally unset. |
+| `VALIDATED_CITY` | Required completed import for the full Nicosia import acceptance test. |
+| `TEST_RUNTIME_CAR` | Internal subprocess switch for the runtime car catalog probe; normally unset. |
+| `TEST_LOCATION_CACHE` | Internal fixture directory for location-cache subprocess tests; normally unset. |
 
 Cargo supplies `CARGO_MANIFEST_DIR` and `CARGO_PKG_VERSION` at build time;
 they are not runtime configuration. Standard platform SDL/audio/video settings

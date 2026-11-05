@@ -477,12 +477,11 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
 
 /// Run after importing the full crop; the historical bundle remains the reference.
 #[test]
-#[ignore = "requires NFS_VALIDATED_CITY pointing to a complete full Nicosia import"]
+#[ignore = "requires VALIDATED_CITY pointing to a complete full Nicosia import"]
 fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
     use std::io::{BufRead, BufReader};
-    let imported = std::path::PathBuf::from(
-        std::env::var_os("NFS_VALIDATED_CITY").expect("set NFS_VALIDATED_CITY"),
-    );
+    let imported =
+        std::path::PathBuf::from(std::env::var_os("VALIDATED_CITY").expect("set VALIDATED_CITY"));
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/locations/nicosia.sqlite");
     let original = crate::package::read_to_string(bundled.join("city.txt")).unwrap();
     let rebuilt = crate::package::read_to_string(imported.join("city.txt")).unwrap();

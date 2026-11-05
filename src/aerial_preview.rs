@@ -34,7 +34,7 @@ fn mercator(p: [f32; 2]) -> [f64; 2] {
 #[test]
 #[ignore = "requires SDL/OpenGL and the explicit local aerial preview image"]
 fn aerial_drape_preview() {
-    let directory = std::env::var("NFS_AERIAL_PREVIEW_DIR").expect("set NFS_AERIAL_PREVIEW_DIR");
+    let directory = std::env::var("AERIAL_PREVIEW_DIR").expect("set AERIAL_PREVIEW_DIR");
     let directory = Path::new(&directory);
     let values: Vec<f64> = std::fs::read_to_string(directory.join("georef.txt"))
         .unwrap()
@@ -52,7 +52,7 @@ fn aerial_drape_preview() {
     let field = city.elevation.as_ref().unwrap();
     let nw = local(xmin, ymax);
     let se = local(xmax, ymin);
-    let hybrid = std::env::var_os("NFS_AERIAL_RAW").is_none();
+    let hybrid = std::env::var_os("AERIAL_RAW").is_none();
     let mut vertices = Vec::<f32>::new();
     let mut emit = |tri: [[f32; 3]; 3]| {
         for p in tri {

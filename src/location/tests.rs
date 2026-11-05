@@ -68,7 +68,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
     fs::create_dir(temp.0.join("broken")).unwrap();
     fs::write(temp.0.join("broken/city.txt"), "invalid map").unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .env("NFS_TEST_LOCATION_CACHE", &temp.0)
+        .env("TEST_LOCATION_CACHE", &temp.0)
         .args([
             "--exact",
             "location::tests::runtime_location_failure_and_eviction_probe",
@@ -255,7 +255,7 @@ fn mapped_multipolygon_holes_stay_empty() {
 
 #[test]
 fn runtime_location_failure_and_eviction_probe() {
-    let Some(root) = std::env::var_os("NFS_TEST_LOCATION_CACHE") else {
+    let Some(root) = std::env::var_os("TEST_LOCATION_CACHE") else {
         return;
     };
     let root = std::path::PathBuf::from(root);

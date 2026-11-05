@@ -522,7 +522,7 @@ mod runtime_tests {
 
     #[test]
     fn runtime_catalog_probe() {
-        if std::env::var_os("NFS_TEST_RUNTIME_CAR").is_none() {
+        if std::env::var_os("TEST_RUNTIME_CAR").is_none() {
             return;
         }
         assert_eq!(ALL.len(), 4);
@@ -744,7 +744,7 @@ mod runtime_tests {
         }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .current_dir(dir.path())
-            .env("NFS_TEST_RUNTIME_CAR", "1")
+            .env("TEST_RUNTIME_CAR", "1")
             .args([
                 "--exact",
                 "cars::runtime_tests::runtime_catalog_probe",
