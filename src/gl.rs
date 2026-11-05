@@ -58,6 +58,33 @@ uniform vec4 u_aerial_bounds[48];
 uniform int u_aerial_layers[48];
 uniform vec2 u_aerial_uv;
 out vec4 o;
+float surface_hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float surface_noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(surface_hash(i), surface_hash(i + vec2(1,0)), f.x),
+               mix(surface_hash(i + vec2(0,1)), surface_hash(i + vec2(1,1)), f.x), f.y);
+}
+float asphalt_mask() {
+    if (v_material.x < -1.5 || v_material.x > -0.5 || normalize(v_normal).y < 0.65) return 0.0;
+    float road = min(distance(v_color,vec3(0.23,0.25,0.26)),
+        min(min(distance(v_color,vec3(0.18,0.20,0.22)),distance(v_color,vec3(0.25,0.26,0.26))),
+        min(distance(v_color,vec3(0.32,0.31,0.28)),distance(v_color,vec3(0.42,0.43,0.40)))));
+    return 1.0 - step(0.012, road);
+}
+vec3 asphalt_texture(vec3 color) {
+    vec2 p = v_world.xz;
+    float fine_fade = 1.0 - smoothstep(0.35, 1.5, length(fwidth(p * 75.0)));
+    float grain = (surface_hash(floor(p * 75.0)) - 0.5) * fine_fade;
+    float aggregate = surface_noise(p * 9.0) - 0.5;
+    float weather = surface_noise(p * 0.38) - 0.5;
+    vec2 cell = floor(p / 5.0);
+    vec2 edge = min(fract(p / 5.0), 1.0 - fract(p / 5.0));
+    float patch = step(0.88, surface_hash(cell)) * smoothstep(0.015, 0.035, min(edge.x, edge.y));
+    return color * (1.0 + grain * 0.22 + aggregate * 0.10 + weather * 0.12 - patch * 0.09);
+}
 float contact_visibility() {
     if (v_material.x > -0.5) return 1.0;
     float visibility = 1.0;
@@ -96,8 +123,7 @@ void main() {
             vec2 uv=(v_world.xz-bounds.xy)/(bounds.zw-bounds.xy);
             if (all(greaterThanEqual(uv,vec2(0.0))) && all(lessThan(uv,vec2(1.0)))) {
                 vec3 colour=texture(u_aerial,vec3(vec2(u_aerial_uv.x)+uv*u_aerial_uv.y,float(u_aerial_layers[i]))).rgb;
-                float road=min(min(distance(v_color,vec3(0.18,0.20,0.22)),distance(v_color,vec3(0.25,0.26,0.26))),min(distance(v_color,vec3(0.32,0.31,0.28)),distance(v_color,vec3(0.42,0.43,0.40))));
-                if (road<0.006) colour*=0.55;
+                if (asphalt_mask() > 0.5) colour = asphalt_texture(colour * 0.55);
                 float fog=smoothstep(u_fog_range.x,u_fog_range.y,length(u_eye-v_world));
                 o=vec4(mix(colour*contact_visibility(),vec3(0.57,0.73,0.80),fog),1.0);
                 return;
@@ -110,6 +136,7 @@ void main() {
     vec3 view = normalize(u_eye - v_world);
     float paint_mask = step(0.5, v_material.x) * (1.0 - step(1.5, v_material.x));
     vec3 paint = v_color * mix(vec3(1.0), u_tint, paint_mask);
+    if (asphalt_mask() > 0.5) paint = asphalt_texture(paint);
     vec3 ambient = mix(vec3(0.25, 0.27, 0.23), vec3(0.53, 0.61, 0.67), n.y * 0.5 + 0.5);
     float diffuse = max(dot(n, sun), 0.0);
     float highlight = pow(max(dot(n, normalize(sun + view)), 0.0), 48.0)
