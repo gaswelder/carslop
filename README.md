@@ -208,6 +208,13 @@ Rebuild it with `python3 tools/build_fictional_cars.py agolf [--output FILE.glb]
 without `--output`, the tool writes `data/cars/club/model.glb`. `-h` / `--help`
 shows usage. The script uses only Python's standard library.
 
+1969 Mosquito SS is an original long-bonnet, short-deck V8 coupe with twin
+stripes, round headlamps, triple rear lamps and five-spoke wheels, inspired by
+[GM's 1969 Camaro SS reference](https://www.gm.com/heritage/collection/chevrolet/1969-chevrolet-camaro-ss).
+It uses a four-speed rear-drive tune. Rebuild its artwork with
+`python3 tools/build_fictional_cars.py mosquito [--output FILE.glb]`; the default
+output is `data/cars/muscle/model.glb`.
+
 ### GLB format
 
 Export static triangulated glTF 2.0 GLB: meters, Y up, +Z forward, one embedded

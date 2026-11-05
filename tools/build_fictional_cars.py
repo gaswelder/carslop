@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build original fictional car GLBs from parametric surfaces; no external assets.
 
-Usage: python3 tools/build_fictional_cars.py agolf [--output FILE.glb]
+Usage: python3 tools/build_fictional_cars.py {agolf,mosquito} [--output FILE.glb]
 """
 import argparse
 import json
@@ -112,7 +112,7 @@ class Coachwork:
         w, center, shoulder = profile(self.stations, z)
         return (w*q, center+(shoulder-center)*math.sin(q*PI/2)**2+.012*(1-q*q), z)
 
-    def skin(self, hatch=False, arches=PAINT):
+    def skin(self, hatch=False, arches=PAINT, rub_strip=True):
         b = self.mesh
         lo, hi = self.stations[0][0], self.stations[-1][0]
         b.patch(32, 112, lambda u,v:self.deck(u*2-1, lo+(hi-lo)*v), PAINT, WHITE)
@@ -139,6 +139,13 @@ class Coachwork:
                     w = profile(self.stations,z)[0]
                     return (side*(w+.004), self.cy+r*math.sin(a), z)
                 b.patch(48, 3, arch, arches, DARK if arches == RUBBER else WHITE)
+                def lining(u,v):
+                    a = u*PI
+                    r = self.radius+.038
+                    z = axle+r*math.cos(a)
+                    w = profile(self.stations,z)[0]
+                    return (side*(w-.23*v),self.cy+r*math.sin(a),z)
+                b.patch(48,4,lining,RUBBER,(.018,.021,.025))
                 w = profile(self.stations, axle)[0]
                 b.disc((side*(w-.22),self.cy,axle),self.radius+.04,RUBBER,(.018,.021,.025),'x')
         for z in [lo,hi]:
@@ -163,7 +170,8 @@ class Coachwork:
         for side in [-1,1]:
             w = profile(self.stations,0)[0]
             b.box((side*w-.012,-.21,-.95),(side*w+.012,-.15,.88),RUBBER,DARK)
-            b.box((side*(w+.008)-.012,.11,-1.15),(side*(w+.008)+.012,.14,1.12),RUBBER,DARK)
+            if rub_strip:
+                b.box((side*(w+.008)-.012,.11,-1.15),(side*(w+.008)+.012,.14,1.12),RUBBER,DARK)
             for z in [-.88,.75]:
                 y = profile(self.stations,z)[2]
                 b.box((side*w-.003,-.15,z-.003),(side*w+.003,y,z+.003),RUBBER,(.07,.065,.06))
@@ -278,6 +286,49 @@ def agolf():
     return b,axles,.30,.715,'mesh'
 
 
+def mosquito():
+    b = Mesh()
+    stations=[(-2.35,.83,.24,.25),(-2.0,.95,.29,.38),(-1.38,.98,.27,.40),
+              (-.65,.92,.27,.32),(.55,.91,.24,.31),(1.36,.98,.23,.36),
+              (2.08,.92,.21,.27),(2.35,.83,.22,.23)]
+    axles=[-1.38,1.36]
+    cabin=[(-1.45,.68,.33),(-.80,.72,.80),(-.30,.73,.84),(.25,.71,.82),(.95,.76,.27)]
+    shell=Coachwork(b,stations,axles,.33,cabin)
+    shell.skin(hatch=True,rub_strip=False)
+    # Low, wide grille and single round headlamps with chrome bezels.
+    b.box((-.82,-.015,2.351),(.82,.215,2.37),RUBBER,DARK)
+    for y in [-.025,.215]: b.box((-.84,y,2.372),(.84,y+.009,2.383),METAL,CHROME)
+    for x in [-.84,.831]: b.box((x,-.025,2.372),(x+.009,.224,2.383),METAL,CHROME)
+    for i in range(21):
+        x=-.49+i*.049
+        b.box((x,.0,2.373),(x+.007,.20,2.378),RUBBER,(.09,.10,.11))
+    for side in [-1,1]:
+        b.disc((side*.68,.105,2.384),.112,METAL,CHROME)
+        b.disc((side*.68,.105,2.39),.099,LENS,(.72,.77,.74))
+        b.box((side*.47-.08,-.18,2.39),(side*.47+.08,-.13,2.402),LENS,(.91,.46,.08))
+    b.box((-.87,-.10,2.32),(.87,-.045,2.405),METAL,CHROME)
+    b.box((-.43,-.28,2.352),(.43,-.215,2.37),RUBBER,DARK)
+    badge(b,'SS',(0,.105,2.39),.013)
+    # Twin bonnet/deck stripes; surface-following paint avoids floating decals.
+    for side in [-1,1]:
+        shell.stripe(side*.27,.19,1.02,2.23,(.87,.86,.79))
+        shell.stripe(side*.27,.19,-2.23,-1.48,(.87,.86,.79))
+        shell.stripe(side*.62,.005,1.03,2.21,(.05,.045,.04))
+    b.box((-.87,-.035,-2.366),(.87,.245,-2.349),RUBBER,DARK)
+    tail_pair(b,-2.375,.83,.37,.055,.20)
+    for side in [-1,1]:
+        for k in [1,2]:
+            x=side*(.37+(.83-.37)*k/3)
+            b.box((x-.003,.055,-2.388),(x+.003,.20,-2.381),RUBBER,DARK)
+    b.box((-.88,-.10,-2.41),(.88,-.045,-2.33),METAL,CHROME)
+    b.box((-.22,-.23,-2.39),(.22,-.14,-2.372),METAL,(.65,.66,.61))
+    badge(b,'MOSQUITO',(0,-.187,-2.393),.007)
+    badge(b,'SS',(0,.12,-2.383),.012)
+    for x in [-.64,.64]:
+        b.box((x-.035,-.29,-2.46),(x+.035,-.24,-2.25),METAL,(.43,.46,.48))
+    return b,axles,.33,.77,'classic'
+
+
 def export(path, body, axles, radius, track, style):
     blob=bytearray()
     doc={'asset':{'version':'2.0','generator':'Cars LOP fictional coachwork'},'scene':0,
@@ -322,7 +373,8 @@ def export(path, body, axles, radius, track, style):
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('car',choices=['agolf'])
+    parser.add_argument('car',choices=['agolf','mosquito'])
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()
-    export(args.output or ROOT/'data/cars/club/model.glb',*agolf())
+    builder, folder = {'agolf': (agolf,'club'), 'mosquito': (mosquito,'muscle')}[args.car]
+    export(args.output or ROOT/f'data/cars/{folder}/model.glb',*builder())
