@@ -383,65 +383,6 @@ impl Hud {
         self.upload(program, &v);
     }
 
-    pub fn draw_building_labels(&self, program: u32, track: &Track, camera: &crate::gl::Camera) {
-        let Some(city) = track.city() else {
-            return;
-        };
-        let mut vertices = Vec::new();
-        let mut occupied: Vec<[f32; 4]> = Vec::new();
-        for (id, name, anchor, distance) in city.nearby_building_labels(camera.eye()) {
-            let Some(p) = camera.project(anchor) else {
-                continue;
-            };
-            if p[0].abs() > 0.9 || !(-0.45..0.82).contains(&p[1]) || (p[0] > 0.48 && p[1] > 0.38) {
-                continue;
-            }
-            let size = (0.0032 - distance * 0.000003).max(0.0025);
-            let upper = name.to_uppercase();
-            let mut label: String = upper.chars().take(28).collect();
-            if upper.chars().count() > 28 {
-                label.push_str("...");
-            }
-            let width = label.chars().count() as f32 * 6.0 * size;
-            let r = [
-                p[0] - width * 0.5 - 0.012,
-                p[1] + 0.012,
-                p[0] + width * 0.5 + 0.012,
-                p[1] + 0.065,
-            ];
-            if r[0] < -0.97
-                || r[2] > 0.97
-                || occupied
-                    .iter()
-                    .any(|b| r[0] < b[2] && r[2] > b[0] && r[1] < b[3] && r[3] > b[1])
-            {
-                continue;
-            }
-            if !city.building_label_visible(camera.eye(), anchor, id) {
-                continue;
-            }
-            line(&mut vertices, p, [p[0], r[1]], 0.0015, [0.7, 0.75, 0.68]);
-            quad(
-                &mut vertices,
-                [r[0], r[1]],
-                [r[2], r[3]],
-                [0.025, 0.04, 0.045],
-            );
-            text(
-                &mut vertices,
-                &label,
-                [r[0] + 0.012, r[3] - 0.009],
-                size,
-                [0.96, 0.93, 0.80],
-            );
-            occupied.push(r);
-            if occupied.len() == 6 {
-                break;
-            }
-        }
-        self.upload(program, &vertices);
-    }
-
     pub fn prepare_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
         self.full_map_view = Some(FullMapView::new(map.track, map.player, viewport));
         self.rebuild_full_map(map, heading, viewport);

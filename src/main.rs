@@ -783,10 +783,6 @@ impl App {
                 },
             );
         } else {
-            if s.state == GameState::Driving {
-                self.hud
-                    .draw_building_labels(self.program, s.track(), &camera);
-            }
             self.hud.draw(
                 self.program,
                 hud::Map {
@@ -946,7 +942,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires SDL3/OpenGL and Nicosia; renders an OSM building label"]
-    fn building_billboard_preview() {
+    fn storefront_sign_preview() {
         let mut app = App::new();
         app.key_down(Keycode::F7);
         app.start_selected();
@@ -960,28 +956,38 @@ mod tests {
                 distance(a).total_cmp(&distance(b))
             })
             .expect("map needs a named building");
-        let [a, b] = [building.polygon[0], building.polygon[1]];
+        let (a, b) = (0..building.polygon.len())
+            .map(|i| {
+                let a = building.polygon[i];
+                let b = building.polygon[(i + 1) % building.polygon.len()];
+                let mid = [(a[0] + b[0]) * 0.5, building.base_y, (a[1] + b[1]) * 0.5];
+                let road = city.project(mid);
+                let distance = (mid[0] - road.point[0]).hypot(mid[2] - road.point[2]);
+                (a, b, distance)
+            })
+            .filter(|(a, b, _)| (a[0] - b[0]).hypot(a[1] - b[1]) >= 2.0)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(a, b, _)| (a, b))
+            .unwrap();
         let length = (b[0] - a[0]).hypot(b[1] - a[1]);
         let middle = [
             (a[0] + b[0]) * 0.5,
-            building.base_y + building.height * 0.6,
+            building.base_y + (building.height - 0.3).min(3.1) - 0.25,
             (a[1] + b[1]) * 0.5,
         ];
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
                 eye: [
-                    middle[0] + (b[1] - a[1]) / length * 25.0,
-                    middle[1] + 2.0,
-                    middle[2] - (b[0] - a[0]) / length * 25.0,
+                    middle[0] + (b[1] - a[1]) / length * 6.0,
+                    middle[1],
+                    middle[2] - (b[0] - a[0]) / length * 6.0,
                 ],
                 target: middle,
             },
         );
         gl::clear_screen();
         app.mesh().draw_ground(app.scene_program, &camera, &[]);
-        app.hud
-            .draw_building_labels(app.program, app.session.track(), &camera);
         capture_frame(std::path::Path::new("/tmp/carslop-building-labels.ppm"));
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }

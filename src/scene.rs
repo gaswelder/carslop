@@ -131,8 +131,10 @@ pub struct Geometry {
 }
 
 pub fn build(track: &track::Track) -> Geometry {
-    if track.city().is_some() {
-        return cars_only();
+    if let Some(city) = track.city() {
+        let mut b = Builder::default();
+        city_scene::storefront_signs(&mut b, city);
+        return finish(b);
     }
     let mut b = Builder::default();
     terrain(&mut b, track);

@@ -54,9 +54,9 @@ The current street name appears in large text at the bottom center while driving
 the location’s OSM source, preferring English when available; unnamed roads and
 off-road driving are labeled accordingly. Built-in routes show their route name.
 
-Named OSM buildings show nearby billboards, preferring `name:en` and falling
-back to the local name. Labels face the camera, avoid overlapping one another,
-and are hidden behind other buildings or terrain. Unnamed buildings have no label.
+Named OSM buildings have facade-mounted storefront signs, preferring `name:en`
+and falling back to the local name. Signs face the closest street and use world
+geometry, so they follow perspective and are hidden by buildings and terrain.
 
 The full map opens centered on your car at the minimap's scale. Zooming keeps
 the car centered; zoom out to see the entire road network. Reopening the map

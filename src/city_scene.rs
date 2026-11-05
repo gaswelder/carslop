@@ -708,3 +708,74 @@ mod tests {
         }
     }
 }
+
+/// Runtime signs also work with existing baked city archives.
+pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
+    for building in &city.buildings {
+        let Some(name) = city.building_name(building.id) else {
+            continue;
+        };
+        let label: Vec<_> = name.to_uppercase().chars().take(40).collect();
+        if label.is_empty() {
+            continue;
+        }
+        // Put the shopfront on the wall closest to the street network.
+        let edge = (0..building.polygon.len())
+            .filter_map(|i| {
+                let a = building.polygon[i];
+                let c = building.polygon[(i + 1) % building.polygon.len()];
+                let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+                if length < 2.0 {
+                    return None;
+                }
+                let midpoint = [(a[0] + c[0]) * 0.5, building.base_y, (a[1] + c[1]) * 0.5];
+                let road = city.project(midpoint);
+                let distance = (midpoint[0] - road.point[0]).hypot(midpoint[2] - road.point[2]);
+                Some((distance, a, c, length))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((_, a, c, length)) = edge else {
+            continue;
+        };
+        let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
+        let pixel = ((length - 0.6) / (label.len() as f32 * 6.0))
+            .min(0.085)
+            .min((building.height * 0.25) / 9.0);
+        let width = label.len() as f32 * 6.0 * pixel;
+        let left = (length - width) * 0.5;
+        let top = building.base_y + (building.height - 0.3).min(3.1);
+        let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
+            let point = |x: f32, y: f32| {
+                [
+                    a[0] + (c[0] - a[0]) * x / length + normal[0] * depth,
+                    y,
+                    a[1] + (c[1] - a[1]) * x / length + normal[1] * depth,
+                ]
+            };
+            b.quad(
+                [point(x1, y0), point(x0, y0), point(x0, y1), point(x1, y1)],
+                Surface::matte(color),
+            );
+        };
+        panel(
+            left - pixel,
+            width + left + pixel,
+            top - 8.0 * pixel,
+            top + pixel,
+            0.14,
+            [0.035, 0.09, 0.10],
+        );
+        for (column, ch) in label.into_iter().enumerate() {
+            for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
+                for bit in 0..5 {
+                    if bits & (1 << (4 - bit)) != 0 {
+                        // The polygon tangent points left when viewed from outside.
+                        let x = left + width - (column * 6 + bit + 1) as f32 * pixel;
+                        let y = top - row as f32 * pixel;
+                        panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
+                    }
+                }
+            }
+        }
+    }
+}
