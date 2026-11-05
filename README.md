@@ -116,7 +116,6 @@ can inherit from `kestrel`, `muscle` or `club`:
 {
   "base": "kestrel",
   "name": "MY COUPE",
-  "description": "CUSTOM ROAD COUPE",
   "mass": 1100,
   "model": "model.glb"
 }
@@ -125,30 +124,6 @@ can inherit from `kestrel`, `muscle` or `club`:
 Omit `model` to inherit artwork; paths are relative to the car folder. Use the
 base JSON definitions as tuning references. Measurements use SI units;
 `top_speed` is metres per second.
-
-### Fictional car artwork
-
-1991 Agolf GTI is an original three-door hot-hatch design with four round lamps,
-red grille trim and mesh wheels, inspired by the
-Golf II GTI.
-Its proportions, handling and badging are game assets rather than factory data.
-Rebuild it with `python3 tools/build_fictional_cars.py agolf [--output FILE.glb]`;
-without `--output`, the tool writes `data/cars/club/model.glb`. `-h` / `--help`
-shows usage. The script uses only Python's standard library.
-
-1969 Mosquito SS is an original long-bonnet, short-deck V8 coupe with twin
-stripes, round headlamps, triple rear lamps and five-spoke wheels, inspired by
-GM's 1969 Camaro SS reference.
-It uses a four-speed rear-drive tune. Rebuild its artwork with
-`python3 tools/build_fictional_cars.py mosquito [--output FILE.glb]`; the default
-output is `data/cars/muscle/model.glb`.
-
-2016 Pitsunda 2 is an original five-door commuter hatch with a swept front,
-shield grille, slim headlamps and split-spoke wheels, inspired by
-Mazda's Demio/Mazda2 design.
-It has a 1.3-litre-style petrol tune, front-wheel drive and six forward gears.
-Rebuild with `python3 tools/build_fictional_cars.py pitsunda [--output FILE.glb]`;
-the default output is `data/cars/pitsunda-2/model.glb`.
 
 ### GLB export
 
