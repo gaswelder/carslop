@@ -369,7 +369,6 @@ impl Hud {
         if map.track.city().is_some() {
             text(&mut v, "N", [0.94, 0.86], 0.0035, white);
         }
-        text(&mut v, "M FULL MAP", [0.60, 0.435], 0.0032, white);
         let street = map
             .track
             .city()
