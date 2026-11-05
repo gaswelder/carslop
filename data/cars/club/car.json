@@ -1,39 +1,42 @@
 {
-  "name": "CLUB",
-  "description": "LIGHT HATCH - GRIP AND BRAKES",
-  "mass": 850.0,
-  "engine_force": 7225.0,
-  "top_speed": 22.5,
-  "brake_force": 18700.0,
-  "lateral_force": 11900.0,
-  "wheelbase": 2.3,
-  "steering_response": 10.0,
-  "road_engine": null,
+  "name": "1991 AGOLF GTI",
+  "description": "1.8 GTI / THREE-DOOR HOT HATCH",
+  "mass": 1000,
+  "engine_force": 8000,
+  "top_speed": 52.77777777777778,
+  "brake_force": 22000,
+  "lateral_force": 14000,
+  "wheelbase": 2.475,
+  "steering_response": 9.0,
+  "road_engine": {
+    "wheel_power_watts": 78000,
+    "drag_accel": 0.00045
+  },
   "dynamics": {
     "front_weight": 0.63,
-    "cg_height": 0.48,
-    "track_width": 1.4,
-    "yaw_inertia": 950.0,
+    "cg_height": 0.46,
+    "track_width": 1.43,
+    "yaw_inertia": 1100,
     "front_drive": 1.0,
     "brake_bias": 0.68,
     "corner_stiffness": [
-      58000.0,
-      43000.0
+      70000,
+      51000
     ],
-    "peak_torque": 102.0,
+    "peak_torque": 148,
     "suspension_hz": 1.85,
-    "steering_speed_squared": 0.0
+    "steering_speed_squared": 0.0015
   },
   "gearbox": {
     "ratios": [
-      3.454545497894287,
-      1.9444444179534912,
-      1.2857142686843872,
-      0.9090909361839294,
-      0.7105262875556946
+      3.455,
+      1.944,
+      1.286,
+      0.969,
+      0.805
     ],
-    "final_drive": 3.8947367668151855,
-    "rolling_radius": 0.2785211503505707,
+    "final_drive": 3.67,
+    "rolling_radius": 0.3,
     "reverse_ratio": 3.1666667461395264,
     "upshift_rpm": 6000.0,
     "downshift_rpm": 2400.0

@@ -198,6 +198,16 @@ and 16 cm droop. This uses two axle tire models and one vertical chassis degree
 of freedom. Vehicle tuning is for gameplay, not a certified vehicle simulation.
 Level-ground automatic 0–100 times are about 6.83 s (Kestrel) and 5.30 s (Turbo).
 
+### Fictional car artwork
+
+1991 Agolf GTI is an original three-door hot-hatch design with four round lamps,
+red grille trim and mesh wheels, inspired by the
+[Golf II GTI](https://www.volkswagen-newsroom.com/en/golf-2-gti-19841991-19502).
+Its proportions, handling and badging are game assets rather than factory data.
+Rebuild it with `python3 tools/build_fictional_cars.py agolf [--output FILE.glb]`;
+without `--output`, the tool writes `data/cars/club/model.glb`. `-h` / `--help`
+shows usage. The script uses only Python's standard library.
+
 ### GLB format
 
 Export static triangulated glTF 2.0 GLB: meters, Y up, +Z forward, one embedded

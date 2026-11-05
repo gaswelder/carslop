@@ -1645,7 +1645,12 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let app = App::new();
         for car_model in cars::ALL {
-            let preview_car = vehicle::Vehicle::new(app.session.vehicle.position, 0.0, car_model);
+            let preview_car = vehicle::Vehicle::on_track(
+                app.session.vehicle.position,
+                0.0,
+                car_model,
+                app.session.vehicle.track.clone(),
+            );
             let car = &preview_car;
             let p = car.position;
             for (name, offset) in [
