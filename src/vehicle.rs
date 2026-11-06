@@ -129,14 +129,8 @@ impl Vehicle {
 
     /// Reference speed for physics checks; road load and gearing determine actual speed.
     #[cfg(test)]
-    pub fn speed_cap(&self) -> f32 {
-        let spec = self.model.spec();
-        spec.top_speed
-            * if spec.road_engine.is_some() {
-                1.0
-            } else {
-                self.track.speed_scale
-            }
+    pub fn reference_speed(&self) -> f32 {
+        self.model.spec().top_speed
     }
     pub fn upshift_speed(&self, gear: u8) -> f32 {
         let gearbox = &self.model.spec().gearbox;
@@ -153,7 +147,7 @@ impl Vehicle {
             .clamp(IDLE_RPM, REDLINE_RPM)
     }
     pub fn brake_accel(&self) -> f32 {
-        self.model.spec().brake_force / self.model.spec().mass * self.track.brake_scale
+        self.model.spec().brake_force / self.model.spec().mass
     }
 
     #[cfg(test)]
@@ -235,18 +229,11 @@ impl Vehicle {
         let grip = spec.lateral_force / spec.mass;
         let reversing = self.direction == Direction::Reverse;
         let direction = if reversing { -1.0 } else { 1.0 };
-        let brake_accel = if reversing {
-            spec.brake_force / spec.mass
-        } else {
-            self.brake_accel()
-        };
-        let drag = if reversing {
-            0.009
-        } else {
-            spec.road_engine
-                .as_ref()
-                .map_or(self.track.drag, |engine| engine.drag_accel)
-        };
+        let brake_accel = self.brake_accel();
+        let drag = spec
+            .road_engine
+            .as_ref()
+            .map_or(0.009, |engine| engine.drag_accel);
         let mut impact: f32 = 0.0;
         for _ in 0..steps {
             let previous_gear = self.gear;
@@ -1496,7 +1483,7 @@ mod tests {
         Vehicle::on_track(road.lane_position(0.0), road.heading(), model, track)
     }
 
-    // Drivetrain calibration compares identical level ground across route tuning.
+    // Compare car behavior on identical level ground across locations.
     fn level_route_car(id: track::TrackId, model: CarModel) -> Vehicle {
         let track = std::sync::Arc::new(id.track().flat_test_track());
         let road = track.at_distance(50.0);
@@ -1891,23 +1878,20 @@ mod tests {
     }
 
     #[test]
-    fn route_calibration_sets_forward_caps_braking_and_shift_points() {
+    fn car_specs_set_reference_speeds_braking_and_shift_points() {
         for model in crate::cars::ALL {
             let mut compact = route_car(track::TrackId::Compact, model);
             let mut scenic = route_car(track::TrackId::scenic(), model);
             let spec = model.spec();
-            assert_eq!(compact.speed_cap(), spec.top_speed);
+            assert_eq!(compact.reference_speed(), spec.top_speed);
             assert_eq!(
                 compact.upshift_speed(1),
                 spec.gearbox.speed_at_rpm(spec.gearbox.upshift_rpm, 1)
             );
             assert_eq!(compact.brake_accel(), spec.brake_force / spec.mass);
-            assert_eq!(
-                scenic.speed_cap(),
-                spec.top_speed * if spec.road_engine.is_some() { 1.0 } else { 1.6 }
-            );
+            assert_eq!(scenic.reference_speed(), spec.top_speed);
             assert_eq!(scenic.upshift_speed(1), compact.upshift_speed(1));
-            assert_eq!(scenic.brake_accel(), spec.brake_force / spec.mass * 0.65);
+            assert_eq!(scenic.brake_accel(), spec.brake_force / spec.mass);
             for car in [&mut compact, &mut scenic] {
                 let tangent = car.track.at_distance(50.0).tangent;
                 car.velocity = tangent.map(|v| v * (car.upshift_speed(1) - 0.01));
@@ -1919,11 +1903,11 @@ mod tests {
             }
         }
         assert_eq!(
-            route_car(track::TrackId::Compact, CarModel::Roadster).speed_cap(),
+            route_car(track::TrackId::Compact, CarModel::Roadster).reference_speed(),
             210.0 / 3.6
         );
         assert_eq!(
-            route_car(track::TrackId::scenic(), CarModel::Roadster).speed_cap(),
+            route_car(track::TrackId::scenic(), CarModel::Roadster).reference_speed(),
             210.0 / 3.6
         );
     }
@@ -2394,10 +2378,10 @@ mod tests {
                 );
             }
             assert!(
-                v.speed > 15.0 && v.speed <= v.speed_cap(),
+                v.speed > 15.0 && v.speed <= v.reference_speed(),
                 "{model:?} terminal {} cap {}",
                 v.speed,
-                v.speed_cap()
+                v.reference_speed()
             );
             let terminal_speed = v.speed;
             v.velocity = sample

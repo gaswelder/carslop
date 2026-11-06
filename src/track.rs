@@ -127,10 +127,6 @@ pub struct Track {
     pub width: f32,
     coastal: bool,
     pub bounds: [[f32; 2]; 2], // min/max XZ, from actual spline samples
-    #[cfg(test)]
-    pub speed_scale: f32,
-    pub brake_scale: f32,
-    pub drag: f32,
     points: Vec<[f32; 3]>,
     distances: Vec<f32>,
     lengths: Vec<f32>,
@@ -252,17 +248,13 @@ impl RoadSample {
 impl Track {
     #[cfg(test)]
     pub fn flat_test_track(&self) -> Self {
-        let mut flat = Self::build_width(
+        Self::build_width(
             self.id,
             &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z]),
             self.width,
             self.coastal,
         )
-        .unwrap();
-        flat.speed_scale = self.speed_scale;
-        flat.brake_scale = self.brake_scale;
-        flat.drag = self.drag;
-        flat
+        .unwrap()
     }
 
     #[cfg(test)]
@@ -286,10 +278,6 @@ impl Track {
             width: 8.0,
             coastal: false,
             bounds: city.bounds,
-            #[cfg(test)]
-            speed_scale: 1.6,
-            brake_scale: 0.65,
-            drag: 0.004,
             points: city.nodes.clone(),
             distances: Vec::new(),
             lengths: Vec::new(),
@@ -422,10 +410,6 @@ impl Track {
             width,
             coastal,
             bounds,
-            #[cfg(test)]
-            speed_scale: if coastal { 1.6 } else { 1.0 },
-            brake_scale: if coastal { 0.65 } else { 1.0 },
-            drag: if coastal { 0.004 } else { 0.009 },
             points,
             distances,
             lengths,
@@ -597,8 +581,6 @@ mod tests {
         assert_eq!(copied.centerline(), original.centerline());
         assert_eq!(copied.shoreline(), original.shoreline());
         assert_eq!(copied.width, original.width);
-        assert_eq!(copied.drag, original.drag);
-        assert_eq!(copied.brake_scale, original.brake_scale);
     }
 
     #[test]
