@@ -59,7 +59,6 @@ pub struct Vehicle {
     vertical_speed: f32,
     suspension_initialized: bool,
     pub wheel_spin: f32,
-    clutch_open: bool,
     launch_energy: f32, // stored flywheel energy released through the clutch (joules)
     axle_load: [f32; 2],
 }
@@ -113,7 +112,6 @@ impl Vehicle {
             vertical_speed: 0.0,
             suspension_initialized: false,
             wheel_spin: 0.0,
-            clutch_open: false,
             launch_energy: 0.0,
             axle_load: [0.0; 2],
         };
@@ -190,9 +188,10 @@ impl Vehicle {
             } else {
                 Direction::Drive
             };
-            self.shift_timer = 0.16;
+            let launching = previous == NEUTRAL_GEAR && matches!(next, 0 | 1);
+            self.shift_timer = if launching { 0.0 } else { 0.16 };
             self.sound_shift_timer = SOUND_SHIFT_SECONDS;
-            if previous == NEUTRAL_GEAR && matches!(next, 0 | 1) {
+            if launching {
                 self.launch_energy = self.flywheel_energy();
             }
             self.begin_rev_match(previous);
@@ -322,20 +321,9 @@ impl Vehicle {
             let wheel_side = front_v * cos - longitudinal * sin;
             let throttle = controls.throttle.clamp(0.0, 1.0);
             self.update_turbo(seconds, throttle, longitudinal);
-            // At rest the brake holds the car while the automatic clutch opens
-            // for a launch. Releasing the brake feeds stored flywheel energy
-            // into the driven wheels; it is a finite impulse, not extra power.
-            self.clutch_open = matches!(self.gear, 0 | 1)
-                && longitudinal.abs() < 2.0
-                && controls.brake > 0.5
-                && throttle > 0.5
-                && !controls.handbrake;
+            // Engaging a gear transfers the energy stored while revving in neutral.
             let launch = self.launch_force(seconds, longitudinal, throttle);
-            let drive = if self.clutch_open {
-                0.0
-            } else {
-                (self.drive_force(longitudinal) * throttle + launch) * direction
-            };
+            let drive = (self.drive_force(longitudinal) * throttle + launch) * direction;
             let closed_throttle = ((0.15 - throttle) / 0.15).clamp(0.0, 1.0);
             let engine_braking = closed_throttle * self.engine_brake_force(longitudinal);
             let brake = self.brake_pressure * brake_accel * spec.mass;
@@ -430,7 +418,7 @@ impl Vehicle {
                 new_longitudinal = 0.0;
             }
             if longitudinal.abs() < 0.1
-                && (throttle == 0.0 || self.clutch_open)
+                && throttle == 0.0
                 && (brake
                     + if controls.handbrake {
                         spec.mass * 5.5
@@ -520,7 +508,7 @@ impl Vehicle {
     }
 
     fn launch_force(&mut self, dt: f32, speed: f32, throttle: f32) -> f32 {
-        if self.clutch_open || self.gear == NEUTRAL_GEAR || self.shift_timer > 0.0 {
+        if self.gear == NEUTRAL_GEAR || self.shift_timer > 0.0 {
             return 0.0;
         }
         if !matches!(self.gear, 0 | 1) || speed.abs() > 15.0 || throttle < 0.1 {
@@ -626,7 +614,7 @@ impl Vehicle {
     }
 
     fn engine_brake_force(&self, speed: f32) -> f32 {
-        if self.gear == NEUTRAL_GEAR || self.clutch_open {
+        if self.gear == NEUTRAL_GEAR {
             return 0.0;
         }
         let g = &self.model.spec().gearbox;
@@ -740,7 +728,7 @@ impl Vehicle {
         let throttle = controls.throttle.clamp(0.0, 1.0);
         self.sound_shift_timer = (self.sound_shift_timer - dt).max(0.0);
         let blip = self.rev_match_timer / REV_MATCH_SECONDS;
-        if self.gear == NEUTRAL_GEAR || self.clutch_open {
+        if self.gear == NEUTRAL_GEAR {
             self.update_neutral_engine(throttle, dt);
             self.launch_energy = self.flywheel_energy();
         } else {
@@ -759,7 +747,7 @@ impl Vehicle {
         }
         // An unloaded engine uses less sustained load; fuel cuts also reach
         // the audio layers so the limiter is audible as well as visible.
-        let requested = if self.gear == NEUTRAL_GEAR || self.clutch_open {
+        let requested = if self.gear == NEUTRAL_GEAR {
             if self.neutral_fuel_cut {
                 0.0
             } else {
@@ -1205,51 +1193,43 @@ mod tests {
     }
 
     #[test]
-    fn revved_launch_spins_driven_wheels_then_hooks_up() {
-        for (model, neutral) in crate::cars::ALL
+    fn revving_in_neutral_then_engaging_a_gear_spins_the_driven_wheels() {
+        for (model, reverse) in crate::cars::ALL
             .into_iter()
             .flat_map(|m| [(m, false), (m, true)])
         {
             let mut car = level_route_car(track::TrackId::Scenic, model);
-            if neutral {
-                car.gear = NEUTRAL_GEAR;
-            }
+            car.manual = true;
+            car.shift(false);
+            assert_eq!(car.gear, NEUTRAL_GEAR);
+            let throttle = Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            };
             for _ in 0..180 {
-                treadmill_tick(
-                    &mut car,
-                    Controls {
-                        throttle: 1.0,
-                        brake: 1.0,
-                        ..Controls::default()
-                    },
-                );
+                treadmill_tick(&mut car, throttle);
             }
-            assert!(car.speed.abs() < 0.02, "{model:?}: brake must hold launch");
+            assert!(
+                car.speed.abs() < 0.02,
+                "{model:?}: neutral must not move the car"
+            );
             assert!(
                 car.engine_rpm > 3500.0,
-                "{model:?}: engine must rev with clutch open"
+                "{model:?}: neutral must allow free revving"
             );
-            if neutral {
-                car.shift(true);
-            }
+            car.shift(!reverse);
+            assert_eq!(car.gear, if reverse { 0 } else { 1 });
             let energy = car.launch_energy;
-            let mut peak_spin: f32 = 0.0;
+            let mut peak_spin = 0.0_f32;
             for _ in 0..240 {
-                treadmill_tick(
-                    &mut car,
-                    Controls {
-                        throttle: 1.0,
-                        ..Controls::default()
-                    },
-                );
+                treadmill_tick(&mut car, throttle);
                 peak_spin = peak_spin.max(car.wheel_spin);
             }
-            println!(
-                "{model:?}: launch spin {peak_spin}, energy {energy}, speed {}",
-                car.speed
+            assert!(
+                peak_spin > 0.15,
+                "{model:?}: neutral launch must break traction"
             );
-            assert!(peak_spin > 0.15, "{model:?}: launch never breaks traction");
-            assert!(car.speed > 1.0, "{model:?}: burnout must launch the car");
+            assert!(car.speed.abs() > 1.0);
             assert!(
                 car.launch_energy < energy * 0.2,
                 "flywheel boost must be spent"
@@ -1260,7 +1240,6 @@ mod tests {
             assert!(car.wheel_spin < 0.01);
             car.reset(car.position, car.heading);
             assert_eq!(car.launch_energy, 0.0);
-            assert!(!car.clutch_open);
         }
     }
 

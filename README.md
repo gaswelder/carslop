@@ -45,8 +45,8 @@ location store. `play --location NAME` preselects a location.
 | L | Return to location and car selection |
 | V | Toggle audio mute |
 
-For a burnout start, hold Up + Down at rest to rev with the clutch open, then
-release Down while holding Up. A revved neutral-to-first shift also works.
+For a burnout start, shift into neutral with **Z**, hold **Up** to rev, then
+press **A** to engage first while keeping the accelerator held.
 
 Press **C** in the full map to copy the car's Google Maps location. Zoom is
 remembered per location across launches in `data/map-zoom.json`.
