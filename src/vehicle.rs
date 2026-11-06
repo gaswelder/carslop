@@ -806,6 +806,13 @@ impl Vehicle {
         let road_blend = road_blend * road_blend * (3.0 - 2.0 * road_blend);
         let falloff = dynamics.steering_low_speed_squared
             + (dynamics.steering_speed_squared - dynamics.steering_low_speed_squared) * road_blend;
+        // Keep trail braking settled while allowing quicker unbraked turn-in.
+        let falloff = falloff
+            * if self.model.appearance() == CarModel::Roadster {
+                1.0 + 0.6 * braking
+            } else {
+                1.0
+            };
         let lock = 0.54
             / (1.0
                 + speed.abs() / 22.0
@@ -1724,6 +1731,28 @@ mod tests {
                     "{model:?} {hz} Hz differs by {error} degrees from 240 Hz; start {start}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn both_kestrels_turn_in_promptly_at_city_speeds() {
+        for model in crate::cars::ALL
+            .into_iter()
+            .filter(|m| m.appearance() == CarModel::Roadster)
+        {
+            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let start = car.heading;
+            steering_run(&mut car, 40.0 / 3.6, 1.0, 0.3, 240.0);
+            assert!(
+                car.front_wheel_angle().abs() > 0.18,
+                "{model:?}: city-speed steering is too restricted"
+            );
+            assert!(car.yaw_rate.abs() > 0.25, "{model:?}: turn-in is too slow");
+            assert!(track::angle(car.heading - start).abs() > 0.025);
+            assert!(
+                car.slip.abs() < 3.0,
+                "{model:?}: ordinary turn-in should keep grip"
+            );
         }
     }
 

@@ -6,7 +6,7 @@
   "brake_force": 23940,
   "lateral_force": 14500,
   "wheelbase": 2.6,
-  "steering_response": 8.5,
+  "steering_response": 10.5,
   "road_engine": {
     "wheel_power_watts": 171900,
     "drag_accel": 0.00045

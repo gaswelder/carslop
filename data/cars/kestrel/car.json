@@ -6,7 +6,7 @@
   "brake_force": 20000.0,
   "lateral_force": 12000.0,
   "wheelbase": 2.6,
-  "steering_response": 8.0,
+  "steering_response": 10.5,
   "road_engine": {
     "wheel_power_watts": 86400.0,
     "drag_accel": 0.00036
@@ -25,7 +25,7 @@
     "peak_torque": 175,
     "suspension_hz": 1.65,
     "steering_speed_squared": 0.0125,
-    "steering_low_speed_squared": 0.016
+    "steering_low_speed_squared": 0.010
   },
   "gearbox": {
     "ratios": [
