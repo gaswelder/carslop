@@ -144,7 +144,11 @@ impl Gearbox {
         speed * 60.0 / (std::f32::consts::TAU * self.rolling_radius) * ratio * self.final_drive
     }
     pub fn speed_at_rpm(&self, rpm: f32, gear: u8) -> f32 {
-        let ratio = self.ratios[gear.saturating_sub(1).min(self.gears() - 1) as usize];
+        let ratio = if gear == 0 {
+            self.reverse_ratio
+        } else {
+            self.ratios[gear.saturating_sub(1).min(self.gears() - 1) as usize]
+        };
         rpm * std::f32::consts::TAU * self.rolling_radius / (60.0 * ratio * self.final_drive)
     }
 }
