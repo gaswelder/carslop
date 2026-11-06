@@ -170,7 +170,7 @@ pub struct PauseMenu<'a> {
 
 const MAP_CONTENT: [[f32; 2]; 2] = [[0.61, 0.49], [0.95, 0.88]];
 const FULL_MAP_CONTENT: [[f32; 2]; 2] = [[-0.94, -0.72], [0.94, 0.75]];
-const MAP_WIDTH_METRES: f32 = 400.0;
+const MAP_WIDTH_METRES: f32 = 500.0;
 
 struct MapFit {
     center: [f32; 2],
