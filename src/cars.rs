@@ -1,4 +1,4 @@
-//! Runtime car catalog: selection, rendering, physics, and AI use one identity.
+use std::fs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CarModel {
@@ -59,7 +59,8 @@ pub struct CarSpec {
     pub steering_response: f32,
     pub dynamics: Dynamics,
     pub gearbox: Gearbox,
-    pub road_engine: Option<RoadEngine>,
+    pub wheel_power_watts: f32,
+    pub drag_accel: f32,
     pub turbo: Option<Turbo>,
 }
 
@@ -78,11 +79,11 @@ fn turbo(value: &serde_json::Value) -> Result<Option<Turbo>, String> {
         return Ok(None);
     }
     let tune = Turbo {
-        off_boost_fraction: fraction(&value["off_boost_fraction"])?,
-        spool_start_rpm: number(&value["spool_start_rpm"])?,
-        full_boost_rpm: number(&value["full_boost_rpm"])?,
-        spool_seconds: number(&value["spool_seconds"])?,
-        decay_seconds: number(&value["decay_seconds"])?,
+        off_boost_fraction: frac(&value["off_boost_fraction"])?,
+        spool_start_rpm: num(&value["spool_start_rpm"])?,
+        full_boost_rpm: num(&value["full_boost_rpm"])?,
+        spool_seconds: num(&value["spool_seconds"])?,
+        decay_seconds: num(&value["decay_seconds"])?,
     };
     if tune.full_boost_rpm <= tune.spool_start_rpm {
         return Err("full boost RPM must exceed spool start RPM".into());
@@ -105,14 +106,6 @@ pub struct Dynamics {
     pub suspension_hz: f32,
     pub steering_low_speed_squared: f32,
     pub steering_speed_squared: f32, // additional steering-lock falloff per (m/s)^2
-}
-
-/// Car-specific wheel power and aerodynamic resistance, independent of map.
-/// Acceleration remains launch-force limited; this is not a full torque curve.
-#[derive(Clone)]
-pub struct RoadEngine {
-    pub wheel_power_watts: f32,
-    pub drag_accel: f32,
 }
 
 /// Ratios and effective rolling radius determine engine RPM from road speed.
@@ -164,14 +157,14 @@ fn originals() -> &'static [CarSpec; 3] {
         })
     })
 }
-fn number(v: &serde_json::Value) -> Result<f32, String> {
+fn num(v: &serde_json::Value) -> Result<f32, String> {
     let n = v.as_f64().ok_or("expected number")? as f32;
     if !n.is_finite() || n <= 0.0 {
         return Err("expected finite positive number".into());
     }
     Ok(n)
 }
-fn fraction(v: &serde_json::Value) -> Result<f32, String> {
+fn frac(v: &serde_json::Value) -> Result<f32, String> {
     let n = nonnegative(v)?;
     if n > 1.0 {
         return Err("expected fraction in 0..1".into());
@@ -200,72 +193,65 @@ fn text(v: &serde_json::Value) -> Result<&'static str, String> {
     Ok(Box::leak(s.to_owned().into_boxed_str()))
 }
 fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
-    let v: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let d = &v["dynamics"];
+    let stiffness = d["corner_stiffness"]
+        .as_array()
+        .filter(|a| a.len() == 2)
+        .ok_or("expected two stiffness values")?;
+    let dynamics = Dynamics {
+        front_weight: frac(&d["front_weight"])?,
+        cg_height: num(&d["cg_height"])?,
+        track_width: num(&d["track_width"])?,
+        yaw_inertia: num(&d["yaw_inertia"])?,
+        front_drive: frac(&d["front_drive"])?,
+        brake_bias: frac(&d["brake_bias"])?,
+        peak_torque: num(&d["peak_torque"])?,
+        suspension_hz: num(&d["suspension_hz"])?,
+        steering_low_speed_squared: nonnegative(
+            d.get("steering_low_speed_squared")
+                .unwrap_or(&d["steering_speed_squared"]),
+        )?,
+        steering_speed_squared: nonnegative(&d["steering_speed_squared"])?,
+        corner_stiffness: [num(&stiffness[0])?, num(&stiffness[1])?],
+    };
     let g = &v["gearbox"];
     let ratios = g["ratios"]
         .as_array()
         .filter(|a| !a.is_empty() && a.len() <= 254)
         .ok_or("expected 1..254 ratios")?
         .iter()
-        .map(number)
+        .map(num)
         .collect::<Result<Vec<_>, _>>()?;
     if !ratios.windows(2).all(|p| p[0] > p[1]) {
         return Err("ratios must descend".into());
     }
-    let stiffness = d["corner_stiffness"]
-        .as_array()
-        .filter(|a| a.len() == 2)
-        .ok_or("expected two stiffness values")?;
+
+    let gearbox = Gearbox {
+        ratios: Box::leak(ratios.into_boxed_slice()),
+        final_drive: num(&g["final_drive"])?,
+        rolling_radius: num(&g["rolling_radius"])?,
+        reverse_ratio: num(&g["reverse_ratio"])?,
+        upshift_rpm: num(&g["upshift_rpm"])?,
+        downshift_rpm: num(&g["downshift_rpm"])?,
+    };
+
     let spec = CarSpec {
         design: load_model(path, &v["model"])?,
         turbo: turbo(&v["turbo"])?,
         name: text(&v["name"])?,
-        mass: number(&v["mass"])?,
-        engine_force: number(&v["engine_force"])?,
-        top_speed: number(&v["top_speed"])?,
-        brake_force: number(&v["brake_force"])?,
-        lateral_force: number(&v["lateral_force"])?,
-        wheelbase: number(&v["wheelbase"])?,
-        steering_response: number(&v["steering_response"])?,
-        dynamics: Dynamics {
-            front_weight: fraction(&d["front_weight"])?,
-            cg_height: number(&d["cg_height"])?,
-            track_width: number(&d["track_width"])?,
-            yaw_inertia: number(&d["yaw_inertia"])?,
-            front_drive: fraction(&d["front_drive"])?,
-            brake_bias: fraction(&d["brake_bias"])?,
-            peak_torque: number(&d["peak_torque"])?,
-            suspension_hz: number(&d["suspension_hz"])?,
-            steering_low_speed_squared: nonnegative(
-                d.get("steering_low_speed_squared")
-                    .unwrap_or(&d["steering_speed_squared"]),
-            )?,
-            steering_speed_squared: nonnegative(&d["steering_speed_squared"])?,
-            corner_stiffness: [number(&stiffness[0])?, number(&stiffness[1])?],
-        },
-        gearbox: Gearbox {
-            ratios: Box::leak(ratios.into_boxed_slice()),
-            final_drive: number(&g["final_drive"])?,
-            rolling_radius: number(&g["rolling_radius"])?,
-            reverse_ratio: number(&g["reverse_ratio"])?,
-            upshift_rpm: number(&g["upshift_rpm"])?,
-            downshift_rpm: number(&g["downshift_rpm"])?,
-        },
-        road_engine: if v
-            .get("road_engine")
-            .ok_or("road_engine is required")?
-            .is_null()
-        {
-            None
-        } else {
-            Some(RoadEngine {
-                wheel_power_watts: number(&v["road_engine"]["wheel_power_watts"])?,
-                drag_accel: number(&v["road_engine"]["drag_accel"])?,
-            })
-        },
+        mass: num(&v["mass"])?,
+        engine_force: num(&v["engine_force"])?,
+        top_speed: num(&v["top_speed"])?,
+        brake_force: num(&v["brake_force"])?,
+        lateral_force: num(&v["lateral_force"])?,
+        wheelbase: num(&v["wheelbase"])?,
+        steering_response: num(&v["steering_response"])?,
+        wheel_power_watts: num(&v["wheel_power_watts"])?,
+        drag_accel: num(&v["drag_accel"])?,
+        dynamics,
+        gearbox,
     };
     if spec.gearbox.downshift_rpm >= spec.gearbox.upshift_rpm {
         return Err("invalid shift thresholds".into());
@@ -336,12 +322,10 @@ mod tests {
                 s.steering_response,
                 s.gearbox.final_drive,
                 s.gearbox.rolling_radius,
+                s.drag_accel,
+                s.wheel_power_watts,
             ] {
                 assert!(value.is_finite() && value > 0.0);
-            }
-            if let Some(engine) = &s.road_engine {
-                assert!(engine.wheel_power_watts.is_finite() && engine.wheel_power_watts > 0.0);
-                assert!(engine.drag_accel.is_finite() && engine.drag_accel > 0.0);
             }
             assert!((4..=6).contains(&s.gearbox.gears()));
             assert!(s.gearbox.ratios.iter().all(|r| r.is_finite() && *r > 0.0));
@@ -382,7 +366,7 @@ fn extras() -> &'static Vec<ExtraCar> {
     static CARS: std::sync::OnceLock<Vec<ExtraCar>> = std::sync::OnceLock::new();
     CARS.get_or_init(|| {
         let dir = std::path::Path::new("data/cars");
-        let mut paths: Vec<_> = match std::fs::read_dir(dir) {
+        let mut paths: Vec<_> = match fs::read_dir(dir) {
             Ok(entries) => entries
                 .filter_map(Result::ok)
                 .map(|e| e.path())
@@ -411,7 +395,7 @@ fn extras() -> &'static Vec<ExtraCar> {
     })
 }
 fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let object = v.as_object().ok_or("expected an object")?;
     let base = match v["base"].as_str().ok_or("base is required")? {
@@ -430,7 +414,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
         spec.name = Box::leak(text.to_owned().into_boxed_str());
     }
     macro_rules! fields { ($obj:expr, $target:expr, $($field:ident),+) => {
-        $(if let Some(value) = $obj.get(stringify!($field)) { $target.$field = number(value)?; })+
+        $(if let Some(value) = $obj.get(stringify!($field)) { $target.$field = num(value)?; })+
     }; }
     fields!(
         object,
@@ -480,7 +464,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
                 .as_array()
                 .filter(|a| a.len() == 2)
                 .ok_or("expected two stiffness values")?;
-            spec.dynamics.corner_stiffness = [number(&a[0])?, number(&a[1])?];
+            spec.dynamics.corner_stiffness = [num(&a[0])?, num(&a[1])?];
         }
     }
     if let Some(g) = object.get("gearbox") {
@@ -499,7 +483,7 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
                 .as_array()
                 .filter(|r| !r.is_empty() && r.len() <= 254)
                 .ok_or("expected 1..254 ratios")?;
-            let ratios = r.iter().map(number).collect::<Result<Vec<_>, _>>()?;
+            let ratios = r.iter().map(num).collect::<Result<Vec<_>, _>>()?;
             if !ratios.windows(2).all(|p| p[0] > p[1]) {
                 return Err("ratios must descend".into());
             }
@@ -509,16 +493,8 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             return Err("invalid shift thresholds".into());
         }
     }
-    if let Some(e) = object.get("road_engine") {
-        spec.road_engine = if e.is_null() {
-            None
-        } else {
-            Some(RoadEngine {
-                wheel_power_watts: number(&e["wheel_power_watts"])?,
-                drag_accel: number(&e["drag_accel"])?,
-            })
-        };
-    }
+    spec.wheel_power_watts = num(&object["wheel_power_watts"])?;
+    spec.drag_accel = num(&object["drag_accel"])?;
     if let Some(value) = object.get("turbo") {
         spec.turbo = turbo(value)?;
     }
@@ -575,30 +551,30 @@ mod runtime_tests {
     fn glb_definitions_support_inheritance_replacement_and_model_only_assets() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
-        std::fs::copy(
+        fs::copy(
             "data/cars/club/model.glb",
             dir.path().join("replacement.glb"),
         )
         .unwrap();
-        std::fs::write(&path, r#"{"base":"club", "mass":950}"#).unwrap();
+        fs::write(&path, r#"{"base":"club", "mass":950}"#).unwrap();
         let inherited = load_extra(&path).unwrap().spec;
         assert!(std::sync::Arc::ptr_eq(
             &inherited.design,
             &CarModel::Club.spec().design
         ));
         // A replacement GLB supplies its own wheel mounts.
-        std::fs::write(&path, r#"{"base":"club", "model":"replacement.glb"}"#).unwrap();
+        fs::write(&path, r#"{"base":"club", "model":"replacement.glb"}"#).unwrap();
         let replacement = load_extra(&path).unwrap().spec;
         assert_eq!(
             replacement.design.mounts[0][0],
             CarModel::Club.wheel_centers()[0][0]
         );
         let mut definition: serde_json::Value =
-            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+            serde_json::from_slice(&fs::read("data/cars/club/car.json").unwrap()).unwrap();
         definition["model"] = serde_json::json!("replacement.glb");
-        std::fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
         assert!(!load_original(&path).unwrap().design.body.is_empty());
-        std::fs::write(dir.path().join("replacement.glb"), b"broken").unwrap();
+        fs::write(dir.path().join("replacement.glb"), b"broken").unwrap();
         let error = load_original(&path).err().unwrap();
         assert!(
             error.contains("replacement.glb") && error.contains("binary glTF"),
@@ -611,16 +587,16 @@ mod runtime_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
         let mut original: serde_json::Value =
-            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+            serde_json::from_slice(&fs::read("data/cars/club/car.json").unwrap()).unwrap();
         original["model"] =
-            serde_json::json!(std::fs::canonicalize("data/cars/club/model.glb").unwrap());
+            serde_json::json!(fs::canonicalize("data/cars/club/model.glb").unwrap());
         for count in [254, 255] {
             let ratios: Vec<_> = (1..=count).rev().collect();
             let mut required = original.clone();
             required["gearbox"]["ratios"] = serde_json::json!(ratios);
-            std::fs::write(&path, serde_json::to_vec(&required).unwrap()).unwrap();
+            fs::write(&path, serde_json::to_vec(&required).unwrap()).unwrap();
             assert_eq!(load_original(&path).is_ok(), count == 254);
-            std::fs::write(
+            fs::write(
                 &path,
                 serde_json::to_vec(&serde_json::json!({
                     "base":"club", "gearbox":{"ratios":ratios}
@@ -637,9 +613,9 @@ mod runtime_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
         let mut original: serde_json::Value =
-            serde_json::from_slice(&std::fs::read("data/cars/club/car.json").unwrap()).unwrap();
+            serde_json::from_slice(&fs::read("data/cars/club/car.json").unwrap()).unwrap();
         original["model"] =
-            serde_json::json!(std::fs::canonicalize("data/cars/club/model.glb").unwrap());
+            serde_json::json!(fs::canonicalize("data/cars/club/model.glb").unwrap());
         for (key, value) in [
             ("mass", serde_json::json!(-1)),
             ("model", serde_json::Value::Null),
@@ -647,7 +623,7 @@ mod runtime_tests {
         ] {
             let mut invalid = original.clone();
             invalid[key] = value;
-            std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
             assert!(load_original(&path).is_err(), "accepted invalid {key}");
         }
     }
@@ -656,11 +632,11 @@ mod runtime_tests {
     fn new_car_is_discovered_by_existing_binary() {
         let dir = tempfile::tempdir().unwrap();
         let cars = dir.path().join("data/cars");
-        std::fs::create_dir_all(&cars).unwrap();
+        fs::create_dir_all(&cars).unwrap();
         for id in ["kestrel", "muscle", "club"] {
             let folder = cars.join(id);
-            std::fs::create_dir_all(&folder).unwrap();
-            std::fs::copy(
+            fs::create_dir_all(&folder).unwrap();
+            fs::copy(
                 format!("data/cars/{id}/model.glb"),
                 folder.join("model.glb"),
             )
@@ -669,21 +645,21 @@ mod runtime_tests {
 
         for id in ["kestrel", "muscle", "club"] {
             let mut v: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(format!("data/cars/{id}/car.json")).unwrap())
+                serde_json::from_slice(&fs::read(format!("data/cars/{id}/car.json")).unwrap())
                     .unwrap();
             if id == "club" {
                 v["mass"] = serde_json::json!(999);
             }
-            std::fs::write(
+            fs::write(
                 cars.join(id).join("car.json"),
                 serde_json::to_vec(&v).unwrap(),
             )
             .unwrap();
         }
 
-        std::fs::create_dir_all(cars.join("new")).unwrap();
+        fs::create_dir_all(cars.join("new")).unwrap();
         // Edit the GLB in a runtime-only package to exercise geometry and pivots.
-        let mut asset = std::fs::read("data/cars/club/model.glb").unwrap();
+        let mut asset = fs::read("data/cars/club/model.glb").unwrap();
         let parsed = gltf::Gltf::from_slice(&asset).unwrap();
         let json_len = u32::from_le_bytes(asset[12..16].try_into().unwrap()) as usize;
         let binary_start = 28 + json_len;
@@ -734,11 +710,11 @@ mod runtime_tests {
         }
         replacement.extend(json);
         replacement.extend_from_slice(&asset[binary_start - 8..]);
-        std::fs::write(cars.join("new/model.glb"), replacement).unwrap();
-        std::fs::create_dir_all(cars.join("bad")).unwrap();
-        std::fs::create_dir_all(cars.join("notes")).unwrap();
-        std::fs::write(cars.join("ignored.json"), "{}").unwrap();
-        std::fs::write(
+        fs::write(cars.join("new/model.glb"), replacement).unwrap();
+        fs::create_dir_all(cars.join("bad")).unwrap();
+        fs::create_dir_all(cars.join("notes")).unwrap();
+        fs::write(cars.join("ignored.json"), "{}").unwrap();
+        fs::write(
             cars.join("new/car.json"),
             r#"{
             "base": "club", "name": "NEW CAR", "mass": 1234,
@@ -746,17 +722,17 @@ mod runtime_tests {
         }"#,
         )
         .unwrap();
-        std::fs::write(cars.join("bad/car.json"), r#"{"base":"club","mass":-1}"#).unwrap();
+        fs::write(cars.join("bad/car.json"), r#"{"base":"club","mass":-1}"#).unwrap();
         for (folder, contents) in [
             ("missing_model", None),
             ("corrupt_model", Some(b"invalid model".as_slice())),
         ] {
             let folder = cars.join(folder);
-            std::fs::create_dir_all(&folder).unwrap();
+            fs::create_dir_all(&folder).unwrap();
             if let Some(bytes) = contents {
-                std::fs::write(folder.join("bad.glb"), bytes).unwrap();
+                fs::write(folder.join("bad.glb"), bytes).unwrap();
             }
-            std::fs::write(
+            fs::write(
                 folder.join("car.json"),
                 serde_json::to_vec(&serde_json::json!({"base":"club", "model": "bad.glb"}))
                     .unwrap(),

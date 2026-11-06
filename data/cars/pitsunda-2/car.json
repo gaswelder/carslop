@@ -9,10 +9,8 @@
   "lateral_force": 11440,
   "wheelbase": 2.57,
   "steering_response": 8.5,
-  "road_engine": {
-    "wheel_power_watts": 62000,
-    "drag_accel": 0.00033
-  },
+  "wheel_power_watts": 62000,
+  "drag_accel": 0.00033,
   "dynamics": {
     "front_weight": 0.6,
     "cg_height": 0.5,

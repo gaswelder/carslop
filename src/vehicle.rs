@@ -230,10 +230,7 @@ impl Vehicle {
         let reversing = self.direction == Direction::Reverse;
         let direction = if reversing { -1.0 } else { 1.0 };
         let brake_accel = self.brake_accel();
-        let drag = spec
-            .road_engine
-            .as_ref()
-            .map_or(0.009, |engine| engine.drag_accel);
+        let drag = spec.drag_accel;
         let mut impact: f32 = 0.0;
         for _ in 0..steps {
             let previous_gear = self.gear;
@@ -557,10 +554,8 @@ impl Vehicle {
         };
         if rpm >= REDLINE_RPM {
             0.0
-        } else if let Some(engine) = &spec.road_engine {
-            force.min(engine.wheel_power_watts * self.boost_power_fraction() / speed.abs().max(1.0))
         } else {
-            force
+            force.min(spec.wheel_power_watts * self.boost_power_fraction() / speed.abs().max(1.0))
         }
     }
 
