@@ -493,6 +493,38 @@ impl Hud {
             size,
             white,
         );
+        for left in [-0.92, 0.46] {
+            quad(
+                &mut v,
+                [left, 0.28],
+                [left + 0.46, 0.72],
+                [0.025, 0.05, 0.075],
+            );
+        }
+        let spec = menu.car.spec();
+        let power = spec.road_engine.as_ref().map_or_else(
+            || "N/A".into(),
+            |engine| format!("{:.0} HP", engine.wheel_power_watts / 745.7),
+        );
+        for (x, y, label, value) in [
+            (-0.84, 0.66, "WHEEL POWER", power),
+            (
+                -0.84,
+                0.45,
+                "TORQUE",
+                format!("{:.0} NM", spec.dynamics.peak_torque),
+            ),
+            (
+                0.54,
+                0.66,
+                "TOP SPEED",
+                format!("{:.0} KM/H", spec.top_speed * 3.6),
+            ),
+            (0.54, 0.45, "WEIGHT", format!("{:.0} KG", spec.mass)),
+        ] {
+            text(&mut v, label, [x, y], 0.0027, muted);
+            text(&mut v, &value, [x, y - 0.07], 0.0038, white);
+        }
         for left in [-0.96, 0.02] {
             quad(
                 &mut v,
