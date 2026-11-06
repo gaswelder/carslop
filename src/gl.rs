@@ -119,9 +119,12 @@ float contact_visibility() {
     return visibility;
 }
 void main() {
+    // Storefront lettering has one readable face. Its back must never show
+    // mirrored text while a streamed facade is still loading.
+    if (v_material.x < -2.5 && !gl_FrontFacing) discard;
     // Reserved material -2: emissive signal lenses. The alpha-free material
     // carries an integer program offset and lens index, with a fractional guard.
-    if (v_material.x < -1.5) {
+    if (v_material.x > -2.5 && v_material.x < -1.5) {
         float code = floor(v_material.y);
         float lens = mod(code, 4.0);
         float phase = mod(u_signal_time + floor(code / 4.0), 50.0);

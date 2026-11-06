@@ -541,6 +541,72 @@ mod tests {
     }
 
     #[test]
+    fn storefront_glyphs_read_left_to_right_on_each_outward_wall_face() {
+        let label = ['F', 'J'];
+        let expected: std::collections::HashSet<_> = label
+            .iter()
+            .enumerate()
+            .flat_map(|(column, ch)| {
+                crate::hud::glyph(*ch)
+                    .into_iter()
+                    .enumerate()
+                    .flat_map(move |(row, bits)| {
+                        (0..5).filter_map(move |bit| {
+                            (bits & (1 << (4 - bit)) != 0)
+                                .then_some(((column * 6 + bit) as i32, row as i32))
+                        })
+                    })
+            })
+            .collect();
+        for [a, c] in [
+            [[0.0, 0.0], [10.0, 0.0]],
+            [[10.0, 0.0], [10.0, 10.0]],
+            [[10.0, 10.0], [0.0, 10.0]],
+            [[0.0, 10.0], [0.0, 0.0]],
+        ] {
+            let mut b = Builder::default();
+            storefront_sign(&mut b, &label, [a, c], 0.0, 8.0);
+            let normal = [(c[1] - a[1]) / 10.0, -(c[0] - a[0]) / 10.0];
+            // Camera right = cross(-outward_normal, world_up).
+            let right = [normal[1], -normal[0]];
+            let screen_x = |v: &super::super::Vertex| {
+                (v.position[0] - c[0]) * right[0] + (v.position[2] - c[1]) * right[1]
+            };
+            let text = &b.vertices[6..];
+            let left = text.iter().map(screen_x).fold(f32::INFINITY, f32::min);
+            let top_y = text
+                .iter()
+                .map(|v| v.position[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let pixel = text[..6]
+                .iter()
+                .map(screen_x)
+                .fold(f32::NEG_INFINITY, f32::max)
+                - text[..6].iter().map(screen_x).fold(f32::INFINITY, f32::min);
+            let mut actual = std::collections::HashSet::new();
+            for quad in b.vertices[6..].chunks_exact(6) {
+                let min_x = quad
+                    .iter()
+                    .map(|v| (v.position[0] - c[0]) * right[0] + (v.position[2] - c[1]) * right[1])
+                    .fold(f32::INFINITY, f32::min);
+                let top = quad
+                    .iter()
+                    .map(|v| v.position[1])
+                    .fold(f32::NEG_INFINITY, f32::max);
+                actual.insert((
+                    ((min_x - left) / pixel).round() as i32,
+                    ((top_y - top) / pixel).round() as i32,
+                ));
+            }
+            assert_eq!(actual, expected);
+            for v in b.vertices {
+                assert_eq!(v.material[0], -3.0);
+                assert!(v.normal[0] * normal[0] + v.normal[2] * normal[1] > 0.999);
+            }
+        }
+    }
+
+    #[test]
     fn varied_trees_are_repeatable_bounded_and_keep_the_dense_canopy_budget() {
         let city = small_city();
         let mut shapes = std::collections::HashSet::new();
@@ -723,49 +789,63 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
                 let midpoint = [(a[0] + c[0]) * 0.5, building.base_y, (a[1] + c[1]) * 0.5];
                 let road = city.project(midpoint);
                 let distance = (midpoint[0] - road.point[0]).hypot(midpoint[2] - road.point[2]);
-                Some((distance, a, c, length))
+                Some((distance, a, c))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let Some((_, a, c, length)) = edge else {
+        let Some((_, a, c)) = edge else {
             continue;
         };
-        let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
-        let pixel = ((length - 0.6) / (label.len() as f32 * 6.0))
-            .min(0.085)
-            .min((building.height * 0.25) / 9.0);
-        let width = label.len() as f32 * 6.0 * pixel;
-        let left = (length - width) * 0.5;
-        let top = building.base_y + (building.height - 0.3).min(3.1);
-        let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
-            let point = |x: f32, y: f32| {
-                [
-                    a[0] + (c[0] - a[0]) * x / length + normal[0] * depth,
-                    y,
-                    a[1] + (c[1] - a[1]) * x / length + normal[1] * depth,
-                ]
-            };
-            b.quad(
-                [point(x1, y0), point(x0, y0), point(x0, y1), point(x1, y1)],
-                Surface::matte(color),
-            );
+        storefront_sign(b, &label, [a, c], building.base_y, building.height);
+    }
+}
+
+// X runs toward the viewer's right on the outward face of the wall.
+fn storefront_sign(
+    b: &mut Builder,
+    label: &[char],
+    [a, c]: [[f32; 2]; 2],
+    base_y: f32,
+    height: f32,
+) {
+    let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+    let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
+    let pixel = ((length - 0.6) / (label.len() as f32 * 6.0))
+        .min(0.085)
+        .min((height * 0.25) / 9.0);
+    let width = label.len() as f32 * 6.0 * pixel;
+    let left = (length - width) * 0.5;
+    let top = base_y + (height - 0.3).min(3.1);
+    let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
+        let point = |x: f32, y: f32| {
+            [
+                c[0] + (a[0] - c[0]) * x / length + normal[0] * depth,
+                y,
+                c[1] + (a[1] - c[1]) * x / length + normal[1] * depth,
+            ]
         };
-        panel(
-            left - pixel,
-            width + left + pixel,
-            top - 8.0 * pixel,
-            top + pixel,
-            0.14,
-            [0.035, 0.09, 0.10],
+        b.quad(
+            [point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1)],
+            Surface {
+                color,
+                material: [-3.0, 0.0],
+            },
         );
-        for (column, ch) in label.into_iter().enumerate() {
-            for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
-                for bit in 0..5 {
-                    if bits & (1 << (4 - bit)) != 0 {
-                        // The polygon tangent points left when viewed from outside.
-                        let x = left + width - (column * 6 + bit + 1) as f32 * pixel;
-                        let y = top - row as f32 * pixel;
-                        panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
-                    }
+    };
+    panel(
+        left - pixel,
+        width + left + pixel,
+        top - 8.0 * pixel,
+        top + pixel,
+        0.14,
+        [0.035, 0.09, 0.10],
+    );
+    for (column, ch) in label.iter().copied().enumerate() {
+        for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
+            for bit in 0..5 {
+                if bits & (1 << (4 - bit)) != 0 {
+                    let x = left + (column * 6 + bit) as f32 * pixel;
+                    let y = top - row as f32 * pixel;
+                    panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
                 }
             }
         }

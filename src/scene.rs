@@ -21,7 +21,7 @@ pub struct Vertex {
     pub color: [f32; 3],
     pub normal: [f32; 3],
     // Material X: 0 untinted, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens, 6 reverse lens;
-    // negative values: -1 road receiver, -2 signal lens.
+    // negative values: -1 road receiver, -2 signal lens, -3 one-sided storefront.
     // Y: specular strength, or encoded signal phase/lens for material -2.
     pub material: [f32; 2],
 }
