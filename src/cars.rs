@@ -44,7 +44,6 @@ pub const WHEEL_RADIUS: f32 = 0.4;
 pub struct CarSpec {
     pub(crate) design: std::sync::Arc<crate::scene::car_glb::Design>,
     pub name: &'static str,
-    pub description: &'static str,
     pub mass: f32,
     pub engine_force: f32,
     pub top_speed: f32,
@@ -214,7 +213,6 @@ fn load_original(path: &std::path::Path) -> Result<CarSpec, String> {
         design: load_model(path, &v["model"])?,
         turbo: turbo(&v["turbo"])?,
         name: text(&v["name"])?,
-        description: text(&v["description"])?,
         mass: number(&v["mass"])?,
         engine_force: number(&v["engine_force"])?,
         top_speed: number(&v["top_speed"])?,
@@ -309,7 +307,7 @@ mod tests {
         for (index, model) in ALL.into_iter().enumerate() {
             assert_eq!(model.index(), index);
             let s = model.spec();
-            assert!(!s.name.is_empty() && !s.description.is_empty());
+            assert!(!s.name.is_empty());
             for value in [
                 s.mass,
                 s.engine_force,
@@ -405,17 +403,12 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     };
     let mut spec = base.spec().clone();
     // Owned runtime strings/ratios live for the startup catalog's lifetime.
-    for (key, target) in [
-        ("name", &mut spec.name),
-        ("description", &mut spec.description),
-    ] {
-        if let Some(value) = object.get(key) {
-            let text = value
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("expected nonempty text")?;
-            *target = Box::leak(text.to_owned().into_boxed_str());
-        }
+    if let Some(value) = object.get("name") {
+        let text = value
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("expected nonempty text")?;
+        spec.name = Box::leak(text.to_owned().into_boxed_str());
     }
     macro_rules! fields { ($obj:expr, $target:expr, $($field:ident),+) => {
         $(if let Some(value) = $obj.get(stringify!($field)) { $target.$field = number(value)?; })+

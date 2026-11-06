@@ -158,6 +158,7 @@ pub fn city_layers(city: &crate::city::City) -> [Vec<crate::chunks::Chunk>; 3] {
     })
 }
 
+#[cfg(test)]
 pub fn cars_only() -> Geometry {
     finish(Builder::default())
 }

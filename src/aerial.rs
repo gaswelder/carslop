@@ -155,8 +155,6 @@ pub struct Aerial {
     texture: u32,
     slots: Vec<Option<usize>>,
     failed: HashSet<usize>,
-    #[cfg(test)]
-    reads: usize,
 }
 impl Aerial {
     pub fn open() -> Option<Self> {
@@ -229,8 +227,6 @@ impl Aerial {
             texture,
             slots: vec![None; capacity],
             failed: HashSet::new(),
-            #[cfg(test)]
-            reads: 0,
         })
     }
     pub fn bind(&mut self, program: u32, eye: [f32; 3]) {
@@ -273,10 +269,6 @@ impl Aerial {
                     }
                     self.slots[slot] = Some(id);
                     changed = true;
-                    #[cfg(test)]
-                    {
-                        self.reads += 1;
-                    }
                 }
                 Err(e) => {
                     log::warn!("Aerial tile unavailable; using procedural surface: {e}");
@@ -320,10 +312,6 @@ impl Aerial {
                 );
             }
         }
-    }
-    #[cfg(test)]
-    pub fn stats(&self) -> (usize, usize) {
-        (self.slots.iter().flatten().count(), self.reads)
     }
 }
 impl Drop for Aerial {

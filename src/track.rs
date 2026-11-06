@@ -13,6 +13,7 @@ pub enum TrackId {
     File(usize),
 }
 
+#[cfg(test)]
 pub const ALL: [TrackId; 3] = [TrackId::Compact, TrackId::Scenic, TrackId::Engomi];
 
 struct RuntimeTrack {

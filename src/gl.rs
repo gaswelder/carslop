@@ -1038,9 +1038,7 @@ pub struct Camera {
     particle_view: crate::particles::View,
 }
 impl Camera {
-    pub fn eye(&self) -> [f32; 3] {
-        self.eye
-    }
+    #[cfg(test)]
     pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
         let m = self.view_projection;
         let w = m[3] * point[0] + m[7] * point[1] + m[11] * point[2] + m[15];
@@ -1507,7 +1505,3 @@ mod tests {
         assert!(right_dot_up.abs() < 0.0001);
     }
 }
-
-#[cfg(test)]
-#[path = "aerial_preview.rs"]
-mod aerial_preview;

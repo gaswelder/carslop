@@ -1,7 +1,6 @@
 {
   "base": "club",
   "name": "2016 PITSUNDA 2",
-  "description": "1.3 PETROL / FIVE-DOOR CITY HATCH",
   "model": "model.glb",
   "mass": 1040,
   "engine_force": 7600,
