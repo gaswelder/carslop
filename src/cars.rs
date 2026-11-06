@@ -23,19 +23,25 @@ impl IntoIterator for Catalog {
     type Item = CarModel;
     type IntoIter = std::vec::IntoIter<CarModel>;
     fn into_iter(self) -> Self::IntoIter {
-        [CarModel::Roadster, CarModel::Muscle, CarModel::Club]
-            .into_iter()
-            .chain((0..extras().len()).map(CarModel::Custom))
-            .collect::<Vec<_>>()
-            .into_iter()
+        ordered_models().to_vec().into_iter()
     }
 }
 impl std::ops::Index<usize> for Catalog {
     type Output = CarModel;
     fn index(&self, index: usize) -> &CarModel {
-        static MODELS: std::sync::OnceLock<Vec<CarModel>> = std::sync::OnceLock::new();
-        &MODELS.get_or_init(|| ALL.into_iter().collect())[index]
+        &ordered_models()[index]
     }
+}
+fn ordered_models() -> &'static [CarModel] {
+    static MODELS: std::sync::OnceLock<Vec<CarModel>> = std::sync::OnceLock::new();
+    MODELS.get_or_init(|| {
+        let mut models: Vec<_> = [CarModel::Roadster, CarModel::Muscle, CarModel::Club]
+            .into_iter()
+            .chain((0..extras().len()).map(CarModel::Custom))
+            .collect();
+        models.sort_by_key(|model| model.folder_name());
+        models
+    })
 }
 #[cfg(test)]
 pub const WHEEL_RADIUS: f32 = 0.4;
@@ -280,11 +286,17 @@ impl CarModel {
     }
 
     pub fn index(self) -> usize {
+        ordered_models()
+            .iter()
+            .position(|model| *model == self)
+            .unwrap()
+    }
+    fn folder_name(self) -> &'static str {
         match self {
-            Self::Roadster => 0,
-            Self::Muscle => 1,
-            Self::Club => 2,
-            Self::Custom(i) => i + 3,
+            Self::Roadster => "kestrel",
+            Self::Muscle => "muscle",
+            Self::Club => "club",
+            Self::Custom(i) => &extras()[i].folder,
         }
     }
 
@@ -304,6 +316,8 @@ mod tests {
 
     #[test]
     fn catalog_is_complete_and_physics_values_are_valid() {
+        let names: Vec<_> = ALL.into_iter().map(CarModel::folder_name).collect();
+        assert!(names.windows(2).all(|p| p[0] < p[1]));
         for (index, model) in ALL.into_iter().enumerate() {
             assert_eq!(model.index(), index);
             let s = model.spec();
@@ -337,6 +351,7 @@ mod tests {
 }
 
 struct ExtraCar {
+    folder: String,
     spec: CarSpec,
     base: CarModel,
 }
@@ -506,7 +521,16 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
     if let Some(model) = object.get("model") {
         spec.design = load_model(path, model)?;
     }
-    Ok(ExtraCar { spec, base })
+    Ok(ExtraCar {
+        spec,
+        base,
+        folder: path
+            .parent()
+            .and_then(|p| p.file_name())
+            .ok_or("car needs a folder")?
+            .to_string_lossy()
+            .into_owned(),
+    })
 }
 
 #[cfg(test)]

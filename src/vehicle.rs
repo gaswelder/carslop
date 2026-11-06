@@ -1711,7 +1711,8 @@ mod tests {
             built
         });
         assert!(
-            results[2] > results[1] && results[1] > results[0],
+            results[CarModel::Club.index()] > results[CarModel::Muscle.index()]
+                && results[CarModel::Muscle.index()] > results[CarModel::Roadster.index()],
             "city-speed lock: Club > Muscle > stabilized Kestrel: {results:?}"
         );
     }
@@ -2271,7 +2272,11 @@ mod tests {
             sliding.update(Duration::from_millis(50), Controls::default());
             (accelerating.speed, braking.speed, sliding.slip.abs())
         });
-        let [roadster, muscle, club] = [results[0], results[1], results[2]];
+        let [roadster, muscle, club] = [
+            results[CarModel::Roadster.index()],
+            results[CarModel::Muscle.index()],
+            results[CarModel::Club.index()],
+        ];
         assert!(
             (muscle.0 - roadster.0).abs() > 0.05 && roadster.0 > club.0 && muscle.0 > club.0,
             "acceleration: {results:?}"
@@ -2317,7 +2322,10 @@ mod tests {
             // Return terminal speed rather than the artificial gearbox test speed.
             terminal_speed
         });
-        assert!(speeds[0] > speeds[2], "terminal speeds: {speeds:?}");
+        assert!(
+            speeds[CarModel::Roadster.index()] > speeds[CarModel::Club.index()],
+            "terminal speeds: {speeds:?}"
+        );
     }
 
     #[test]

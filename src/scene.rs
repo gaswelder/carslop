@@ -667,7 +667,11 @@ mod tests {
             });
             std::array::from_fn::<_, 3, _>(|i| max[i] - min[i])
         });
-        let [roadster, muscle, club] = [extents[0], extents[1], extents[2]];
+        let [roadster, muscle, club] = [
+            extents[CarModel::Roadster.index()],
+            extents[CarModel::Muscle.index()],
+            extents[CarModel::Club.index()],
+        ];
         assert!(muscle[0] > club[0] && roadster[0] > club[0]);
         assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
         assert!(club[1] > muscle[1]);

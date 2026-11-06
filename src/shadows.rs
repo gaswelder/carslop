@@ -74,7 +74,12 @@ mod tests {
                 assert!(wheel[2].abs() < footprints[model.index()][3] - 0.3);
             }
         }
-        assert!(footprints[1][3] > footprints[0][3] && footprints[0][3] > footprints[2][3]);
+        assert!(
+            footprints[cars::CarModel::Muscle.index()][3]
+                > footprints[cars::CarModel::Roadster.index()][3]
+                && footprints[cars::CarModel::Roadster.index()][3]
+                    > footprints[cars::CarModel::Club.index()][3]
+        );
     }
 
     #[test]
