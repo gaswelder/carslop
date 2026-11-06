@@ -60,7 +60,7 @@ pub fn prepare(
             }
         }
         let elapsed = started.elapsed().as_secs_f32();
-        let _ = window.set_title(&format!("Loading {name} - {elapsed:.0}s"));
+        let _ = window.set_title(&format!("Loading {name}"));
         draw(window, name, "READING MAP AND BUILDING COLLISIONS", elapsed);
         crate::gl::swap_window(window);
         std::thread::sleep(Duration::from_millis(16));
@@ -122,12 +122,6 @@ pub fn draw(window: &Window, name: &str, stage: &str, elapsed: f32) {
     rect([-0.55, -0.22], [0.55, -0.19], [0.12, 0.20, 0.25]);
     let x = -0.55 + (elapsed * 1.5).sin().mul_add(0.5, 0.5) * 0.9;
     rect([x, -0.22], [x + 0.2, -0.19], [0.15, 0.85, 0.95]);
-    text(
-        &format!("{elapsed:.0} SECONDS"),
-        -0.34,
-        0.004,
-        [0.55, 0.66, 0.70],
-    );
     text("ESC TO CLOSE", -0.52, 0.003, [0.55, 0.66, 0.70]);
     unsafe {
         gl::Disable(gl::SCISSOR_TEST);
