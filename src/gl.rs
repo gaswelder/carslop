@@ -78,16 +78,25 @@ float asphalt_mask() {
 }
 vec3 asphalt_texture(vec3 color) {
     vec2 p = v_world.xz;
-    float fine_fade = 1.0 - smoothstep(0.35, 1.5, length(fwidth(p * 75.0)));
-    float grain = (surface_hash(floor(p * 75.0)) - 0.5) * fine_fade;
-    float aggregate_fade = 1.0 - smoothstep(0.5, 2.0, length(fwidth(p * 24.0)));
-    float aggregate = (surface_noise(p * 24.0) - 0.5) * aggregate_fade;
-    float coarse = surface_noise(p * 7.0) - 0.5;
-    float weather = surface_noise(p * 0.38) - 0.5;
-    vec2 cell = floor(p / 5.0);
-    vec2 edge = min(fract(p / 5.0), 1.0 - fract(p / 5.0));
-    float patch = step(0.88, surface_hash(cell)) * smoothstep(0.015, 0.035, min(edge.x, edge.y));
-    return color * (1.0 + grain * 0.65 + aggregate * 0.48 + coarse * 0.18 + weather * 0.12 - patch * 0.09);
+    // Irregular exposed aggregate in a darker bitumen binder, at centimetre scale.
+    vec2 q = p * 55.0, cell = floor(q), local = fract(q);
+    float nearest = 10.0, tone = 0.5;
+    for (int y=-1; y<=1; ++y) for (int x=-1; x<=1; ++x) {
+        vec2 offset = vec2(float(x),float(y));
+        vec2 key = cell + offset;
+        vec2 seed = vec2(surface_hash(key),surface_hash(key + vec2(37.0,91.0)));
+        float d = length(offset + seed - local);
+        if (d < nearest) { nearest=d; tone=surface_hash(key+vec2(13.0,7.0)); }
+    }
+    float aa = max(length(fwidth(q)),0.02);
+    float stone = 1.0-smoothstep(0.20,0.36+aa,nearest);
+    float detail = 1.0-smoothstep(0.35,1.6,length(fwidth(q)));
+    float aggregate = mix(1.0,0.83+stone*(0.24+tone*0.25),detail);
+    float pores = (surface_noise(p*90.0)-0.5)*0.08*detail;
+    float weather = (surface_noise(p*0.45)-0.5)*0.10;
+    // Soft, irregular resurfacing avoids a repeating grid of square patches.
+    float repair = smoothstep(0.70,0.80,surface_noise(p*0.11));
+    return color * (aggregate + pores + weather - repair*0.09);
 }
 vec3 concrete_texture(vec3 color, vec3 normal) {
     vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
