@@ -207,7 +207,7 @@ impl MapFit {
         let dz = p[2] - self.center[1];
         let [x, y] = if let Some(heading) = self.heading {
             let (sin, cos) = heading.sin_cos();
-            [dx * cos - dz * sin, dx * sin + dz * cos]
+            [dz * sin - dx * cos, dx * sin + dz * cos]
         } else {
             [dx, dz * if self.north_up { -1.0 } else { 1.0 }]
         };
@@ -1324,14 +1324,17 @@ mod tests {
             let forward = fit.point([heading.sin() * 30.0, 0.0, heading.cos() * 30.0]);
             assert!((forward[0] - center[0]).abs() < 0.00001);
             assert!(forward[1] > center[1]);
+            let camera_right = fit.point([-heading.cos() * 30.0, 0.0, heading.sin() * 30.0]);
+            assert!(camera_right[0] > center[0]);
+            assert!((camera_right[1] - center[1]).abs() < 0.00001);
             let bounds = fit.world_bounds();
             for x in [MAP_CONTENT[0][0], MAP_CONTENT[1][0]] {
                 for y in [MAP_CONTENT[0][1], MAP_CONTENT[1][1]] {
                     let right = (x - center[0]) / fit.scale[0];
                     let ahead = (y - center[1]) / fit.scale[1];
                     let world = [
-                        right * heading.cos() + ahead * heading.sin(),
-                        -right * heading.sin() + ahead * heading.cos(),
+                        -right * heading.cos() + ahead * heading.sin(),
+                        right * heading.sin() + ahead * heading.cos(),
                     ];
                     for i in 0..2 {
                         assert!(
