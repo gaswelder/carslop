@@ -541,6 +541,32 @@ mod tests {
     }
 
     #[test]
+    fn storefronts_use_large_letters_and_wrap_long_names_within_the_facade() {
+        let short: Vec<_> = "BAKERY".chars().collect();
+        let (lines, pixel) = storefront_layout(&short, 12.0, 8.0);
+        assert_eq!(lines.len(), 1);
+        assert!(pixel * 7.0 >= 1.7, "short names need metre-scale lettering");
+        let long: Vec<_> = "HIGH COMMISSION OF THE REPUBLIC OF INDIA".chars().collect();
+        for (length, height) in [(10.0, 8.0), (4.0, 3.0), (30.0, 12.0)] {
+            let (lines, pixel) = storefront_layout(&long, length, height);
+            assert!((2..=3).contains(&lines.len()));
+            let joined: String = lines
+                .iter()
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(joined, "HIGH COMMISSION OF THE REPUBLIC OF INDIA");
+            assert!(pixel > 0.0);
+            let mut b = Builder::default();
+            storefront_sign(&mut b, &long, [[0.0, 0.0], [length, 0.0]], 2.0, height);
+            for v in b.vertices {
+                assert!(v.position[0] >= 0.29 && v.position[0] <= length - 0.29);
+                assert!(v.position[1] >= 2.29 && v.position[1] <= 2.0 + height - 0.29);
+            }
+        }
+    }
+
+    #[test]
     fn storefront_glyphs_read_left_to_right_on_each_outward_wall_face() {
         let label = ['F', 'J'];
         let expected: std::collections::HashSet<_> = label
@@ -773,7 +799,7 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
         let Some(name) = city.building_name(building.id) else {
             continue;
         };
-        let label: Vec<_> = name.to_uppercase().chars().take(40).collect();
+        let label: Vec<_> = name.to_uppercase().chars().take(80).collect();
         if label.is_empty() {
             continue;
         }
@@ -809,12 +835,11 @@ fn storefront_sign(
 ) {
     let length = (c[0] - a[0]).hypot(c[1] - a[1]);
     let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
-    let pixel = ((length - 0.6) / (label.len() as f32 * 6.0))
-        .min(0.085)
-        .min((height * 0.25) / 9.0);
-    let width = label.len() as f32 * 6.0 * pixel;
+    let (lines, pixel) = storefront_layout(label, length, height);
+    let width = lines.iter().map(Vec::len).max().unwrap_or(0) as f32 * 6.0 * pixel;
     let left = (length - width) * 0.5;
-    let top = base_y + (height - 0.3).min(3.1);
+    let panel_height = lines.len() as f32 * 9.0 * pixel;
+    let top = base_y + (panel_height + 1.0).min(height - 0.3);
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
         let point = |x: f32, y: f32| {
             [
@@ -834,20 +859,60 @@ fn storefront_sign(
     panel(
         left - pixel,
         width + left + pixel,
-        top - 8.0 * pixel,
-        top + pixel,
+        top - panel_height,
+        top,
         0.14,
         [0.035, 0.09, 0.10],
     );
-    for (column, ch) in label.iter().copied().enumerate() {
-        for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
-            for bit in 0..5 {
-                if bits & (1 << (4 - bit)) != 0 {
-                    let x = left + (column * 6 + bit) as f32 * pixel;
-                    let y = top - row as f32 * pixel;
-                    panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
+    for (line, chars) in lines.iter().enumerate() {
+        let line_left = (length - chars.len() as f32 * 6.0 * pixel) * 0.5;
+        for (column, ch) in chars.iter().copied().enumerate() {
+            for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
+                for bit in 0..5 {
+                    if bits & (1 << (4 - bit)) != 0 {
+                        let x = line_left + (column * 6 + bit) as f32 * pixel;
+                        let y = top - (1 + line * 9 + row) as f32 * pixel;
+                        panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
+                    }
                 }
             }
         }
     }
+}
+
+fn storefront_layout(label: &[char], length: f32, height: f32) -> (Vec<Vec<char>>, f32) {
+    let wrap = |columns: usize| {
+        let mut lines = Vec::new();
+        let mut start = 0;
+        while start < label.len() {
+            while start < label.len() && label[start].is_whitespace() {
+                start += 1;
+            }
+            if start == label.len() {
+                break;
+            }
+            let mut end = (start + columns).min(label.len());
+            if end < label.len() {
+                if let Some(space) = label[start..end].iter().rposition(|c| c.is_whitespace()) {
+                    if space > 0 {
+                        end = start + space;
+                    }
+                }
+            }
+            lines.push(label[start..end].to_vec());
+            start = end;
+        }
+        lines
+    };
+    let mut columns = ((length - 0.6) / (6.0 * 0.25)).floor().max(6.0) as usize;
+    let mut lines = wrap(columns);
+    while lines.len() > 3 {
+        columns += 1;
+        lines = wrap(columns);
+    }
+    let widest = lines.iter().map(Vec::len).max().unwrap_or(1) as f32;
+    let pixel = 0.25_f32
+        .min((length - 0.6) / (widest * 6.0 + 2.0))
+        .min((height - 0.6).min(3.8) / (lines.len().max(1) as f32 * 9.0));
+    (lines, pixel)
 }

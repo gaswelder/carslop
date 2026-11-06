@@ -974,16 +974,16 @@ mod tests {
         let length = (b[0] - a[0]).hypot(b[1] - a[1]);
         let middle = [
             (a[0] + b[0]) * 0.5,
-            building.base_y + (building.height - 0.3).min(3.1) - 0.25,
+            building.base_y + 2.8,
             (a[1] + b[1]) * 0.5,
         ];
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
                 eye: [
-                    middle[0] + (b[1] - a[1]) / length * 6.0,
+                    middle[0] + (b[1] - a[1]) / length * (length * 0.65).clamp(7.0, 30.0),
                     middle[1],
-                    middle[2] - (b[0] - a[0]) / length * 6.0,
+                    middle[2] - (b[0] - a[0]) / length * (length * 0.65).clamp(7.0, 30.0),
                 ],
                 target: middle,
             },
