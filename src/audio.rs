@@ -102,11 +102,16 @@ impl Synth {
         } else {
             procedural
         };
-        // Lift-off keeps the in-gear pitch but softens the engine independently
-        // of rolling noise, tire scrub and impacts. Load is already smoothed.
-        // Boost the engine by 6 dB before spatial attenuation, keeping other
-        // driving sounds at their existing levels and preserving mix headroom.
-        let engine = engine * 2.0 * (0.35 + self.load * 0.65);
+        // Bring the rear-engine Kestrel forward without raising tires or road noise.
+        // A soft knee catches exhaust peaks before the final mix limiter.
+        let engine = if voice.model.appearance() == CarModel::Roadster {
+            let amplified = engine * 3.2 * (0.45 + self.load * 0.55);
+            let magnitude = amplified.abs();
+            amplified.signum()
+                * (magnitude.min(0.22) + 0.06 * ((magnitude - 0.22).max(0.0) / 0.06).tanh())
+        } else {
+            engine * 2.0 * (0.35 + self.load * 0.65)
+        };
         let turbo_target = if voice.enabled {
             self.turbo_target
         } else {
@@ -373,6 +378,36 @@ fn engine_frequency(rpm: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kestrel_voice_stays_present_with_headroom_for_the_driving_mix() {
+        for load in [0.12, 1.0] {
+            let mut synth = Synth::default();
+            let mut energy = 0.0;
+            let mut clipped = 0;
+            for i in 0..48000 {
+                let sample = synth.sample(Voice {
+                    frequency: 150.0,
+                    load,
+                    scrub: 0.0,
+                    model: CarModel::Roadster,
+                    enabled: true,
+                });
+                if i > 12000 {
+                    energy += sample * sample;
+                    if sample.abs() >= 0.299 {
+                        clipped += 1;
+                    }
+                }
+            }
+            let rms = (energy / 35999.0_f32).sqrt();
+            assert!(
+                rms > if load < 0.5 { 0.012 } else { 0.035 },
+                "Kestrel too quiet at load {load}: {rms}"
+            );
+            assert_eq!(clipped, 0, "engine alone must leave headroom");
+        }
+    }
 
     #[test]
     fn outdoor_reflections_spread_a_centred_source_and_decay() {

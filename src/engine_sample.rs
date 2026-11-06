@@ -203,10 +203,10 @@ impl RecordedEngine {
             }
         }
         // Coasting emphasizes the body; throttle opens the upper engine texture.
-        let cutoff = 1300.0 + load * 3800.0 + (rpm / 6500.0).clamp(0.0, 1.0) * 2000.0;
+        let cutoff = 1800.0 + load * 4200.0 + (rpm / 6500.0).clamp(0.0, 1.0) * 2000.0;
         let alpha = 1.0 - (-std::f32::consts::TAU * cutoff / SAMPLE_RATE).exp();
         self.low += (value - self.low) * alpha;
-        (self.low + (value - self.low) * (0.12 + load * 0.55)) * (0.13 + load * 0.10)
+        (self.low + (value - self.low) * (0.22 + load * 0.50)) * (0.13 + load * 0.10)
     }
 }
 
