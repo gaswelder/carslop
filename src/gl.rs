@@ -22,7 +22,7 @@ layout (location = 0) in vec3 position;
 layout (location = 1) in vec3 color;
 layout (location = 2) in vec3 normal;
 layout (location = 3) in vec2 material;
-uniform mat4 u_view_projection;
+uniform mat4 u_clip_from_model;
 uniform mat4 u_model;
 out vec3 v_color;
 out vec3 v_normal;
@@ -34,7 +34,7 @@ void main() {
     v_normal = mat3(u_model) * normal;
     v_color = color;
     v_material = material;
-    gl_Position = u_view_projection * world;
+    gl_Position = u_clip_from_model * vec4(position, 1.0);
 }";
 
 pub const SCENE_FS: &str = "#version 330 core
@@ -569,8 +569,10 @@ impl Mesh {
             gl::Uniform1f(reverse_light, 0.0);
             set_tint(program, [1.0; 3]);
             for index in 0..4 {
-                let matrix = vehicle_wheel_matrix(car, *model, index);
-                set_scene_transform(program, camera, &matrix);
+                let local = vehicle_wheel_local_matrix(car, *model, index);
+                let matrix = multiply(*model, local);
+                let clip = multiply(camera.clip_from_model(model), local);
+                set_scene_transform_clip(program, camera, &matrix, &clip);
                 gl::DrawArrays(
                     GL_TRIANGLES,
                     self.wheel_range[car.model.index()][index].start,
@@ -981,10 +983,16 @@ impl Drop for ParticleRenderer {
 }
 
 unsafe fn set_scene_transform(program: u32, camera: &Camera, model: &[f32; 16]) {
-    for (name, matrix) in [
-        ("u_view_projection", &camera.view_projection),
-        ("u_model", model),
-    ] {
+    set_scene_transform_clip(program, camera, model, &camera.clip_from_model(model));
+}
+
+unsafe fn set_scene_transform_clip(
+    program: u32,
+    camera: &Camera,
+    model: &[f32; 16],
+    clip: &[f32; 16],
+) {
+    for (name, matrix) in [("u_clip_from_model", clip), ("u_model", model)] {
         let name = CString::new(name).unwrap();
         gl::UniformMatrix4fv(
             gl::GetUniformLocation(program, name.as_ptr()),
@@ -1046,10 +1054,20 @@ pub fn perspective(aspect: f32, fov_y: f32, near: f32, far: f32) -> [f32; 16] {
 
 pub struct Camera {
     view_projection: [f32; 16],
+    relative_view_projection: [f32; 16],
     eye: [f32; 3],
     particle_view: crate::particles::View,
 }
 impl Camera {
+    fn clip_from_model(&self, model: &[f32; 16]) -> [f32; 16] {
+        // Cancel the large city translation before projecting millimetre-scale
+        // car detail. Adding it on the GPU first collapses nearby body panels.
+        let mut relative = *model;
+        for axis in 0..3 {
+            relative[12 + axis] -= self.eye[axis];
+        }
+        multiply(self.relative_view_projection, relative)
+    }
     #[cfg(test)]
     pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
         let m = self.view_projection;
@@ -1163,8 +1181,11 @@ fn camera_at_up(
     ];
     let mut projection = perspective(aspect, 1.0, 0.3, VIEW_DISTANCE);
     projection[8] = -horizontal_shift;
+    let mut rotation = view;
+    rotation[12..15].fill(0.0);
     Camera {
         view_projection: multiply(projection, view),
+        relative_view_projection: multiply(projection, rotation),
         eye,
         particle_view: crate::particles::View {
             eye,
@@ -1226,7 +1247,16 @@ pub fn body_model_matrix(
     ]
 }
 
+#[cfg(test)]
 fn vehicle_wheel_matrix(car: &crate::vehicle::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
+    multiply(body, vehicle_wheel_local_matrix(car, body, index))
+}
+
+fn vehicle_wheel_local_matrix(
+    car: &crate::vehicle::Vehicle,
+    body: [f32; 16],
+    index: usize,
+) -> [f32; 16] {
     let mut center = car.model.wheel_centers()[index];
     let mounted: [f32; 3] = std::array::from_fn(|i| {
         body[i] * center[0] + body[4 + i] * center[1] + body[8 + i] * center[2] + body[12 + i]
@@ -1241,7 +1271,7 @@ fn vehicle_wheel_matrix(car: &crate::vehicle::Vehicle, body: [f32; 16], index: u
     center[1] += ((ground + radius - mounted[1]) / body[5].abs().max(0.5)).clamp(-0.16, 0.14);
     let front = index >= 2;
     wheel_matrix(
-        body,
+        model_matrix([0.0; 3], 0.0, 0.0),
         center,
         if front { car.front_wheel_angle() } else { 0.0 },
         car.wheel_phase[usize::from(front)],
@@ -1342,11 +1372,38 @@ pub fn clear_screen() {
 pub fn enable_depth_test() {
     unsafe {
         gl::Enable(GL_DEPTH_TEST);
+        gl::Enable(gl::MULTISAMPLE);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camera_relative_projection_preserves_fine_car_details_at_city_coordinates() {
+        let mut reference = None;
+        for origin in [[0.0, 100.0, 0.0], [12000.0, 100.0, 9000.0]] {
+            let camera = super::chase_camera(
+                16.0 / 9.0,
+                crate::camera::Pose {
+                    eye: [origin[0] + 4.0, origin[1] + 2.0, origin[2] - 6.0],
+                    target: [origin[0], origin[1] + 0.25, origin[2]],
+                },
+            );
+            let clip = camera.clip_from_model(&super::model_matrix(origin, 0.7, 0.0));
+            let a = transform(clip, [0.5, 0.3, 1.0]);
+            let b = transform(clip, [0.5001, 0.3, 1.0]);
+            assert!(
+                (a[0] - b[0]).abs() > 0.00001,
+                "nearby panels must remain distinct"
+            );
+            if let Some((expected_a, expected_b)) = reference {
+                assert_eq!(a, expected_a);
+                assert_eq!(b, expected_b);
+            }
+            reference = Some((a, b));
+        }
+    }
+
     #[test]
     fn building_lod_uses_hysteresis_to_avoid_boundary_flicker() {
         assert!(!super::coarse_lod(Some(false), 195.0_f32.powi(2)));

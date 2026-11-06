@@ -209,11 +209,24 @@ impl App {
         gl_attr.set_context_profile(sdl3::video::GLProfile::Core);
         gl_attr.set_context_version(3, 3);
         gl_attr.set_depth_size(24);
+        gl_attr.set_multisample_buffers(1);
+        gl_attr.set_multisample_samples(4);
         let events = sdl_context.event_pump().expect("failed to get event pump");
-        let mut window = video
-            .window("Cars LOP", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-            .opengl()
-            .build()
+        let build_window = || {
+            video
+                .window("Cars LOP", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
+                .opengl()
+                .build()
+        };
+        let mut window = build_window()
+            .or_else(|error| {
+                log::warn!(
+                    "Multisampled window unavailable: {error}; using the default framebuffer"
+                );
+                gl_attr.set_multisample_buffers(0);
+                gl_attr.set_multisample_samples(0);
+                build_window()
+            })
             .expect("failed to create window");
         let gl_context = gl::create_gl_context(&window).expect("failed to create GL context");
         let _ = video.gl_set_swap_interval(sdl3::video::SwapInterval::VSync);
@@ -1579,6 +1592,50 @@ mod tests {
                 "lamps must return to their unlit finish"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; compares car detail near and far from the map origin"]
+    fn car_details_stay_stable_far_from_the_map_origin() {
+        let app = App::with_location(false);
+        let track = std::sync::Arc::new(TrackId::Compact.track().flat_test_track());
+        let mut frames = Vec::new();
+        for (label, position) in [
+            ("near", [0.0, 100.0, 0.0]),
+            ("far", [12000.0, 100.0, 9000.0]),
+        ] {
+            let car = Vehicle::on_track(position, 0.0, CarModel::Roadster, track.clone());
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: [position[0] + 4.0, position[1] + 2.0, position[2] - 6.0],
+                    target: [position[0], position[1] + 0.25, position[2]],
+                },
+            );
+            gl::clear_screen();
+            app.mesh().draw(
+                app.scene_program,
+                &camera,
+                &gl::vehicle_body_matrix(&car),
+                [1.0, 0.18, 0.08],
+                &car,
+            );
+            let path = std::env::temp_dir().join(format!("carslop-car-precision-{label}.ppm"));
+            capture_frame(&path);
+            let bytes = std::fs::read(path).unwrap();
+            let header = format!("P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).len();
+            frames.push(bytes[header..].to_vec());
+        }
+        let changed = frames[0]
+            .chunks_exact(3)
+            .zip(frames[1].chunks_exact(3))
+            .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 20))
+            .count();
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        assert!(
+            changed < 150,
+            "car details flicker after a world translation: {changed} pixels"
+        );
     }
 
     #[test]
