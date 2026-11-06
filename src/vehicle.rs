@@ -6,6 +6,7 @@ pub const NEUTRAL_GEAR: u8 = u8::MAX;
 pub const IDLE_RPM: f32 = 900.0;
 pub const REDLINE_RPM: f32 = 6500.0;
 const REV_MATCH_SECONDS: f32 = 0.22;
+const SOUND_SHIFT_SECONDS: f32 = 0.36;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -48,6 +49,7 @@ pub struct Vehicle {
     steering: f32,
     yaw_rate: f32,
     shift_timer: f32,
+    sound_shift_timer: f32,
     rev_match_timer: f32,
     neutral_fuel_cut: bool,
     acceleration: [f32; 2], // longitudinal/lateral, filtered for load transfer
@@ -101,6 +103,7 @@ impl Vehicle {
             tire_scrub: 0.0,
             brake_lights: false,
             shift_timer: 0.0,
+            sound_shift_timer: 0.0,
             rev_match_timer: 0.0,
             neutral_fuel_cut: false,
             acceleration: [0.0; 2],
@@ -188,6 +191,7 @@ impl Vehicle {
                 Direction::Drive
             };
             self.shift_timer = 0.16;
+            self.sound_shift_timer = SOUND_SHIFT_SECONDS;
             if previous == NEUTRAL_GEAR && matches!(next, 0 | 1) {
                 self.launch_energy = self.flywheel_energy();
             }
@@ -250,6 +254,7 @@ impl Vehicle {
             self.refresh_speed();
             if previous_gear != self.gear {
                 self.shift_timer = 0.16;
+                self.sound_shift_timer = SOUND_SHIFT_SECONDS;
             }
             self.shift_timer = (self.shift_timer - seconds).max(0.0);
             self.rev_match_timer = (self.rev_match_timer - seconds).max(0.0);
@@ -733,6 +738,7 @@ impl Vehicle {
 
     fn update_engine_feedback(&mut self, controls: Controls, dt: f32) {
         let throttle = controls.throttle.clamp(0.0, 1.0);
+        self.sound_shift_timer = (self.sound_shift_timer - dt).max(0.0);
         let blip = self.rev_match_timer / REV_MATCH_SECONDS;
         if self.gear == NEUTRAL_GEAR || self.clutch_open {
             self.update_neutral_engine(throttle, dt);
@@ -744,12 +750,12 @@ impl Vehicle {
                 .min(REDLINE_RPM);
             let response = if blip > 0.0 {
                 22.0
-            } else if self.shift_timer > 0.0 {
-                12.0
+            } else if self.sound_shift_timer > 0.0 {
+                3.2
             } else {
                 7.5
             };
-            self.engine_rpm += (target_rpm - self.engine_rpm) * (dt * response).clamp(0.0, 1.0);
+            self.engine_rpm += (target_rpm - self.engine_rpm) * (1.0 - (-dt * response).exp());
         }
         // An unloaded engine uses less sustained load; fuel cuts also reach
         // the audio layers so the limiter is audible as well as visible.
@@ -762,7 +768,8 @@ impl Vehicle {
         } else {
             throttle
         };
-        let shift_unload = if self.shift_timer > 0.0 { 0.25 } else { 1.0 };
+        let shift_progress = 1.0 - self.sound_shift_timer / SOUND_SHIFT_SECONDS;
+        let shift_unload = 0.15 + 0.85 * shift_progress * shift_progress;
         // Feed the blip into both recorded load/coast layers and procedural
         // engine voices, without applying extra driving force at the wheels.
         let target_load = (requested * shift_unload + 0.12 * (1.0 - requested))
@@ -2602,6 +2609,34 @@ mod tests {
     }
 
     #[test]
+    fn upshift_sound_has_an_audible_rpm_and_load_transition() {
+        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        car.manual = true;
+        car.gear = 2;
+        car.speed = car.model.spec().gearbox.speed_at_rpm(5000.0, 2);
+        car.engine_rpm = 5000.0;
+        car.engine_load = 1.0;
+        car.shift(true);
+        let target = car.target_engine_rpm();
+        let controls = Controls {
+            throttle: 1.0,
+            ..Controls::default()
+        };
+        car.update_engine_feedback(controls, 1.0 / 60.0);
+        assert!(car.engine_rpm > target + (5000.0 - target) * 0.85);
+        for _ in 0..8 {
+            car.update_engine_feedback(controls, 1.0 / 60.0);
+        }
+        assert!(car.engine_load < 0.6);
+        assert!(car.engine_rpm > target + 200.0);
+        for _ in 0..40 {
+            car.update_engine_feedback(controls, 1.0 / 60.0);
+        }
+        assert!((car.engine_rpm - target).abs() < 100.0);
+        assert!(car.engine_load > 0.9);
+    }
+
+    #[test]
     fn downshifts_blip_engine_while_braking_and_then_return_to_coast() {
         let road = track::TrackId::Compact.track().at_distance(50.0);
         for model in crate::cars::ALL {
@@ -2797,7 +2832,20 @@ mod tests {
         }
         assert!(car.engine_rpm > IDLE_RPM);
         assert!(car.engine_rpm < REDLINE_RPM);
+        // Let a longer audible shift finish before checking sustained engine load.
+        car.manual = true;
+        for _ in 0..30 {
+            car.position = road.lane_position(0.0);
+            car.update(
+                Duration::from_secs_f64(1.0 / 60.0),
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            );
+        }
         assert!(car.engine_load > 0.45);
+        car.manual = false;
 
         // Begin below the first shift in first gear. The previous acceleration
         // may already have shifted; hysteresis correctly retains that gear.
