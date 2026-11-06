@@ -373,7 +373,14 @@ impl Vehicle {
                 let spinning = drive.abs() * drive_share > capacity;
                 let limit = if spinning {
                     let sideways = (self.slip.abs() / 2.0).clamp(0.0, 1.0);
-                    limit * (0.97 - 0.05 * sideways)
+                    if axle == 1 && self.model.appearance() == CarModel::Roadster {
+                        // Combined slip reduces driving traction as the rear slides,
+                        // leaving lateral force for recovery and countersteering.
+                        let angle = rear_v.abs().atan2(longitudinal.abs().max(2.5));
+                        limit * (0.94 - 0.14 * (angle / 0.6).clamp(0.0, 1.0))
+                    } else {
+                        limit * (0.97 - 0.05 * sideways)
+                    }
                 } else {
                     limit
                 };
@@ -1129,6 +1136,35 @@ mod tests {
             );
             assert!(speed < 12.0, "donuts must stay tight: {speed}");
         }
+    }
+
+    #[test]
+    fn kestrel_rear_grip_recovers_under_partial_throttle() {
+        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let h = car.heading;
+        car.velocity = [
+            h.sin() * 15.0 + h.cos() * 6.0,
+            h.cos() * 15.0 - h.sin() * 6.0,
+        ];
+        car.yaw_rate = 0.3;
+        for _ in 0..480 {
+            treadmill_tick(
+                &mut car,
+                Controls {
+                    throttle: 0.35,
+                    ..Controls::default()
+                },
+            );
+        }
+        let rear = car.slip
+            - car.yaw_rate * car.model.spec().wheelbase * car.model.spec().dynamics.front_weight;
+        let angle = rear.abs().atan2(car.speed.abs().max(2.5)).to_degrees();
+        assert!(
+            angle < 4.0,
+            "rear slip persists under a maintenance throttle: {angle}"
+        );
+        assert!(car.speed > 8.0);
+        assert!(car.yaw_rate.abs() < 0.2);
     }
 
     #[test]
