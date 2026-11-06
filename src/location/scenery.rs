@@ -202,8 +202,6 @@ struct Feature {
     travel: P,
     value: u16,
     phase: i64,
-    estimated: bool,
-    inferred: bool,
     width: f64,
     source: P,
 }
@@ -376,7 +374,6 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
             };
             let left = [travel[1], -travel[0]];
             let mut position = None;
-            let mut estimated = true;
             for extra in [0.0, 1.5, 3.0] {
                 let anchor = along(
                     path,
@@ -387,7 +384,6 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
                     && !conflicts(&Point::new(p[0], p[1]).buffer(0.18))
                 {
                     position = Some(p);
-                    estimated = false;
                     break;
                 }
                 for step in 0..31 {
@@ -417,8 +413,6 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
                 travel,
                 value,
                 phase: 0,
-                estimated,
-                inferred,
                 width: r.width,
                 source: p,
             });
@@ -496,24 +490,22 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
     let mut file = BufWriter::new(fs::File::create(output.join("furniture.txt"))?);
     writeln!(
         file,
-        "FURNITURE 1 {:08x} {:08x}",
+        "FURNITURE 3 {:08x} {:08x}",
         crate::street_surface::crc32(city),
         s.text_crc
     )?;
     for f in &unique {
+        let kind = match f.kind {
+            0 => "signal",
+            1 => "stop",
+            2 => "yield",
+            3 => "speed_limit",
+            _ => unreachable!("unknown furniture kind"),
+        };
         writeln!(
             file,
-            "f {} {} {:.3} {:.3} {:.7} {:.7} {} {} {} {}",
-            f.id,
-            f.kind,
-            f.position[0],
-            f.position[1],
-            f.travel[0],
-            f.travel[1],
-            f.value,
-            f.phase,
-            u8::from(f.estimated),
-            u8::from(f.inferred)
+            "{} {} {:.3} {:.3} {:.7} {:.7} {} {}",
+            f.id, kind, f.position[0], f.position[1], f.travel[0], f.travel[1], f.value, f.phase
         )?;
     }
     file.flush()?;

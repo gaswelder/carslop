@@ -8,7 +8,12 @@ pub struct HeightField {
     values: Vec<f32>,
 }
 impl HeightField {
+    #[cfg(test)]
     pub fn load(text: &str, city: &str) -> Result<Self, String> {
+        Self::load_with_checksum(text, crate::street_surface::crc32(city))
+    }
+
+    pub(crate) fn load_with_checksum(text: &str, city_checksum: u32) -> Result<Self, String> {
         let mut lines = text.lines();
         let header: Vec<_> = lines
             .next()
@@ -18,7 +23,7 @@ impl HeightField {
         if header.len() != 3
             || header[0] != "ELEVATION"
             || header[1] != "1"
-            || u32::from_str_radix(header[2], 16).ok() != Some(crate::street_surface::crc32(city))
+            || u32::from_str_radix(header[2], 16).ok() != Some(city_checksum)
         {
             return Err(
                 "stale elevation package; re-import the source with add-location under a new name"

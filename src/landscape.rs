@@ -25,68 +25,19 @@ impl Landscape {
             crate::street_surface::SourceChecksums::new(city, streets),
         )
     }
-    pub(crate) fn load_with_checksums(
+    #[cfg(test)]
+    fn load_with_checksums(
         text: &str,
         checksums: crate::street_surface::SourceChecksums,
     ) -> Result<Self, String> {
-        let mut lines = text.lines();
-        let expected = format!(
-            "LANDSCAPE 1 {:08x} {:08x}",
-            checksums.city, checksums.streets
-        );
-        if lines.next() != Some(expected.as_str()) {
-            return Err(
-                "stale landscape package; re-import the source with add-location under a new name"
-                    .into(),
-            );
-        }
-        let mut result = Self::default();
-        for line in lines {
-            let f: Vec<_> = line.split_whitespace().collect();
-            let value = |i: usize| -> Result<f32, String> {
-                let v: f32 = f
-                    .get(i)
-                    .ok_or("missing landscape coordinate")?
-                    .parse()
-                    .map_err(|_| "invalid landscape number")?;
-                if v.is_finite() && v.abs() < 100_000.0 {
-                    Ok(v)
-                } else {
-                    Err("invalid landscape coordinate".into())
-                }
-            };
-            match f.first().copied() {
-                Some("a") if f.len() == 8 => {
-                    let style: usize = f[1].parse().map_err(|_| "invalid landscape style")?;
-                    if style > 8 {
-                        return Err("unknown ground style".into());
-                    }
-                    result.ground.push(GroundTriangle {
-                        style,
-                        points: [
-                            [value(2)?, value(3)?],
-                            [value(4)?, value(5)?],
-                            [value(6)?, value(7)?],
-                        ],
-                    });
-                }
-                Some("t") if f.len() == 6 => {
-                    let height = value(4)?;
-                    let radius = value(5)?;
-                    if !(2.5..=18.0).contains(&height) || !(0.7..=4.5).contains(&radius) {
-                        return Err("invalid tree size".into());
-                    }
-                    result.trees.push(Tree {
-                        id: f[1].parse().map_err(|_| "invalid tree id")?,
-                        point: [value(2)?, value(3)?],
-                        height,
-                        radius,
-                    });
-                }
-                _ => return Err("invalid landscape record".into()),
-            }
-        }
-        for (i, t) in result.ground.iter().enumerate() {
+        let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
+        std::fs::write(folder.path().join("landscape.txt"), text).map_err(|e| e.to_string())?;
+        crate::city_assets::CityAsset::new(folder.path().to_path_buf()).get_landscape(checksums)
+    }
+
+    pub(crate) fn index_ground(&mut self) {
+        self.grid.clear();
+        for (i, t) in self.ground.iter().enumerate() {
             let low: [i32; 2] = std::array::from_fn(|axis| {
                 (t.points
                     .iter()
@@ -105,11 +56,10 @@ impl Landscape {
             });
             for x in low[0]..=high[0] {
                 for z in low[1]..=high[1] {
-                    result.grid.entry((x, z)).or_default().push(i);
+                    self.grid.entry((x, z)).or_default().push(i);
                 }
             }
         }
-        Ok(result)
     }
     #[cfg(test)]
     pub fn append_imagery(&mut self, text: &str, city: &str, streets: &str) -> Result<(), String> {
@@ -118,24 +68,33 @@ impl Landscape {
             crate::street_surface::SourceChecksums::new(city, streets),
         )
     }
-    pub(crate) fn append_imagery_with_checksums(
+    #[cfg(test)]
+    fn append_imagery_with_checksums(
         &mut self,
         text: &str,
         checksums: crate::street_surface::SourceChecksums,
     ) -> Result<(), String> {
-        let extra = Self::load_with_checksums(text, checksums)?;
-        if !extra.ground.is_empty() {
-            return Err("imagery supplement must contain only trees".into());
-        }
+        let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let header = format!(
+            "LANDSCAPE 1 {:08x} {:08x}\n",
+            checksums.city, checksums.streets
+        );
+        std::fs::write(folder.path().join("landscape.txt"), header).map_err(|e| e.to_string())?;
+        std::fs::write(folder.path().join("imagery-trees.txt"), text).map_err(|e| e.to_string())?;
+        let extra = crate::city_assets::CityAsset::new(folder.path().to_path_buf())
+            .get_landscape(checksums)?;
+        self.append_imagery_trees(extra.trees)
+    }
+
+    pub(crate) fn append_imagery_trees(&mut self, trees: Vec<Tree>) -> Result<(), String> {
         let mut ids: std::collections::HashSet<_> = self.trees.iter().map(|t| t.id).collect();
-        if extra
-            .trees
+        if trees
             .iter()
             .any(|t| t.id < (1_u64 << 63) || !ids.insert(t.id))
         {
             return Err("invalid or duplicate imagery tree id".into());
         }
-        self.trees.extend(extra.trees);
+        self.trees.extend(trees);
         Ok(())
     }
     pub fn style(&self, p: [f32; 2]) -> Option<usize> {

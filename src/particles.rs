@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn scenic_particles_use_scenic_height_and_verge_width() {
-        let track = track::TrackId::Scenic.track();
+        let track = track::TrackId::scenic().track();
         let road = track.at_distance(50.0);
         let mut car = Vehicle::on_track(
             road.lane_position(2.0),

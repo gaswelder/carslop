@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn shoreline_levels_are_route_local_and_compact_wrapper_is_unchanged() {
         let compact = track::TrackId::Compact.track();
-        let scenic = track::TrackId::Scenic.track();
+        let scenic = track::TrackId::scenic().track();
         assert_eq!(shoreline(), compact.shoreline());
         let shore = scenic.shoreline()[10];
         let near_scenic = Levels::on_track(shore, 0.0, &scenic);

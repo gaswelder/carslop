@@ -83,12 +83,21 @@ impl SourceChecksums {
 }
 
 impl StreetSurface {
+    #[cfg(test)]
     pub fn load_city(
         directory: &std::path::Path,
         source: &str,
         count: usize,
     ) -> Result<(Self, RoadPaths, SourceChecksums), String> {
-        binary::load(directory, source, count).map_err(|error| {
+        Self::load_city_with_checksum(directory, crc32(source), count)
+    }
+
+    pub(crate) fn load_city_with_checksum(
+        directory: &std::path::Path,
+        city_checksum: u32,
+        count: usize,
+    ) -> Result<(Self, RoadPaths, SourceChecksums), String> {
+        binary::load(directory, city_checksum, count).map_err(|error| {
             let name = directory.file_stem().unwrap_or_default().to_string_lossy();
             format!(
                 "cannot load required collision data {}: {error}; rebuild with bake-collision --location {name}",
@@ -316,11 +325,11 @@ mod tests {
 
     #[test]
     fn stale_surface_package_is_rejected_before_loading_geometry() {
-        let source = &crate::city_assets::read("city.txt");
+        let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
+        let source = std::fs::read_to_string(assets.directory().join("city.txt")).unwrap();
+        let streets = std::fs::read_to_string(assets.directory().join("streets.txt")).unwrap();
         let stale = format!("{source}\n");
-        assert!(
-            StreetSurface::load(&crate::city_assets::read("streets.txt"), &stale, 1839).is_err()
-        );
+        assert!(StreetSurface::load(&streets, &stale, 1839).is_err());
     }
     #[test]
     fn curbs_report_crossings_without_becoming_walls() {

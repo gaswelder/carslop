@@ -42,7 +42,7 @@ fn surfaces(
     let city = osm::write(map, &temp.0).unwrap();
     let s = surfaces::build(map, &city, &temp.0).unwrap();
     let loaded = crate::street_surface::StreetSurface::load(
-        &crate::package::read_to_string(temp.0.join("streets.txt")).unwrap(),
+        &std::fs::read_to_string(temp.0.join("streets.txt")).unwrap(),
         &city,
         map.roads.len(),
     )
@@ -336,12 +336,12 @@ fn controls(oneway: bool, enabled: bool) -> Vec<crate::traffic::Furniture> {
     way(&mut s, 101, &[1, 5, 2, 4, 3], &tags);
     let m = osm::compile(&s, None).unwrap();
     let (temp, surfaces, _) = surfaces(&m);
-    let city = crate::package::read_to_string(temp.0.join("city.txt")).unwrap();
+    let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
     scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
     crate::traffic::load(
-        &crate::package::read_to_string(temp.0.join("furniture.txt")).unwrap(),
+        &std::fs::read_to_string(temp.0.join("furniture.txt")).unwrap(),
         &city,
-        &crate::package::read_to_string(temp.0.join("streets.txt")).unwrap(),
+        &std::fs::read_to_string(temp.0.join("streets.txt")).unwrap(),
     )
     .unwrap()
 }
@@ -409,11 +409,11 @@ fn landscape_priorities_crop_and_tree_conflicts_are_preserved() {
         &[vec![[55., 55.], [65., 55.], [65., 65.], [55., 65.]]],
     );
     let (temp, surfaces, _) = surfaces(&m);
-    let city = crate::package::read_to_string(temp.0.join("city.txt")).unwrap();
+    let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
     scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
-    let streets = crate::package::read_to_string(temp.0.join("streets.txt")).unwrap();
+    let streets = std::fs::read_to_string(temp.0.join("streets.txt")).unwrap();
     let l = crate::landscape::Landscape::load(
-        &crate::package::read_to_string(temp.0.join("landscape.txt")).unwrap(),
+        &std::fs::read_to_string(temp.0.join("landscape.txt")).unwrap(),
         &city,
         &streets,
     )
@@ -466,12 +466,11 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
     s.relations.push(relation);
     let m = map(&[[-50., 0.], [50., 0.]], &[(0, 1, 8., 1)], &[]);
     let (temp, surfaces, _) = surfaces(&m);
-    let city = crate::package::read_to_string(temp.0.join("city.txt")).unwrap();
+    let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
     scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
-    let meta: serde_json::Value = serde_json::from_str(
-        &crate::package::read_to_string(temp.0.join("landscape.json")).unwrap(),
-    )
-    .unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(temp.0.join("landscape.json")).unwrap())
+            .unwrap();
     assert!((meta["area_m2_by_style"]["1"].as_f64().unwrap() - 150.).abs() < 0.01);
 }
 
@@ -482,9 +481,9 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
     use std::io::{BufRead, BufReader};
     let imported =
         std::path::PathBuf::from(std::env::var_os("VALIDATED_CITY").expect("set VALIDATED_CITY"));
-    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/locations/nicosia.sqlite");
-    let original = crate::package::read_to_string(bundled.join("city.txt")).unwrap();
-    let rebuilt = crate::package::read_to_string(imported.join("city.txt")).unwrap();
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/locations/nicosia");
+    let original = std::fs::read_to_string(bundled.join("city.txt")).unwrap();
+    let rebuilt = std::fs::read_to_string(imported.join("city.txt")).unwrap();
     let origin = |text: &str| -> P {
         let f: Vec<_> = text
             .lines()
@@ -541,14 +540,12 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
         assert_eq!(a.height, b.height);
         assert_eq!(a.polygon.len(), b.polygon.len());
     }
-    let metadata: serde_json::Value = serde_json::from_str(
-        &crate::package::read_to_string(imported.join("streets.json")).unwrap(),
-    )
-    .unwrap();
-    let reference: serde_json::Value = serde_json::from_str(
-        &crate::package::read_to_string(bundled.join("streets.json")).unwrap(),
-    )
-    .unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(imported.join("streets.json")).unwrap())
+            .unwrap();
+    let reference: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bundled.join("streets.json")).unwrap())
+            .unwrap();
     let area = metadata["road_area_m2"].as_f64().unwrap();
     let reference_area = reference["road_area_m2"].as_f64().unwrap();
     assert!(
@@ -587,30 +584,32 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
     assert_eq!(triangles, expected_triangles);
     let key = crate::street_surface::crc32(&rebuilt);
     let streets_crc = super::surfaces::crc_file(&imported.join("streets.txt")).unwrap();
-    let elevation =
-        crate::package::read_to_string(imported.join("elevation/heightfield.txt")).unwrap();
+    let elevation = std::fs::read_to_string(imported.join("elevation/heightfield.txt")).unwrap();
     crate::elevation::HeightField::load(&elevation, &rebuilt).unwrap();
-    for (file, kind) in [
-        ("furniture.txt", "FURNITURE"),
-        ("landscape.txt", "LANDSCAPE"),
+    for (file, kind, version) in [
+        ("furniture.txt", "FURNITURE", 3),
+        ("landscape.txt", "LANDSCAPE", 1),
     ] {
         let first = BufReader::new(fs::File::open(imported.join(file)).unwrap())
             .lines()
             .next()
             .unwrap()
             .unwrap();
-        assert_eq!(first, format!("{kind} 1 {key:08x} {streets_crc:08x}"));
+        assert_eq!(
+            first,
+            format!("{kind} {version} {key:08x} {streets_crc:08x}")
+        );
     }
     let controls = |folder: &Path| {
         let mut counts = BTreeMap::new();
-        for line in crate::package::read_to_string(folder.join("furniture.txt"))
+        for line in std::fs::read_to_string(folder.join("furniture.txt"))
             .unwrap()
             .lines()
             .skip(1)
         {
             let f: Vec<_> = line.split_whitespace().collect();
             *counts
-                .entry((f[1].to_string(), f[2].to_string()))
+                .entry((f[0].to_string(), f[1].to_string()))
                 .or_insert(0_u64) += 1;
         }
         counts
@@ -622,7 +621,7 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
         "mapped control approaches changed"
     );
     let trees = |folder: &Path| {
-        crate::package::read_to_string(folder.join("landscape.txt"))
+        std::fs::read_to_string(folder.join("landscape.txt"))
             .unwrap()
             .lines()
             .filter(|l| l.starts_with("t "))
@@ -638,14 +637,12 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
         old_trees, new_trees,
         "mapped tree identities or dimensions changed"
     );
-    let old_land: serde_json::Value = serde_json::from_str(
-        &crate::package::read_to_string(bundled.join("landscape.json")).unwrap(),
-    )
-    .unwrap();
-    let new_land: serde_json::Value = serde_json::from_str(
-        &crate::package::read_to_string(imported.join("landscape.json")).unwrap(),
-    )
-    .unwrap();
+    let old_land: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bundled.join("landscape.json")).unwrap())
+            .unwrap();
+    let new_land: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(imported.join("landscape.json")).unwrap())
+            .unwrap();
     let mut landscape_deltas = BTreeMap::new();
     for (i, name) in [
         "grass",
@@ -691,7 +688,7 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
         total_delta < 0.0001,
         "total land cover area changed: {original_total} vs {rebuilt_total}"
     );
-    let report = serde_json::json!({"nodes":new.nodes.len(),"road_segments":new.streets.len(),"buildings":new.buildings.len(),"road_area_m2":area,"reference_road_area_m2":reference_area,"triangles":triangles,"curbs":curbs,"mapped_controls":new_controls.values().sum::<u64>(),"trees":new_trees.len(),"landscape_relative_area_differences":landscape_deltas,"landscape_total_relative_area_difference":total_delta,"scene_pack_bytes":crate::package::size(&imported.join("scene.pack")).unwrap(),"reference_scene_pack_bytes":crate::package::size(&bundled.join("scene.pack")).unwrap(),"checks":"geographic node positions; complete road metadata; building IDs/heights/ring sizes; asphalt area and winding; elevation loader; scenery CRC headers; mapped control/tree identities; land cover area per style within 0.25%, total within 0.01%"});
+    let report = serde_json::json!({"nodes":new.nodes.len(),"road_segments":new.streets.len(),"buildings":new.buildings.len(),"road_area_m2":area,"reference_road_area_m2":reference_area,"triangles":triangles,"curbs":curbs,"mapped_controls":new_controls.values().sum::<u64>(),"trees":new_trees.len(),"landscape_relative_area_differences":landscape_deltas,"landscape_total_relative_area_difference":total_delta,"scene_pack_bytes":std::fs::metadata(imported.join("scene.pack")).unwrap().len(),"reference_scene_pack_bytes":std::fs::metadata(bundled.join("scene.pack")).unwrap().len(),"checks":"geographic node positions; complete road metadata; building IDs/heights/ring sizes; asphalt area and winding; elevation loader; scenery CRC headers; mapped control/tree identities; land cover area per style within 0.25%, total within 0.01%"});
     json(
         &imported.parent().unwrap().join("validation-report.json"),
         report.clone(),

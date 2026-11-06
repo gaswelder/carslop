@@ -940,7 +940,7 @@ mod tests {
     use super::*;
 
     fn hill_car(uphill: bool) -> Vehicle {
-        let route = track::TrackId::Scenic.track();
+        let route = track::TrackId::scenic().track();
         let road = (0..200)
             .map(|i| route.at_distance(i as f32 * 10.0))
             .max_by(|a, b| {
@@ -996,7 +996,7 @@ mod tests {
     fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
         for model in crate::cars::ALL {
             for initial_speed in [12.0, -4.0] {
-                let mut car = level_route_car(track::TrackId::Scenic, model);
+                let mut car = level_route_car(track::TrackId::scenic(), model);
                 car.manual = true;
                 if initial_speed < 0.0 {
                     car.shift(false);
@@ -1039,7 +1039,7 @@ mod tests {
     fn kestrel_city_speed_cornering_stays_balanced() {
         for input in [-1.0, -0.5, -0.25, 0.25, 0.5, 1.0] {
             for throttle in [0.0, 0.35, 1.0] {
-                let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+                let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
                 let road = car.track.at_distance(50.0);
                 let speed = 40.0 / 3.6;
                 let mut peak_slip: f32 = 0.0;
@@ -1077,7 +1077,7 @@ mod tests {
         for speed_kmh in [40.0, 60.0, 90.0, 120.0] {
             for input in [-1.0, -0.5, 0.5, 1.0] {
                 for brake in [0.0, 0.35] {
-                    let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+                    let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
                     car.velocity =
                         [car.heading.sin(), car.heading.cos()].map(|v| v * speed_kmh / 3.6);
                     let mut peak_slip: f32 = 0.0;
@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn rear_drive_can_sustain_power_donuts_in_both_directions() {
         for steering in [-1.0, 1.0] {
-            let mut car = level_route_car(track::TrackId::Scenic, CarModel::Muscle);
+            let mut car = level_route_car(track::TrackId::scenic(), CarModel::Muscle);
             let mut rotation = 0.0;
             let mut slip = 0.0;
             let mut speed = 0.0;
@@ -1144,7 +1144,7 @@ mod tests {
 
     #[test]
     fn kestrel_rear_grip_recovers_under_partial_throttle() {
-        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
         let h = car.heading;
         car.velocity = [
             h.sin() * 15.0 + h.cos() * 6.0,
@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn tires_regain_direction_after_lifting_out_of_a_slide() {
         for model in crate::cars::ALL {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             let h = car.heading;
             car.velocity = [
                 h.sin() * 15.0 + h.cos() * 6.0,
@@ -1205,7 +1205,7 @@ mod tests {
             .into_iter()
             .flat_map(|m| [(m, false), (m, true)])
         {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             car.manual = true;
             car.shift(false);
             assert_eq!(car.gear, NEUTRAL_GEAR);
@@ -1253,7 +1253,7 @@ mod tests {
     #[test]
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
-            let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+            let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
             let h = car.heading;
             car.velocity = [
                 h.sin() * 10.0 + h.cos() * 2.0,
@@ -1272,7 +1272,7 @@ mod tests {
             run(1.0) > run(0.0),
             "drive torque must reduce available cornering force"
         );
-        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
         car.velocity = [car.heading.sin() * 20.0, car.heading.cos() * 20.0];
         car.yaw_rate = 0.5;
         car.update(Duration::from_secs_f64(1.0 / 240.0), Controls::default());
@@ -1286,7 +1286,7 @@ mod tests {
     fn lifting_in_gear_slows_the_car_more_than_neutral_without_brake_lights() {
         for model in crate::cars::ALL {
             let coast = |gear| {
-                let mut car = level_route_car(track::TrackId::Scenic, model);
+                let mut car = level_route_car(track::TrackId::scenic(), model);
                 car.manual = true;
                 car.gear = gear;
                 let road = car.track.at_distance(50.0);
@@ -1313,7 +1313,7 @@ mod tests {
 
     #[test]
     fn gearing_changes_wheel_force_and_engine_braking() {
-        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
         car.gear = 1;
         let first = car.drive_force(10.0);
         let first_drag = car.engine_brake_force(10.0);
@@ -1328,7 +1328,7 @@ mod tests {
     #[test]
     fn acceleration_and_braking_transfer_axle_load() {
         for model in crate::cars::ALL {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             let road = car.track.at_distance(50.0);
             car.velocity = road.tangent.map(|v| v * 10.0);
             car.refresh_speed();
@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
         let run = |hz: u32| {
-            let track = std::sync::Arc::new(track::TrackId::Scenic.track().bump_test_track());
+            let track = std::sync::Arc::new(track::TrackId::scenic().track().bump_test_track());
             let road = track.at_distance(50.0);
             let mut car = Vehicle::on_track(
                 road.lane_position(0.0),
@@ -1399,7 +1399,7 @@ mod tests {
 
     #[test]
     fn chassis_can_unload_land_and_settle() {
-        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
         let ground = car.ride_height();
         car.suspension_initialized = true;
         car.position[1] = ground + 0.5;
@@ -1546,7 +1546,7 @@ mod tests {
     fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
         for model in crate::cars::ALL {
             for speed in [-5.0, -3.0, -1.0, 1.0, 3.0, 5.0] {
-                let mut car = level_route_car(track::TrackId::Scenic, model);
+                let mut car = level_route_car(track::TrackId::scenic(), model);
                 for steering in [-1.0, 1.0] {
                     steering_run(&mut car, speed, steering, 5.0, 240.0);
                     let angle = car.steering_angle(speed).abs();
@@ -1572,7 +1572,7 @@ mod tests {
     #[test]
     fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
         for model in crate::cars::ALL {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             for speed_kmh in [40.0, 80.0, 120.0, 200.0] {
                 for direction in [-1.0, 1.0] {
                     let mut previous = 0.0;
@@ -1596,7 +1596,7 @@ mod tests {
             .into_iter()
             .filter(|m| m.appearance() == CarModel::Roadster)
         {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             car.steering = 1.0;
             assert!(car.steering_angle(80.0 / 3.6).abs() > 0.08);
             car.steering = 0.0;
@@ -1621,7 +1621,7 @@ mod tests {
     fn road_speed_held_steering_has_useful_cornering_authority() {
         for model in crate::cars::ALL {
             for input in [-1.0, 1.0] {
-                let mut car = level_route_car(track::TrackId::Scenic, model);
+                let mut car = level_route_car(track::TrackId::scenic(), model);
                 let speed = 80.0 / 3.6;
                 car.velocity = [car.heading.sin() * speed, car.heading.cos() * speed];
                 let start = car.heading;
@@ -1650,7 +1650,7 @@ mod tests {
     fn keyboard_taps_are_small_corrections_and_held_turns_remain_useful() {
         for model in crate::cars::ALL {
             for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
-                let mut car = route_car(track::TrackId::Scenic, model);
+                let mut car = route_car(track::TrackId::scenic(), model);
                 let heading = car.heading;
                 steering_run(&mut car, speed, 1.0, 0.1, 120.0);
                 assert!(
@@ -1671,7 +1671,7 @@ mod tests {
                 }
                 assert_eq!(car.steering, 0.0);
                 assert!(car.yaw_rate.abs() < 0.2, "residual yaw {}", car.yaw_rate);
-                let mut held = route_car(track::TrackId::Scenic, model);
+                let mut held = route_car(track::TrackId::scenic(), model);
                 steering_run(&mut held, speed, 1.0, 1.0, 120.0);
                 let turn = crate::track::angle(held.heading - heading)
                     .abs()
@@ -1690,7 +1690,7 @@ mod tests {
     #[test]
     fn tire_torque_turns_and_countersteering_reverses_rotation() {
         for model in crate::cars::ALL {
-            let mut car = route_car(track::TrackId::Scenic, model);
+            let mut car = route_car(track::TrackId::scenic(), model);
             steering_run(&mut car, 15.0, 0.25, 0.6, 240.0);
             assert!(car.yaw_rate < 0.0);
             assert!(car.yaw_rate.is_finite() && car.yaw_rate.abs() < 2.0);
@@ -1711,13 +1711,13 @@ mod tests {
     #[test]
     fn steering_response_is_consistent_across_frame_rates() {
         for model in crate::cars::ALL {
-            let mut reference = route_car(track::TrackId::Scenic, model);
+            let mut reference = route_car(track::TrackId::scenic(), model);
             let start = reference.heading;
             for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
                 steering_run(&mut reference, 25.0, input, seconds, 240.0);
             }
             for hz in [30.0, 60.0, 144.0] {
-                let mut car = route_car(track::TrackId::Scenic, model);
+                let mut car = route_car(track::TrackId::scenic(), model);
                 for (input, seconds) in
                     [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)]
                 {
@@ -1740,7 +1740,7 @@ mod tests {
             .into_iter()
             .filter(|m| m.appearance() == CarModel::Roadster)
         {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             let start = car.heading;
             steering_run(&mut car, 40.0 / 3.6, 1.0, 0.3, 240.0);
             assert!(
@@ -1759,7 +1759,7 @@ mod tests {
     #[test]
     fn steering_builds_progressively_centres_faster_and_preserves_car_identity() {
         let results = crate::cars::ALL.map(|model| {
-            let mut car = route_car(track::TrackId::Scenic, model);
+            let mut car = route_car(track::TrackId::scenic(), model);
             steering_run(&mut car, 15.0, 1.0, 0.1, 240.0);
             let built = car.front_wheel_angle().abs();
             steering_run(&mut car, 15.0, 0.0, 0.05, 240.0);
@@ -1780,7 +1780,7 @@ mod tests {
     #[test]
     fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
         for model in crate::cars::ALL {
-            let mut car = route_car(track::TrackId::Scenic, model);
+            let mut car = route_car(track::TrackId::scenic(), model);
             let road = car.track.at_distance(50.0);
             let g = &model.spec().gearbox;
             for gear in 1..g.gears() {
@@ -1894,7 +1894,7 @@ mod tests {
     fn route_calibration_sets_forward_caps_braking_and_shift_points() {
         for model in crate::cars::ALL {
             let mut compact = route_car(track::TrackId::Compact, model);
-            let mut scenic = route_car(track::TrackId::Scenic, model);
+            let mut scenic = route_car(track::TrackId::scenic(), model);
             let spec = model.spec();
             assert_eq!(compact.speed_cap(), spec.top_speed);
             assert_eq!(
@@ -1923,7 +1923,7 @@ mod tests {
             210.0 / 3.6
         );
         assert_eq!(
-            route_car(track::TrackId::Scenic, CarModel::Roadster).speed_cap(),
+            route_car(track::TrackId::scenic(), CarModel::Roadster).speed_cap(),
             210.0 / 3.6
         );
     }
@@ -1934,7 +1934,7 @@ mod tests {
             .into_iter()
             .filter(|m| m.appearance() == CarModel::Roadster)
         {
-            for id in [track::TrackId::Compact, track::TrackId::Scenic] {
+            for id in [track::TrackId::Compact, track::TrackId::scenic()] {
                 let mut car = level_route_car(id, model);
                 let mut ticks = 0;
                 while car.speed < 100.0 / 3.6 && ticks < 240 * 20 {
@@ -1968,7 +1968,7 @@ mod tests {
             throttle: 1.0,
             ..Controls::default()
         };
-        let speeds = track::ALL.map(|id| {
+        let speeds = track::all().map(|id| {
             let mut car = level_route_car(id, CarModel::Roadster);
             for _ in 0..240 * 15 {
                 treadmill_tick(&mut car, throttle);
@@ -1999,9 +1999,9 @@ mod tests {
 
     #[test]
     fn kestrel_power_limited_acceleration_tapers_and_overspeed_is_not_clamped() {
-        let sample = track::TrackId::Scenic.track().at_distance(50.0);
+        let sample = track::TrackId::scenic().track().at_distance(50.0);
         let acceleration = |speed: f32| {
-            let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
+            let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
             car.velocity = sample.tangent.map(|v| v * speed);
             car.refresh_speed();
             treadmill_tick(
@@ -2016,7 +2016,7 @@ mod tests {
         assert!(acceleration(20.0) > acceleration(40.0));
         assert!(acceleration(40.0) > 0.0);
         assert!(acceleration(70.0) < 0.0);
-        let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
         car.velocity = sample.tangent.map(|v| v * 70.0);
         car.refresh_speed();
         treadmill_tick(
@@ -2035,7 +2035,7 @@ mod tests {
     #[test]
     fn stop_lights_follow_pedal_at_rest_and_in_reverse() {
         for model in crate::cars::ALL {
-            let mut car = route_car(track::TrackId::Scenic, model);
+            let mut car = route_car(track::TrackId::scenic(), model);
             for reverse in [false, true] {
                 if reverse {
                     assert!(car.toggle_direction());
@@ -2072,7 +2072,7 @@ mod tests {
 
     #[test]
     fn foot_brake_builds_releases_and_does_not_fake_a_skid() {
-        let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
         let road = car.track.at_distance(50.0);
         car.velocity = road.tangent.map(|v| v * 20.0);
         let pedal = Controls {
@@ -2095,7 +2095,7 @@ mod tests {
 
     #[test]
     fn scenic_roadster_brakes_from_100_kmh_progressively() {
-        let mut car = route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
         car.velocity = car
             .track
             .at_distance(50.0)
@@ -2130,7 +2130,7 @@ mod tests {
     #[test]
     fn reverse_uses_gearing_and_redline_instead_of_an_artificial_speed_cap() {
         for model in crate::cars::ALL {
-            let mut car = level_route_car(track::TrackId::Scenic, model);
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             car.toggle_direction();
             assert!(car.drive_force(-8.0) > 0.0);
             let redline_speed = model.spec().gearbox.speed_at_rpm(REDLINE_RPM, 0);
@@ -2143,7 +2143,7 @@ mod tests {
     fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         for model in crate::cars::ALL {
             let mut compact = level_route_car(track::TrackId::Compact, model);
-            let mut scenic = level_route_car(track::TrackId::Scenic, model);
+            let mut scenic = level_route_car(track::TrackId::scenic(), model);
             assert!(compact.toggle_direction() && scenic.toggle_direction());
             for _ in 0..240 * 12 {
                 for car in [&mut compact, &mut scenic] {
@@ -2192,7 +2192,7 @@ mod tests {
     fn road_resolution_uses_each_cars_route_width_and_elevation() {
         let mut compact = route_car(track::TrackId::Compact, CarModel::Roadster);
         let compact_position = compact.position;
-        let mut scenic = route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut scenic = route_car(track::TrackId::scenic(), CarModel::Roadster);
         let road = scenic.track.at_distance(50.0);
         scenic.position = road.lane_position(2.4);
         scenic.resolve_road();
@@ -2227,7 +2227,7 @@ mod tests {
 
     #[test]
     fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
-        let mut car = route_car(track::TrackId::Scenic, CarModel::Muscle);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::Muscle);
         car.toggle_direction();
         treadmill_tick(
             &mut car,
@@ -2242,7 +2242,7 @@ mod tests {
         car.reset(road.lane_position(0.0), road.heading());
         assert!(std::sync::Arc::ptr_eq(
             &car.track,
-            &track::TrackId::Scenic.track()
+            &track::TrackId::scenic().track()
         ));
         assert_eq!(car.model, CarModel::Muscle);
         assert_eq!(car.position, road.lane_position(0.0));
@@ -2618,7 +2618,7 @@ mod tests {
 
     #[test]
     fn upshift_sound_has_an_audible_rpm_and_load_transition() {
-        let mut car = level_route_car(track::TrackId::Scenic, CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
         car.manual = true;
         car.gear = 2;
         car.speed = car.model.spec().gearbox.speed_at_rpm(5000.0, 2);

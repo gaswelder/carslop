@@ -193,7 +193,7 @@ fn finish(mut b: Builder) -> Geometry {
 
 fn terrain_height(track: &track::Track, x: f32, z: f32) -> f32 {
     let s = track.project([x, 0.0, z]);
-    if track.id == track::TrackId::Scenic {
+    if track.is_coastal() {
         let half = track.width * 0.5;
         let levels = [
             (-half - 22.0, crate::ambience::SEA_LEVEL - 0.4),
@@ -237,7 +237,7 @@ fn terrain(b: &mut Builder, track: &track::Track) {
             material: [0.0, 0.35],
         },
     );
-    if track.id == track::TrackId::Scenic {
+    if track.is_coastal() {
         scenic_terrain(b, track);
         return;
     }
@@ -344,14 +344,14 @@ fn road(b: &mut Builder, track: &track::Track) {
             );
         };
         strip(b, -half - 1.0, half + 1.0, 0.0, [0.38, 0.40, 0.26]);
-        if track.id == track::TrackId::Scenic && a.distance < 320.0 {
+        if track.is_coastal() && a.distance < 320.0 {
             // First representative coast section: mineral shoulders sit below
             // the asphalt lip, with muted gravel against the dry verge.
             strip(b, -half - 0.9, -half, 0.02, [0.53, 0.49, 0.38]);
             strip(b, half, half + 0.9, 0.02, [0.53, 0.49, 0.38]);
         }
         strip(b, -half, half, 0.05, [0.23, 0.25, 0.26]);
-        let curb = if track.id == track::TrackId::Scenic {
+        let curb = if track.is_coastal() {
             [0.80, 0.81, 0.73]
         } else if i / 3 % 2 == 0 {
             [0.78, 0.25, 0.16]
@@ -391,7 +391,7 @@ fn road(b: &mut Builder, track: &track::Track) {
             }
         }
     }
-    if track.id == track::TrackId::Scenic {
+    if track.is_coastal() {
         return;
     }
     let start = track.at_distance(0.0);
@@ -495,7 +495,7 @@ fn house(b: &mut Builder, track: &track::Track, x: f32, z: f32) {
 }
 
 fn scenery(b: &mut Builder, track: &track::Track) {
-    if track.id == track::TrackId::Scenic {
+    if track.is_coastal() {
         // Start with a single 320 m coast section. Keep the sea side open and
         // set inland vegetation beyond both the barrier and chase-camera path.
         for i in 0..18 {
@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
-        let route = track::TrackId::Scenic.track();
+        let route = track::TrackId::scenic().track();
         let geometry = build(&route);
         assert!(
             geometry.world_count > 100_000 && geometry.world_count < 800_000,

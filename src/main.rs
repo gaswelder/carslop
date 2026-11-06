@@ -17,7 +17,6 @@ mod imagery_trees;
 mod landscape;
 mod loading;
 mod location;
-mod package;
 mod particles;
 mod prefetch;
 mod scene;
@@ -69,7 +68,7 @@ struct Session {
 
 impl Session {
     fn new(model: CarModel) -> Self {
-        Self::on_track(model, TrackId::Scenic)
+        Self::on_track(model, TrackId::scenic())
     }
 
     fn on_track(model: CarModel, id: TrackId) -> Self {
@@ -235,11 +234,24 @@ impl App {
         info!("{}", gl::debug_context_info());
         let mut locations = city_assets::menu_locations();
         let selected_city = city.then(|| {
-            city_assets::directory()
+            city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .directory()
                 .canonicalize()
-                .unwrap_or_else(|_| city_assets::directory().to_path_buf())
+                .unwrap_or_else(|_| {
+                    city_assets::CITY_ASSET
+                        .read()
+                        .unwrap()
+                        .directory()
+                        .to_path_buf()
+                })
         });
-        let selected_location = selected_city.map_or(0, |path| {
+        let default_location = locations
+            .iter()
+            .position(|entry| entry.track == TrackId::scenic())
+            .unwrap_or(0);
+        let selected_location = selected_city.map_or(default_location, |path| {
             if let Some(index) = locations.iter().position(|entry| {
                 entry
                     .path
@@ -251,7 +263,7 @@ impl App {
                 index
             } else {
                 locations.push(city_assets::MenuLocation {
-                    name: city_assets::name().into(),
+                    name: city_assets::CITY_ASSET.read().unwrap().name().into(),
                     track: TrackId::Engomi,
                     path: Some(path),
                 });
@@ -263,7 +275,7 @@ impl App {
             .unwrap_or(selected_location);
         let mut session = Session::new(CarModel::Roadster);
         session.state = GameState::Menu;
-        let _ = window.set_title(session.track().name);
+        let _ = window.set_title(&session.track().name);
 
         let program =
             gl::create_program(gl::VS_SRC, gl::FS_SRC).expect("failed to create GL program");
@@ -309,17 +321,18 @@ impl App {
 
     fn start_selected(&mut self) {
         let entry = self.locations[self.selected_location].clone();
-        let previous = city_assets::directory().to_path_buf();
+        let previous = city_assets::CITY_ASSET.read().unwrap().clone();
         let mut changed = false;
         if let Some(path) = entry.path {
-            changed = path.canonicalize().ok().as_deref() != Some(city_assets::directory());
+            changed = path.canonicalize().ok().as_deref()
+                != Some(city_assets::CITY_ASSET.read().unwrap().directory());
             if let Err(error) = city_assets::select(path) {
                 warn!("Cannot select location: {error}");
                 return;
             }
         }
         if !self.prepare_location(entry.track) {
-            let _ = city_assets::select(previous);
+            *city_assets::CITY_ASSET.write().unwrap() = previous;
             return;
         }
         self.meshes
@@ -329,7 +342,7 @@ impl App {
                 Ok(mesh) => self.meshes[entry.track.index()] = Some(mesh),
                 Err(error) => {
                     warn!("Cannot prepare location geometry: {error}");
-                    let _ = city_assets::select(previous);
+                    *city_assets::CITY_ASSET.write().unwrap() = previous;
                     return;
                 }
             }
@@ -354,7 +367,7 @@ impl App {
             if track.id == TrackId::Engomi {
                 loading::draw(
                     &self.window,
-                    track.name,
+                    &track.name,
                     "PREPARING VEHICLES AND SCENERY",
                     0.0,
                 );
@@ -909,7 +922,7 @@ mod tests {
     #[ignore = "requires SDL3/OpenGL; renders a suspension bump sequence"]
     fn suspension_bump_preview() {
         let app = App::with_location(false);
-        let track = std::sync::Arc::new(TrackId::Scenic.track().bump_test_track());
+        let track = std::sync::Arc::new(TrackId::scenic().track().bump_test_track());
         let mesh = gl::Mesh::new(&track).unwrap();
         let road = track.at_distance(50.0);
         let mut car = vehicle::Vehicle::on_track(
@@ -1532,7 +1545,7 @@ mod tests {
         }
         // Completed loads must not create another loader or consume input.
         assert!(loading::prepare(
-            TrackId::Scenic,
+            TrackId::scenic(),
             &mut app.window,
             &mut app.events,
             &app.sdl_context
@@ -1999,7 +2012,7 @@ mod tests {
         let mut app = App::with_location(false);
         // Scenic fixtures are sampled from the route, never compact world coordinates.
         for model in cars::ALL {
-            app.session = Session::on_track(model, TrackId::Scenic);
+            app.session = Session::on_track(model, TrackId::scenic());
             app.ensure_mesh();
             for distance in [50.0, 50.6] {
                 let road = app.session.track().at_distance(distance);
@@ -2071,7 +2084,7 @@ mod tests {
 
     #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
-        for id in track::ALL {
+        for id in track::all() {
             let mut s = Session::on_track(CarModel::Roadster, id);
             s.state = GameState::Menu;
             for model in cars::ALL {
@@ -2095,7 +2108,7 @@ mod tests {
 
     #[test]
     fn free_recovery_uses_selected_route() {
-        for id in track::ALL {
+        for id in track::all() {
             let mut s = Session::on_track(CarModel::Muscle, id);
             let road = s.track().at_distance(s.track().length() * 0.5);
             s.vehicle.reset(road.lane_position(1.0), road.heading());
@@ -2154,7 +2167,7 @@ mod tests {
 
     #[test]
     fn opening_menu_location_and_car_choices_survive_start() {
-        for location in hud::LOCATIONS {
+        for location in hud::locations() {
             for car in cars::ALL {
                 let mut s = Session::new(CarModel::Roadster);
                 s.state = GameState::Menu;
@@ -2204,7 +2217,7 @@ mod tests {
         app.key_down(Keycode::Return);
         let directory = std::path::PathBuf::from("/tmp/full-map-preview");
         std::fs::create_dir_all(&directory).unwrap();
-        for id in track::ALL {
+        for id in track::all() {
             app.session = Session::on_track(CarModel::Roadster, id);
             app.session.vehicle.speed = 12.0;
             app.session.vehicle.velocity = [1.0, 12.0];
@@ -2361,16 +2374,26 @@ mod tests {
             assert_ne!(app.session.track().id, TrackId::Engomi);
         }
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
-        app.menu_action(hud::MenuAction::Choice(0));
-        assert_eq!(app.session.track().id, TrackId::Scenic);
+        let scenic_choice = app
+            .locations
+            .iter()
+            .position(|entry| entry.track == TrackId::scenic())
+            .unwrap();
+        app.menu_action(hud::MenuAction::Choice(scenic_choice));
+        assert_eq!(app.session.track().id, TrackId::scenic());
         app.key_down(Keycode::Return);
-        assert_eq!(app.session.track().id, TrackId::Scenic);
+        assert_eq!(app.session.track().id, TrackId::scenic());
         assert!(app.session.state == GameState::Driving);
         assert!(app.meshes[TrackId::Engomi.index()].is_none());
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         drop(app);
-        if let Ok(path) = city_assets::directory().canonicalize() {
+        if let Ok(path) = city_assets::CITY_ASSET
+            .read()
+            .unwrap()
+            .directory()
+            .canonicalize()
+        {
             let mut app = App::with_location(true);
             let selected = &app.locations[app.selected_location];
             assert_eq!(

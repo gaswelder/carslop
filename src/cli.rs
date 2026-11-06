@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild package\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\n  pack-location SOURCE_DIR OUTPUT.sqlite  Convert a location folder\n  unpack-location FILE.sqlite OUTPUT_DIR  Extract a package for editing\n  verify-location FILE.sqlite             Verify every asset and block\n\nGlobal options:\n  --locations-dir PATH                    Location store\n  -h, --help                              Show help\n  -V, --version                           Show version\n\nLocations are stored under data/locations (or --locations-dir).\nRun without a command to browse all locations. Maps load only after Start Driving; play --location NAME preselects a city.\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild location\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  -h, --help                              Show help\n  -V, --version                           Show version\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -24,14 +24,6 @@ enum Command {
     Help,
     Version,
 }
-struct Args {
-    command: Command,
-    root: PathBuf,
-}
-fn root() -> PathBuf {
-    crate::city_assets::default_locations_directory()
-}
-
 fn valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -44,37 +36,15 @@ fn text(s: &OsString) -> Result<String> {
         .into_string()
         .map_err(|_| invalid("expected UTF-8 command or location name"))
 }
-fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
-    let mut root = default_root;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--locations-dir" {
-            if i + 1 >= args.len() {
-                return Err(invalid("--locations-dir needs a path"));
-            }
-            root = PathBuf::from(args.remove(i + 1));
-            args.remove(i);
-        } else {
-            i += 1;
-        }
-    }
+fn parse(mut args: Vec<OsString>) -> Result<Command> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        return Ok(Args {
-            command: Command::Help,
-            root,
-        });
+        return Ok(Command::Help);
     }
     if args == [OsString::from("--version")] || args == [OsString::from("-V")] {
-        return Ok(Args {
-            command: Command::Version,
-            root,
-        });
+        return Ok(Command::Version);
     }
     if args.is_empty() {
-        return Ok(Args {
-            command: Command::Play(None),
-            root,
-        });
+        return Ok(Command::Play(None));
     }
     let cmd = text(&args.remove(0))?;
     if matches!(
@@ -85,15 +55,9 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
             | "preview-trees"
             | "import-imagery-trees"
             | "prepare-city-imagery"
-            | "pack-location"
-            | "unpack-location"
-            | "verify-location"
     ) {
         args.insert(0, cmd.into());
-        return Ok(Args {
-            command: Command::Source(args),
-            root,
-        });
+        return Ok(Command::Source(args));
     }
     let mut location = None;
     let mut source = None;
@@ -192,23 +156,15 @@ fn parse(mut args: Vec<OsString>, default_root: PathBuf) -> Result<Args> {
         }
         _ => return Err(invalid(format!("unknown command: {cmd}\n\n{HELP}"))),
     };
-    Ok(Args { command, root })
+    Ok(command)
 }
-fn select(root: &Path, name: &str) -> Result<()> {
-    let database = root.join(format!("{name}.sqlite"));
-    let path = if database.is_file() {
-        database
-    } else {
-        root.join(name)
-    };
+fn select(name: &str) -> Result<()> {
+    let path = Path::new(crate::city_assets::LOCATIONS_DIRECTORY).join(name);
     validate(&path)?;
     crate::city_assets::select(path)?;
     Ok(())
 }
 fn validate(path: &Path) -> Result<()> {
-    if crate::package::is_package(path) {
-        return crate::package::validate(path);
-    }
     for name in [
         "city.txt",
         "streets.txt",
@@ -233,37 +189,46 @@ impl Drop for Pending {
 }
 /// Returns true when the game should be opened, after resolving its location.
 pub fn run() -> Result<Option<bool>> {
-    let args = parse(std::env::args_os().skip(1).collect(), root())?;
-    crate::city_assets::configure_locations(&args.root)?;
-    match args.command {
+    let command = parse(std::env::args_os().skip(1).collect())?;
+    let root = Path::new(crate::city_assets::LOCATIONS_DIRECTORY);
+    match command {
         Command::Source(values) => crate::source_tools::run(values)?,
         Command::Help => print!("{HELP}"),
         Command::Version => println!("nfs5like {}", env!("CARGO_PKG_VERSION")),
         Command::Play(location) => {
             if let Some(name) = location {
-                let file = args.root.join(format!("{name}.track.json"));
+                let file = root.join(format!("{name}.track.json"));
                 if file.is_file() {
                     crate::track::select_file(&file).map_err(invalid)?;
                     return Ok(Some(false));
                 }
-                select(&args.root, &name)?;
+                select(&name)?;
                 return Ok(Some(true));
             }
             return Ok(Some(false));
         }
         Command::List => {
-            if args.root.exists() {
-                let mut entries = fs::read_dir(&args.root)?.collect::<std::io::Result<Vec<_>>>()?;
+            if root.exists() {
+                let mut entries = fs::read_dir(&root)?.collect::<std::io::Result<Vec<_>>>()?;
                 entries.sort_by_key(|e| e.file_name());
                 for entry in entries {
                     let path = entry.path();
-                    let name = if crate::package::is_package(&path) {
-                        path.file_stem().and_then(|s| s.to_str())
-                    } else if path.is_dir() && !path.with_extension("sqlite").is_file() {
-                        path.file_name().and_then(|s| s.to_str())
-                    } else {
-                        None
-                    };
+                    if path.is_file() {
+                        if let Some(name) = path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .and_then(|s| s.strip_suffix(".track.json"))
+                        {
+                            if valid_name(name) && crate::track::register_file(&path).is_ok() {
+                                println!("{name}\t{}", path.display());
+                            }
+                        }
+                        continue;
+                    }
+                    let name = path
+                        .is_dir()
+                        .then(|| path.file_name().and_then(|s| s.to_str()))
+                        .flatten();
                     if let Some(name) = name.filter(|s| valid_name(s)) {
                         if validate(&path).is_ok() {
                             println!("{name}\t{}", path.display());
@@ -273,20 +238,35 @@ pub fn run() -> Result<Option<bool>> {
             }
         }
         Command::CircuitOnly(name) => {
-            select(&args.root, &name)?;
-            crate::location::circuit_only(crate::city_assets::directory())?;
+            select(&name)?;
+            let directory = crate::city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .directory()
+                .to_path_buf();
+            crate::location::circuit_only(&directory)?;
         }
         Command::BakeCollision(name) => {
-            select(&args.root, &name)?;
-            crate::street_surface::bake(crate::city_assets::directory())?;
+            select(&name)?;
+            let directory = crate::city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .directory()
+                .to_path_buf();
+            crate::street_surface::bake(&directory)?;
         }
         Command::BakeScene(name) => {
-            select(&args.root, &name)?;
+            select(&name)?;
             crate::scene_archive::bake_default()?;
         }
         Command::Bake(name) => {
-            select(&args.root, &name)?;
-            crate::street_surface::bake(crate::city_assets::directory())?;
+            select(&name)?;
+            let directory = crate::city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .directory()
+                .to_path_buf();
+            crate::street_surface::bake(&directory)?;
             crate::scene_archive::bake_default()?;
         }
         Command::Add {
@@ -295,16 +275,14 @@ pub fn run() -> Result<Option<bool>> {
             bbox,
             elevation,
         } => {
-            let destination = args.root.join(format!("{name}.sqlite"));
-            if destination.exists() || args.root.join(&name).exists() {
+            let destination = root.join(&name);
+            if destination.exists() {
                 return Err(invalid(format!(
                     "location {name} already exists; choose another name"
                 )));
             }
-            fs::create_dir_all(&args.root)?;
-            let staging = args
-                .root
-                .join(format!(".import-{name}-{}", std::process::id()));
+            fs::create_dir_all(&root)?;
+            let staging = root.join(format!(".import-{name}-{}", std::process::id()));
             fs::create_dir(&staging)?;
             let pending = Pending(staging);
             crate::location::compile(crate::location::Options {
@@ -323,19 +301,9 @@ pub fn run() -> Result<Option<bool>> {
                     "location appeared during import; refusing to replace it",
                 ));
             }
-            let publication = tempfile::Builder::new()
-                .prefix(".location-publish-")
-                .tempdir_in(&args.root)?;
-            let package = publication.path().join("location.sqlite");
-            crate::package::pack(&pending.0, &package, false)?;
-            if destination.exists() {
-                return Err(invalid(
-                    "location appeared during packing; refusing to replace it",
-                ));
-            }
-            fs::rename(package, &destination)?;
+            fs::rename(&pending.0, &destination)?;
             println!(
-                "Added {name}: {}\nSelect with: nfs5like play --location {name}\nUse the same --locations-dir if you supplied one.",
+                "Added {name}: {}\nSelect with: nfs5like play --location {name}",
                 destination.display()
             );
         }
@@ -345,41 +313,32 @@ pub fn run() -> Result<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn args(a: &[&str]) -> Result<Args> {
-        parse(
-            a.iter().map(OsString::from).collect(),
-            PathBuf::from("/tmp/test-locations"),
-        )
+    fn args(a: &[&str]) -> Result<Command> {
+        parse(a.iter().map(OsString::from).collect())
     }
     #[test]
     fn command_routing() {
-        assert_eq!(args(&[]).unwrap().command, Command::Play(None));
+        assert_eq!(args(&[]).unwrap(), Command::Play(None));
         assert_eq!(
-            args(&["play", "--location", "limassol"]).unwrap().command,
+            args(&["play", "--location", "limassol"]).unwrap(),
             Command::Play(Some("limassol".into()))
         );
         assert!(args(&["--bake-city"]).is_err());
         assert!(args(&["--bake-city", "--location", "nicosia"]).is_err());
         assert!(args(&["bake-city"]).is_err());
         assert_eq!(
-            args(&["bake-city", "--location", "nicosia"])
-                .unwrap()
-                .command,
+            args(&["bake-city", "--location", "nicosia"]).unwrap(),
             Command::Bake("nicosia".into())
         );
         assert_eq!(
-            args(&["bake-collision", "--location", "nicosia"])
-                .unwrap()
-                .command,
+            args(&["bake-collision", "--location", "nicosia"]).unwrap(),
             Command::BakeCollision("nicosia".into())
         );
         assert!(args(&["bake-collision"]).is_err());
         assert!(args(&["bake-collision", "--location", "../bad"]).is_err());
         assert!(args(&["circuit-only"]).is_err());
         assert_eq!(
-            args(&["circuit-only", "--location", "nurburgring"])
-                .unwrap()
-                .command,
+            args(&["circuit-only", "--location", "nurburgring"]).unwrap(),
             Command::CircuitOnly("nurburgring".into())
         );
         assert!(args(&["unknown"]).is_err());
@@ -440,9 +399,8 @@ mod tests {
         .is_ok());
     }
     #[test]
-    fn global_location_directory() {
-        let a = args(&["--locations-dir", "/tmp/elsewhere", "list-locations"]).unwrap();
-        assert_eq!(a.root, PathBuf::from("/tmp/elsewhere"));
-        assert_eq!(a.command, Command::List);
+    fn location_directory_override_is_rejected() {
+        assert!(args(&["--locations-dir", "/tmp/elsewhere", "list-locations"]).is_err());
+        assert!(args(&["list-locations", "--locations-dir", "/tmp/elsewhere"]).is_err());
     }
 }

@@ -8,18 +8,20 @@ pub const CAR_RADIUS: f32 = 1.4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackId {
     Compact,
-    Scenic,
     Engomi,
     File(usize),
 }
 
 #[cfg(test)]
-pub const ALL: [TrackId; 3] = [TrackId::Compact, TrackId::Scenic, TrackId::Engomi];
+pub fn all() -> [TrackId; 3] {
+    [TrackId::Compact, TrackId::scenic(), TrackId::Engomi]
+}
 
 struct RuntimeTrack {
     path: std::path::PathBuf,
     name: &'static str,
     width: f32,
+    coastal: bool,
     points: Vec<[f32; 3]>,
     track: OnceLock<Result<std::sync::Arc<Track>, String>>,
 }
@@ -28,6 +30,7 @@ fn runtime_tracks() -> &'static std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrac
     TRACKS.get_or_init(Default::default)
 }
 /// Register a data-only closed circuit. Spline and render geometry load on selection.
+/// Optional `scenery` selects `standard` (default) or `coastal` terrain and roadside scenery.
 pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), String> {
     let path = path.canonicalize().map_err(|e| e.to_string())?;
     let mut tracks = runtime_tracks().write().unwrap();
@@ -50,6 +53,12 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
     if !width.is_finite() || !(2.0..=30.0).contains(&width) {
         return Err("track width must be 2..30 metres".into());
     }
+    let coastal = match v.get("scenery").and_then(serde_json::Value::as_str) {
+        None if v.get("scenery").is_none() => false,
+        Some("standard") => false,
+        Some("coastal") => true,
+        _ => return Err("track scenery must be standard or coastal".into()),
+    };
     let points: Vec<[f32; 3]> =
         serde_json::from_value(v["points"].clone()).map_err(|e| e.to_string())?;
     if !(4..=4096).contains(&points.len())
@@ -79,6 +88,7 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
         path,
         name,
         width,
+        coastal,
         points,
         track: OnceLock::new(),
     }));
@@ -111,51 +121,11 @@ pub const ROAD_POINTS: [[f32; 3]; 12] = [
     [-4.0, 0.0, -34.0],
 ];
 
-// Separately authored road: coast straight, climbing bends, ridge, western
-// sweep, and a tighter descending return. World units are metres.
-const SCENIC_POINTS: &[[f32; 3]] = &[
-    [0.0, 3.0, -300.0],
-    [160.0, 3.0, -300.0],
-    [300.0, 5.0, -250.0],
-    [365.0, 10.0, -150.0],
-    [350.0, 18.0, -30.0],
-    [290.0, 24.0, 60.0],
-    [235.0, 28.0, 140.0],
-    // Mountain hairpin: a clockwise reversal with a climbing entry.
-    [235.0, 28.8, 170.0],
-    [238.75, 29.1, 184.0],
-    [249.0, 29.4, 194.25],
-    [263.0, 29.7, 198.0],
-    [277.0, 30.0, 194.25],
-    [287.25, 30.3, 184.0],
-    [291.0, 30.6, 170.0],
-    [291.0, 31.0, 140.0],
-    // Opposing tight bend returns to a fast, open ridge sweep.
-    [298.0, 31.6, 122.0],
-    [316.0, 32.0, 115.0],
-    [334.0, 32.4, 122.0],
-    [341.0, 32.8, 140.0],
-    [341.0, 32.0, 195.0],
-    [300.0, 30.5, 270.0],
-    [200.0, 29.0, 310.0],
-    [80.0, 22.0, 345.0],
-    [-50.0, 14.0, 330.0],
-    [-140.0, 9.0, 265.0],
-    [-210.0, 7.0, 200.0],
-    [-300.0, 5.0, 190.0],
-    [-370.0, 4.0, 110.0],
-    [-390.0, 4.0, -20.0],
-    [-345.0, 7.0, -120.0],
-    [-270.0, 12.0, -160.0],
-    [-210.0, 14.0, -230.0],
-    [-160.0, 10.0, -295.0],
-    [-70.0, 5.0, -320.0],
-];
-
 pub struct Track {
     pub id: TrackId,
-    pub name: &'static str,
+    pub name: String,
     pub width: f32,
+    coastal: bool,
     pub bounds: [[f32; 2]; 2], // min/max XZ, from actual spline samples
     #[cfg(test)]
     pub speed_scale: f32,
@@ -173,12 +143,18 @@ pub struct Track {
 }
 
 impl TrackId {
+    /// The bundled default uses the same registry and format as other disk circuits.
+    pub fn scenic() -> Self {
+        register_file(std::path::Path::new("data/locations/scenic.track.json"))
+            .expect("cannot load Coastal Highway track definition")
+            .0
+    }
+
     pub fn index(self) -> usize {
         match self {
             Self::Compact => 0,
-            Self::Scenic => 1,
-            Self::Engomi => 2,
-            Self::File(index) => 3 + index,
+            Self::Engomi => 1,
+            Self::File(index) => 2 + index,
         }
     }
 
@@ -189,7 +165,6 @@ impl TrackId {
     pub fn try_track(self) -> Result<std::sync::Arc<Track>, String> {
         use std::sync::{Arc, Mutex};
         static COMPACT: OnceLock<Arc<Track>> = OnceLock::new();
-        static SCENIC: OnceLock<Arc<Track>> = OnceLock::new();
         // Retain only the most recent city; sessions own their own references.
         type CityCache = Mutex<Option<(std::path::PathBuf, Arc<Track>)>>;
         static CITY: OnceLock<CityCache> = OnceLock::new();
@@ -207,9 +182,13 @@ impl TrackId {
                 definition
                     .track
                     .get_or_init(|| {
-                        let mut track =
-                            Track::build_width(self, &definition.points, definition.width)?;
-                        track.name = definition.name;
+                        let mut track = Track::build_width(
+                            self,
+                            &definition.points,
+                            definition.width,
+                            definition.coastal,
+                        )?;
+                        track.name = definition.name.to_owned();
                         Ok(std::sync::Arc::new(track))
                     })
                     .clone()?
@@ -218,11 +197,12 @@ impl TrackId {
             Self::Compact => COMPACT
                 .get_or_init(|| Arc::new(Track::build(self, &ROAD_POINTS)))
                 .clone(),
-            Self::Scenic => SCENIC
-                .get_or_init(|| Arc::new(Track::build(self, SCENIC_POINTS)))
-                .clone(),
             Self::Engomi => {
-                let path = crate::city_assets::directory().to_path_buf();
+                let path = crate::city_assets::CITY_ASSET
+                    .read()
+                    .unwrap()
+                    .directory()
+                    .to_path_buf();
                 let cache = CITY.get_or_init(Default::default);
                 if let Some((key, track)) = cache.lock().unwrap().as_ref() {
                     if *key == path {
@@ -272,7 +252,13 @@ impl RoadSample {
 impl Track {
     #[cfg(test)]
     pub fn flat_test_track(&self) -> Self {
-        let mut flat = Self::build(self.id, &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z]));
+        let mut flat = Self::build_width(
+            self.id,
+            &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z]),
+            self.width,
+            self.coastal,
+        )
+        .unwrap();
         flat.speed_scale = self.speed_scale;
         flat.brake_scale = self.brake_scale;
         flat.drag = self.drag;
@@ -292,8 +278,13 @@ impl Track {
         let city = crate::city::City::engomi()?;
         Ok(Self {
             id: TrackId::Engomi,
-            name: crate::city_assets::name(),
+            name: crate::city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .name()
+                .to_owned(),
             width: 8.0,
+            coastal: false,
             bounds: city.bounds,
             #[cfg(test)]
             speed_scale: 1.6,
@@ -363,18 +354,14 @@ impl Track {
         }
     }
     fn build(id: TrackId, controls: &[[f32; 3]]) -> Self {
-        Self::build_width(
-            id,
-            controls,
-            if id == TrackId::Scenic {
-                8.0
-            } else {
-                ROAD_WIDTH
-            },
-        )
-        .expect("invalid built-in route")
+        Self::build_width(id, controls, ROAD_WIDTH, false).expect("invalid built-in route")
     }
-    fn build_width(id: TrackId, controls: &[[f32; 3]], width: f32) -> Result<Self, String> {
+    fn build_width(
+        id: TrackId,
+        controls: &[[f32; 3]],
+        width: f32,
+        coastal: bool,
+    ) -> Result<Self, String> {
         let mut points = Vec::new();
         let n = controls.len();
         for segment in 0..n {
@@ -429,20 +416,16 @@ impl Track {
                 }
             }
         }
-        let scenic = id == TrackId::Scenic;
         let mut track = Self {
             id,
-            name: if scenic {
-                "COASTAL HIGHWAY"
-            } else {
-                "COASTAL LOOP"
-            },
+            name: "COASTAL LOOP".into(),
             width,
+            coastal,
             bounds,
             #[cfg(test)]
-            speed_scale: if scenic { 1.6 } else { 1.0 },
-            brake_scale: if scenic { 0.65 } else { 1.0 },
-            drag: if scenic { 0.004 } else { 0.009 },
+            speed_scale: if coastal { 1.6 } else { 1.0 },
+            brake_scale: if coastal { 0.65 } else { 1.0 },
+            drag: if coastal { 0.004 } else { 0.009 },
             points,
             distances,
             lengths,
@@ -452,7 +435,7 @@ impl Track {
             buckets,
             city: None,
         };
-        let count = if scenic {
+        let count = if coastal {
             (total / 8.0).ceil() as usize
         } else {
             64
@@ -461,7 +444,7 @@ impl Track {
             .map(|i| {
                 let sample = track.at_distance(total * i as f32 / count as f32);
                 let n = sample.normal();
-                let offset = track.width * 0.5 + if scenic { 22.0 } else { 10.0 };
+                let offset = track.width * 0.5 + if coastal { 22.0 } else { 10.0 };
                 [
                     sample.point[0] - n[0] * offset,
                     crate::ambience::SEA_LEVEL,
@@ -470,6 +453,10 @@ impl Track {
             })
             .collect();
         Ok(track)
+    }
+
+    pub fn is_coastal(&self) -> bool {
+        self.coastal
     }
 
     #[cfg(test)]
@@ -543,7 +530,7 @@ impl Track {
         if let Some(city) = &self.city {
             return city.project(position);
         }
-        if self.id == TrackId::Scenic {
+        if self.id != TrackId::Compact {
             let cell = (
                 (position[0] / 32.0).floor() as i32,
                 (position[2] / 32.0).floor() as i32,
@@ -579,6 +566,7 @@ mod tests {
         let track = id.try_track().unwrap();
         assert_eq!(track.width, 11.0);
         assert!(track.city().is_none());
+        assert!(!track.is_coastal());
         assert!(std::sync::Arc::ptr_eq(&track, &id.try_track().unwrap()));
         assert!(track.length() > 400.0);
         for sample in track.centerline() {
@@ -590,9 +578,35 @@ mod tests {
     }
 
     #[test]
+    fn coastal_scenery_follows_file_data_after_renaming() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("renamed.track.json");
+        let mut data: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string("data/locations/scenic.track.json").unwrap(),
+        )
+        .unwrap();
+        data["name"] = "Another coast".into();
+        std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
+        let (id, _) = super::register_file(&path).unwrap();
+        assert!(matches!(id, super::TrackId::File(_)));
+        let copied = id.track();
+        let original = super::TrackId::scenic().track();
+        assert_ne!(copied.id, original.id);
+        assert_eq!(copied.name, "ANOTHER COAST");
+        assert!(copied.is_coastal());
+        assert_eq!(copied.centerline(), original.centerline());
+        assert_eq!(copied.shoreline(), original.shoreline());
+        assert_eq!(copied.width, original.width);
+        assert_eq!(copied.drag, original.drag);
+        assert_eq!(copied.brake_scale, original.brake_scale);
+    }
+
+    #[test]
     fn runtime_circuit_rejects_invalid_definitions() {
         for data in [
             r#"{"version":2}"#,
+            r#"{"version":1,"name":"bad","scenery":"unknown"}"#,
+            r#"{"version":1,"name":"bad","scenery":null}"#,
             r#"{"version":1,"name":"bad","width":"wide","points":[]}"#,
             r#"{"version":1,"name":"bad","width":0,"points":[]}"#,
             r#"{"version":1,"name":"bad","points":[[0,0,0],[1,0,0],[1,0,1]]}"#,
@@ -627,7 +641,7 @@ mod tests {
 
     #[test]
     fn scenic_route_has_real_scale_moderate_grades_and_smooth_hairpins() {
-        let scenic = TrackId::Scenic.track();
+        let scenic = TrackId::scenic().track();
         assert!(
             (1500.0..3000.0).contains(&scenic.length()),
             "length {}",
@@ -654,7 +668,7 @@ mod tests {
 
     #[test]
     fn highway_includes_straights_sweeps_and_opposing_hairpins() {
-        let road = TrackId::Scenic.track();
+        let road = TrackId::scenic().track();
         let mut left: f32 = 0.0;
         let mut right: f32 = 0.0;
         let mut straight = 0;
@@ -685,7 +699,7 @@ mod tests {
 
     #[test]
     fn spatial_projection_matches_full_search_and_route_caches_are_isolated() {
-        let scenic = TrackId::Scenic.track();
+        let scenic = TrackId::scenic().track();
         for i in 0..400 {
             let s = scenic.at_distance(scenic.length() * i as f32 / 400.0);
             for offset in [-45.0, -3.0, 0.0, 3.0, 45.0] {
@@ -703,7 +717,7 @@ mod tests {
 
     #[test]
     fn scenic_route_has_no_crossings_or_ambiguous_neighbouring_roads() {
-        let route = TrackId::Scenic.track();
+        let route = TrackId::scenic().track();
         let count = (route.length() / 10.0).ceil() as usize;
         for i in 0..count {
             let a = route.at_distance(route.length() * i as f32 / count as f32);

@@ -13,4 +13,7 @@ __pycache__/
 /artifacts/
 /data/*
 !/data/cars/
+!/data/locations/
+/data/locations/*
+!/data/locations/scenic.track.json
 /Screenshot From *.png

@@ -20,7 +20,6 @@ tempfile = "3.27.0"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 crc32fast = "1.5.3"
 ureq = { version = "3", features = ["json"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras"] }
 glam = "0.30"
 

@@ -5,14 +5,15 @@ use crate::{
 use std::ffi::CString;
 
 #[cfg(test)]
-pub const LOCATIONS: [TrackId; 2] = [TrackId::Scenic, TrackId::Engomi];
+pub fn locations() -> [TrackId; 2] {
+    [TrackId::scenic(), TrackId::Engomi]
+}
 #[cfg(test)]
-pub fn available_locations(city_enabled: bool) -> &'static [TrackId] {
-    if city_enabled {
-        &LOCATIONS
-    } else {
-        &LOCATIONS[..1]
-    }
+pub fn available_locations(city_enabled: bool) -> Vec<TrackId> {
+    locations()
+        .into_iter()
+        .take(if city_enabled { 2 } else { 1 })
+        .collect()
 }
 const CHOICES_PER_PAGE: usize = 3;
 fn choice_box(index: usize, left: f32) -> [f32; 4] {
@@ -99,7 +100,7 @@ pub fn selection_menu_hit_test(
 #[cfg(test)]
 pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
     let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    for (i, id) in LOCATIONS.into_iter().enumerate() {
+    for (i, id) in locations().into_iter().enumerate() {
         let r = location_box(i);
         if inside(r) {
             return Some(MenuAction::Location(id));
@@ -468,7 +469,7 @@ impl Hud {
         let street = map
             .track
             .city()
-            .map_or(map.track.name, |city| city.street_name(map.player));
+            .map_or(map.track.name.as_str(), |city| city.street_name(map.player));
         append_street_name(&mut v, street);
         if let Some(pause) = pause {
             append_pause(&mut v, pause);
@@ -729,7 +730,7 @@ fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32;
     );
     text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
     let name_size = 0.004_f32.min(0.94 / (map.track.name.chars().count().max(1) as f32 * 6.0));
-    text(v, map.track.name, [-0.60, 0.90], name_size, white);
+    text(v, &map.track.name, [-0.60, 0.90], name_size, white);
     text(v, "M / ESC BACK", [0.49, 0.90], 0.004, white);
 
     let pixel = |p: [f32; 2]| {
@@ -1299,7 +1300,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("zoom.json");
         let track = TrackId::Compact.track();
-        let other = TrackId::Scenic.track();
+        let other = TrackId::scenic().track();
         let viewport = [1280.0, 720.0];
         let player = track.spawn().point;
         let mut memory = MapZoomMemory::open(Some(path.clone()));
@@ -1397,7 +1398,7 @@ mod tests {
 
     #[test]
     fn main_menu_click_targets_cover_all_locations_cars_and_start() {
-        for (y, id) in [(-0.07, TrackId::Scenic), (-0.195, TrackId::Engomi)] {
+        for (y, id) in [(-0.07, TrackId::scenic()), (-0.195, TrackId::Engomi)] {
             assert_eq!(menu_hit_test(-0.5, y), Some(MenuAction::Location(id)));
         }
         for (index, car) in crate::cars::ALL
@@ -1466,7 +1467,7 @@ mod tests {
 
     #[test]
     fn vicinity_map_follows_player_and_preserves_pixel_aspect() {
-        for id in crate::track::ALL {
+        for id in crate::track::all() {
             let track = id.track();
             for player in [track.spawn().point, track.at_distance(600.0).point] {
                 for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
@@ -1506,7 +1507,7 @@ mod tests {
 
     #[test]
     fn full_map_zoom_matches_minimap_and_can_fit_every_road() {
-        for id in crate::track::ALL {
+        for id in crate::track::all() {
             let track = id.track();
             for player in [
                 track.spawn().point,
@@ -1561,7 +1562,7 @@ mod tests {
 
     #[test]
     fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = TrackId::Scenic.track();
+        let track = TrackId::scenic().track();
         let player = track.spawn().point;
         for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
             for steps in [-100.0, 0.0, 100.0] {

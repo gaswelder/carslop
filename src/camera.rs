@@ -270,7 +270,7 @@ mod tests {
     fn changing_routes_snaps_camera_and_preserves_selected_view() {
         let mut camera = ChaseCamera::new(&car());
         camera.toggle_view();
-        let track = track::TrackId::Scenic.track();
+        let track = track::TrackId::scenic().track();
         let road = track.at_distance(850.0);
         let mut scenic = Vehicle::on_track(
             road.lane_position(0.0),
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn scenic_camera_clearance_and_look_ahead_use_scenic_projection() {
-        let track = track::TrackId::Scenic.track();
+        let track = track::TrackId::scenic().track();
         let road = track.at_distance(0.0);
         let mut car = Vehicle::on_track(
             road.lane_position(0.0),

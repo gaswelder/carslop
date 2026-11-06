@@ -517,13 +517,6 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
         }
     }
     match command {
-        "pack-location" if positional.len() == 2 => {
-            crate::package::pack(&positional[0], &positional[1], false)
-        }
-        "unpack-location" if positional.len() == 2 => {
-            crate::package::unpack(&positional[0], &positional[1])
-        }
-        "verify-location" if positional.len() == 1 => crate::package::verify(&positional[0]),
         "merge-osm" if positional.len() == 3 => {
             merge(&positional[0], &positional[1], &positional[2])
         }
@@ -543,13 +536,7 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
                         .parse()?)
                 })
                 .transpose()?;
-            if limit.is_some() {
-                crate::city_imagery::run(path("--city-data")?, path("--work-dir")?, limit)
-            } else {
-                crate::package::edit(path("--city-data")?, |folder| {
-                    crate::city_imagery::run(folder, path("--work-dir")?, limit)
-                })
-            }
+            crate::city_imagery::run(path("--city-data")?, path("--work-dir")?, limit)
         }
         "import-imagery-trees" if positional.is_empty() => {
             let path = |key| -> Result<&Path> {
@@ -558,9 +545,7 @@ pub fn run(args: Vec<std::ffi::OsString>) -> Result<()> {
                     .map(Path::new)
                     .ok_or_else(|| invalid(format!("missing {key}")))
             };
-            crate::package::edit(path("--city-data")?, |folder| {
-                crate::imagery_trees::import(path("--candidates")?, folder)
-            })
+            crate::imagery_trees::import(path("--candidates")?, path("--city-data")?)
         }
         "preview-trees" if positional.is_empty() => {
             let path = |key| -> Result<&Path> {

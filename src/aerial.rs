@@ -110,7 +110,7 @@ fn wanted(catalog: &Catalog, eye: [f32; 3], capacity: usize) -> Vec<usize> {
 }
 fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, String> {
     let tile = &catalog.tiles[id];
-    let bytes = crate::package::read(&directory.join(&tile.name)).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&directory.join(&tile.name)).map_err(|e| e.to_string())?;
     if bytes.len() != (catalog.size + catalog.gutter * 2).pow(2) * 3
         || crate::street_surface::crc32_bytes(&bytes) != tile.crc
     {
@@ -119,17 +119,26 @@ fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 pub fn source_available() -> bool {
-    crate::package::exists(&crate::city_assets::directory().join("aerial/tiles.txt"))
+    crate::city_assets::CITY_ASSET
+        .read()
+        .unwrap()
+        .directory()
+        .join("aerial/tiles.txt")
+        .is_file()
 }
 pub fn attribution_label() -> &'static str {
     static LABEL: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, &'static &'static str>>,
+        std::sync::Mutex<std::collections::HashMap<PathBuf, &'static str>>,
     > = std::sync::OnceLock::new();
-    crate::city_assets::cached::<&'static str>(&LABEL, || {
-        let path = crate::city_assets::directory()
-            .join("aerial")
-            .join("source.json");
-        let metadata = crate::package::read(&path)
+    let directory = crate::city_assets::CITY_ASSET
+        .read()
+        .unwrap()
+        .directory()
+        .to_path_buf();
+    let mut labels = LABEL.get_or_init(Default::default).lock().unwrap();
+    labels.entry(directory.clone()).or_insert_with(|| {
+        let path = directory.join("aerial/source.json");
+        let metadata = std::fs::read(&path)
             .ok()
             .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
         if metadata
@@ -158,12 +167,16 @@ pub struct Aerial {
 }
 impl Aerial {
     pub fn open() -> Option<Self> {
-        let directory = crate::city_assets::directory().join("aerial");
+        let directory = crate::city_assets::CITY_ASSET
+            .read()
+            .unwrap()
+            .directory()
+            .join("aerial");
         let path = directory.join("tiles.txt");
-        if !crate::package::exists(&path) {
+        if !path.is_file() {
             return None;
         }
-        let catalog = crate::package::read_to_string(&path)
+        let catalog = std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|s| Catalog::parse(&s));
         let catalog = match catalog {

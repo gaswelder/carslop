@@ -15,8 +15,6 @@ pub struct Furniture {
     pub travel: [f32; 2],
     pub value: u16,
     pub phase: u8,
-    pub _estimated_curb: bool,
-    pub _inferred_direction: bool,
 }
 #[cfg(test)]
 pub fn load(text: &str, city: &str, streets: &str) -> Result<Vec<Furniture>, String> {
@@ -25,76 +23,14 @@ pub fn load(text: &str, city: &str, streets: &str) -> Result<Vec<Furniture>, Str
         crate::street_surface::SourceChecksums::new(city, streets),
     )
 }
-pub(crate) fn load_with_checksums(
+#[cfg(test)]
+fn load_with_checksums(
     text: &str,
     checksums: crate::street_surface::SourceChecksums,
 ) -> Result<Vec<Furniture>, String> {
-    let mut lines = text.lines();
-    let header: Vec<_> = lines
-        .next()
-        .ok_or("missing furniture header")?
-        .split_whitespace()
-        .collect();
-    if header.len() != 4
-        || header[0] != "FURNITURE"
-        || header[1] != "1"
-        || u32::from_str_radix(header[2], 16).ok() != Some(checksums.city)
-        || u32::from_str_radix(header[3], 16).ok() != Some(checksums.streets)
-    {
-        return Err(
-            "stale furniture package; re-import the source with add-location under a new name"
-                .into(),
-        );
-    }
-    let mut result = Vec::new();
-    for line in lines {
-        let f: Vec<_> = line.split_whitespace().collect();
-        if f.len() != 11 || f[0] != "f" {
-            return Err("invalid road furniture record".into());
-        }
-        let n = |i: usize| -> Result<u64, String> {
-            f[i].parse().map_err(|_| "invalid furniture index".into())
-        };
-        let v = |i: usize| -> Result<f32, String> {
-            let value: f32 = f[i].parse().map_err(|_| "invalid furniture coordinate")?;
-            if value.is_finite() {
-                Ok(value)
-            } else {
-                Err("nonfinite furniture coordinate".into())
-            }
-        };
-        let kind = match n(2)? {
-            0 => FurnitureKind::Signal,
-            1 => FurnitureKind::Stop,
-            2 => FurnitureKind::Yield,
-            3 => FurnitureKind::Speed,
-            _ => return Err("unknown furniture kind".into()),
-        };
-        let travel = [v(5)?, v(6)?];
-        let length = travel[0].hypot(travel[1]);
-        let value = n(7)?;
-        let phase = n(8)?;
-        if (length - 1.0).abs() > 0.001
-            || phase >= 50
-            || value > 150
-            || (kind == FurnitureKind::Speed && value < 5)
-            || n(9)? > 1
-            || n(10)? > 1
-        {
-            return Err("invalid furniture direction, phase or value".into());
-        }
-        result.push(Furniture {
-            _source_id: n(1)?,
-            kind,
-            position: [v(3)?, 0.0, v(4)?],
-            travel,
-            value: value as u16,
-            phase: phase as u8,
-            _estimated_curb: n(9)? != 0,
-            _inferred_direction: n(10)? != 0,
-        });
-    }
-    Ok(result)
+    let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
+    std::fs::write(folder.path().join("furniture.txt"), text).map_err(|e| e.to_string())?;
+    crate::city_assets::CityAsset::new(folder.path().to_path_buf()).get_furniture(checksums)
 }
 
 #[cfg(test)]
@@ -111,11 +47,59 @@ pub fn lamp_lit(time: f32, offset: u8, lamp: usize) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn eight_column_records_preserve_signal_and_sign_fields() {
+        let text = format!(
+            "FURNITURE 3 {:08x} {:08x}\n123 signal 12.5 -40 1 0 0 33\n456 speed_limit -10 20 0 -1 50 0\n789 stop 0 0 1 0 0 0\n987 yield 0 0 1 0 0 0\n",
+            crate::street_surface::crc32("city"),
+            crate::street_surface::crc32("streets"),
+        );
+        let controls = load(&text, "city", "streets").unwrap();
+        assert_eq!(controls.len(), 4);
+        assert_eq!(controls[0]._source_id, 123);
+        assert_eq!(controls[0].kind, FurnitureKind::Signal);
+        assert_eq!(controls[0].position, [12.5, 0.0, -40.0]);
+        assert_eq!(controls[0].travel, [1.0, 0.0]);
+        assert_eq!(controls[0].phase, 33);
+        assert_eq!(controls[1]._source_id, 456);
+        assert_eq!(controls[1].kind, FurnitureKind::Speed);
+        assert_eq!(controls[1].position, [-10.0, 0.0, 20.0]);
+        assert_eq!(controls[1].travel, [0.0, -1.0]);
+        assert_eq!(controls[1].value, 50);
+        assert_eq!(controls[2].kind, FurnitureKind::Stop);
+        assert_eq!(controls[3].kind, FurnitureKind::Yield);
+    }
+
+    #[test]
+    fn obsolete_furniture_headers_and_columns_are_rejected() {
+        let header = format!(
+            "FURNITURE 3 {:08x} {:08x}\n",
+            crate::street_surface::crc32("city"),
+            crate::street_surface::crc32("streets"),
+        );
+        for record in [
+            "f 123 signal 0 0 1 0 0 0",
+            "123 signal 0 0 1 0 0 0 1 1",
+            "123 0 0 0 1 0 0 0",
+            "123 unknown 0 0 1 0 0 0",
+        ] {
+            assert!(load(&(header.clone() + record), "city", "streets").is_err());
+        }
+        for old_version in ["FURNITURE 1", "FURNITURE 2"] {
+            assert!(load(
+                &header.replace("FURNITURE 3", old_version),
+                "city",
+                "streets"
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
     fn shared_checksums_reject_stale_furniture_sources() {
         use crate::street_surface::SourceChecksums;
         let checksums = SourceChecksums::new("city", "streets");
         let text = format!(
-            "FURNITURE 1 {:08x} {:08x}\n",
+            "FURNITURE 3 {:08x} {:08x}\n",
             checksums.city, checksums.streets
         );
         assert!(load_with_checksums(&text, checksums).unwrap().is_empty());
@@ -174,11 +158,9 @@ mod tests {
             assert!(city.building_clearance([f.position[0], f.position[2]]) >= 0.0);
             assert!(f.position.iter().all(|v| v.is_finite()));
         }
-        assert!(load(
-            &crate::city_assets::read("furniture.txt"),
-            "stale",
-            &crate::city_assets::read("streets.txt")
-        )
-        .is_err());
+        let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
+        let furniture = std::fs::read_to_string(assets.directory().join("furniture.txt")).unwrap();
+        let streets = std::fs::read_to_string(assets.directory().join("streets.txt")).unwrap();
+        assert!(load(&furniture, "stale", &streets).is_err());
     }
 }

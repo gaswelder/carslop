@@ -58,7 +58,7 @@ fn obstacle(
 }
 impl Obstacles {
     pub fn read(directory: &Path, lonlat_bounds: [f64; 4]) -> Result<Self> {
-        let text = crate::package::read_to_string(directory.join("city.txt"))?;
+        let text = std::fs::read_to_string(directory.join("city.txt"))?;
         let city = crate::city::City::parse(&text).map_err(invalid)?;
         let origin_line = text
             .lines()
@@ -93,9 +93,7 @@ impl Obstacles {
             }
         }
         println!("Checking road surfaces for tree exclusions...");
-        let mut input = BufReader::new(crate::package::Reader::open(
-            &directory.join("streets.txt"),
-        )?);
+        let mut input = BufReader::new(std::fs::File::open(&directory.join("streets.txt"))?);
         let mut line = String::new();
         input.read_line(&mut line)?;
         let expected = format!(

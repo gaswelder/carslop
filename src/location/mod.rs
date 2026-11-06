@@ -16,9 +16,9 @@ pub type P = [f64; 2];
 pub fn invalid(message: impl Into<String>) -> Box<dyn std::error::Error> {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
-pub fn sha(path: &Path) -> Result<String> {
+pub fn sha(path: &Path) -> io::Result<String> {
     use std::io::Read;
-    let mut file = crate::package::Reader::open(path)?;
+    let mut file = std::fs::File::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
@@ -235,53 +235,49 @@ fn compile_filtered(options: Options<'_>, circuit_only: bool) -> Result<()> {
 }
 
 /// Rebuild an existing location using only its racing roads, preserving scenery
-/// and source provenance. Package editing publishes atomically after baking.
+/// and source provenance.
 pub fn circuit_only(path: &Path) -> Result<()> {
     let manifest: serde_json::Value =
-        serde_json::from_slice(&crate::package::read(&path.join("manifest.json"))?)?;
+        serde_json::from_slice(&std::fs::read(&path.join("manifest.json"))?)?;
     if manifest["raceways_only"] == true {
         println!("Location already contains racing roads only");
         return Ok(());
     }
-    crate::package::edit(path, |folder| {
-        let temp = tempfile::tempdir()?;
-        let output = temp.path().join("circuit");
-        let mut tiles = fs::read_dir(folder.join("elevation"))?
-            .map(|entry| entry.map(|e| e.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        tiles.sort();
-        let elevation = tiles
-            .into_iter()
-            .find(|p| {
-                p.to_string_lossy().ends_with(".hgt") || p.to_string_lossy().ends_with(".hgt.gz")
-            })
-            .ok_or_else(|| invalid("location has no preserved HGT elevation tile"))?;
-        let bbox = serde_json::from_value(manifest["bbox_south_west_north_east"].clone())?;
-        compile_filtered(
-            Options {
-                source: &folder.join("source.osm"),
-                output: &output,
-                name: manifest["name"].as_str().unwrap_or("circuit"),
-                bbox: Some(bbox),
-                elevation: &elevation,
-            },
-            true,
-        )?;
-        crate::city_assets::select(output.clone())?;
-        crate::scene_archive::bake_default()?;
-        fn copy_tree(from: &Path, to: &Path) -> Result<()> {
-            fs::create_dir_all(to)?;
-            for entry in fs::read_dir(from)? {
-                let entry = entry?;
-                let target = to.join(entry.file_name());
-                if entry.file_type()?.is_dir() {
-                    copy_tree(&entry.path(), &target)?;
-                } else {
-                    fs::copy(entry.path(), target)?;
-                }
+    let temp = tempfile::tempdir()?;
+    let output = temp.path().join("circuit");
+    let mut tiles = fs::read_dir(path.join("elevation"))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    tiles.sort();
+    let elevation = tiles
+        .into_iter()
+        .find(|p| p.to_string_lossy().ends_with(".hgt") || p.to_string_lossy().ends_with(".hgt.gz"))
+        .ok_or_else(|| invalid("location has no preserved HGT elevation tile"))?;
+    let bbox = serde_json::from_value(manifest["bbox_south_west_north_east"].clone())?;
+    compile_filtered(
+        Options {
+            source: &path.join("source.osm"),
+            output: &output,
+            name: manifest["name"].as_str().unwrap_or("circuit"),
+            bbox: Some(bbox),
+            elevation: &elevation,
+        },
+        true,
+    )?;
+    crate::city_assets::select(output.clone())?;
+    crate::scene_archive::bake_default()?;
+    fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            let target = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_tree(&entry.path(), &target)?;
+            } else {
+                fs::copy(entry.path(), target)?;
             }
-            Ok(())
         }
-        copy_tree(&output, folder)
-    })
+        Ok(())
+    }
+    copy_tree(&output, path)
 }

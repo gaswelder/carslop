@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
-        for id in crate::track::ALL {
+        for id in crate::track::all() {
             for model in crate::cars::ALL {
                 let track = id.track();
                 let road = track.spawn();
@@ -1484,7 +1484,7 @@ mod tests {
 
     #[test]
     fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
-        let track = crate::track::TrackId::Scenic.track();
+        let track = crate::track::TrackId::scenic().track();
         let road = track.spawn();
         let mut car = crate::vehicle::Vehicle::on_track(
             road.lane_position(0.0),
@@ -1518,7 +1518,7 @@ mod tests {
 
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
-        let track = std::sync::Arc::new(crate::track::TrackId::Scenic.track().bump_test_track());
+        let track = std::sync::Arc::new(crate::track::TrackId::scenic().track().bump_test_track());
         let road = track.at_distance(54.0);
         let mut car = crate::vehicle::Vehicle::on_track(
             road.lane_position(0.0),

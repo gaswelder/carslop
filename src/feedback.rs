@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn scenic_trails_use_scenic_width_and_road_height() {
-        let track = track::TrackId::Scenic.track();
+        let track = track::TrackId::scenic().track();
         let mut marks = SkidMarks::default();
         for distance in [50.0, 50.5] {
             let road = track.at_distance(distance);

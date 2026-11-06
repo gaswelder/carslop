@@ -21,7 +21,7 @@ pub struct Entry {
     pub layers: [Span; 3],
 }
 pub struct Archive {
-    file: crate::package::Reader,
+    file: std::fs::File,
     path: std::path::PathBuf,
     pub entries: Vec<Entry>,
     pub bytes_read: usize,
@@ -53,8 +53,8 @@ fn encode(vertices: &[Vertex]) -> Vec<u8> {
 }
 impl Archive {
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let mut file = crate::package::Reader::open(path)?;
-        let length = file.len()?;
+        let mut file = std::fs::File::open(path)?;
+        let length = file.metadata()?.len();
         let mut header = [0u8; 16];
         file.read_exact(&mut header)?;
         let n = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
@@ -122,7 +122,13 @@ impl Archive {
         Self::open(&self.path)
     }
     pub fn open_default() -> std::io::Result<Self> {
-        Self::open(&crate::city_assets::directory().join("scene.pack"))
+        Self::open(
+            &crate::city_assets::CITY_ASSET
+                .read()
+                .unwrap()
+                .directory()
+                .join("scene.pack"),
+        )
     }
     pub fn read_layer(&mut self, index: usize, layer: usize) -> std::io::Result<Vec<Vertex>> {
         let entry = self
@@ -237,21 +243,12 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
 pub fn bake_default() -> std::io::Result<()> {
     let city_track = crate::track::TrackId::Engomi.track();
     let city = city_track.city().expect("city");
-    let directory = crate::city_assets::directory();
-    let packaged = crate::package::is_package(directory);
-    let temporary = if packaged {
-        Some(
-            tempfile::Builder::new()
-                .prefix(".location-bake-")
-                .tempdir_in(directory.parent().unwrap())?,
-        )
-    } else {
-        None
-    };
-    let path = temporary
-        .as_ref()
-        .map(|t| t.path().join("scene.pack"))
-        .unwrap_or_else(|| directory.join("scene.pack"));
+    let directory = crate::city_assets::CITY_ASSET
+        .read()
+        .unwrap()
+        .directory()
+        .to_path_buf();
+    let path = directory.join("scene.pack");
     let started = std::time::Instant::now();
     println!(
         "Generating city geometry with {} trees...",
@@ -263,13 +260,8 @@ pub fn bake_default() -> std::io::Result<()> {
     let archive = Archive::open(&path)?;
     let counts: [usize; 3] =
         std::array::from_fn(|layer| archive.entries.iter().map(|e| e.layers[layer].count).sum());
-    println!("Baked {} chunks: {} ground, {} detailed building, {} distant building vertices; {:.1} MiB; {:.2}s",archive.entries.len(),counts[0],counts[1],counts[2],crate::package::size(&path)? as f32/1048576.0,started.elapsed().as_secs_f32());
+    println!("Baked {} chunks: {} ground, {} detailed building, {} distant building vertices; {:.1} MiB; {:.2}s",archive.entries.len(),counts[0],counts[1],counts[2],std::fs::metadata(&path)?.len() as f32/1048576.0,started.elapsed().as_secs_f32());
     drop(archive);
-    if packaged {
-        crate::package::replace_asset(directory, "scene.pack", &path)
-            .map_err(|e| error(&e.to_string()))?;
-        Archive::open(&directory.join("scene.pack"))?;
-    }
     Ok(())
 }
 

@@ -279,11 +279,10 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
         return Err(invalid("--limit-blocks must be positive"));
     }
     fs::create_dir_all(work)?;
-    let city_text = crate::package::read_to_string(city_dir.join("city.txt"))?;
+    let city_text = std::fs::read_to_string(city_dir.join("city.txt"))?;
     let city = crate::city::City::parse(&city_text).map_err(invalid)?;
     let origin = city_origin(&city_text)?;
-    let manifest: Value =
-        serde_json::from_slice(&crate::package::read(&city_dir.join("manifest.json"))?)?;
+    let manifest: Value = serde_json::from_slice(&std::fs::read(&city_dir.join("manifest.json"))?)?;
     let mut bbox = [0.; 4];
     for (i, v) in bbox.iter_mut().enumerate() {
         *v = manifest["bbox_south_west_north_east"][i]

@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn engine_pitch_follows_ratio_based_shifts_on_every_route() {
-        for track in crate::track::ALL.map(|id| id.track()) {
+        for track in crate::track::all().map(|id| id.track()) {
             let road = track.at_distance(50.0);
             for model in crate::cars::ALL {
                 let mut car = crate::vehicle::Vehicle::on_track(

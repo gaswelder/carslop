@@ -183,8 +183,6 @@ mod tests {
                 travel: [0.0, 1.0],
                 value: 30,
                 phase: 0,
-                _estimated_curb: true,
-                _inferred_direction: false,
             };
             let mut b = Builder::default();
             build(&mut b, &feature);

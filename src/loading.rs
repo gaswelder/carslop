@@ -26,8 +26,12 @@ pub fn prepare(
     }
     let started = Instant::now();
     let title = window.title().to_owned();
-    let name = crate::city_assets::name();
-    draw(window, name, "READING MAP AND BUILDING COLLISIONS", 0.0);
+    let name = crate::city_assets::CITY_ASSET
+        .read()
+        .unwrap()
+        .name()
+        .to_owned();
+    draw(window, &name, "READING MAP AND BUILDING COLLISIONS", 0.0);
     crate::gl::swap_window(window);
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
@@ -61,7 +65,12 @@ pub fn prepare(
         }
         let elapsed = started.elapsed().as_secs_f32();
         let _ = window.set_title(&format!("Loading {name}"));
-        draw(window, name, "READING MAP AND BUILDING COLLISIONS", elapsed);
+        draw(
+            window,
+            &name,
+            "READING MAP AND BUILDING COLLISIONS",
+            elapsed,
+        );
         crate::gl::swap_window(window);
         std::thread::sleep(Duration::from_millis(16));
     }

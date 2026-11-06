@@ -1,5 +1,5 @@
 //! Required, lossless runtime data for street surfaces and their collision grids.
-//! The text remains the source of truth. Its package hash invalidates stale caches.
+//! The text remains the source of truth. Its SHA-256 hash invalidates stale caches.
 //! Bump MAGIC when changing grid cell sizes, padding or collision index semantics.
 use super::{Curb, RoadPaths, SourceChecksums, StreetSurface, SurfaceTriangle};
 use sha2::{Digest, Sha256};
@@ -90,10 +90,11 @@ fn floats<const N: usize>(bytes: &[u8]) -> io::Result<[f32; N]> {
     Ok(values)
 }
 
-pub(super) fn load(directory: &Path, source: &str, roads: usize) -> io::Result<Loaded> {
-    let file = crate::package::Reader::open(&directory.join("streets.bin"))?;
+pub(super) fn load(directory: &Path, city_checksum: u32, roads: usize) -> io::Result<Loaded> {
+    let file = std::fs::File::open(&directory.join("streets.bin"))?;
     let body_len = file
-        .len()?
+        .metadata()?
+        .len()
         .checked_sub(4)
         .ok_or_else(|| invalid("truncated collision cache"))?;
     let checked = Checked {
@@ -112,9 +113,9 @@ pub(super) fn load(directory: &Path, source: &str, roads: usize) -> io::Result<L
         streets: u32::from_le_bytes(r.bytes()?),
     };
     let fingerprint = r.bytes::<64>()?;
-    if checksums.city != super::crc32(source)
+    if checksums.city != city_checksum
         || fingerprint.as_slice()
-            != crate::package::content_hash(&directory.join("streets.txt"))?.as_bytes()
+            != crate::location::sha(&directory.join("streets.txt"))?.as_bytes()
     {
         return Err(invalid("stale collision cache"));
     }
@@ -280,8 +281,8 @@ fn write(
 
 pub(crate) fn bake(directory: &Path) -> crate::location::Result<()> {
     let started = std::time::Instant::now();
-    let source = crate::package::read_to_string(directory.join("city.txt"))?;
-    let streets = crate::package::read_to_string(directory.join("streets.txt"))?;
+    let source = std::fs::read_to_string(directory.join("city.txt"))?;
+    let streets = std::fs::read_to_string(directory.join("streets.txt"))?;
     let city = crate::city::City::parse(&source)?;
     let checksums = SourceChecksums::new(&source, &streets);
     let (surfaces, paths) = StreetSurface::load(&streets, &source, city.streets.len())?;
@@ -289,23 +290,13 @@ pub(crate) fn bake(directory: &Path) -> crate::location::Result<()> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    if fingerprint != crate::package::content_hash(&directory.join("streets.txt"))? {
+    if fingerprint != crate::location::sha(&directory.join("streets.txt"))? {
         return Err(invalid("street source changed during collision bake").into());
     }
-    let packaged = crate::package::is_package(directory);
-    let parent = if packaged {
-        directory.parent().unwrap_or(Path::new("."))
-    } else {
-        directory
-    };
-    let temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let temporary = tempfile::NamedTempFile::new_in(directory)?;
     write(temporary.path(), &surfaces, &paths, checksums, &fingerprint)?;
     let bytes = temporary.as_file().metadata()?.len();
-    if packaged {
-        crate::package::replace_asset(directory, "streets.bin", temporary.path())?;
-    } else {
-        temporary.persist(directory.join("streets.bin"))?;
-    }
+    temporary.persist(directory.join("streets.bin"))?;
     println!(
         "Baked collision cache: {} triangles, {} curbs, {:.1} MiB; {:.2}s",
         surfaces.triangles.len(),
@@ -365,46 +356,15 @@ mod tests {
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
         let (expected, paths) = StreetSurface::load(&streets, &source, 1).unwrap();
         bake(root).unwrap();
-        let (actual, actual_paths, sums) = load(root, &source, 1).unwrap();
+        let (actual, actual_paths, sums) = load(root, super::super::crc32(&source), 1).unwrap();
         compare(&expected, &actual);
         assert_eq!(paths, actual_paths);
         assert_eq!(sums.streets, super::super::crc32(&streets));
-        // Exercise the same cache through the compressed SQLite reader.
-        for name in [
-            "manifest.json",
-            "furniture.txt",
-            "landscape.txt",
-            "elevation/heightfield.txt",
-            "scene.pack",
-        ] {
-            let path = root.join(name);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "fixture").unwrap();
-        }
-        // Keep the output outside the source tree being inventoried.
-        let package_temp = tempfile::tempdir().unwrap();
-        let packaged = package_temp.path().join("fixture.sqlite");
-        crate::package::pack(root, &packaged, false).unwrap();
-        bake(&packaged).unwrap();
-        let db = rusqlite::Connection::open(&packaged).unwrap();
-        let compressed: i64 = db.query_row(
-            "SELECT COUNT(*) FROM blocks WHERE asset_id=(SELECT id FROM assets WHERE name='streets.bin') AND codec<>0",
-            [], |row| row.get(0),
-        ).unwrap();
-        assert_eq!(
-            compressed, 0,
-            "startup collision blocks should be uncompressed"
-        );
-        drop(db);
-        let (packed, packed_paths, _) = load(&packaged, &source, 1).unwrap();
-        compare(&expected, &packed);
-        assert_eq!(paths, packed_paths);
         let changed = streets.replace("10 1", "10 2");
         std::fs::write(root.join("streets.txt"), &changed).unwrap();
-        crate::package::replace_asset(&packaged, "streets.txt", &root.join("streets.txt")).unwrap();
-        assert!(StreetSurface::load_city(&packaged, &source, 1).is_err());
-        bake(&packaged).unwrap();
-        let (_, updated_paths, sums) = StreetSurface::load_city(&packaged, &source, 1).unwrap();
+        assert!(StreetSurface::load_city(root, &source, 1).is_err());
+        bake(root).unwrap();
+        let (_, updated_paths, sums) = StreetSurface::load_city(root, &source, 1).unwrap();
         assert_eq!(updated_paths[0][1], [10.0, 0.0, 2.0]);
         assert_eq!(sums.streets, super::super::crc32(&changed));
     }
@@ -444,13 +404,15 @@ mod tests {
     #[test]
     #[ignore = "requires a location with baked collision data"]
     fn full_collision_cache_matches_source() {
-        let root = crate::city_assets::directory();
-        let source = crate::package::read_to_string(root.join("city.txt")).unwrap();
-        let streets = crate::package::read_to_string(root.join("streets.txt")).unwrap();
+        let assets = crate::city_assets::CITY_ASSET.read().unwrap();
+        let root = assets.directory();
+        let source = std::fs::read_to_string(root.join("city.txt")).unwrap();
+        let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
         let city = crate::city::City::parse(&source).unwrap();
         let (expected, expected_paths) =
             StreetSurface::load(&streets, &source, city.streets.len()).unwrap();
-        let (actual, actual_paths, sums) = load(root, &source, city.streets.len()).unwrap();
+        let (actual, actual_paths, sums) =
+            load(root, city.source_checksum, city.streets.len()).unwrap();
         // A release bake omits the preview-only junction marker.
         let mut expected = expected;
         expected.preview_junction = actual.preview_junction;

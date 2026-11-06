@@ -23,6 +23,7 @@ pub struct Building {
 }
 #[derive(Debug)]
 pub struct City {
+    pub(crate) source_checksum: u32,
     origin: Option<[f64; 2]>,
     pub nodes: Vec<[f32; 3]>,
     pub streets: Vec<Street>,
@@ -183,9 +184,9 @@ fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
 
 impl City {
     pub fn engomi() -> Result<Self, String> {
-        let source = crate::city_assets::try_read("city.txt")?;
-        let mut city = Self::parse(&source)?;
-        match crate::package::Reader::open(&crate::city_assets::directory().join("source.osm")) {
+        let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
+        let mut city = assets.get_city()?;
+        match assets.get_source_osm() {
             Ok(source) => match read_osm_labels(std::io::BufReader::new(source)) {
                 Ok(labels) => {
                     city.street_names = labels.streets;
@@ -195,14 +196,12 @@ impl City {
             },
             Err(error) => log::warn!("Cannot open street names: {error}"),
         }
-        let (mut surfaces, paths, checksums) = crate::street_surface::StreetSurface::load_city(
-            crate::city_assets::directory(),
-            &source,
-            city.streets.len(),
-        )?;
-        let manifest: serde_json::Value =
-            serde_json::from_str(&crate::city_assets::try_read("manifest.json")?)
-                .map_err(|e| format!("invalid location manifest: {e}"))?;
+        let crate::city_assets::StreetAssets {
+            mut surfaces,
+            paths,
+            checksums,
+        } = assets.get_streets(&city)?;
+        let manifest = assets.get_manifest()?;
         if let Some(height) = manifest.get("pavement_height_metres") {
             let height = height
                 .as_f64()
@@ -232,14 +231,8 @@ impl City {
                 i,
             );
         }
-        city.furniture = crate::traffic::load_with_checksums(
-            &crate::city_assets::try_read("furniture.txt")?,
-            checksums,
-        )?;
-        let field = crate::elevation::HeightField::load(
-            &crate::city_assets::try_read("elevation/heightfield.txt")?,
-            &source,
-        )?;
+        city.furniture = assets.get_furniture(checksums)?;
+        let field = assets.get_heightfield(&city)?;
         for p in &mut city.nodes {
             p[1] = field.height([p[0], p[2]]);
         }
@@ -263,24 +256,14 @@ impl City {
                 .fold(f32::NEG_INFINITY, f32::max)
                 + 0.02;
         }
-        city.landscape = crate::landscape::Landscape::load_with_checksums(
-            &crate::city_assets::try_read("landscape.txt")?,
-            checksums,
-        )?;
-        let imagery = crate::city_assets::directory().join("imagery-trees.txt");
-        match crate::package::read_to_string(&imagery) {
-            Ok(text) => city
-                .landscape
-                .append_imagery_with_checksums(&text, checksums)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("cannot read imagery trees: {e}")),
-        }
+        city.landscape = assets.get_landscape(checksums)?;
         city.elevation = Some(field);
         city.surfaces = Some(surfaces);
         Ok(city)
     }
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let mut city = Self {
+            source_checksum: crate::street_surface::crc32(text),
             origin: None,
             nodes: Vec::new(),
             streets: Vec::new(),
