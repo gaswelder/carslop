@@ -48,7 +48,8 @@ location store. `play --location NAME` preselects a location.
 For a burnout start, hold Up + Down at rest to rev with the clutch open, then
 release Down while holding Up. A revved neutral-to-first shift also works.
 
-Press **C** in the full map to copy the car's Google Maps location.
+Press **C** in the full map to copy the car's Google Maps location. Zoom is
+remembered per location across launches in `data/map-zoom.json`.
 
 ## Add and maintain locations
 

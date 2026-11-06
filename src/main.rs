@@ -2156,7 +2156,7 @@ mod tests {
             let gear = app.session.vehicle.gear;
             let signal_time = app.session.signal_time;
             let view = app.chase.view();
-            let mut initial_frame = None;
+            let mut remembered_scale: Option<f32> = None;
             for from in [GameState::Driving, GameState::Paused] {
                 app.session.state = from;
                 app.key_down(Keycode::Up);
@@ -2194,13 +2194,12 @@ mod tests {
                 app.capture_path = Some(path.clone());
                 app.render(Duration::ZERO);
                 let initial = std::fs::read(&path).unwrap();
-                if let Some(previous) = &initial_frame {
+                if let Some(previous) = remembered_scale {
                     assert!(
-                        *previous == initial,
-                        "reopening must restore the minimap scale"
+                        (app.hud.full_map_scale() - previous).abs() < 0.000001,
+                        "reopening must retain zoom"
                     );
                 }
-                initial_frame = Some(initial.clone());
                 for key in [Keycode::Equals, Keycode::Plus, Keycode::KpPlus] {
                     app.key_down(key);
                 }
@@ -2232,6 +2231,7 @@ mod tests {
                 app.capture_path = None;
                 app.render(Duration::ZERO);
                 assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                remembered_scale = Some(app.hud.full_map_scale());
                 app.key_down(if from == GameState::Driving {
                     Keycode::M
                 } else {

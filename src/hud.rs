@@ -333,11 +333,58 @@ fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, aspect: f32, color: 
     }
 }
 
+#[derive(Default)]
+struct MapZoomMemory {
+    values: std::collections::BTreeMap<String, f32>,
+    path: Option<std::path::PathBuf>,
+}
+impl MapZoomMemory {
+    fn open(path: Option<std::path::PathBuf>) -> Self {
+        let mut values: std::collections::BTreeMap<String, f32> = path
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        values.retain(|_, value| value.is_finite() && (0.000001..=16.0).contains(value));
+        Self { values, path }
+    }
+    fn key(track: &Track) -> String {
+        format!("{}:{:?}", track.name, track.bounds)
+    }
+    fn restore(&self, track: &Track, view: &mut FullMapView) {
+        if let Some(factor) = self.values.get(&Self::key(track)) {
+            let scale = (view.max_scale / 16.0 * factor).clamp(view.min_scale, view.max_scale);
+            view.fit.scale[1] *= scale / view.fit.scale[0];
+            view.fit.scale[0] = scale;
+        }
+    }
+    fn remember(&mut self, track: &Track, view: &FullMapView) {
+        self.values.insert(
+            Self::key(track),
+            view.fit.scale[0] / (view.max_scale / 16.0),
+        );
+        if let Some(path) = &self.path {
+            let save = || -> std::io::Result<()> {
+                let parent = path.parent().unwrap_or(std::path::Path::new("."));
+                std::fs::create_dir_all(parent)?;
+                let mut file = tempfile::NamedTempFile::new_in(parent)?;
+                serde_json::to_writer(&mut file, &self.values).map_err(std::io::Error::other)?;
+                file.persist(path).map_err(|error| error.error)?;
+                Ok(())
+            };
+            if let Err(error) = save() {
+                log::warn!("Cannot save map zoom: {error}");
+            }
+        }
+    }
+}
+
 pub struct Hud {
     vao: u32,
     vbo: u32,
     full_map_vertices: i32,
     full_map_view: Option<FullMapView>,
+    map_zoom: MapZoomMemory,
 }
 
 impl Drop for Hud {
@@ -366,6 +413,11 @@ impl Hud {
                 vbo,
                 full_map_vertices: 0,
                 full_map_view: None,
+                map_zoom: MapZoomMemory::open(if cfg!(test) {
+                    None
+                } else {
+                    Some("data/map-zoom.json".into())
+                }),
             }
         }
     }
@@ -425,7 +477,9 @@ impl Hud {
     }
 
     pub fn prepare_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
-        self.full_map_view = Some(FullMapView::new(map.track, map.player, viewport));
+        let mut view = FullMapView::new(map.track, map.player, viewport);
+        self.map_zoom.restore(map.track, &mut view);
+        self.full_map_view = Some(view);
         self.rebuild_full_map(map, heading, viewport);
     }
 
@@ -435,8 +489,15 @@ impl Hud {
             .as_mut()
             .is_some_and(|view| view.zoom(steps))
         {
+            self.map_zoom
+                .remember(map.track, self.full_map_view.as_ref().unwrap());
             self.rebuild_full_map(map, heading, viewport);
         }
+    }
+
+    #[cfg(test)]
+    pub fn full_map_scale(&self) -> f32 {
+        self.full_map_view.as_ref().unwrap().fit.scale[0]
     }
 
     pub fn map_copy_status(
@@ -1232,6 +1293,31 @@ pub(crate) fn glyph(ch: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_zoom_is_remembered_per_location_after_reopening_and_reloading() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("zoom.json");
+        let track = TrackId::Compact.track();
+        let other = TrackId::Scenic.track();
+        let viewport = [1280.0, 720.0];
+        let player = track.spawn().point;
+        let mut memory = MapZoomMemory::open(Some(path.clone()));
+        let mut view = FullMapView::new(&track, player, viewport);
+        view.zoom(3.0);
+        let expected = view.fit.scale;
+        memory.remember(&track, &view);
+        let memory = MapZoomMemory::open(Some(path.clone()));
+        let mut reopened = FullMapView::new(&track, player, viewport);
+        memory.restore(&track, &mut reopened);
+        assert!((reopened.fit.scale[0] - expected[0]).abs() < 0.0000001);
+        let mut other_view = FullMapView::new(&other, other.spawn().point, viewport);
+        let scale = other_view.fit.scale;
+        memory.restore(&other, &mut other_view);
+        assert_eq!(other_view.fit.scale, scale);
+        std::fs::write(&path, b"broken settings").unwrap();
+        assert!(MapZoomMemory::open(Some(path)).values.is_empty());
+    }
 
     #[test]
     fn street_label_stays_inside_its_panel_for_long_and_local_names() {
