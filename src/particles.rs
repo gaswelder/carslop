@@ -198,7 +198,7 @@ mod tests {
         let mut car = Vehicle::new(
             road.lane_position(offset),
             road.heading(),
-            CarModel::Roadster,
+            CarModel::test_fixture(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
         car.speed = 10.0;
@@ -215,13 +215,13 @@ mod tests {
     }
 
     #[test]
-    fn scenic_particles_use_scenic_height_and_verge_width() {
-        let track = track::TrackId::scenic().track();
+    fn authored_particles_use_road_height_and_verge_width() {
+        let track = crate::test_support::track();
         let road = track.at_distance(50.0);
         let mut car = Vehicle::on_track(
             road.lane_position(2.0),
             road.heading(),
-            CarModel::Roadster,
+            CarModel::test_fixture(),
             track.clone(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
@@ -230,9 +230,9 @@ mod tests {
         emit(&mut particles, &car, 30);
         assert!(
             particles.puffs.is_empty(),
-            "scenic verge must not use compact width"
+            "authored verge must use the selected road width"
         );
-        car.position = road.lane_position(2.55);
+        car.position = road.lane_position(road.width * 0.5 - car.model.wheel_centers()[0][0].abs());
         emit(&mut particles, &car, 30);
         assert!(!particles.puffs.is_empty());
         assert!(particles.puffs.iter().all(|p| p.kind == Kind::Dust));

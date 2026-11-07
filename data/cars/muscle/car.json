@@ -1,29 +1,23 @@
 {
   "name": "1969 MOSQUITO SS",
-  "mass": 1450.0,
-  "engine_force": 15950.0,
-  "top_speed": 55.55555555555556,
+  "weight_kg": 1450.0,
   "brake_force": 26100.0,
-  "lateral_force": 14500.0,
-  "wheelbase": 2.74,
+  "tire_friction_coefficient": 1.019368,
   "steering_response": 6.8,
-  "wheel_power_watts": 180000,
-  "drag_accel": 0.00067,
-  "dynamics": {
-    "front_weight": 0.55,
-    "cg_height": 0.55,
-    "track_width": 1.54,
-    "yaw_inertia": 2600,
-    "front_drive": 0.0,
-    "brake_bias": 0.65,
-    "corner_stiffness": [
-      78000.0,
-      82000.0
-    ],
-    "peak_torque": 420.0,
-    "suspension_hz": 1.45,
-    "steering_speed_squared": 0.0
-  },
+  "engine_power_hp": 268.2,
+  "drag_coefficient": 0.77706002,
+  "front_weight": 0.55,
+  "cg_height_fraction": 0.40917626,
+  "yaw_inertia": 2600,
+  "drive_bias": 0.0,
+  "brake_bias": 0.65,
+  "corner_stiffness": [
+    78000.0,
+    82000.0
+  ],
+  "engine_max_torque_nm": 420.0,
+  "suspension_hz": 1.45,
+  "steering_speed_squared": 0.0,
   "gearbox": {
     "ratios": [
       2.52,
@@ -32,10 +26,28 @@
       1.0
     ],
     "final_drive": 3.55,
-    "rolling_radius": 0.33,
     "reverse_ratio": 2.9,
     "upshift_rpm": 5500.0,
     "downshift_rpm": 2200.0
   },
-  "model": "model.glb"
+  "audio": {
+    "harmonics": [
+      [
+        1,
+        0.55
+      ],
+      [
+        0.5,
+        0.3
+      ],
+      [
+        3,
+        0.15
+      ]
+    ],
+    "gain": 2,
+    "coast_gain": 0.35,
+    "soft_limit": null,
+    "pulses_per_revolution": 4
+  }
 }

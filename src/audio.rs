@@ -1,11 +1,10 @@
-use crate::cars::CarModel;
+use crate::cars::EngineVoice;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
 
 pub(crate) const SAMPLE_RATE: f32 = 48_000.0;
 const QUEUE_SAMPLES: usize = 2400;
 
-// Recorded Roadster engine with procedural fallback voices and driving effects.
 pub struct EngineAudio {
     stream: AudioStreamOwner,
     _subsystem: sdl3::AudioSubsystem,
@@ -15,11 +14,11 @@ pub struct EngineAudio {
 }
 
 #[derive(Clone, Copy)]
-struct Voice {
+struct Voice<'a> {
     frequency: f32,
     load: f32,
     scrub: f32,
-    model: CarModel,
+    tuning: &'a EngineVoice,
     enabled: bool,
 }
 
@@ -60,7 +59,7 @@ impl Synth {
         self.impact_cooldown = 0.0;
     }
 
-    fn sample(&mut self, voice: Voice) -> f32 {
+    fn sample(&mut self, voice: Voice<'_>) -> f32 {
         self.frequency += (voice.frequency - self.frequency) * 0.002;
         let load = if voice.enabled {
             voice.load.clamp(0.0, 1.0)
@@ -76,13 +75,12 @@ impl Synth {
         self.master += (f32::from(u8::from(voice.enabled)) - self.master) * 0.002;
         self.phase = (self.phase + self.frequency / SAMPLE_RATE).rem_euclid(2.0);
         let p = self.phase * TAU;
-        let harmonics = match voice.model.appearance() {
-            CarModel::Roadster => p.sin() * 0.65 + (p * 2.0).sin() * 0.23 + (p * 4.0).sin() * 0.12,
-            CarModel::Muscle => p.sin() * 0.55 + (p * 0.5).sin() * 0.30 + (p * 3.0).sin() * 0.15,
-            CarModel::Club | CarModel::Custom(_) => {
-                p.sin() * 0.52 + (p * 3.0).sin() * 0.30 + (p * 6.0).sin() * 0.18
-            }
-        };
+        let tuning = voice.tuning;
+        let harmonics: f32 = tuning
+            .harmonics
+            .iter()
+            .map(|[multiple, amplitude]| (p * multiple).sin() * amplitude)
+            .sum();
         // Deterministic filtered noise: independent tire scrub, intake hiss and impact grit.
         self.noise = self
             .noise
@@ -93,22 +91,24 @@ impl Synth {
         let procedural = (p.sin() * (1.0 - self.load) + harmonics * self.load)
             * (0.065 + self.load * 0.065)
             + self.filtered_noise * self.load * 0.025;
-        let engine = if voice.model.appearance() == CarModel::Roadster && self.recorded.available()
-        {
-            // Kestrel is a four-stroke six-cylinder: three firing pulses per revolution.
-            self.recorded.sample(self.frequency * 1.5, self.load)
+        self.recorded.select(tuning.samples.as_deref());
+        let engine = if self.recorded.available() {
+            self.recorded.sample(
+                self.frequency * 30.0,
+                tuning.pulses_per_revolution,
+                self.load,
+            )
         } else {
             procedural
         };
-        // Bring the rear-engine Kestrel forward without raising tires or road noise.
-        // A soft knee catches exhaust peaks before the final mix limiter.
-        let engine = if voice.model.appearance() == CarModel::Roadster {
-            let amplified = engine * 3.2 * (0.45 + self.load * 0.55);
-            let magnitude = amplified.abs();
-            amplified.signum()
-                * (magnitude.min(0.22) + 0.06 * ((magnitude - 0.22).max(0.0) / 0.06).tanh())
+        let engine =
+            engine * tuning.gain * (tuning.coast_gain + self.load * (1.0 - tuning.coast_gain));
+        let engine = if let Some([knee, headroom]) = tuning.soft_limit {
+            let magnitude = engine.abs();
+            engine.signum()
+                * (magnitude.min(knee) + headroom * ((magnitude - knee).max(0.0) / headroom).tanh())
         } else {
-            engine * 2.0 * (0.35 + self.load * 0.65)
+            engine
         };
         let turbo_target = if voice.enabled {
             self.turbo_target
@@ -338,7 +338,7 @@ impl EngineAudio {
                 car.engine_load
             },
             scrub: car.tire_scrub,
-            model: car.model,
+            tuning: &car.model.spec().audio,
             enabled,
         };
         let placement = SpatialAudio::placement(car.position, listener);
@@ -371,7 +371,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kestrel_voice_stays_present_with_headroom_for_the_driving_mix() {
+    fn engine_voice_stays_present_with_headroom_for_the_driving_mix() {
         for load in [0.12, 1.0] {
             let mut synth = Synth::default();
             let mut energy = 0.0;
@@ -381,7 +381,7 @@ mod tests {
                     frequency: 150.0,
                     load,
                     scrub: 0.0,
-                    model: CarModel::Roadster,
+                    tuning: crate::test_support::audio_voice(),
                     enabled: true,
                 });
                 if i > 12000 {
@@ -394,7 +394,7 @@ mod tests {
             let rms = (energy / 35999.0_f32).sqrt();
             assert!(
                 rms > if load < 0.5 { 0.012 } else { 0.035 },
-                "Kestrel too quiet at load {load}: {rms}"
+                "fixture voice too quiet at load {load}: {rms}"
             );
             assert_eq!(clipped, 0, "engine alone must leave headroom");
         }
@@ -479,35 +479,33 @@ mod tests {
     }
 
     #[test]
-    fn coasting_quiets_every_engine_without_changing_pitch() {
-        for model in crate::cars::ALL {
-            for rpm in [2500.0, 5500.0] {
-                let render = |load| {
-                    let mut synth = Synth::default();
-                    let voice = Voice {
-                        frequency: engine_frequency(rpm),
-                        load,
-                        scrub: 0.0,
-                        model,
-                        enabled: true,
-                    };
-                    let mut energy = 0.0;
-                    for i in 0..24000 {
-                        let sample = synth.sample(voice);
-                        if i >= 12000 {
-                            energy += sample * sample;
-                        }
-                    }
-                    (energy, synth.frequency)
+    fn coasting_quiets_engine_without_changing_pitch() {
+        for rpm in [2500.0, 5500.0] {
+            let render = |load| {
+                let mut synth = Synth::default();
+                let voice = Voice {
+                    frequency: engine_frequency(rpm),
+                    load,
+                    scrub: 0.0,
+                    tuning: crate::test_support::audio_voice(),
+                    enabled: true,
                 };
-                let (coast, coast_pitch) = render(0.12);
-                let (powered, powered_pitch) = render(1.0);
-                assert!(
-                    coast > 0.0 && coast < powered * 0.4,
-                    "{model:?} at {rpm} RPM: coast {coast}, powered {powered}"
-                );
-                assert_eq!(coast_pitch, powered_pitch);
-            }
+                let mut energy = 0.0;
+                for i in 0..24000 {
+                    let sample = synth.sample(voice);
+                    if i >= 12000 {
+                        energy += sample * sample;
+                    }
+                }
+                (energy, synth.frequency)
+            };
+            let (coast, coast_pitch) = render(0.12);
+            let (powered, powered_pitch) = render(1.0);
+            assert!(
+                coast > 0.0 && coast < powered * 0.4,
+                "at {rpm} RPM: coast {coast}, powered {powered}"
+            );
+            assert_eq!(coast_pitch, powered_pitch);
         }
     }
 
@@ -522,7 +520,7 @@ mod tests {
             frequency: 60.0,
             load: 0.0,
             scrub: 0.0,
-            model: CarModel::Roadster,
+            tuning: crate::test_support::audio_voice(),
             enabled: true,
         };
         let difference: f32 = (0..24000)
@@ -559,7 +557,7 @@ mod tests {
                 frequency: engine_frequency(rpm),
                 load: if t < 12.0 { 0.85 } else { 0.0 },
                 scrub: if (14.0..16.0).contains(&t) { 0.8 } else { 0.0 },
-                model: CarModel::Roadster,
+                tuning: crate::test_support::audio_voice(),
                 enabled: t < 16.0,
             });
             assert!(sample.is_finite() && sample.abs() <= 0.3);
@@ -587,70 +585,42 @@ mod tests {
     }
 
     #[test]
-    fn engine_pitch_follows_ratio_based_shifts_on_every_route() {
-        for track in crate::track::all().map(|id| id.track()) {
-            let road = track.at_distance(50.0);
-            for model in crate::cars::ALL {
-                let mut car = crate::vehicle::Vehicle::on_track(
-                    road.lane_position(0.0),
-                    road.heading(),
-                    model,
-                    track.clone(),
-                );
-                let step = car.upshift_speed(1);
-                car.velocity = road.tangent.map(|v| v * (step - 0.01));
-                car.refresh_speed();
-                let before = engine_frequency(car.target_engine_rpm());
-                car.velocity = road.tangent.map(|v| v * (step + 0.01));
-                car.refresh_speed();
-                let after = engine_frequency(car.target_engine_rpm());
-                assert_eq!(car.gear, 2);
-                assert!(before > after + 30.0);
-            }
-        }
-    }
-
-    #[test]
     fn engine_pitch_matches_every_gears_ratio_drop() {
-        for model in crate::cars::ALL {
-            let g = &model.spec().gearbox;
-            for gear in 1..g.gears() {
-                let speed = g.speed_at_rpm(g.upshift_rpm, gear);
-                let before = engine_frequency(g.rpm(speed, gear));
-                let after = engine_frequency(g.rpm(speed, gear + 1));
-                let expected = g.ratios[gear as usize] / g.ratios[gear as usize - 1];
-                assert!((after / before - expected).abs() < 0.001);
-                assert!(after < before);
-            }
+        let g = &crate::test_support::car_spec().gearbox;
+        for gear in 1..g.gears() {
+            let speed = g.speed_at_rpm(g.upshift_rpm, gear);
+            let before = engine_frequency(g.rpm(speed, gear));
+            let after = engine_frequency(g.rpm(speed, gear + 1));
+            let expected = g.ratios[gear as usize] / g.ratios[gear as usize - 1];
+            assert!((after / before - expected).abs() < 0.001);
+            assert!(after < before);
         }
     }
 
     #[test]
     fn procedural_audio_is_bounded_and_fades_to_silence() {
-        for model in crate::cars::ALL {
-            let mut synth = Synth::default();
-            let mut voice = Voice {
-                frequency: 180.0,
-                load: 1.0,
-                scrub: 1.0,
-                model,
-                enabled: true,
-            };
-            for i in 0..48000 {
-                if i % 6000 == 0 {
-                    synth.hit(20.0);
-                }
-                let s = synth.sample(voice);
-                assert!(s.is_finite() && s.abs() <= 0.3);
+        let mut synth = Synth::default();
+        let mut voice = Voice {
+            frequency: 180.0,
+            load: 1.0,
+            scrub: 1.0,
+            tuning: crate::test_support::audio_voice(),
+            enabled: true,
+        };
+        for i in 0..48000 {
+            if i % 6000 == 0 {
+                synth.hit(20.0);
             }
-            synth.suppress_impacts();
-            voice.enabled = false;
-            let mut last = 1.0;
-            for _ in 0..12000 {
-                last = synth.sample(voice);
-            }
-            assert!(last.abs() < 0.0001);
+            let s = synth.sample(voice);
+            assert!(s.is_finite() && s.abs() <= 0.3);
         }
+        synth.suppress_impacts();
+        voice.enabled = false;
+        let mut last = 1.0;
+        for _ in 0..12000 {
+            last = synth.sample(voice);
+        }
+        assert!(last.abs() < 0.0001);
     }
 
     #[test]
@@ -666,7 +636,7 @@ mod tests {
             frequency: 30.0,
             load: 0.0,
             scrub: 0.0,
-            model: CarModel::Roadster,
+            tuning: crate::test_support::audio_voice(),
             enabled: true,
         };
         for _ in 0..48000 {
@@ -680,20 +650,22 @@ mod tests {
     }
 
     #[test]
-    fn models_have_distinct_timbres_and_scrub_adds_an_independent_layer() {
-        let voices = crate::cars::ALL.map(|model| {
+    fn configured_harmonics_change_timbre_and_scrub_adds_an_independent_layer() {
+        let render = |tuning| {
             let mut synth = Synth::default();
             let voice = Voice {
                 frequency: 120.0,
                 load: 1.0,
                 scrub: 0.0,
-                model,
+                tuning,
                 enabled: true,
             };
             (0..4000).map(|_| synth.sample(voice)).collect::<Vec<_>>()
-        });
-        assert_ne!(voices[0], voices[1]);
-        assert_ne!(voices[0], voices[2]);
+        };
+        let baseline = crate::test_support::audio_voice();
+        let mut changed = baseline.clone();
+        changed.harmonics = vec![[1.0, 0.2], [4.0, 0.8]];
+        assert_ne!(render(baseline), render(&changed));
         let mut quiet = Synth::default();
         let mut sliding = Synth {
             road_speed: 20.0,
@@ -704,7 +676,7 @@ mod tests {
             frequency: 80.0,
             load: 0.0,
             scrub: 0.0,
-            model: CarModel::Club,
+            tuning: crate::test_support::audio_voice(),
             enabled: true,
         };
         let difference: f32 = (0..4000)
@@ -722,37 +694,35 @@ mod tests {
 
     #[test]
     fn driving_output_is_bounded_and_fades_on_mute_or_pause() {
-        for model in crate::cars::ALL {
-            let mut engine = Synth::default();
-            let mut voice = Voice {
-                frequency: 180.0,
-                load: 1.0,
-                scrub: 1.0,
-                model,
-                enabled: true,
-            };
-            let mut driving_energy = 0.0;
-            for i in 0..48000 {
-                if i % 6000 == 0 {
-                    engine.hit(20.0);
-                }
-                let driving = engine.sample(voice);
-                let sample = output_sample(driving);
-                assert!(sample.is_finite() && sample.abs() <= 0.3);
-                driving_energy += driving * driving;
+        let mut engine = Synth::default();
+        let mut voice = Voice {
+            frequency: 180.0,
+            load: 1.0,
+            scrub: 1.0,
+            tuning: crate::test_support::audio_voice(),
+            enabled: true,
+        };
+        let mut driving_energy = 0.0;
+        for i in 0..48000 {
+            if i % 6000 == 0 {
+                engine.hit(20.0);
             }
-            assert!(driving_energy > 0.01);
-            voice.enabled = false;
-            engine.suppress_impacts();
-            let mut tail: f32 = 0.0;
-            for i in 0..24000 {
-                let sample = output_sample(engine.sample(voice));
-                if i > 20000 {
-                    tail = tail.max(sample.abs());
-                }
-            }
-            assert!(tail < 0.00001);
+            let driving = engine.sample(voice);
+            let sample = output_sample(driving);
+            assert!(sample.is_finite() && sample.abs() <= 0.3);
+            driving_energy += driving * driving;
         }
+        assert!(driving_energy > 0.01);
+        voice.enabled = false;
+        engine.suppress_impacts();
+        let mut tail: f32 = 0.0;
+        for i in 0..24000 {
+            let sample = output_sample(engine.sample(voice));
+            if i > 20000 {
+                tail = tail.max(sample.abs());
+            }
+        }
+        assert!(tail < 0.00001);
     }
 
     #[test]
@@ -825,21 +795,15 @@ mod tests {
 
     #[test]
     fn reverse_pitch_increases_with_backwards_speed() {
-        for model in crate::cars::ALL {
-            let road = crate::track::TrackId::Compact.track().at_distance(50.0);
-            let mut car =
-                crate::vehicle::Vehicle::new(road.lane_position(0.0), road.heading(), model);
-            car.toggle_direction();
-            let idle = engine_frequency(car.target_engine_rpm());
-            let gearbox = &model.spec().gearbox;
-            let speed = 2000.0 * std::f32::consts::TAU * gearbox.rolling_radius
-                / (60.0 * gearbox.reverse_ratio * gearbox.final_drive);
-            car.speed = -speed;
-            let slow = engine_frequency(car.target_engine_rpm());
-            car.speed = -speed * 2.0;
-            let fast = engine_frequency(car.target_engine_rpm());
-            assert!(idle < slow && slow < fast && fast <= 6500.0 / 30.0);
-        }
+        let gearbox = &crate::test_support::car_spec().gearbox;
+        let slow = gearbox.speed_at_rpm(2000.0, 0);
+        let slow_pitch = engine_frequency(gearbox.rpm(-slow, 0));
+        let fast_pitch = engine_frequency(gearbox.rpm(-slow * 2.0, 0));
+        assert!(engine_frequency(0.0) < slow_pitch && slow_pitch < fast_pitch);
+        assert_eq!(
+            engine_frequency(100_000.0),
+            crate::vehicle::REDLINE_RPM / 30.0
+        );
     }
 }
 
@@ -853,7 +817,7 @@ mod turbo_tests {
             frequency: 120.0,
             load: 0.7,
             scrub: 0.0,
-            model: CarModel::Roadster,
+            tuning: crate::test_support::audio_voice(),
             enabled: true,
         };
         let mut quiet = Synth::default();

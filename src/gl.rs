@@ -1417,39 +1417,37 @@ mod tests {
 
     #[test]
     fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
-        for id in crate::track::all() {
-            for model in crate::cars::ALL {
-                let track = id.track();
-                let road = track.spawn();
-                let mut car = crate::vehicle::Vehicle::on_track(
-                    road.lane_position(0.0),
-                    road.heading(),
-                    model,
-                    track,
-                );
-                for speed in [-6.0, 0.0, 30.0, 45.0] {
-                    car.speed = speed;
-                    car.velocity = road.tangent.map(|n| n * speed);
-                    let chase = crate::camera::ChaseCamera::new(&car);
-                    let camera = chase_camera(1280.0 / 720.0, chase.pose());
-                    let matrix = multiply(
-                        camera.view_projection,
-                        model_matrix(car.position, car.heading, 0.0),
-                    );
-                    for x in [-1.4, 1.4] {
-                        for y in [-0.42, 1.25] {
-                            for z in [-2.2, 2.2] {
-                                let p = [x, y, z];
-                                let clip = transform(matrix, p);
-                                let w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
-                                assert!(w > 0.0);
-                                assert!(
-                                    clip[0].abs() / w < 0.98 && clip[1].abs() / w < 0.98,
-                                    "car clipped for {id:?}/{model:?} at {speed}: {:?}",
-                                    clip.map(|v| v / w)
-                                );
-                            }
-                        }
+        let track = crate::test_support::track();
+        let model = crate::cars::CarModel::test_fixture();
+
+        let road = track.spawn();
+        let mut car = crate::vehicle::Vehicle::on_track(
+            road.lane_position(0.0),
+            road.heading(),
+            model,
+            track,
+        );
+        for speed in [-6.0, 0.0, 30.0, 45.0] {
+            car.speed = speed;
+            car.velocity = road.tangent.map(|n| n * speed);
+            let chase = crate::camera::ChaseCamera::new(&car);
+            let camera = chase_camera(1280.0 / 720.0, chase.pose());
+            let matrix = multiply(
+                camera.view_projection,
+                model_matrix(car.position, car.heading, 0.0),
+            );
+            for x in [-1.4, 1.4] {
+                for y in [-0.42, 1.25] {
+                    for z in [-2.2, 2.2] {
+                        let p = [x, y, z];
+                        let clip = transform(matrix, p);
+                        let w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+                        assert!(w > 0.0);
+                        assert!(
+                            clip[0].abs() / w < 0.98 && clip[1].abs() / w < 0.98,
+                            "car clipped for {model:?} at {speed}: {:?}",
+                            clip.map(|v| v / w)
+                        );
                     }
                 }
             }
@@ -1458,35 +1456,34 @@ mod tests {
 
     #[test]
     fn wheels_turn_about_their_axles_not_the_vehicle_origin() {
-        for car in crate::cars::ALL {
-            for center in car.wheel_centers() {
-                let body = model_matrix([12.0, 3.0, -7.0], 1.2, 0.15);
-                let axle = transform(body, center);
-                for (steer, spin) in [(0.0, 0.0), (-0.4, 1.5), (0.4, 5.0)] {
-                    let matrix = wheel_matrix(body, center, steer, spin);
-                    let origin = transform(matrix, [0.0; 3]);
-                    for i in 0..3 {
-                        assert!((origin[i] - axle[i]).abs() < 0.0001);
-                    }
-                    let rim = transform(matrix, [0.0, crate::cars::WHEEL_RADIUS, 0.0]);
-                    let radius = (0..3)
-                        .map(|i| (rim[i] - axle[i]).powi(2))
-                        .sum::<f32>()
-                        .sqrt();
-                    assert!((radius - crate::cars::WHEEL_RADIUS).abs() < 0.0001);
+        let car = crate::cars::CarModel::test_fixture();
+        for center in car.wheel_centers() {
+            let body = model_matrix([12.0, 3.0, -7.0], 1.2, 0.15);
+            let axle = transform(body, center);
+            for (steer, spin) in [(0.0, 0.0), (-0.4, 1.5), (0.4, 5.0)] {
+                let matrix = wheel_matrix(body, center, steer, spin);
+                let origin = transform(matrix, [0.0; 3]);
+                for i in 0..3 {
+                    assert!((origin[i] - axle[i]).abs() < 0.0001);
                 }
+                let rim = transform(matrix, [0.0, crate::cars::WHEEL_RADIUS, 0.0]);
+                let radius = (0..3)
+                    .map(|i| (rim[i] - axle[i]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                assert!((radius - crate::cars::WHEEL_RADIUS).abs() < 0.0001);
             }
         }
     }
 
     #[test]
     fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
-        let track = crate::track::TrackId::scenic().track();
+        let track = crate::test_support::track();
         let road = track.spawn();
         let mut car = crate::vehicle::Vehicle::on_track(
             road.lane_position(0.0),
             road.heading(),
-            crate::cars::CarModel::Roadster,
+            crate::cars::CarModel::test_fixture(),
             track,
         );
         let mut chase = crate::camera::ChaseCamera::new(&car);
@@ -1515,12 +1512,12 @@ mod tests {
 
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
-        let track = std::sync::Arc::new(crate::track::TrackId::scenic().track().bump_test_track());
+        let track = std::sync::Arc::new(crate::test_support::track().bump_test_track());
         let road = track.at_distance(54.0);
         let mut car = crate::vehicle::Vehicle::on_track(
             road.lane_position(0.0),
             road.heading(),
-            crate::cars::CarModel::Roadster,
+            crate::cars::CarModel::test_fixture(),
             track,
         );
         car.suspension_pitch = 0.0;

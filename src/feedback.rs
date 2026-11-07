@@ -139,23 +139,31 @@ mod tests {
     use super::*;
     use crate::cars::CarModel;
 
-    fn sliding(distance: f32) -> Vehicle {
+    fn sliding(model: CarModel, distance: f32) -> Vehicle {
         let road = track::TrackId::Compact.track().at_distance(distance);
-        let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
         car.tire_scrub = 0.9;
         car
     }
 
     #[test]
-    fn scenic_trails_use_scenic_width_and_road_height() {
-        let track = track::TrackId::scenic().track();
+    fn authored_trails_use_road_width_and_height() {
+        let model = CarModel::test_fixture();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"version":2,"name":"Trail test","points":[[0,3,0,10],[400,6,0,10],[400,5,400,10],[0,3,400,10]]}"#).unwrap();
+        let track = track::register_file(file.path()).unwrap().0.track();
+        let half_track = model.wheel_centers()[..2]
+            .iter()
+            .map(|p| p[0].abs())
+            .fold(0.0, f32::max);
+        let lane_offset = track.at_distance(50.0).width * 0.5 - half_track - 0.5;
         let mut marks = SkidMarks::default();
         for distance in [50.0, 50.5] {
             let road = track.at_distance(distance);
             let mut car = Vehicle::on_track(
-                road.lane_position(2.55),
+                road.lane_position(lane_offset),
                 road.heading(),
-                CarModel::Roadster,
+                model,
                 track.clone(),
             );
             car.tire_scrub = 0.9;
@@ -164,7 +172,7 @@ mod tests {
         assert_eq!(
             marks.marks.len(),
             2,
-            "both rear tires fit the wider scenic road"
+            "both rear tires fit the authored road"
         );
         for vertex in marks.vertices() {
             let road = track.project(vertex.position);
@@ -175,9 +183,10 @@ mod tests {
 
     #[test]
     fn trails_follow_road_fade_and_expire() {
+        let model = CarModel::test_fixture();
         let mut marks = SkidMarks::default();
-        marks.record(0, &sliding(50.0));
-        marks.record(0, &sliding(50.5));
+        marks.record(0, &sliding(model, 50.0));
+        marks.record(0, &sliding(model, 50.5));
         assert_eq!(marks.marks.len(), 2);
         let before = marks.vertices();
         assert_eq!(before.len(), 12);
@@ -199,29 +208,31 @@ mod tests {
 
     #[test]
     fn trails_never_bridge_recovery_or_grip_changes() {
+        let model = CarModel::test_fixture();
         let mut marks = SkidMarks::default();
-        marks.record(0, &sliding(50.0));
-        marks.record(0, &sliding(100.0));
+        marks.record(0, &sliding(model, 50.0));
+        marks.record(0, &sliding(model, 100.0));
         assert!(marks.marks.is_empty());
         marks.break_trail(0);
-        marks.record(0, &sliding(100.5));
+        marks.record(0, &sliding(model, 100.5));
         assert!(marks.marks.is_empty());
-        let mut car = sliding(101.0);
+        let mut car = sliding(model, 101.0);
         car.tire_scrub = 0.0;
         marks.record(0, &car);
-        marks.record(0, &sliding(101.5));
+        marks.record(0, &sliding(model, 101.5));
         assert!(marks.marks.is_empty());
     }
 
     #[test]
     fn trail_storage_is_bounded_and_stationary_cars_leave_nothing() {
+        let model = CarModel::test_fixture();
         let mut marks = SkidMarks::default();
         for _ in 0..100 {
-            marks.record(0, &sliding(50.0));
+            marks.record(0, &sliding(model, 50.0));
         }
         assert!(marks.marks.is_empty());
         for i in 0..3000 {
-            marks.record(0, &sliding(50.0 + i as f32 * 0.25));
+            marks.record(0, &sliding(model, 50.0 + i as f32 * 0.25));
         }
         assert!(!marks.marks.is_empty());
         assert!(marks.marks.len() <= MAX_MARKS);

@@ -1,29 +1,23 @@
 {
   "name": "1991 AGOLF GTI",
-  "mass": 1000,
-  "engine_force": 8000,
-  "top_speed": 52.77777777777778,
+  "weight_kg": 1000,
   "brake_force": 22000,
-  "lateral_force": 14000,
-  "wheelbase": 2.475,
+  "tire_friction_coefficient": 1.427115,
   "steering_response": 9.0,
-  "wheel_power_watts": 78000,
-  "drag_accel": 0.00045,
-  "dynamics": {
-    "front_weight": 0.63,
-    "cg_height": 0.46,
-    "track_width": 1.43,
-    "yaw_inertia": 1100,
-    "front_drive": 1.0,
-    "brake_bias": 0.68,
-    "corner_stiffness": [
-      70000,
-      51000
-    ],
-    "peak_torque": 148,
-    "suspension_hz": 1.85,
-    "steering_speed_squared": 0.0015
-  },
+  "engine_power_hp": 116.2,
+  "drag_coefficient": 0.36201367,
+  "front_weight": 0.63,
+  "cg_height_fraction": 0.31286827,
+  "yaw_inertia": 1100,
+  "drive_bias": 1.0,
+  "brake_bias": 0.68,
+  "corner_stiffness": [
+    70000,
+    51000
+  ],
+  "engine_max_torque_nm": 148,
+  "suspension_hz": 1.85,
+  "steering_speed_squared": 0.0015,
   "gearbox": {
     "ratios": [
       3.455,
@@ -33,10 +27,28 @@
       0.805
     ],
     "final_drive": 3.67,
-    "rolling_radius": 0.3,
     "reverse_ratio": 3.1666667461395264,
     "upshift_rpm": 6000.0,
     "downshift_rpm": 2400.0
   },
-  "model": "model.glb"
+  "audio": {
+    "harmonics": [
+      [
+        1,
+        0.52
+      ],
+      [
+        3,
+        0.3
+      ],
+      [
+        6,
+        0.18
+      ]
+    ],
+    "gain": 2,
+    "coast_gain": 0.35,
+    "soft_limit": null,
+    "pulses_per_revolution": 2
+  }
 }

@@ -204,7 +204,11 @@ mod tests {
 
     fn car() -> Vehicle {
         let road = track::TrackId::Compact.track().at_distance(50.0);
-        Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster)
+        Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::test_fixture(),
+        )
     }
 
     fn assert_close(a: [f32; 3], b: [f32; 3], tolerance: f32) {
@@ -265,12 +269,12 @@ mod tests {
     fn changing_routes_snaps_camera_and_preserves_selected_view() {
         let mut camera = ChaseCamera::new(&car());
         camera.toggle_view();
-        let track = track::TrackId::scenic().track();
+        let track = crate::test_support::track();
         let road = track.at_distance(850.0);
         let mut scenic = Vehicle::on_track(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::Roadster,
+            CarModel::test_fixture(),
             track.clone(),
         );
         scenic.speed = 30.0;
@@ -291,13 +295,13 @@ mod tests {
     }
 
     #[test]
-    fn scenic_camera_clearance_and_look_ahead_use_scenic_projection() {
-        let track = track::TrackId::scenic().track();
+    fn authored_camera_clearance_and_look_ahead_use_selected_road() {
+        let track = crate::test_support::track();
         let road = track.at_distance(0.0);
         let mut car = Vehicle::on_track(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::Roadster,
+            CarModel::test_fixture(),
             track.clone(),
         );
         let mut camera = ChaseCamera::new(&car);

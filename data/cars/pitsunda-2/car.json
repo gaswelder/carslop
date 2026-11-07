@@ -1,32 +1,24 @@
 {
-  "base": "club",
   "name": "2016 PITSUNDA 2",
-  "model": "model.glb",
-  "mass": 1040,
-  "engine_force": 7600,
-  "top_speed": 50.0,
+  "weight_kg": 1040,
   "brake_force": 18720,
-  "lateral_force": 11440,
-  "wheelbase": 2.57,
+  "tire_friction_coefficient": 1.121305,
   "steering_response": 8.5,
-  "wheel_power_watts": 62000,
-  "drag_accel": 0.00033,
-  "dynamics": {
-    "front_weight": 0.6,
-    "cg_height": 0.5,
-    "track_width": 1.47,
-    "yaw_inertia": 1250,
-    "front_drive": 1,
-    "brake_bias": 0.68,
-    "corner_stiffness": [
-      65000,
-      48000
-    ],
-    "peak_torque": 125,
-    "suspension_hz": 1.55,
-    "steering_speed_squared": 0.002,
-    "steering_low_speed_squared": 0.002
-  },
+  "engine_power_hp": 92.4,
+  "drag_coefficient": 0.26827704,
+  "front_weight": 0.6,
+  "cg_height_fraction": 0.32189189,
+  "yaw_inertia": 1250,
+  "drive_bias": 1,
+  "brake_bias": 0.68,
+  "corner_stiffness": [
+    65000,
+    48000
+  ],
+  "engine_max_torque_nm": 125,
+  "suspension_hz": 1.55,
+  "steering_speed_squared": 0.002,
+  "steering_low_speed_squared": 0.002,
   "gearbox": {
     "ratios": [
       3.552,
@@ -37,9 +29,28 @@
       0.599
     ],
     "final_drive": 4.105,
-    "rolling_radius": 0.295,
     "reverse_ratio": 3.893,
     "upshift_rpm": 6100,
     "downshift_rpm": 2400
+  },
+  "audio": {
+    "harmonics": [
+      [
+        1,
+        0.52
+      ],
+      [
+        3,
+        0.3
+      ],
+      [
+        6,
+        0.18
+      ]
+    ],
+    "gain": 2,
+    "coast_gain": 0.35,
+    "soft_limit": null,
+    "pulses_per_revolution": 2
   }
 }

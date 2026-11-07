@@ -51,40 +51,22 @@ mod tests {
     use crate::{cars, track};
 
     #[test]
-    fn footprints_are_finite_bounded_and_match_each_car() {
+    fn footprint_contains_wheel_contacts() {
         let road = track::TrackId::Compact.track().at_distance(50.0);
-        let footprints = cars::ALL.map(|model| {
-            let car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
-            let shadow = ContactShadow::new(&car);
-            assert!(shadow
-                .origin
-                .iter()
-                .chain(shadow.axes.iter())
-                .all(|x| x.is_finite()));
-            assert!(shadow.axes[2] > 1.0 && shadow.axes[2] < 1.7);
-            assert!(shadow.axes[3] > 2.0 && shadow.axes[3] < 2.7);
-            assert_eq!(shadow.origin, car.position);
-            shadow.axes
-        });
-        // The new cars use different track widths; every contact must still
-        // fit inside the projected footprint, regardless of model ordering.
-        for model in cars::ALL {
-            for wheel in model.wheel_centers() {
-                assert!(wheel[0].abs() < footprints[model.index()][2]);
-                assert!(wheel[2].abs() < footprints[model.index()][3] - 0.3);
-            }
+        let model = cars::CarModel::test_fixture();
+        let car = Vehicle::new(road.lane_position(0.0), road.heading(), model);
+        let shadow = ContactShadow::new(&car);
+        assert_eq!(shadow.origin, car.position);
+        assert!(shadow.axes.iter().all(|v| v.is_finite()));
+        for wheel in model.wheel_centers() {
+            assert!(wheel[0].abs() < shadow.axes[2]);
+            assert!(wheel[2].abs() < shadow.axes[3] - 0.3);
         }
-        assert!(
-            footprints[cars::CarModel::Muscle.index()][3]
-                > footprints[cars::CarModel::Roadster.index()][3]
-                && footprints[cars::CarModel::Roadster.index()][3]
-                    > footprints[cars::CarModel::Club.index()][3]
-        );
     }
 
     #[test]
     fn soft_contact_rotates_with_car_and_fades_out_at_edges_and_height() {
-        let mut car = Vehicle::new([10.0, 3.48, -7.0], 0.0, cars::CarModel::Roadster);
+        let mut car = Vehicle::new([10.0, 3.48, -7.0], 0.0, cars::CarModel::test_fixture());
         for heading in [0.0, 0.7, 1.8, 4.5] {
             car.heading = heading;
             let shadow = ContactShadow::new(&car);
@@ -114,21 +96,20 @@ mod tests {
 
     #[test]
     fn contacts_follow_elevated_route_and_recovery_without_history() {
-        for model in cars::ALL {
-            for i in 0..120 {
-                let road = track::TrackId::Compact
-                    .track()
-                    .at_distance(i as f32 * track::TrackId::Compact.track().length() / 120.0);
-                let mut car = Vehicle::new(road.lane_position(1.4), road.heading(), model);
-                let shadow = ContactShadow::new(&car);
-                let p = [car.position[0], road.point[1] + 0.05, car.position[2]];
-                assert!((shadow.opacity_at(p) - STRENGTH).abs() < 0.0001);
-                let elsewhere = track::TrackId::Compact
-                    .track()
-                    .at_distance(road.distance + track::TrackId::Compact.track().length() * 0.5);
-                car.reset(elsewhere.lane_position(0.0), elsewhere.heading());
-                assert_eq!(ContactShadow::new(&car).opacity_at(p), 0.0);
-            }
+        let model = cars::CarModel::test_fixture();
+        for i in 0..120 {
+            let road = track::TrackId::Compact
+                .track()
+                .at_distance(i as f32 * track::TrackId::Compact.track().length() / 120.0);
+            let mut car = Vehicle::new(road.lane_position(1.4), road.heading(), model);
+            let shadow = ContactShadow::new(&car);
+            let p = [car.position[0], road.point[1] + 0.05, car.position[2]];
+            assert!((shadow.opacity_at(p) - STRENGTH).abs() < 0.0001);
+            let elsewhere = track::TrackId::Compact
+                .track()
+                .at_distance(road.distance + track::TrackId::Compact.track().length() * 0.5);
+            car.reset(elsewhere.lane_position(0.0), elsewhere.heading());
+            assert_eq!(ContactShadow::new(&car).opacity_at(p), 0.0);
         }
     }
 }

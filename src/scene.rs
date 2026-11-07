@@ -605,7 +605,7 @@ pub(crate) fn authored_decorations(track: &track::Track) -> [Vec<crate::chunks::
 
 #[cfg(test)]
 fn wheel(b: &mut Builder, x: f32, z: f32) {
-    let mut vertices = CarModel::Roadster.spec().design.wheels[0].clone();
+    let mut vertices = CarModel::fixture("kestrel").spec().design.wheels[0].clone();
     for vertex in &mut vertices {
         vertex.position[0] += x;
         vertex.position[2] += z;
@@ -761,9 +761,9 @@ mod tests {
             std::array::from_fn::<_, 3, _>(|i| max[i] - min[i])
         });
         let [roadster, muscle, club] = [
-            extents[CarModel::Roadster.index()],
-            extents[CarModel::Muscle.index()],
-            extents[CarModel::Club.index()],
+            extents[CarModel::fixture("kestrel").index()],
+            extents[CarModel::fixture("muscle").index()],
+            extents[CarModel::fixture("club").index()],
         ];
         assert!(muscle[0] > club[0] && roadster[0] > club[0]);
         assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn kestrel_uses_its_original_clear_reverse_lenses() {
         let mut b = Builder::default();
-        car(&mut b, CarModel::Roadster);
+        car(&mut b, CarModel::fixture("kestrel"));
         let lenses: Vec<_> = b.vertices.iter().filter(|v| v.material[0] == 6.0).collect();
         assert!(lenses.len() >= 60);
         for v in lenses {
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn roadster_reference_mesh_has_authored_lights_arches_and_trim() {
         let mut b = Builder::default();
-        car(&mut b, CarModel::Roadster);
+        car(&mut b, CarModel::fixture("kestrel"));
         let count = |color: [f32; 3]| b.vertices.iter().filter(|v| v.color == color).count();
         assert!(
             b.vertices.len() > 520,
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn reference_panels_have_curved_smooth_shading() {
         let mut b = Builder::default();
-        car(&mut b, CarModel::Roadster);
+        car(&mut b, CarModel::fixture("kestrel"));
         // The first panel is the sculpted deck. Its triangles must interpolate
         // distinct normals; extra triangles with constant face normals would
         // retain the old faceted appearance.

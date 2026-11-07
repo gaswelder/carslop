@@ -564,14 +564,14 @@ impl Hud {
             );
         }
         let spec = menu.car.spec();
-        let power = format!("{:.0} HP", spec.wheel_power_watts / 745.7);
+        let power = format!("{:.0} HP", spec.engine_power_hp);
         for (x, y, label, value) in [
-            (-0.84, 0.66, "WHEEL POWER", power),
+            (-0.84, 0.66, "ENGINE POWER", power),
             (
                 -0.84,
                 0.45,
                 "TORQUE",
-                format!("{:.0} NM", spec.dynamics.peak_torque),
+                format!("{:.0} NM", spec.engine_max_torque_nm),
             ),
             (
                 0.54,

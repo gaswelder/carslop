@@ -12,6 +12,89 @@ pub(crate) struct Design {
     pub mounts: [[f32; 3]; 4],
     pub wheel_radii: [f32; 4],
 }
+impl Design {
+    /// Overall vertical extent, including wheels translated to their axle mounts.
+    /// CG height fractions use the lowest model point as ground and the highest as 1.
+    pub fn height(&self) -> f32 {
+        let heights = self.body.iter().map(|v| v.position[1]).chain(
+            self.wheels
+                .iter()
+                .zip(self.mounts)
+                .flat_map(|(wheel, mount)| wheel.iter().map(move |v| v.position[1] + mount[1])),
+        );
+        let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+        for y in heights {
+            if !y.is_finite() {
+                return f32::NAN;
+            }
+            min = min.min(y);
+            max = max.max(y);
+        }
+        max - min
+    }
+    /// Estimate the front silhouette area in m² (+Z forward) on a 512×512 grid.
+    /// Project both faces of every triangle and mark their union, including mounted
+    /// wheels. Overlaps count once; scanline spans keep detailed models inexpensive.
+    pub fn frontal_area_m2(&self) -> f32 {
+        const RESOLUTION: usize = 512;
+        let parts =
+            || std::iter::once((&self.body, [0.0; 3])).chain(self.wheels.iter().zip(self.mounts));
+        let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+        let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for (vertices, offset) in parts() {
+            for vertex in vertices {
+                let x = (vertex.position[0] + offset[0]) as f64;
+                let y = (vertex.position[1] + offset[1]) as f64;
+                if !x.is_finite() || !y.is_finite() {
+                    return f32::NAN;
+                }
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        }
+        let (width, height) = (max_x - min_x, max_y - min_y);
+        if width <= 0.0 || height <= 0.0 {
+            return 0.0;
+        }
+        let scale = RESOLUTION as f64;
+        let mut covered = vec![false; RESOLUTION * RESOLUTION];
+        // A cell is covered when its centre lies inside a projected triangle.
+        let cell = |edge: f64| (edge - 0.5).ceil().clamp(0.0, scale) as usize;
+        for (vertices, offset) in parts() {
+            for triangle in vertices.chunks_exact(3) {
+                let points: [(f64, f64); 3] = std::array::from_fn(|i| {
+                    let p = triangle[i].position;
+                    (
+                        ((p[0] + offset[0]) as f64 - min_x) * scale / width,
+                        ((p[1] + offset[1]) as f64 - min_y) * scale / height,
+                    )
+                });
+                let bottom = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                let top = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                for row in cell(bottom)..cell(top) {
+                    let y = row as f64 + 0.5;
+                    let (mut left, mut right) = (f64::INFINITY, f64::NEG_INFINITY);
+                    for edge in 0..3 {
+                        let (a, b) = (points[edge], points[(edge + 1) % 3]);
+                        if (a.1 <= y && y < b.1) || (b.1 <= y && y < a.1) {
+                            let x = a.0 + (y - a.1) * (b.0 - a.0) / (b.1 - a.1);
+                            left = left.min(x);
+                            right = right.max(x);
+                        }
+                    }
+                    if left < right {
+                        covered[row * RESOLUTION + cell(left)..row * RESOLUTION + cell(right)]
+                            .fill(true);
+                    }
+                }
+            }
+        }
+        (width * height * covered.iter().filter(|v| **v).count() as f64 / (scale * scale)) as f32
+    }
+}
+
 fn invalid(message: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
@@ -342,6 +425,73 @@ mod tests {
         result.extend(bin);
         result
     }
+    #[test]
+    fn height_includes_body_and_mounted_wheels_and_ignores_vertical_offset() {
+        let mut design = (*crate::test_support::car_spec().design).clone();
+        assert!((design.height() - 1.3).abs() < 0.00001);
+        design.mounts[0][1] = -2.0;
+        assert!((design.height() - 3.0).abs() < 0.00001);
+        for v in &mut design.body {
+            v.position[1] += 10.0;
+        }
+        for mount in &mut design.mounts {
+            mount[1] += 10.0;
+        }
+        assert!((design.height() - 3.0).abs() < 0.00001);
+        design.body[0].position[1] = f32::NAN;
+        assert!(!design.height().is_finite());
+    }
+
+    #[test]
+    fn frontal_area_counts_projected_silhouette_once_including_wheels() {
+        let mut design = (*crate::test_support::car_spec().design).clone();
+        // Two triangles make a 2 x 1 rectangle in the front view.
+        let vertex = |x, y, z| Vertex {
+            position: [x, y, z],
+            color: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            material: [0.0; 2],
+        };
+        design.body = vec![
+            vertex(0.0, 0.0, 0.0),
+            vertex(2.0, 0.0, 0.0),
+            vertex(0.0, 1.0, 0.0),
+            vertex(2.0, 0.0, 0.0),
+            vertex(2.0, 1.0, 0.0),
+            vertex(0.0, 1.0, 0.0),
+        ];
+        design.wheels = std::array::from_fn(|_| Vec::new());
+        assert!((design.frontal_area_m2() - 2.0).abs() < 0.00001);
+        let duplicate: Vec<_> = design
+            .body
+            .iter()
+            .rev()
+            .copied()
+            .map(|mut v| {
+                v.position[2] += 3.0;
+                v
+            })
+            .collect();
+        design.body.extend(duplicate);
+        assert!((design.frontal_area_m2() - 2.0).abs() < 0.00001);
+        design.mounts[0] = [2.0, 0.0, 0.0];
+        design.wheels[0] = vec![
+            vertex(0.0, 0.0, 0.0),
+            vertex(1.0, 0.0, 0.0),
+            vertex(0.0, 1.0, 0.0),
+        ];
+        assert!((design.frontal_area_m2() - 2.5).abs() < 0.01);
+        for v in &mut design.body {
+            v.position[0] += 10.0;
+            v.position[1] -= 5.0;
+        }
+        for mount in &mut design.mounts {
+            mount[0] += 10.0;
+            mount[1] -= 5.0;
+        }
+        assert!((design.frontal_area_m2() - 2.5).abs() < 0.01);
+    }
+
     #[test]
     fn indexed_geometry_materials_hierarchy_and_wheel_pivots() {
         let (mut doc, bin) = fixture();

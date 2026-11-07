@@ -42,11 +42,10 @@ Subcommands:
 
 ## GLB models of the cars
 
-Export static triangulated glTF 2.0 GLB: metres, Y up, +Z forward, one embedded
+Export static triangulated glTF 2.0 as `model.glb`: metres, Y up, +Z forward, one embedded
 buffer and opaque materials. Name parts `body`, `wheel_rl`, `wheel_rr`,
 `wheel_fl`, `wheel_fr`. Left/right wheels use negative/positive X.
 Wheel origins are axle mounts; wheels spin about X and steer about Y.
-Match JSON wheelbase and rolling radius to the artwork.
 
 Use vertex colours or solid PBR materials; textures, transparency, animation,
 skinning, morphs, sparse accessors and external buffers are unsupported.

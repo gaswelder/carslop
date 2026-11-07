@@ -23,6 +23,8 @@ mod scene_archive;
 mod shadows;
 mod source_tools;
 mod street_surface;
+#[cfg(test)]
+mod test_support;
 mod track;
 mod traffic;
 mod tree_obstacles;
@@ -282,7 +284,7 @@ impl App {
             .get(selected_location)
             .filter(|entry| entry.path.is_none())
             .map_or(TrackId::Compact, |entry| entry.track);
-        let mut session = Session::on_track(CarModel::Roadster, preview);
+        let mut session = Session::on_track(CarModel::first(), preview);
         session.state = GameState::Menu;
         let _ = window.set_title(&session.track().name);
 
@@ -709,12 +711,14 @@ impl App {
             }
             Keycode::F1 | Keycode::F2 | Keycode::F3 if self.session.state == GameState::Menu => {
                 let model = match key {
-                    Keycode::F1 => CarModel::Roadster,
-                    Keycode::F2 => CarModel::Muscle,
-                    _ => CarModel::Club,
+                    Keycode::F1 => 0,
+                    Keycode::F2 => 1,
+                    _ => 2,
                 };
-                self.session.select_car(model);
-                self.snap_camera();
+                if let Some(model) = cars::ALL.into_iter().nth(model) {
+                    self.session.select_car(model);
+                    self.snap_camera();
+                }
             }
             Keycode::F6 if self.session.state == GameState::Menu => {
                 self.selected_location = if self.selected_location == 0 { 1 } else { 0 };
@@ -937,7 +941,7 @@ mod tests {
         let mut car = vehicle::Vehicle::on_track(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::Roadster,
+            CarModel::fixture("kestrel"),
             track,
         );
         car.velocity = road.tangent.map(|v| v * 8.0);
@@ -1626,7 +1630,7 @@ mod tests {
             ("near", [0.0, 100.0, 0.0]),
             ("far", [12000.0, 100.0, 9000.0]),
         ] {
-            let car = Vehicle::on_track(position, 0.0, CarModel::Roadster, track.clone());
+            let car = Vehicle::on_track(position, 0.0, CarModel::fixture("kestrel"), track.clone());
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
@@ -2056,7 +2060,7 @@ mod tests {
                     .vehicle
                     .reset(road.lane_position(0.0), road.heading());
                 app.snap_camera();
-                if model == CarModel::Roadster {
+                if model == CarModel::fixture("kestrel") {
                     assert_contact_pixel_readback(&app);
                 }
                 for view in [camera::FollowView::Wide, camera::FollowView::Close] {
@@ -2094,7 +2098,7 @@ mod tests {
     #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
         for id in track::all() {
-            let mut s = Session::on_track(CarModel::Roadster, id);
+            let mut s = Session::on_track(CarModel::fixture("kestrel"), id);
             s.state = GameState::Menu;
             for model in cars::ALL {
                 s.select_car(model);
@@ -2118,7 +2122,7 @@ mod tests {
     #[test]
     fn free_recovery_uses_selected_route() {
         for id in track::all() {
-            let mut s = Session::on_track(CarModel::Muscle, id);
+            let mut s = Session::on_track(CarModel::fixture("muscle"), id);
             let road = s.track().at_distance(s.track().length() * 0.5);
             s.vehicle.reset(road.lane_position(1.0), road.heading());
             assert!(s.recover());
@@ -2131,7 +2135,7 @@ mod tests {
 
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
-        let mut s = Session::on_track(CarModel::Roadster, TrackId::Engomi);
+        let mut s = Session::on_track(CarModel::fixture("kestrel"), TrackId::Engomi);
         let start = s.vehicle.position;
         for _ in 0..40 {
             s.tick(Controls {
@@ -2157,7 +2161,7 @@ mod tests {
 
     #[test]
     fn free_recovery_is_nearby_unpenalized_and_preserves_facing_direction() {
-        let mut s = Session::on_track(CarModel::Muscle, TrackId::Compact);
+        let mut s = Session::on_track(CarModel::fixture("muscle"), TrackId::Compact);
         let road = track::TrackId::Compact.track().at_distance(120.0);
         s.vehicle.reset(
             road.lane_position(1.4),
@@ -2170,7 +2174,7 @@ mod tests {
         assert!(recovered.offset.abs() < 0.01);
         assert!((s.vehicle.heading - road.heading()).cos() < -0.9);
         assert_eq!(s.vehicle.direction, vehicle::Direction::Drive);
-        assert_eq!(s.vehicle.model, CarModel::Muscle);
+        assert_eq!(s.vehicle.model, CarModel::fixture("muscle"));
         assert_eq!(s.recoveries, 1);
     }
 
@@ -2178,7 +2182,7 @@ mod tests {
     fn opening_menu_location_and_car_choices_survive_start() {
         for location in hud::locations() {
             for car in cars::ALL {
-                let mut s = Session::new(CarModel::Roadster);
+                let mut s = Session::new(CarModel::fixture("kestrel"));
                 s.state = GameState::Menu;
                 s.select_location(location);
                 s.select_car(car);
@@ -2196,7 +2200,7 @@ mod tests {
     }
     #[test]
     fn location_cycle_excludes_unselected_cities() {
-        let mut session = Session::new(CarModel::Club);
+        let mut session = Session::new(CarModel::fixture("club"));
         session.state = GameState::Menu;
         for direction in [1, 1, -1, -1, 1, 1] {
             session.cycle_location(direction, false);
@@ -2227,7 +2231,7 @@ mod tests {
         let directory = std::path::PathBuf::from("/tmp/full-map-preview");
         std::fs::create_dir_all(&directory).unwrap();
         for id in track::all() {
-            app.session = Session::on_track(CarModel::Roadster, id);
+            app.session = Session::on_track(CarModel::fixture("kestrel"), id);
             app.session.vehicle.speed = 12.0;
             app.session.vehicle.velocity = [1.0, 12.0];
             let position = app.session.vehicle.position;
@@ -2322,7 +2326,7 @@ mod tests {
             }
         }
         // Exercise the regular HUD after the map reused its vertex buffer.
-        app.session = Session::new(CarModel::Roadster);
+        app.session = Session::new(CarModel::fixture("kestrel"));
         app.snap_camera();
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
@@ -2463,7 +2467,7 @@ mod tests {
 
     #[test]
     fn free_drive_pauses_and_can_reverse() {
-        let mut s = Session::new(CarModel::Roadster);
+        let mut s = Session::new(CarModel::fixture("kestrel"));
         s.vehicle.toggle_direction();
         for _ in 0..20 {
             s.tick(Controls {

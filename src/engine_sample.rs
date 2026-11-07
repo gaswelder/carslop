@@ -1,9 +1,13 @@
-//! File-backed Kestrel engine voice, cached once alongside the car artwork.
 use crate::audio::SAMPLE_RATE;
-use std::{io, io::Read, path::Path, sync::OnceLock};
+use std::{
+    io,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
 
-const AUDIO_DIR: &str = "data/cars/kestrel/audio";
-static SAMPLES: OnceLock<Option<EngineSamples>> = OnceLock::new();
+static SAMPLES: OnceLock<Mutex<std::collections::HashMap<PathBuf, Option<Arc<EngineSamples>>>>> =
+    OnceLock::new();
 
 struct EngineSamples {
     bands: Vec<RpmBand>,
@@ -113,28 +117,40 @@ impl EngineSamples {
     }
 }
 
+#[derive(Default)]
 pub struct RecordedEngine {
-    samples: Option<&'static EngineSamples>,
+    directory: Option<PathBuf>,
+    samples: Option<Arc<EngineSamples>>,
     positions: Vec<[f32; 2]>,
     low: f32,
 }
 
-impl Default for RecordedEngine {
-    fn default() -> Self {
-        let samples = SAMPLES
-            .get_or_init(|| match EngineSamples::load(Path::new(AUDIO_DIR)) {
-                Ok(samples) => Some(samples),
-                Err(error) => {
-                    log::warn!("Cannot load {AUDIO_DIR}: {error}; using procedural Kestrel engine");
-                    None
-                }
-            })
-            .as_ref();
-        Self {
-            samples,
-            positions: vec![[0.0; 2]; samples.map_or(0, |s| s.bands.len())],
-            low: 0.0,
+impl RecordedEngine {
+    pub fn select(&mut self, directory: Option<&Path>) {
+        if self.directory.as_deref() == directory {
+            return;
         }
+        self.directory = directory.map(Path::to_owned);
+        self.samples = directory.and_then(|directory| {
+            SAMPLES
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .entry(directory.to_owned())
+                .or_insert_with(|| match EngineSamples::load(directory) {
+                    Ok(samples) => Some(Arc::new(samples)),
+                    Err(error) => {
+                        log::warn!(
+                            "Cannot load {}: {error}; using procedural engine",
+                            directory.display()
+                        );
+                        None
+                    }
+                })
+                .clone()
+        });
+        self.positions = vec![[0.0; 2]; self.samples.as_ref().map_or(0, |s| s.bands.len())];
+        self.low = 0.0;
     }
 }
 
@@ -168,13 +184,12 @@ impl RecordedEngine {
         self.samples.is_some()
     }
 
-    pub fn sample(&mut self, pulse_hz: f32, load: f32) -> f32 {
-        let Some(samples) = self.samples else {
+    pub fn sample(&mut self, rpm: f32, pulses_per_revolution: f32, load: f32) -> f32 {
+        let Some(samples) = &self.samples else {
             return 0.0;
         };
         let load = load.clamp(0.0, 1.0);
-        let pulse_hz = pulse_hz.max(1.0);
-        let rpm = pulse_hz * 20.0; // target six-cylinder firing rate -> RPM
+        let pulse_hz = (rpm * pulses_per_revolution / 60.0).max(1.0);
         let (lower, upper, blend) = samples.blend(rpm);
         let mut value = 0.0;
         for (i, (band, positions)) in samples.bands.iter().zip(&mut self.positions).enumerate() {
@@ -211,14 +226,80 @@ impl RecordedEngine {
 }
 
 #[cfg(test)]
+pub(crate) fn validate_bank(directory: &Path) -> io::Result<()> {
+    EngineSamples::load(directory).map(|_| ())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    fn audio_dir() -> &'static Path {
+        static BANK: OnceLock<tempfile::TempDir> = OnceLock::new();
+        BANK.get_or_init(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let bands: Vec<_> = [1200.0, 3000.0, 6000.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, rpm)| {
+                    let pulse_hz = rpm / 20.0;
+                    let filename = format!("band-{i}.pcm");
+                    let pcm: Vec<u8> = (0..4800)
+                        .flat_map(|frame| {
+                            let phase =
+                                std::f32::consts::TAU * pulse_hz * frame as f32 / SAMPLE_RATE;
+                            ((phase.sin() * 0.30 * i16::MAX as f32) as i16).to_le_bytes()
+                        })
+                        .collect();
+                    std::fs::write(directory.path().join(&filename), pcm).unwrap();
+                    let clip =
+                        serde_json::json!({"file":filename, "pulse_hz":pulse_hz, "overlap":480});
+                    serde_json::json!({"rpm":rpm, "load":clip, "coast":clip})
+                })
+                .collect();
+            let manifest =
+                serde_json::json!({"version":1, "sample_rate":SAMPLE_RATE as u32, "bands":bands});
+            std::fs::write(directory.path().join("engine.json"), manifest.to_string()).unwrap();
+            directory
+        })
+        .path()
+    }
+    fn recorded() -> RecordedEngine {
+        let mut engine = RecordedEngine::default();
+        engine.select(Some(audio_dir()));
+        engine
+    }
+
+    #[test]
+    fn recording_banks_follow_the_selected_asset_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(audio_dir()).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().is_file() {
+                std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
+            }
+        }
+        let mut engine = RecordedEngine::default();
+        assert!(!engine.available());
+        engine.select(Some(directory.path()));
+        assert!(engine.available());
+        let first = engine.sample(3000.0, 3.0, 1.0);
+        for _ in 0..100 {
+            engine.sample(3000.0, 3.0, 1.0);
+        }
+        engine.select(None);
+        assert!(!engine.available());
+        assert_eq!(engine.sample(3000.0, 3.0, 1.0), 0.0);
+        engine.select(Some(directory.path()));
+        assert_eq!(engine.sample(3000.0, 3.0, 1.0), first);
+        engine.select(Some(&directory.path().join("missing")));
+        assert!(!engine.available());
+    }
 
     #[test]
     fn missing_or_malformed_car_audio_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
         assert!(EngineSamples::load(directory.path()).is_err());
-        let manifest = std::fs::read(Path::new(AUDIO_DIR).join("engine.json")).unwrap();
+        let manifest = std::fs::read(audio_dir().join("engine.json")).unwrap();
         std::fs::write(directory.path().join("engine.json"), &manifest).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
         let names: Vec<_> = manifest["bands"]
@@ -233,7 +314,7 @@ mod tests {
             })
             .collect();
         for name in &names {
-            std::fs::copy(Path::new(AUDIO_DIR).join(name), directory.path().join(name)).unwrap();
+            std::fs::copy(audio_dir().join(name), directory.path().join(name)).unwrap();
         }
         assert!(EngineSamples::load(directory.path()).is_ok());
         for name in names {
@@ -245,19 +326,18 @@ mod tests {
                     "accepted {name}"
                 );
             }
-            std::fs::copy(Path::new(AUDIO_DIR).join(name), path).unwrap();
+            std::fs::copy(audio_dir().join(name), path).unwrap();
         }
     }
 
     #[test]
     fn invalid_manifest_is_rejected_before_playback() {
         let directory = tempfile::tempdir().unwrap();
-        let original: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(Path::new(AUDIO_DIR).join("engine.json")).unwrap(),
-        )
-        .unwrap();
+        let original: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(audio_dir().join("engine.json")).unwrap())
+                .unwrap();
         // Manifest validation cannot depend on the presence of loop assets.
-        for entry in std::fs::read_dir(AUDIO_DIR).unwrap() {
+        for entry in std::fs::read_dir(audio_dir()).unwrap() {
             let entry = entry.unwrap();
             if entry.path().extension().is_some_and(|e| e == "pcm") {
                 std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
@@ -296,12 +376,12 @@ mod tests {
             ..RecordedEngine::default()
         };
         assert!(!engine.available());
-        assert_eq!(engine.sample(300.0, 1.0), 0.0);
+        assert_eq!(engine.sample(6000.0, 3.0, 1.0), 0.0);
     }
 
     #[test]
     fn interpolation_handles_tail_offset_rounding_to_length() {
-        let samples = EngineSamples::load(Path::new(AUDIO_DIR)).unwrap();
+        let samples = EngineSamples::load(audio_dir()).unwrap();
         for clip in samples
             .bands
             .iter()
@@ -317,7 +397,7 @@ mod tests {
 
     #[test]
     fn recorded_layers_survive_seams_shifts_and_load_changes() {
-        let mut engine = RecordedEngine::default();
+        let mut engine = recorded();
         assert!(engine.available());
         let mut previous = 0.0_f32;
         let mut largest_step = 0.0_f32;
@@ -325,7 +405,7 @@ mod tests {
             let seconds = i as f32 / SAMPLE_RATE;
             let rpm = 900.0 + (seconds % 3.0) / 3.0 * 5600.0;
             let load = if seconds % 4.0 < 2.0 { 1.0 } else { 0.0 };
-            let sample = engine.sample(rpm / 20.0, load);
+            let sample = engine.sample(rpm, 3.0, load);
             assert!(sample.is_finite() && sample.abs() < 0.5);
             largest_step = largest_step.max((sample - previous).abs());
             previous = sample;
@@ -335,7 +415,7 @@ mod tests {
 
     #[test]
     fn rpm_sweep_keeps_level_across_recording_boundaries() {
-        let samples = EngineSamples::load(Path::new(AUDIO_DIR)).unwrap();
+        let samples = EngineSamples::load(audio_dir()).unwrap();
         let mut points = vec![900.0, 6500.0];
         for bands in samples.bands.windows(2) {
             points.extend([bands[0].rpm, (bands[0].rpm + bands[1].rpm) * 0.5]);
@@ -344,10 +424,10 @@ mod tests {
         for load in [0.0, 1.0] {
             let mut levels = Vec::new();
             for rpm in &points {
-                let mut engine = RecordedEngine::default();
+                let mut engine = recorded();
                 let mut energy = 0.0;
                 for i in 0..24000 {
-                    let sample = engine.sample(rpm / 20.0, load);
+                    let sample = engine.sample(*rpm, 3.0, load);
                     if i >= 4000 {
                         energy += sample * sample;
                     }

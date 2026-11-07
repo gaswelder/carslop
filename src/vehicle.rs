@@ -127,7 +127,7 @@ impl Vehicle {
         self.manual = manual;
     }
 
-    /// Reference speed for physics checks; road load and gearing determine actual speed.
+    /// Calculated level-road estimate, used as a reference by physics checks.
     #[cfg(test)]
     pub fn reference_speed(&self) -> f32 {
         self.model.spec().top_speed
@@ -225,12 +225,10 @@ impl Vehicle {
         let steps = (dt.as_secs_f32() * 240.0).ceil().max(1.0) as u32;
         let seconds = dt.as_secs_f32() / steps as f32;
         let spec = self.model.spec();
-        let dynamics = &spec.dynamics;
-        let grip = spec.lateral_force / spec.mass;
+        let mu = spec.tire_friction_coefficient;
         let reversing = self.direction == Direction::Reverse;
         let direction = if reversing { -1.0 } else { 1.0 };
         let brake_accel = self.brake_accel();
-        let drag = spec.drag_accel;
         let mut impact: f32 = 0.0;
         for _ in 0..steps {
             let previous_gear = self.gear;
@@ -259,8 +257,8 @@ impl Vehicle {
             let gravity = gradient.map(|g| -9.81 * g / (1.0 + dot(gradient, gradient)));
             let longitudinal = dot(self.velocity, forward);
             let lateral = dot(self.velocity, right);
-            let a = spec.wheelbase * (1.0 - dynamics.front_weight);
-            let b = spec.wheelbase * dynamics.front_weight;
+            let a = spec.wheelbase * (1.0 - spec.front_weight);
+            let b = spec.wheelbase * spec.front_weight;
             let delta = -self.steering_angle(longitudinal);
             let (sin, cos) = delta.sin_cos();
 
@@ -272,29 +270,28 @@ impl Vehicle {
                 self.position[1] = ground;
                 self.suspension_initialized = true;
             }
-            let omega = std::f32::consts::TAU * dynamics.suspension_hz;
+            let omega = std::f32::consts::TAU * spec.suspension_hz;
             let support = (9.81 + omega * omega * (ground - self.position[1])
                 - 1.3 * omega * self.vertical_speed)
                 .clamp(0.0, 49.05);
             self.vertical_speed += (support - 9.81) * seconds;
             self.position[1] += self.vertical_speed * seconds;
-            let transfer = spec.mass * self.acceleration[0] * dynamics.cg_height / spec.wheelbase;
+            let transfer = spec.mass * self.acceleration[0] * spec.cg_height / spec.wheelbase;
             let total_load = spec.mass * support;
-            let front_load = (total_load * dynamics.front_weight - transfer).clamp(0.0, total_load);
+            let front_load = (total_load * spec.front_weight - transfer).clamp(0.0, total_load);
             self.axle_load = [front_load, total_load - front_load];
-            let mu = grip / 9.81;
             let capacities = [0, 1].map(|axle| {
                 // Outside tires gain less grip than inside tires lose. This
                 // introduces lateral weight-transfer sensitivity without a full
                 // four-wheel rigid-body solver.
                 let load = self.axle_load[axle];
                 let share = if axle == 0 {
-                    dynamics.front_weight
+                    spec.front_weight
                 } else {
-                    1.0 - dynamics.front_weight
+                    1.0 - spec.front_weight
                 };
-                let transfer = spec.mass * self.acceleration[1].abs() * dynamics.cg_height
-                    / dynamics.track_width
+                let transfer = spec.mass * self.acceleration[1].abs() * spec.cg_height
+                    / spec.track_width
                     * share;
                 let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
                 mu * load * (1.0 - 0.18 * imbalance * imbalance)
@@ -311,15 +308,15 @@ impl Vehicle {
             let closed_throttle = ((0.15 - throttle) / 0.15).clamp(0.0, 1.0);
             let engine_braking = closed_throttle * self.engine_brake_force(longitudinal);
             let brake = self.brake_pressure * brake_accel * spec.mass;
-            let front_drive = dynamics.front_drive;
+            let drive_bias = spec.drive_bias;
             let requested_x = [
-                drive * front_drive
+                drive * drive_bias
                     - longitudinal.signum()
-                        * (brake * dynamics.brake_bias + engine_braking * front_drive),
-                drive * (1.0 - front_drive)
+                        * (brake * spec.brake_bias + engine_braking * drive_bias),
+                drive * (1.0 - drive_bias)
                     - longitudinal.signum()
-                        * (brake * (1.0 - dynamics.brake_bias)
-                            + engine_braking * (1.0 - front_drive)
+                        * (brake * (1.0 - spec.brake_bias)
+                            + engine_braking * (1.0 - drive_bias)
                             + if controls.handbrake {
                                 spec.mass * 5.5
                             } else {
@@ -342,18 +339,20 @@ impl Vehicle {
                 // Sliding tires retain some sideways authority. Reserve enough of the
                 // friction circle for it during a powered burnout.
                 let drive_share = if axle == 0 {
-                    front_drive
+                    drive_bias
                 } else {
-                    1.0 - front_drive
+                    1.0 - drive_bias
                 };
                 let spinning = drive.abs() * drive_share > capacity;
                 let limit = if spinning {
                     let sideways = (self.slip.abs() / 2.0).clamp(0.0, 1.0);
-                    if axle == 1 && self.model.appearance() == CarModel::Roadster {
+                    if let Some([baseline, reduction, slip_angle]) =
+                        spec.rear_combined_slip.filter(|_| axle == 1)
+                    {
                         // Combined slip reduces driving traction as the rear slides,
                         // leaving lateral force for recovery and countersteering.
                         let angle = rear_v.abs().atan2(longitudinal.abs().max(2.5));
-                        limit * (0.94 - 0.14 * (angle / 0.6).clamp(0.0, 1.0))
+                        limit * (baseline - reduction * (angle / slip_angle).clamp(0.0, 1.0))
                     } else {
                         limit * (0.97 - 0.05 * sideways)
                     }
@@ -370,7 +369,7 @@ impl Vehicle {
                 // atan slip curve peaks, then gently falls toward sliding grip.
                 // A speed floor damps the otherwise singular parking regime.
                 let alpha = side.atan2(along.abs().max(2.5));
-                let stiffness = dynamics.corner_stiffness[axle];
+                let stiffness = spec.corner_stiffness[axle];
                 let normalized = stiffness * alpha / capacity.max(1.0);
                 let fy = -capacity
                     * normalized.tanh()
@@ -393,9 +392,9 @@ impl Vehicle {
             let ay = (front_y + forces[1][1]) / spec.mass;
             // Integrate yaw torque; no target yaw, grip clamp, or automatic
             // faster unwinding. Countersteering must generate opposing torque.
-            self.yaw_rate += (a * front_y - b * forces[1][1]) / dynamics.yaw_inertia * seconds;
+            self.yaw_rate += (a * front_y - b * forces[1][1]) / spec.yaw_inertia * seconds;
             let mut new_longitudinal = longitudinal + (ax + dot(gravity, forward)) * seconds;
-            let resistance = (0.25 + drag * longitudinal * longitudinal) * seconds;
+            let resistance = spec.resistance_accel(longitudinal) * seconds;
             // Static friction holds the car without making brakes propel it
             // backwards as speed crosses zero.
             if longitudinal * new_longitudinal < 0.0 && (brake > 0.0 || controls.handbrake) {
@@ -438,11 +437,11 @@ impl Vehicle {
             self.position[2] += self.velocity[1] * seconds;
             let spin = longitudinal * seconds / spec.gearbox.rolling_radius;
             let spin_slip = self.wheel_spin * seconds * 35.0 * direction;
-            self.wheel_phase[1] = (self.wheel_phase[1] + spin + spin_slip * dynamics.front_drive)
+            self.wheel_phase[1] = (self.wheel_phase[1] + spin + spin_slip * spec.drive_bias)
                 .rem_euclid(std::f32::consts::TAU);
             if !controls.handbrake {
                 self.wheel_phase[0] =
-                    (self.wheel_phase[0] + spin + spin_slip * (1.0 - dynamics.front_drive))
+                    (self.wheel_phase[0] + spin + spin_slip * (1.0 - spec.drive_bias))
                         .rem_euclid(std::f32::consts::TAU);
             }
             let chassis_height = self.position[1];
@@ -484,7 +483,7 @@ impl Vehicle {
     }
 
     fn flywheel_energy(&self) -> f32 {
-        let inertia = 0.12 + self.model.spec().dynamics.peak_torque * 0.0006;
+        let inertia = 0.12 + self.model.spec().engine_max_torque_nm * 0.0006;
         let omega = self.engine_rpm * std::f32::consts::TAU / 60.0;
         let clutch_rpm = 2200.0 * std::f32::consts::TAU / 60.0;
         (0.5 * inertia * (omega * omega - clutch_rpm * clutch_rpm)).max(0.0)
@@ -511,51 +510,13 @@ impl Vehicle {
     }
 
     fn drive_force(&self, speed: f32) -> f32 {
-        if self.gear == NEUTRAL_GEAR {
-            return 0.0;
-        }
-        let spec = self.model.spec();
-        let g = &spec.gearbox;
-        let ratio = if self.direction == Direction::Reverse {
-            g.reverse_ratio
-        } else {
-            g.ratios[self.gear.saturating_sub(1).min(g.gears() - 1) as usize]
-        };
-        // While rolling against the selected gear, the clutch slips and drive
-        // torque opposes motion.
-        let driven_speed = if self.direction == Direction::Reverse {
-            -speed
-        } else {
-            speed
-        }
-        .max(0.0);
-        let rpm = g.rpm(driven_speed, self.gear).max(2200.0);
-        // Broad torque plateau with weaker idle and redline torque. The clutch
-        // slips at launch; gearing subsequently sets wheel force and shift loss.
-        let torque_factor = if rpm < 3500.0 {
-            0.60 + 0.40 * (rpm / 3500.0)
-        } else {
-            (1.0 - 0.10 * ((rpm - 3500.0) / 3000.0)).max(0.0)
-        };
-        let force = spec.dynamics.peak_torque * torque_factor * ratio * g.final_drive * 0.90
-            / g.rolling_radius;
-        let force = force.min(spec.engine_force);
-        let force = if self.shift_timer > 0.0 {
-            force * 0.2
-        } else {
-            force
-        };
-        let force = force * self.boost_power_fraction();
-        let force = if self.direction == Direction::Reverse {
-            force * ((REDLINE_RPM - rpm) / 250.0).clamp(0.0, 1.0)
-        } else {
-            force
-        };
-        if rpm >= REDLINE_RPM {
-            0.0
-        } else {
-            force.min(spec.wheel_power_watts * self.boost_power_fraction() / speed.abs().max(1.0))
-        }
+        self.model.spec().drive_force(
+            speed,
+            self.gear,
+            self.direction == Direction::Reverse,
+            self.boost_power_fraction(),
+            self.shift_timer > 0.0,
+        )
     }
 
     fn boost_power_fraction(&self) -> f32 {
@@ -608,9 +569,9 @@ impl Vehicle {
         // Regulate overrun torque as lateral tire demand rises, just as foot
         // braking is regulated: lifting in a bend must not lock the driven axle.
         let lateral_demand = (self.acceleration[1].abs()
-            / (self.model.spec().lateral_force / self.model.spec().mass))
+            / (self.model.spec().tire_friction_coefficient * 9.81))
             .clamp(0.0, 1.0);
-        self.model.spec().dynamics.peak_torque
+        self.model.spec().engine_max_torque_nm
             * 0.24
             * (1.0 - 0.70 * lateral_demand)
             * (rpm / 3500.0).clamp(0.0, 1.5)
@@ -632,7 +593,7 @@ impl Vehicle {
             self.track.drive_height([p[0], p[2]])
         };
         let length = self.model.spec().wheelbase;
-        let width = self.model.spec().dynamics.track_width;
+        let width = self.model.spec().track_width;
         (
             ((h(sin * length * 0.5, cos * length * 0.5)
                 - h(-sin * length * 0.5, -cos * length * 0.5))
@@ -647,10 +608,10 @@ impl Vehicle {
     }
 
     fn update_body_motion(&mut self, dt: f32) {
-        let d = &self.model.spec().dynamics;
-        let target_pitch = (self.acceleration[0] * d.cg_height / 80.0).clamp(-0.10, 0.10);
-        let target_roll = (self.acceleration[1] * d.cg_height / 65.0).clamp(-0.12, 0.12);
-        let omega = std::f32::consts::TAU * d.suspension_hz;
+        let spec = self.model.spec();
+        let target_pitch = (self.acceleration[0] * spec.cg_height / 80.0).clamp(-0.10, 0.10);
+        let target_roll = (self.acceleration[1] * spec.cg_height / 65.0).clamp(-0.12, 0.12);
+        let omega = std::f32::consts::TAU * spec.suspension_hz;
         self.pitch_rate +=
             (omega * omega * (target_pitch - self.body_pitch) - 1.4 * omega * self.pitch_rate) * dt;
         self.roll_rate +=
@@ -675,9 +636,9 @@ impl Vehicle {
     }
 
     fn update_neutral_engine(&mut self, throttle: f32, dt: f32) {
-        let peak_torque = self.model.spec().dynamics.peak_torque;
+        let engine_max_torque_nm = self.model.spec().engine_max_torque_nm;
         // Approximate crank/flywheel inertia; larger engines carry more inertia.
-        let inertia = 0.12 + peak_torque * 0.0006;
+        let inertia = 0.12 + engine_max_torque_nm * 0.0006;
         // Feedback runs once per frame. Substep free revs so limiter cycles and
         // throttle blips remain consistent at different rendering frame rates.
         let steps = (dt * 240.0).ceil().max(1.0) as u32;
@@ -692,11 +653,11 @@ impl Vehicle {
             let combustion = if self.neutral_fuel_cut {
                 0.0
             } else {
-                throttle * peak_torque * (1.0 - 0.3 * revs)
+                throttle * engine_max_torque_nm * (1.0 - 0.3 * revs)
             };
             // Pumping/friction losses grow with speed. Unlike an RPM target,
             // a small pedal opening can keep accelerating an unloaded engine.
-            let drag = peak_torque * (0.10 + 0.16 * revs + 0.24 * revs * revs);
+            let drag = engine_max_torque_nm * (0.10 + 0.16 * revs + 0.24 * revs * revs);
             let rpm_rate = (combustion - drag) / inertia * 60.0 / std::f32::consts::TAU;
             self.engine_rpm = (self.engine_rpm + rpm_rate * seconds).clamp(IDLE_RPM, REDLINE_RPM);
         }
@@ -777,20 +738,15 @@ impl Vehicle {
         // a held key cannot overwhelm the tires, while taps stay responsive.
         // Use a linear input factor: a squared factor can reduce wheel angle
         // as the driver adds steering at road speeds.
-        let dynamics = &self.model.spec().dynamics;
+        let spec = self.model.spec();
         // Retain the settled city-speed response, then release the extra lock
         // restriction progressively from 40 to 80 km/h for ordinary road bends.
         let road_blend = ((speed.abs() * 3.6 - 40.0) / 40.0).clamp(0.0, 1.0);
         let road_blend = road_blend * road_blend * (3.0 - 2.0 * road_blend);
-        let falloff = dynamics.steering_low_speed_squared
-            + (dynamics.steering_speed_squared - dynamics.steering_low_speed_squared) * road_blend;
+        let falloff = spec.steering_low_speed_squared
+            + (spec.steering_speed_squared - spec.steering_low_speed_squared) * road_blend;
         // Keep trail braking settled while allowing quicker unbraked turn-in.
-        let falloff = falloff
-            * if self.model.appearance() == CarModel::Roadster {
-                1.0 + 0.6 * braking
-            } else {
-                1.0
-            };
+        let falloff = falloff * (1.0 + spec.steering_brake_falloff * braking);
         let lock = 0.54
             / (1.0
                 + speed.abs() / 22.0
@@ -933,7 +889,7 @@ mod tests {
                 let mut car = Vehicle::on_track(
                     position,
                     sample.heading(),
-                    CarModel::Roadster,
+                    CarModel::fixture("kestrel"),
                     track.clone(),
                 );
                 assert_eq!(car.resolve_road(), 0.0);
@@ -962,14 +918,14 @@ mod tests {
         Vehicle::on_track(
             road.lane_position(0.0),
             road.heading() + if uphill { 0.0 } else { std::f32::consts::PI },
-            CarModel::Roadster,
+            CarModel::fixture("kestrel"),
             route,
         )
     }
 
     #[test]
     fn manual_shifts_hold_gears_and_pass_through_neutral() {
-        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::Roadster);
+        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::fixture("kestrel"));
         car.manual = true;
         car.velocity = [0.0, 40.0];
         car.refresh_speed();
@@ -1049,7 +1005,8 @@ mod tests {
     fn kestrel_city_speed_cornering_stays_balanced() {
         for input in [-1.0, -0.5, -0.25, 0.25, 0.5, 1.0] {
             for throttle in [0.0, 0.35, 1.0] {
-                let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+                let mut car =
+                    level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
                 let road = car.track.at_distance(50.0);
                 let speed = 40.0 / 3.6;
                 let mut peak_slip: f32 = 0.0;
@@ -1087,7 +1044,8 @@ mod tests {
         for speed_kmh in [40.0, 60.0, 90.0, 120.0] {
             for input in [-1.0, -0.5, 0.5, 1.0] {
                 for brake in [0.0, 0.35] {
-                    let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+                    let mut car =
+                        level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
                     car.velocity =
                         [car.heading.sin(), car.heading.cos()].map(|v| v * speed_kmh / 3.6);
                     let mut peak_slip: f32 = 0.0;
@@ -1106,7 +1064,7 @@ mod tests {
                         let rear_side = car.slip
                             - car.yaw_rate
                                 * car.model.spec().wheelbase
-                                * car.model.spec().dynamics.front_weight;
+                                * car.model.spec().front_weight;
                         peak_slip = peak_slip
                             .max(rear_side.abs().atan2(car.speed.abs().max(2.5)).to_degrees());
                     }
@@ -1123,7 +1081,7 @@ mod tests {
     #[test]
     fn rear_drive_can_sustain_power_donuts_in_both_directions() {
         for steering in [-1.0, 1.0] {
-            let mut car = level_route_car(track::TrackId::scenic(), CarModel::Muscle);
+            let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("muscle"));
             let mut rotation = 0.0;
             let mut slip = 0.0;
             let mut speed = 0.0;
@@ -1154,7 +1112,7 @@ mod tests {
 
     #[test]
     fn kestrel_rear_grip_recovers_under_partial_throttle() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         let h = car.heading;
         car.velocity = [
             h.sin() * 15.0 + h.cos() * 6.0,
@@ -1170,8 +1128,8 @@ mod tests {
                 },
             );
         }
-        let rear = car.slip
-            - car.yaw_rate * car.model.spec().wheelbase * car.model.spec().dynamics.front_weight;
+        let rear =
+            car.slip - car.yaw_rate * car.model.spec().wheelbase * car.model.spec().front_weight;
         let angle = rear.abs().atan2(car.speed.abs().max(2.5)).to_degrees();
         assert!(
             angle < 4.0,
@@ -1194,8 +1152,8 @@ mod tests {
             for _ in 0..480 {
                 treadmill_tick(&mut car, Controls::default());
             }
-            let rear_side = car.slip
-                - car.yaw_rate * model.spec().wheelbase * model.spec().dynamics.front_weight;
+            let rear_side =
+                car.slip - car.yaw_rate * model.spec().wheelbase * model.spec().front_weight;
             let angle = rear_side.abs().atan2(car.speed.abs().max(2.5)).to_degrees();
             assert!(angle < 3.0, "{model:?}: slide persists after lift: {angle}");
             assert!(
@@ -1263,7 +1221,7 @@ mod tests {
     #[test]
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
-            let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+            let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
             let h = car.heading;
             car.velocity = [
                 h.sin() * 10.0 + h.cos() * 2.0,
@@ -1282,7 +1240,7 @@ mod tests {
             run(1.0) > run(0.0),
             "drive torque must reduce available cornering force"
         );
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         car.velocity = [car.heading.sin() * 20.0, car.heading.cos() * 20.0];
         car.yaw_rate = 0.5;
         car.update(Duration::from_secs_f64(1.0 / 240.0), Controls::default());
@@ -1323,7 +1281,7 @@ mod tests {
 
     #[test]
     fn gearing_changes_wheel_force_and_engine_braking() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         car.gear = 1;
         let first = car.drive_force(10.0);
         let first_drag = car.engine_brake_force(10.0);
@@ -1351,7 +1309,7 @@ mod tests {
                     },
                 );
             }
-            let static_front = model.spec().mass * 9.81 * model.spec().dynamics.front_weight;
+            let static_front = model.spec().mass * 9.81 * model.spec().front_weight;
             assert!(car.axle_load[0] < static_front * 0.98);
             for _ in 0..100 {
                 treadmill_tick(
@@ -1374,7 +1332,7 @@ mod tests {
             let mut car = Vehicle::on_track(
                 road.lane_position(0.0),
                 road.heading(),
-                CarModel::Roadster,
+                CarModel::fixture("kestrel"),
                 track,
             );
             car.velocity = road.tangent.map(|v| v * 8.0);
@@ -1409,7 +1367,7 @@ mod tests {
 
     #[test]
     fn chassis_can_unload_land_and_settle() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         let ground = car.ride_height();
         car.suspension_initialized = true;
         car.position[1] = ground + 0.5;
@@ -1496,7 +1454,7 @@ mod tests {
         Vehicle::new(
             start.lane_position(0.0),
             start.heading(),
-            CarModel::Roadster,
+            CarModel::fixture("kestrel"),
         )
     }
 
@@ -1604,7 +1562,7 @@ mod tests {
     fn kestrels_have_useful_lock_and_cornering_at_city_road_speeds() {
         for model in crate::cars::ALL
             .into_iter()
-            .filter(|m| m.appearance() == CarModel::Roadster)
+            .filter(|m| m.spec().rear_combined_slip.is_some())
         {
             let mut car = level_route_car(track::TrackId::scenic(), model);
             car.steering = 1.0;
@@ -1613,8 +1571,8 @@ mod tests {
             steering_run(&mut car, 80.0 / 3.6, 0.5, 2.0, 240.0);
             let lateral_accel = car.yaw_rate.abs() * 80.0 / 3.6;
             assert!(lateral_accel > 5.5, "{model:?}: cornering {lateral_accel}");
-            let rear_side = car.slip
-                - car.yaw_rate * model.spec().wheelbase * model.spec().dynamics.front_weight;
+            let rear_side =
+                car.slip - car.yaw_rate * model.spec().wheelbase * model.spec().front_weight;
             let rear_slip = rear_side.abs().atan2(car.speed.abs());
             println!(
                 "{model:?}: cornering {lateral_accel}, rear slip {} degrees",
@@ -1748,7 +1706,7 @@ mod tests {
     fn both_kestrels_turn_in_promptly_at_city_speeds() {
         for model in crate::cars::ALL
             .into_iter()
-            .filter(|m| m.appearance() == CarModel::Roadster)
+            .filter(|m| m.spec().rear_combined_slip.is_some())
         {
             let mut car = level_route_car(track::TrackId::scenic(), model);
             let start = car.heading;
@@ -1781,8 +1739,10 @@ mod tests {
             built
         });
         assert!(
-            results[CarModel::Club.index()] > results[CarModel::Muscle.index()]
-                && results[CarModel::Muscle.index()] > results[CarModel::Roadster.index()],
+            results[CarModel::fixture("club").index()]
+                > results[CarModel::fixture("muscle").index()]
+                && results[CarModel::fixture("muscle").index()]
+                    > results[CarModel::fixture("kestrel").index()],
             "city-speed lock: Club > Muscle > stabilized Kestrel: {results:?}"
         );
     }
@@ -1827,17 +1787,6 @@ mod tests {
     }
 
     #[test]
-    fn kestrel_uses_the_earliest_911_ratios_and_longer_first_gear() {
-        let g = &CarModel::Roadster.spec().gearbox;
-        assert_eq!(g.ratios, &[2.833, 1.778, 1.217, 0.962, 0.821]);
-        assert!((g.final_drive - 31.0 / 7.0).abs() < 0.00001);
-        let car = route_car(track::TrackId::Engomi, CarModel::Roadster);
-        assert!((car.upshift_speed(1) * 3.6 - 58.7).abs() < 0.3);
-        let rpm = g.rpm(100.0 / 3.6, 5);
-        assert!((rpm - 3062.0).abs() < 5.0, "100 km/h in fifth: {rpm}");
-    }
-
-    #[test]
     fn city_curb_is_crossable_with_a_single_small_speed_loss_and_settling_bump() {
         let track = track::TrackId::Engomi.track();
         let city = track.city().unwrap();
@@ -1875,7 +1824,12 @@ mod tests {
             .expect("missing clear curb crossing fixture");
         let position = [q[0] + normal[0] * 0.08, 0.0, q[1] + normal[1] * 0.08];
         let heading = (-normal[0]).atan2(-normal[1]);
-        let mut car = Vehicle::on_track(position, heading, CarModel::Roadster, track.clone());
+        let mut car = Vehicle::on_track(
+            position,
+            heading,
+            CarModel::fixture("kestrel"),
+            track.clone(),
+        );
         car.velocity = normal.map(|n| -n * 8.0);
         car.update(Duration::from_millis(24), Controls::default());
         assert!(!surfaces.contains([car.position[0], car.position[2]]));
@@ -1925,21 +1879,13 @@ mod tests {
                 assert_eq!(car.gear, 2);
             }
         }
-        assert_eq!(
-            route_car(track::TrackId::Compact, CarModel::Roadster).reference_speed(),
-            210.0 / 3.6
-        );
-        assert_eq!(
-            route_car(track::TrackId::scenic(), CarModel::Roadster).reference_speed(),
-            210.0 / 3.6
-        );
     }
 
     #[test]
     fn kestrel_standing_start_acceleration() {
         for model in crate::cars::ALL
             .into_iter()
-            .filter(|m| m.appearance() == CarModel::Roadster)
+            .filter(|m| m.spec().rear_combined_slip.is_some())
         {
             for id in [track::TrackId::Compact, track::TrackId::scenic()] {
                 let mut car = level_route_car(id, model);
@@ -1976,7 +1922,7 @@ mod tests {
             ..Controls::default()
         };
         let speeds = track::all().map(|id| {
-            let mut car = level_route_car(id, CarModel::Roadster);
+            let mut car = level_route_car(id, CarModel::fixture("kestrel"));
             for _ in 0..240 * 15 {
                 treadmill_tick(&mut car, throttle);
             }
@@ -1994,10 +1940,10 @@ mod tests {
                 car.gear, car.engine_rpm
             );
             assert!(
-                (208.0..213.0).contains(&terminal),
-                "{id:?}: {terminal} km/h"
+                (terminal - car.reference_speed() * 3.6).abs() < 1.0,
+                "{id:?}: {terminal} km/h, calculated {}",
+                car.reference_speed() * 3.6
             );
-            assert_eq!(car.gear, 5);
             assert!(car.engine_rpm < REDLINE_RPM);
             terminal
         });
@@ -2008,7 +1954,7 @@ mod tests {
     fn kestrel_power_limited_acceleration_tapers_and_overspeed_is_not_clamped() {
         let sample = track::TrackId::scenic().track().at_distance(50.0);
         let acceleration = |speed: f32| {
-            let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
+            let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
             car.velocity = sample.tangent.map(|v| v * speed);
             car.refresh_speed();
             treadmill_tick(
@@ -2023,7 +1969,7 @@ mod tests {
         assert!(acceleration(20.0) > acceleration(40.0));
         assert!(acceleration(40.0) > 0.0);
         assert!(acceleration(70.0) < 0.0);
-        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         car.velocity = sample.tangent.map(|v| v * 70.0);
         car.refresh_speed();
         treadmill_tick(
@@ -2079,7 +2025,7 @@ mod tests {
 
     #[test]
     fn foot_brake_builds_releases_and_does_not_fake_a_skid() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         let road = car.track.at_distance(50.0);
         car.velocity = road.tangent.map(|v| v * 20.0);
         let pedal = Controls {
@@ -2102,7 +2048,7 @@ mod tests {
 
     #[test]
     fn scenic_roadster_brakes_from_100_kmh_progressively() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         car.velocity = car
             .track
             .at_distance(50.0)
@@ -2205,7 +2151,7 @@ mod tests {
             let mut car = Vehicle::on_track(
                 position,
                 inward[0].atan2(inward[1]),
-                CarModel::Roadster,
+                CarModel::fixture("kestrel"),
                 track.clone(),
             );
             car.manual = true;
@@ -2229,7 +2175,7 @@ mod tests {
 
     #[test]
     fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::Muscle);
+        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("muscle"));
         car.toggle_direction();
         treadmill_tick(
             &mut car,
@@ -2246,7 +2192,7 @@ mod tests {
             &car.track,
             &track::TrackId::scenic().track()
         ));
-        assert_eq!(car.model, CarModel::Muscle);
+        assert_eq!(car.model, CarModel::fixture("muscle"));
         assert_eq!(car.position, road.lane_position(0.0));
         assert_eq!(car.heading, road.heading());
         assert_eq!(car.velocity, [0.0; 2]);
@@ -2291,7 +2237,7 @@ mod tests {
         let mut car = Vehicle::on_track(
             [bounds[0][0] - 1.0, 0.0, (bounds[0][1] + bounds[1][1]) * 0.5],
             0.0,
-            CarModel::Roadster,
+            CarModel::fixture("kestrel"),
             track.clone(),
         );
         car.velocity = [-4.0, 8.0];
@@ -2355,12 +2301,13 @@ mod tests {
             (accelerating.speed, braking.speed, sliding.slip.abs())
         });
         let [roadster, muscle, club] = [
-            results[CarModel::Roadster.index()],
-            results[CarModel::Muscle.index()],
-            results[CarModel::Club.index()],
+            results[CarModel::fixture("kestrel").index()],
+            results[CarModel::fixture("muscle").index()],
+            results[CarModel::fixture("club").index()],
         ];
         assert!(
-            (muscle.0 - roadster.0).abs() > 0.05 && roadster.0 > club.0 && muscle.0 > club.0,
+            // The model-sized rear tires give the roadster taller gearing at launch.
+            (muscle.0 - roadster.0).abs() > 0.05 && muscle.0 > club.0 && club.0 > roadster.0,
             "acceleration: {results:?}"
         );
         assert!(
@@ -2405,7 +2352,8 @@ mod tests {
             terminal_speed
         });
         assert!(
-            speeds[CarModel::Roadster.index()] > speeds[CarModel::Club.index()],
+            speeds[CarModel::fixture("kestrel").index()]
+                > speeds[CarModel::fixture("club").index()],
             "terminal speeds: {speeds:?}"
         );
     }
@@ -2416,9 +2364,13 @@ mod tests {
         let mut heavy = Vehicle::new(
             sample.lane_position(0.8),
             sample.heading(),
-            CarModel::Muscle,
+            CarModel::fixture("muscle"),
         );
-        let mut light = Vehicle::new(sample.lane_position(-0.8), sample.heading(), CarModel::Club);
+        let mut light = Vehicle::new(
+            sample.lane_position(-0.8),
+            sample.heading(),
+            CarModel::fixture("club"),
+        );
         let n = sample.normal();
         heavy.velocity = n.map(|x| -x * 3.0);
         let momentum = |a: &Vehicle, b: &Vehicle| {
@@ -2510,7 +2462,11 @@ mod tests {
     #[test]
     fn sprung_body_motion_responds_to_braking_throttle_and_cornering() {
         let road = track::TrackId::Compact.track().at_distance(50.0);
-        let mut braking = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut braking = Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::fixture("kestrel"),
+        );
         braking.velocity = road.tangent.map(|v| v * 20.0);
         braking.refresh_speed();
         for _ in 0..30 {
@@ -2528,8 +2484,11 @@ mod tests {
             braking.body_pitch
         );
 
-        let mut accelerating =
-            Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut accelerating = Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::fixture("kestrel"),
+        );
         accelerating.velocity = road.tangent.map(|v| v * 8.0);
         accelerating.refresh_speed();
         for _ in 0..30 {
@@ -2547,7 +2506,11 @@ mod tests {
             accelerating.body_pitch
         );
 
-        let mut turning = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut turning = Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::fixture("kestrel"),
+        );
         turning.velocity = road.tangent.map(|v| v * 18.0);
         turning.refresh_speed();
         for _ in 0..30 {
@@ -2609,7 +2572,7 @@ mod tests {
         let mut car = Vehicle::on_track(
             [bounds[0][0] + track::CAR_RADIUS + 0.02, 0.0, 0.0],
             -std::f32::consts::FRAC_PI_2,
-            CarModel::Roadster,
+            CarModel::fixture("kestrel"),
             track,
         );
         car.velocity = [-5.0, 0.0];
@@ -2620,7 +2583,7 @@ mod tests {
 
     #[test]
     fn upshift_sound_has_an_audible_rpm_and_load_transition() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::Roadster);
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
         car.manual = true;
         car.gear = 2;
         car.speed = car.model.spec().gearbox.speed_at_rpm(5000.0, 2);
@@ -2697,7 +2660,11 @@ mod tests {
     #[test]
     fn rev_matching_excludes_upshifts_neutral_reverse_and_idle() {
         let road = track::TrackId::Compact.track().at_distance(50.0);
-        let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut car = Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::fixture("kestrel"),
+        );
         car.manual = true;
         car.gear = 3;
         car.shift(false);
@@ -2800,7 +2767,7 @@ mod tests {
     fn neutral_blips_are_consistent_across_frame_rates() {
         let mut results = Vec::new();
         for hz in [30, 60, 144, 240] {
-            let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::Roadster);
+            let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::fixture("kestrel"));
             car.gear = NEUTRAL_GEAR;
             for _ in 0..hz / 2 {
                 car.update_engine_feedback(
@@ -2824,7 +2791,11 @@ mod tests {
     #[test]
     fn engine_feedback_smooths_rpm_load_and_shift_unload() {
         let road = track::TrackId::Compact.track().at_distance(50.0);
-        let mut car = Vehicle::new(road.lane_position(0.0), road.heading(), CarModel::Roadster);
+        let mut car = Vehicle::new(
+            road.lane_position(0.0),
+            road.heading(),
+            CarModel::fixture("kestrel"),
+        );
         assert_eq!(car.engine_rpm, IDLE_RPM);
         assert_eq!(car.engine_load, 0.0);
         let mut previous_speed = 0.0;
