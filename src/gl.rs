@@ -98,6 +98,88 @@ vec3 asphalt_texture(vec3 color) {
     float repair = smoothstep(0.70,0.80,surface_noise(p*0.11));
     return color * (aggregate + pores + weather - repair*0.09);
 }
+// Baked map palettes select the surface, not colours sampled from the photo.
+// Keep this pass on upward ground so walls, trees, paint and markings stay clean.
+vec3 mapped_ground_detail(vec3 color) {
+    if (v_material.x < -1.5 || v_material.x > -0.5 || normalize(v_normal).y < 0.8)
+        return color;
+    float grass = min(min(distance(v_color,vec3(0.39,0.48,0.25)),
+                          distance(v_color,vec3(0.43,0.53,0.30))),
+                      min(distance(v_color,vec3(0.40,0.46,0.28)),
+                          min(distance(v_color,vec3(0.33,0.42,0.21)),
+                              distance(v_color,vec3(0.28,0.38,0.19)))));
+    float paving = min(min(distance(v_color,vec3(0.68,0.69,0.66)),
+                           distance(v_color,vec3(0.72,0.71,0.65))),
+                       distance(v_color,vec3(0.66,0.64,0.56)));
+    float concrete = distance(v_color,vec3(0.72,0.73,0.70));
+    float dirt = min(min(distance(v_color,vec3(0.62,0.58,0.46)),
+                         distance(v_color,vec3(0.56,0.51,0.40))),
+                     min(distance(v_color,vec3(0.64,0.63,0.54)),
+                         distance(v_color,vec3(0.43,0.42,0.32))));
+    if (min(min(grass,paving),min(concrete,dirt)) > 0.018) return color;
+    vec2 p = v_world.xz;
+    vec2 dx = dFdx(p), dy = dFdy(p);
+    // Use pixel area for detail visibility. The longest axis grows rapidly on
+    // ground viewed at a shallow angle and was hiding detail only metres away.
+    float footprint = sqrt(abs(dx.x*dy.y-dx.y*dy.x));
+    float fade = 1.0-smoothstep(25.0,65.0,length(u_eye-v_world));
+    if (fade < 0.001) return color;
+    float fine = 1.0-smoothstep(0.08,0.45,footprint);
+    float aa = max(footprint*0.7,0.0015);
+    if (grass < 0.018) {
+        // Jittered, leaning strokes suggest short tufts without a regular stripe grid.
+        vec2 q = mat2(0.917,0.399,-0.399,0.917)*p*vec2(7.0,5.0);
+        vec2 cell = floor(q), local = fract(q);
+        float seed = surface_hash(cell);
+        float along = local.y-0.2;
+        float center = 0.35+0.30*surface_hash(cell+31.0)
+            +(seed-0.5)*along*0.65;
+        float blade_aa = max(fwidth(local.x-center)*0.5,0.01);
+        float blade = (1.0-smoothstep(0.035,0.085+blade_aa,abs(local.x-center)))
+            * smoothstep(0.0,0.12,along)
+            * (1.0-smoothstep(0.42,0.65,along));
+        float clumps = (surface_noise(p*1.9)-0.5)*0.24
+            +(surface_noise(p*5.0)-0.5)*0.12*fine;
+        float strokes = blade*mix(-0.32,0.30,step(0.46,seed))*fine;
+        return color*(1.0+fade*(clumps+strokes));
+    }
+    if (min(paving,concrete) < 0.018) {
+        // Staggered pavers and larger concrete slabs. Dimensions are in metres.
+        bool slabs = concrete < paving;
+        vec2 size = slabs ? vec2(1.20,0.90) : vec2(0.60,0.40);
+        vec2 q = mat2(0.917,0.399,-0.399,0.917)*p;
+        float row = floor(q.y/size.y);
+        q.x += slabs ? 0.0 : mod(row,2.0)*size.x*0.5;
+        vec2 cell = floor(q/size);
+        vec2 edge = min(fract(q/size),1.0-fract(q/size))*size;
+        float gap_distance = min(edge.x,edge.y);
+        float width = slabs ? 0.007 : 0.010;
+        // Filter across each joint rather than along the entire ground footprint.
+        float aa = max(fwidth(gap_distance)*0.5,0.0015);
+        float joints = (1.0-smoothstep(max(0.0,width-aa),width+aa,gap_distance))
+            * min(1.0,width/aa);
+        float bevel = smoothstep(width,width+0.008,gap_distance)
+            * (1.0-smoothstep(width+0.008,width+0.018+aa,gap_distance));
+        float variation = (surface_hash(cell)-0.5)*0.12;
+        float grain = (surface_noise(p*45.0)-0.5)*0.06*fine;
+        float resolved = 1.0-smoothstep(0.15,0.80,footprint);
+        return color*(1.0+fade*(variation+resolved*(grain-joints*0.40+bevel*0.07)));
+    }
+    // Loose earth: broad clods plus occasional small stones with a dark rim.
+    float clods = (surface_noise(p*2.2)-0.5)*0.28
+        +(surface_noise(p*8.0)-0.5)*0.16*fine;
+    vec2 q = p/0.22, cell = floor(q), local = fract(q);
+    vec2 center = vec2(0.3)+vec2(surface_hash(cell+11.0),surface_hash(cell+47.0))*0.4;
+    vec2 delta = (local-center)*vec2(1.0,1.4)*0.22;
+    float radius = mix(0.018,0.045,surface_hash(cell+73.0));
+    float d = length(delta);
+    aa = max(fwidth(d)*0.5,0.0015);
+    float stone = 1.0-smoothstep(max(0.0,radius-aa),radius+aa,d);
+    float rim = (1.0-smoothstep(radius,radius+0.012+aa,d))-stone;
+    float scatter = step(0.68,surface_hash(cell+97.0));
+    float relief = scatter*(stone*(0.18+0.18*surface_hash(cell+23.0))-rim*0.20)*fine;
+    return color*(1.0+fade*(clods+relief));
+}
 vec3 concrete_texture(vec3 color, vec3 normal) {
     vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
     vec2 p = vec2(dot(v_world, tangent), v_world.y);
@@ -153,7 +235,8 @@ void main() {
             vec2 uv=(v_world.xz-bounds.xy)/(bounds.zw-bounds.xy);
             if (all(greaterThanEqual(uv,vec2(0.0))) && all(lessThan(uv,vec2(1.0)))) {
                 vec3 colour=texture(u_aerial,vec3(vec2(u_aerial_uv.x)+uv*u_aerial_uv.y,float(u_aerial_layers[i]))).rgb;
-                if (asphalt_mask() > 0.5) colour = asphalt_texture(colour * 0.55);
+                if (asphalt_mask() > 0.5) colour *= 0.55;
+                else colour = mapped_ground_detail(colour);
                 float fog=smoothstep(u_fog_range.x,u_fog_range.y,length(u_eye-v_world));
                 o=vec4(mix(colour*contact_visibility(),vec3(0.57,0.73,0.80),fog),1.0);
                 return;
@@ -167,6 +250,7 @@ void main() {
     float paint_mask = step(0.5, v_material.x) * (1.0 - step(1.5, v_material.x));
     vec3 paint = v_color * mix(vec3(1.0), u_tint, paint_mask);
     if (asphalt_mask() > 0.5) paint = asphalt_texture(paint);
+    else paint = mapped_ground_detail(paint);
     if (u_concrete == 1 && abs(n.y) < 0.35 && abs(v_material.x) < 0.01
         && v_material.y < 0.05 && min(v_color.r, min(v_color.g, v_color.b)) > 0.55) {
         paint = concrete_texture(paint, n);
