@@ -175,53 +175,106 @@ impl Archive {
         Ok(vertices)
     }
 }
-pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
-    let mut chunks = std::collections::BTreeMap::<[i32; 2], [Option<Chunk>; 3]>::new();
-    for (layer, values) in layers.into_iter().enumerate() {
-        for chunk in values {
-            let cell = chunk.cell;
-            chunks.entry(cell).or_default()[layer] = Some(chunk);
-        }
+// Packed fragments live on the location's disk, never in /tmp (which may be RAM).
+// Only fragment offsets and bounds remain resident as the city is generated.
+struct SpoolChunk {
+    bounds: [[f32; 3]; 2],
+    fragments: Vec<(u64, usize)>,
+}
+pub struct Spool {
+    file: tempfile::NamedTempFile,
+    chunks: std::collections::BTreeMap<[i32; 2], SpoolChunk>,
+}
+impl Spool {
+    pub fn new(directory: &Path) -> std::io::Result<Self> {
+        Ok(Self {
+            file: tempfile::NamedTempFile::new_in(directory)?,
+            chunks: Default::default(),
+        })
     }
-    let temporary = path.with_extension("pack.tmp");
-    let mut file = File::create(&temporary)?;
-    file.write_all(&vec![0; 16 + chunks.len() * ENTRY_SIZE])?;
-    let mut entries = Vec::new();
-    for (_, layers) in chunks {
+    pub fn append(&mut self, chunk: Chunk) -> std::io::Result<()> {
+        let bytes = encode(&chunk.vertices);
+        let offset = self.file.stream_position()?;
+        self.file.write_all(&bytes)?;
+        let entry = self.chunks.entry(chunk.cell).or_insert_with(|| SpoolChunk {
+            bounds: chunk.bounds,
+            fragments: Vec::new(),
+        });
+        for axis in 0..3 {
+            entry.bounds[0][axis] = entry.bounds[0][axis].min(chunk.bounds[0][axis]);
+            entry.bounds[1][axis] = entry.bounds[1][axis].max(chunk.bounds[1][axis]);
+        }
+        entry.fragments.push((offset, bytes.len()));
+        Ok(())
+    }
+}
+fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Result<()> {
+    let cells: std::collections::BTreeSet<_> = layers
+        .iter()
+        .flat_map(|layer| layer.chunks.keys().copied())
+        .collect();
+    let mut file = tempfile::NamedTempFile::new_in(
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new(".")),
+    )?;
+    file.write_all(&vec![0; 16 + cells.len() * ENTRY_SIZE])?;
+    let mut entries = Vec::with_capacity(cells.len());
+    let mut buffer = vec![0u8; 64 * 1024];
+    for cell in cells {
         let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
         let mut spans = [Span {
             offset: 0,
             count: 0,
             crc: 0,
         }; 3];
-        for (layer, chunk) in layers.into_iter().enumerate() {
-            let vertices = if let Some(chunk) = chunk {
-                for (axis, value) in bounds[0].iter_mut().enumerate() {
-                    *value = value.min(chunk.bounds[0][axis]);
+        for (layer, spool) in layers.iter_mut().enumerate() {
+            let offset = file.stream_position()?;
+            let mut count = 0;
+            let mut crc = crc32fast::Hasher::new();
+            if let Some(chunk) = spool.chunks.get(&cell) {
+                for axis in 0..3 {
+                    bounds[0][axis] = bounds[0][axis].min(chunk.bounds[0][axis]);
+                    bounds[1][axis] = bounds[1][axis].max(chunk.bounds[1][axis]);
                 }
-                for (axis, value) in bounds[1].iter_mut().enumerate() {
-                    *value = value.max(chunk.bounds[1][axis]);
+                for &(start, size) in &chunk.fragments {
+                    count += size / STRIDE;
+                    spool.file.seek(SeekFrom::Start(start))?;
+                    let mut remaining = size;
+                    while remaining > 0 {
+                        let n = remaining.min(buffer.len());
+                        spool.file.read_exact(&mut buffer[..n])?;
+                        crc.update(&buffer[..n]);
+                        file.write_all(&buffer[..n])?;
+                        remaining -= n;
+                    }
                 }
-                chunk.vertices
-            } else {
-                Vec::new()
-            };
-            let bytes = encode(&vertices);
+            }
+            if count > 2_000_000 {
+                return Err(error("scene layer exceeds archive limit"));
+            }
             spans[layer] = Span {
-                offset: file.stream_position()?,
-                count: vertices.len(),
-                crc: crc32_bytes(&bytes),
+                offset,
+                count,
+                crc: crc.finalize(),
             };
-            file.write_all(&bytes)?;
         }
         entries.push(Entry {
             bounds,
             layers: spans,
         });
     }
+    write_index(file.as_file_mut(), &entries)?;
+    file.as_file().sync_all()?;
+    // Validate the index before atomically replacing the previous working scene.
+    Archive::open(file.path())?;
+    file.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+fn write_index(file: &mut File, entries: &[Entry]) -> std::io::Result<()> {
     file.seek(SeekFrom::Start(0))?;
     file.write_all(MAGIC)?;
-    file.write_all(&0u32.to_le_bytes())?; // Reserved.
+    file.write_all(&0u32.to_le_bytes())?;
     file.write_all(&(entries.len() as u32).to_le_bytes())?;
     for entry in entries {
         for side in entry.bounds {
@@ -235,10 +288,24 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
             file.write_all(&span.crc.to_le_bytes())?;
         }
     }
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(temporary, path)?;
     Ok(())
+}
+/// Write already-partitioned geometry through the same disk-spooling path used
+/// by city baking. Authored decorations and test fixtures use this entry point.
+pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
+    let directory = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut spools = Vec::with_capacity(3);
+    for chunks in layers {
+        let mut spool = Spool::new(directory)?;
+        for chunk in chunks {
+            spool.append(chunk)?;
+        }
+        spools.push(spool);
+    }
+    write_spooled(path, &mut spools)
 }
 pub fn bake_default() -> std::io::Result<()> {
     let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
@@ -254,27 +321,31 @@ pub fn bake_assets(assets: &crate::city_assets::CityAsset) -> std::io::Result<()
         "Generating city geometry with {} trees...",
         city.landscape.trees.len()
     );
-    let mut layers = crate::scene::city_layers(&city);
+    let mut layers = Vec::new();
     let decorations = directory.join("decorations.pack");
-    if decorations.is_file() {
-        let mut archive = Archive::open(&decorations)?;
-        for (layer, chunks) in layers.iter_mut().enumerate() {
-            let mut builder = crate::chunks::ChunkBuilder::default();
-            for chunk in std::mem::take(chunks) {
-                for tri in chunk.vertices.as_chunks::<3>().0 {
-                    builder.push(*tri);
-                }
-            }
+    let mut decorations = if decorations.is_file() {
+        Some(Archive::open(&decorations)?)
+    } else {
+        None
+    };
+    for layer in 0..3 {
+        println!("Generating layer {layer} with bounded geometry buffers...");
+        let mut spool = crate::scene::city_layer_spooled(&city, layer, directory)?;
+        if let Some(archive) = &mut decorations {
             for entry in 0..archive.entries.len() {
+                let mut builder = crate::chunks::ChunkBuilder::default();
                 for tri in archive.read_layer(entry, layer)?.as_chunks::<3>().0 {
                     builder.push(*tri);
                 }
+                for chunk in builder.finish() {
+                    spool.append(chunk)?;
+                }
             }
-            *chunks = builder.finish();
         }
+        layers.push(spool);
     }
     println!("Writing city render archive...");
-    write(&path, layers)?;
+    write_spooled(&path, &mut layers)?;
     let archive = Archive::open(&path)?;
     let counts: [usize; 3] =
         std::array::from_fn(|layer| archive.entries.iter().map(|e| e.layers[layer].count).sum());
@@ -303,6 +374,81 @@ mod tests {
             let _ = std::fs::remove_file(&self.0);
         }
     }
+    #[test]
+    fn spooled_archive_preserves_geometry_across_flushes_and_sparse_layers() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scene.pack");
+        let mut builder = crate::chunks::ChunkBuilder::spooled(directory.path()).unwrap();
+        for i in 0..90_000 {
+            let mut tri: [Vertex; 3] = triangle().try_into().unwrap();
+            for v in &mut tri {
+                v.position[0] += (i % 3) as f32 * 512.0;
+                v.color[0] = (i % 251) as f32 / 255.0;
+            }
+            builder.push(tri);
+        }
+        let mut layers = vec![
+            builder.finish_spooled().unwrap(),
+            Spool::new(directory.path()).unwrap(),
+            Spool::new(directory.path()).unwrap(),
+        ];
+        for chunk in crate::chunks::partition(triangle()) {
+            layers[2].append(chunk).unwrap();
+        }
+        write_spooled(&path, &mut layers).unwrap();
+        let mut archive = Archive::open(&path).unwrap();
+        assert_eq!(archive.entries.len(), 3);
+        for cell in 0..3 {
+            let offset = cell as f32 * 512.0;
+            assert_eq!(
+                archive.entries[cell].bounds,
+                [
+                    [255.75 + offset, 4.125, -1234.5],
+                    [257.0 + offset, 7.0, -1234.5]
+                ]
+            );
+            // Reading each layer also verifies its stored checksum.
+            let loaded = archive.read_layer(cell, 0).unwrap();
+            assert_eq!(loaded.len(), 90_000);
+            for (j, tri) in loaded.chunks_exact(3).enumerate() {
+                let i = j * 3 + cell;
+                for (mut expected, actual) in triangle().into_iter().zip(tri) {
+                    expected.position[0] += offset;
+                    expected.color[0] = (i % 251) as f32 / 255.0;
+                    assert_vertex_matches(expected, actual);
+                }
+            }
+            assert!(archive.read_layer(cell, 1).unwrap().is_empty());
+            let detail = archive.read_layer(cell, 2).unwrap();
+            assert_eq!(detail.len(), if cell == 0 { 3 } else { 0 });
+            for (expected, actual) in triangle().into_iter().zip(&detail) {
+                assert_vertex_matches(expected, actual);
+            }
+        }
+    }
+
+    fn assert_vertex_matches(expected: Vertex, actual: &Vertex) {
+        assert_eq!(expected.position, actual.position);
+        assert_eq!(expected.material, actual.material);
+        for axis in 0..3 {
+            assert!((expected.normal[axis] - actual.normal[axis]).abs() < 0.00004);
+            assert!((expected.color[axis] - actual.color[axis]).abs() < 1.0 / 255.0);
+        }
+    }
+
+    #[test]
+    fn failed_spooled_replacement_preserves_the_working_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scene.pack");
+        fixture(&path);
+        let before = std::fs::read(&path).unwrap();
+        let mut empty: Vec<_> = (0..3)
+            .map(|_| Spool::new(directory.path()).unwrap())
+            .collect();
+        assert!(write_spooled(&path, &mut empty).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
     #[test]
     fn packed_signal_material_preserves_every_program_phase_and_lens() {
         let path = TestFile::new();

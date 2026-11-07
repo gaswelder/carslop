@@ -1,6 +1,7 @@
 //! Static glTF 2.0 car artwork adapted to the existing colored-triangle renderer.
+use super::mesh_glb;
 use super::Vertex;
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use std::{io, path::Path};
 
 const PARTS: [&str; 5] = ["body", "wheel_rl", "wheel_rr", "wheel_fl", "wheel_fr"];
@@ -106,91 +107,36 @@ pub(crate) fn load(path: &Path) -> io::Result<Design> {
 }
 
 fn decode(bytes: &[u8]) -> io::Result<Design> {
-    if !bytes.starts_with(b"glTF") {
-        return Err(invalid("expected a binary glTF 2.0 (.glb) file"));
-    }
-    let asset = gltf::Gltf::from_slice(bytes).map_err(invalid)?;
-    let blob = asset
-        .blob
-        .as_deref()
-        .ok_or_else(|| invalid("missing GLB binary buffer"))?;
-    if asset.buffers().count() != 1
-        || asset
-            .buffers()
-            .any(|b| !matches!(b.source(), gltf::buffer::Source::Bin) || b.length() > blob.len())
-    {
-        return Err(invalid(
-            "use one embedded GLB buffer; external buffers are unsupported",
-        ));
-    }
-    if asset.extensions_required().next().is_some()
-        || asset.animations().next().is_some()
-        || asset.skins().next().is_some()
-    {
-        return Err(invalid(
-            "required extensions, animations and skinning are unsupported; export static meshes",
-        ));
-    }
-    // Validate storage ranges before using gltf's zero-copy accessor readers.
-    for view in asset.views() {
-        if view
-            .offset()
-            .checked_add(view.length())
-            .is_none_or(|end| end > blob.len() || end > view.buffer().length())
-        {
-            return Err(invalid("buffer view exceeds embedded buffer"));
+    mesh_glb::with_scene(bytes, |scene, blob| {
+        let mut importer = Importer {
+            blob,
+            vertices: std::array::from_fn(|_| Vec::new()),
+            origins: [None; 5],
+            visited: std::collections::HashSet::new(),
+        };
+        for node in scene.nodes() {
+            importer.node(node, Mat4::IDENTITY, None, 0)?;
         }
-    }
-    for accessor in asset.accessors() {
-        if accessor.sparse().is_some() {
-            return Err(invalid("sparse accessors are unsupported"));
+        for (i, part) in PARTS.iter().enumerate() {
+            if importer.origins[i].is_none() || importer.vertices[i].is_empty() {
+                return Err(invalid(format!("missing or empty named node {part}")));
+            }
         }
-        let view = accessor
-            .view()
-            .ok_or_else(|| invalid("accessor has no buffer view"))?;
-        let stride = view.stride().unwrap_or(accessor.size());
-        let end = accessor
-            .count()
-            .checked_sub(1)
-            .and_then(|n| n.checked_mul(stride))
-            .and_then(|n| n.checked_add(accessor.size()))
-            .and_then(|n| n.checked_add(accessor.offset()));
-        if stride < accessor.size() || end.is_none_or(|end| end > view.length()) {
-            return Err(invalid("accessor exceeds buffer view"));
-        }
-    }
-    let scene = asset
-        .default_scene()
-        .or_else(|| asset.scenes().next())
-        .ok_or_else(|| invalid("missing scene"))?;
-    let mut importer = Importer {
-        blob,
-        vertices: std::array::from_fn(|_| Vec::new()),
-        origins: [None; 5],
-        visited: vec![false; asset.nodes().count()],
-    };
-    for node in scene.nodes() {
-        importer.node(node, Mat4::IDENTITY, None, 0)?;
-    }
-    for (i, part) in PARTS.iter().enumerate() {
-        if importer.origins[i].is_none() || importer.vertices[i].is_empty() {
-            return Err(invalid(format!("missing or empty named node {part}")));
-        }
-    }
-    let [body, rl, rr, fl, fr] = importer.vertices;
-    let mounts = std::array::from_fn(|i| importer.origins[i + 1].unwrap().to_array());
-    let wheels = [rl, rr, fl, fr];
-    let wheel_radii = std::array::from_fn(|i| {
-        wheels[i]
-            .iter()
-            .map(|v| v.position[1].hypot(v.position[2]))
-            .fold(0.0, f32::max)
-    });
-    Ok(Design {
-        body,
-        wheels,
-        wheel_radii,
-        mounts,
+        let [body, rl, rr, fl, fr] = importer.vertices;
+        let mounts = std::array::from_fn(|i| importer.origins[i + 1].unwrap().to_array());
+        let wheels = [rl, rr, fl, fr];
+        let wheel_radii = std::array::from_fn(|i| {
+            wheels[i]
+                .iter()
+                .map(|v| v.position[1].hypot(v.position[2]))
+                .fold(0.0, f32::max)
+        });
+        Ok(Design {
+            body,
+            wheels,
+            wheel_radii,
+            mounts,
+        })
     })
 }
 
@@ -198,7 +144,7 @@ struct Importer<'a> {
     blob: &'a [u8],
     vertices: [Vec<Vertex>; 5],
     origins: [Option<Vec3>; 5],
-    visited: Vec<bool>,
+    visited: std::collections::HashSet<usize>,
 }
 impl Importer<'_> {
     fn node(
@@ -208,7 +154,7 @@ impl Importer<'_> {
         part: Option<usize>,
         depth: usize,
     ) -> io::Result<()> {
-        if depth > 128 || std::mem::replace(&mut self.visited[node.index()], true) {
+        if depth > 128 || !self.visited.insert(node.index()) {
             return Err(invalid("scene must be a tree with depth at most 128"));
         }
         let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
@@ -240,134 +186,16 @@ impl Importer<'_> {
                 } else {
                     Mat4::from_translation(-self.origins[part].unwrap()) * transform
                 };
-                self.primitive(primitive, geometry_transform, part)?;
+                mesh_glb::primitive(
+                    self.blob,
+                    primitive,
+                    geometry_transform,
+                    &mut self.vertices[part],
+                )?;
             }
         }
         for child in node.children() {
             self.node(child, transform, part, depth + 1)?;
-        }
-        Ok(())
-    }
-
-    fn primitive(
-        &mut self,
-        primitive: gltf::Primitive<'_>,
-        transform: Mat4,
-        part: usize,
-    ) -> io::Result<()> {
-        if primitive.mode() != gltf::mesh::Mode::Triangles
-            || primitive.morph_targets().next().is_some()
-        {
-            return Err(invalid("export static triangle primitives"));
-        }
-        let material = primitive.material();
-        let pbr = material.pbr_metallic_roughness();
-        if pbr.base_color_texture().is_some()
-            || pbr.metallic_roughness_texture().is_some()
-            || material.normal_texture().is_some()
-            || material.emissive_texture().is_some()
-            || material.occlusion_texture().is_some()
-        {
-            return Err(invalid(
-                "car textures are not supported yet; export vertex colors or solid materials",
-            ));
-        }
-        if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
-            return Err(invalid("transparent materials are unsupported; use opaque glass with carslop material extras"));
-        }
-        let reader = primitive.reader(|_| Some(self.blob));
-        let positions: Vec<_> = reader
-            .read_positions()
-            .ok_or_else(|| invalid("missing POSITION"))?
-            .collect();
-        let normals = reader.read_normals().map(|v| v.collect::<Vec<_>>());
-        let colors = reader
-            .read_colors(0)
-            .map(|v| v.into_rgba_f32().collect::<Vec<_>>());
-        if positions.is_empty()
-            || normals.as_ref().is_some_and(|v| v.len() != positions.len())
-            || colors.as_ref().is_some_and(|v| v.len() != positions.len())
-        {
-            return Err(invalid("inconsistent vertex attribute counts"));
-        }
-        let indices: Vec<usize> = reader
-            .read_indices()
-            .map(|v| v.into_u32().map(|i| i as usize).collect())
-            .unwrap_or_else(|| (0..positions.len()).collect());
-        if indices.is_empty()
-            || !indices.len().is_multiple_of(3)
-            || indices.iter().any(|i| *i >= positions.len())
-        {
-            return Err(invalid("invalid triangle indices"));
-        }
-        let extras: serde_json::Value = material
-            .extras()
-            .as_ref()
-            .map(|v| serde_json::from_str(v.get()))
-            .transpose()
-            .map_err(invalid)?
-            .unwrap_or_default();
-        let finish = if let Some(v) = extras.get("carslop_material") {
-            let values: [f32; 2] = serde_json::from_value(v.clone()).map_err(invalid)?;
-            if !values[0].is_finite()
-                || !values[1].is_finite()
-                || !(0.0..=6.0).contains(&values[0])
-                || values[0].fract() != 0.0
-                || !(0.0..=1.0).contains(&values[1])
-            {
-                return Err(invalid("invalid carslop_material extras"));
-            }
-            values
-        } else {
-            [
-                if pbr.metallic_factor() >= 0.5 {
-                    3.0
-                } else {
-                    0.0
-                },
-                1.0 - pbr.roughness_factor(),
-            ]
-        };
-        let base = pbr.base_color_factor();
-        let normal_matrix = Mat3::from_mat4(transform).inverse().transpose();
-        for triangle in indices.chunks_exact(3) {
-            let mut triangle = [triangle[0], triangle[1], triangle[2]];
-            if transform.determinant() < 0.0 {
-                triangle.swap(1, 2);
-            }
-            let points =
-                triangle.map(|i| transform.transform_point3(Vec3::from_array(positions[i])));
-            let face = (points[1] - points[0])
-                .cross(points[2] - points[0])
-                .normalize_or_zero();
-            for (corner, i) in triangle.into_iter().enumerate() {
-                let normal = normals
-                    .as_ref()
-                    .map(|v| (normal_matrix * Vec3::from_array(v[i])).normalize_or_zero())
-                    .unwrap_or(face);
-                let color = colors.as_ref().map(|v| v[i]).unwrap_or([1.0; 4]);
-                let vertex = Vertex {
-                    position: points[corner].to_array(),
-                    normal: normal.to_array(),
-                    color: std::array::from_fn(|j| color[j] * base[j]),
-                    material: finish,
-                };
-                if vertex
-                    .position
-                    .into_iter()
-                    .chain(vertex.normal)
-                    .chain(vertex.color)
-                    .any(|v| !v.is_finite())
-                    || normal.length_squared() < 0.5
-                {
-                    return Err(invalid("nonfinite geometry or zero-length triangle normal"));
-                }
-                if color.into_iter().chain(base).any(|v| !v.is_finite()) || color[3] * base[3] < 1.0
-                {
-                    return Err(invalid("vertex and base colors must be opaque"));
-                }
-                self.vertices[part].push(vertex);
-            }
         }
         Ok(())
     }

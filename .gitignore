@@ -13,6 +13,7 @@ __pycache__/
 /artifacts/
 /data/*
 !/data/cars/
+!/data/buildings/
 !/data/locations/
 /data/locations/*
 !/data/locations/scenic.track.json

@@ -183,15 +183,11 @@ vec3 mapped_ground_detail(vec3 color) {
 vec3 concrete_texture(vec3 color, vec3 normal) {
     vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
     vec2 p = vec2(dot(v_world, tangent), v_world.y);
-    // Preserve a stable facade colour even for older baked city palettes.
-    float family = mod(floor(dot(color, vec3(31.0, 47.0, 71.0))), 4.0);
-    vec3 base = family < 1.0 ? vec3(0.94, 0.93, 0.90)
-        : family < 2.0 ? vec3(0.94, 0.90, 0.80)
-        : family < 3.0 ? vec3(0.83, 0.77, 0.65) : vec3(0.95, 0.90, 0.68);
+    // Keep authored plaster, limestone and trim colours distinct.
     float fine = 1.0 - smoothstep(0.35, 1.5, length(fwidth(p * 65.0)));
     float pores = surface_hash(floor(p * 65.0)) - 0.5;
     float weather = surface_noise(p * 0.7) - 0.5;
-    return base * (1.0 + pores * 0.07 * fine + weather * 0.06);
+    return color * (1.0 + pores * 0.04 * fine + weather * 0.035);
 }
 
 float contact_visibility() {
@@ -256,6 +252,11 @@ void main() {
         paint = concrete_texture(paint, n);
     }
     vec3 ambient = mix(vec3(0.25, 0.27, 0.23), vec3(0.53, 0.61, 0.67), n.y * 0.5 + 0.5);
+    // Bright Mediterranean sky and pale ground bounce keep shaded Nicosia
+    // walls readable. Car finishes have their own lighting below.
+    if (u_concrete == 1 && v_material.x < 0.5) {
+        ambient = mix(vec3(0.48, 0.49, 0.45), vec3(0.85, 0.90, 0.95), n.y * 0.5 + 0.5);
+    }
     float diffuse = max(dot(n, sun), 0.0);
     float highlight = pow(max(dot(n, normalize(sun + view)), 0.0), 48.0)
         * v_material.y * step(0.001, diffuse);

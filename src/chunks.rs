@@ -1,17 +1,48 @@
-//! Static city triangles partitioned without clipping or duplicating shared edges.
 use crate::scene::Vertex;
+
 pub const SIZE: f32 = 256.0;
+
 pub struct Chunk {
     pub cell: [i32; 2],
     pub vertices: Vec<Vertex>,
     pub bounds: [[f32; 3]; 2],
 }
+
 #[derive(Default)]
 pub struct ChunkBuilder {
     bins: std::collections::BTreeMap<(i32, i32), Chunk>,
+    spool: Option<crate::scene_archive::Spool>,
+    pending: usize,
+    failure: Option<std::io::Error>,
 }
+
 impl ChunkBuilder {
+    pub fn spooled(directory: &std::path::Path) -> std::io::Result<Self> {
+        Ok(Self {
+            spool: Some(crate::scene_archive::Spool::new(directory)?),
+            ..Self::default()
+        })
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(spool) = &mut self.spool {
+            for chunk in std::mem::take(&mut self.bins).into_values() {
+                spool.append(chunk)?;
+            }
+            self.pending = 0;
+        }
+        Ok(())
+    }
+    pub fn finish_spooled(mut self) -> std::io::Result<crate::scene_archive::Spool> {
+        if let Some(error) = self.failure.take() {
+            return Err(error);
+        }
+        self.flush()?;
+        Ok(self.spool.take().expect("spooled builder"))
+    }
     pub fn push(&mut self, tri: [Vertex; 3]) {
+        if self.failure.is_some() {
+            return;
+        }
         let x = tri.iter().map(|v| v.position[0]).sum::<f32>() / 3.;
         let z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.;
         let cell = ((x / SIZE).floor() as i32, (z / SIZE).floor() as i32);
@@ -27,8 +58,16 @@ impl ChunkBuilder {
             }
         }
         chunk.vertices.extend_from_slice(&tri);
+        self.pending += 3;
+        // Bound live geometry independently of city size (about 12 MiB of vertices).
+        if self.spool.is_some() && self.pending >= 262_144 {
+            if let Err(error) = self.flush() {
+                self.failure = Some(error);
+            }
+        }
     }
     pub fn finish(self) -> Vec<Chunk> {
+        assert!(self.spool.is_none());
         self.bins.into_values().collect()
     }
 }

@@ -53,6 +53,15 @@ Material extras `{"carslop_material": [CODE, GLOSS]}` use gloss 0–1 and codes:
 0 fixed colour, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens,
 6 reverse lens. Normals and winding must face outward.
 
+## Building models
+
+Reusable window, entrance, and balcony GLBs live in `data/buildings/`.
+`parts.json` selects the models and controls fitting, scaling, and placement.
+Location baking combines these parts with mapped building shells into
+`scene.pack`; play loads the baked geometry. See
+[architectural asset conventions](data/buildings/README.md) for editing and export
+instructions. Rebuild edited artwork with `cargo run -- bake-scene --location nicosia`.
+
 ## Credits and distribution
 
 - **Maps:** © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright),

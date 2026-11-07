@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "window": {"model": "window.glb", "size": [1.0, 1.5, 0.06], "scale_axes": [true, true, false]},
+  "entrance": {"model": "entrance.glb", "size": [1.24, 2.25, 0.09], "scale_axes": [false, false, false]},
+  "balconies": [
+    {"model": "balcony-solid.glb", "size": [8.0, 2.43, 1.4], "scale_axes": [true, false, true]},
+    {"model": "balcony-glass.glb", "size": [8.0, 2.43, 1.4], "scale_axes": [true, false, true]}
+  ],
+  "placement": {
+    "window_spacing": [3.0, 4.4],
+    "modern_window_spacing": 2.6,
+    "entrance_min_wall": 4.0,
+    "entrance_min_height": 3.0,
+    "balcony_min_height": 6.0,
+    "balcony_min_wall": 7.0,
+    "balcony_max_walls": 2,
+    "balcony_width_ratio": 0.72,
+    "balcony_max_width": 11.0,
+    "balcony_depth": [1.15, 1.60],
+    "balcony_floor_offset": 0.42,
+    "balcony_headroom": 2.25
+  }
+}

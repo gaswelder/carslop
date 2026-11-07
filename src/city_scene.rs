@@ -1,5 +1,7 @@
-//! Original materials on OSM footprints. No downloaded imagery or map tiles.
-use super::{Builder, Surface};
+use super::{
+    building_assets::{Catalog, Tints},
+    Builder, Surface,
+};
 use crate::city::{Building, City};
 
 fn cross(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
@@ -58,12 +60,14 @@ fn roof_triangles(polygon: &[[f32; 2]]) -> Vec<[usize; 3]> {
 #[cfg(test)]
 pub(super) fn build(b: &mut Builder, city: &City) {
     ground_mesh(b, city);
-    buildings(b, city, true);
+    buildings(b, city, true).unwrap();
 }
-pub(super) fn buildings(b: &mut Builder, city: &City, detailed: bool) {
+pub(super) fn buildings(b: &mut Builder, city: &City, detailed: bool) -> std::io::Result<()> {
+    let models = Catalog::load_default()?;
     for building in &city.buildings {
-        building_mesh(b, building, city, detailed);
+        building_mesh(b, building, city, detailed, &models);
     }
+    Ok(())
 }
 pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
     let field = city
@@ -168,14 +172,32 @@ fn tinted(color: [f32; 3], gain: f32) -> [f32; 3] {
     color.map(|c| (c * gain).clamp(0.0, 1.0))
 }
 
-fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bool) {
+fn building_mesh(
+    b: &mut Builder,
+    building: &Building,
+    city: &City,
+    detailed: bool,
+    models: &Catalog,
+) {
     // These are regional art variations, rather than surveyed OSM materials.
-    let palette = [
-        [0.94, 0.93, 0.90], // white concrete
-        [0.94, 0.90, 0.80], // cream
-        [0.83, 0.77, 0.65], // beige
-        [0.95, 0.90, 0.68], // pale yellow
-    ];
+    let nicosia = city
+        .geographic_origin()
+        .is_some_and(|[lat, lon]| (35.10..35.24).contains(&lat) && (33.24..33.48).contains(&lon));
+    let palette = if nicosia {
+        [
+            [0.97, 0.96, 0.94], // white plaster
+            [0.95, 0.94, 0.91], // warm white concrete
+            [0.91, 0.88, 0.81], // pale limestone
+            [0.96, 0.93, 0.86], // ivory
+        ]
+    } else {
+        [
+            [0.94, 0.93, 0.90], // white concrete
+            [0.94, 0.90, 0.80], // cream
+            [0.83, 0.77, 0.65], // beige
+            [0.95, 0.90, 0.68], // pale yellow
+        ]
+    };
     let id = building.id;
     let seed = visual_seed(id, 1);
     let wall_color = tinted(
@@ -183,18 +205,20 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
         0.95 + variation(id, 2) * 0.08,
     );
     let wall = Surface::matte(wall_color);
-    let roof = Surface::matte(
+    let roof = Surface::matte(if nicosia {
+        tinted([0.86, 0.85, 0.81], 0.94 + variation(id, 3) * 0.08)
+    } else {
         [
             [0.64, 0.65, 0.62],
             [0.77, 0.75, 0.68],
             [0.58, 0.62, 0.63],
             [0.71, 0.64, 0.56],
             [0.69, 0.57, 0.48],
-        ][visual_seed(id, 3) as usize % 5],
-    );
+        ][visual_seed(id, 3) as usize % 5]
+    });
     let height = building.base_y + building.height;
     // Generate the complete shared shell first. Near detail never changes the
-    // mapped footprint, roof outline or the silhouette when the LOD switches.
+    // mapped footprint and roof outline. Balcony furniture is near detail.
     for i in 0..building.polygon.len() {
         let a = building.polygon[i];
         let c = building.polygon[(i + 1) % building.polygon.len()];
@@ -223,7 +247,16 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
     // Four coherent facade families: shuttered plaster, banded apartments,
     // wider modern glazing, and modest punched windows.
     let style = visual_seed(id, 4) % 4;
-    let trim = Surface::matte(tinted(wall_color, if style == 2 { 0.69 } else { 0.85 }));
+    let trim = Surface::matte(tinted(
+        wall_color,
+        if nicosia {
+            0.97
+        } else if style == 2 {
+            0.69
+        } else {
+            0.85
+        },
+    ));
     let frame = Surface::matte(
         [
             [0.73, 0.71, 0.63],
@@ -241,17 +274,35 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
         ][visual_seed(id, 6) as usize % 4],
     );
     let spacing = if style == 2 {
-        2.6
+        models.placement.modern_window_spacing
     } else {
-        3.0 + variation(id, 7) * 1.4
+        let [min, max] = models.placement.window_spacing;
+        min + variation(id, 7) * (max - min)
     };
-    let storey = 2.85 + variation(id, 8) * 0.55;
+    let storey = if nicosia {
+        // OSM heights commonly use 3.1 m per level. Fit complete storeys to the
+        // measured height so rounding cannot leave a blank top floor.
+        building.height / (building.height / 3.1).round().max(1.0)
+    } else {
+        2.85 + variation(id, 8) * 0.55
+    };
     let window_width = if style == 2 {
         1.7
     } else {
         0.95 + variation(id, 9) * 0.65
     };
-    let window_height = 1.15 + variation(id, 10) * 0.6;
+    let window_height = if nicosia && (style == 1 || style == 2) {
+        1.95
+    } else {
+        1.15 + variation(id, 10) * 0.6
+    };
+    let mut tints = Tints {
+        wall: wall_color,
+        frame: frame.color,
+        trim: trim.color,
+        shutter: shutter.color,
+        glass: [1.0; 3],
+    };
     for i in 0..building.polygon.len() {
         let a = building.polygon[i];
         let c = building.polygon[(i + 1) % building.polygon.len()];
@@ -261,27 +312,33 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
         }
         let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
         // Coordinates are metres along the wall and absolute elevation.
-        let mut panel =
-            |left: f32, right: f32, bottom: f32, top: f32, depth: f32, surface: Surface| {
-                let p = |along: f32, y: f32| {
-                    [
-                        a[0] + (c[0] - a[0]) * along / length + normal[0] * depth,
-                        y,
-                        a[1] + (c[1] - a[1]) * along / length + normal[1] * depth,
-                    ]
-                };
-                b.quad(
-                    [
-                        p(right, bottom),
-                        p(left, bottom),
-                        p(left, top),
-                        p(right, top),
-                    ],
-                    surface,
-                );
+        let panel = |b: &mut Builder,
+                     left: f32,
+                     right: f32,
+                     bottom: f32,
+                     top: f32,
+                     depth: f32,
+                     surface: Surface| {
+            let p = |along: f32, y: f32| {
+                [
+                    a[0] + (c[0] - a[0]) * along / length + normal[0] * depth,
+                    y,
+                    a[1] + (c[1] - a[1]) * along / length + normal[1] * depth,
+                ]
             };
-        panel(0.0, length, height - 0.24, height - 0.04, 0.018, trim);
+            b.quad(
+                [
+                    p(right, bottom),
+                    p(left, bottom),
+                    p(left, top),
+                    p(right, top),
+                ],
+                surface,
+            );
+        };
+        panel(b, 0.0, length, height - 0.24, height - 0.04, 0.018, trim);
         panel(
+            b,
             0.0,
             length,
             building.base_y + 0.06,
@@ -291,59 +348,48 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
         );
         let columns = ((length - 1.0) / spacing).floor().clamp(1.0, 20.0) as usize;
         let half = (window_width * 0.5).min(length / columns as f32 * 0.29);
-        for floor in 0..((building.height / storey).floor() as usize).min(16) {
+        for floor in 0..((building.height / storey + 0.001).floor() as usize).min(16) {
             let bottom = building.base_y + 0.85 + floor as f32 * storey;
             let top = (bottom + window_height).min(height - 0.45);
             if top <= bottom + 0.3 {
                 continue;
             }
             if style == 1 && floor > 0 {
-                panel(0.0, length, bottom - 0.42, bottom - 0.29, 0.02, trim);
+                panel(b, 0.0, length, bottom - 0.42, bottom - 0.29, 0.02, trim);
             }
             for column in 0..columns {
                 let center = (column as f32 + 0.5) * length / columns as f32;
                 if floor == 0
                     && i == 0
-                    && length > 4.0
-                    && building.height > 3.0
+                    && length > models.placement.entrance_min_wall
+                    && building.height > models.placement.entrance_min_height
                     && (center - length * 0.5).abs() < half + 0.72
                 {
                     continue;
                 }
                 let key = id ^ ((i as u64) << 32) ^ ((floor as u64) << 16) ^ column as u64;
-                let glass = Surface {
-                    color: tinted([0.16, 0.24, 0.27], 0.75 + variation(key, 11) * 0.65),
-                    material: [0.0, 0.45],
-                };
-                panel(
-                    center - half - 0.07,
-                    center + half + 0.07,
+                tints.glass = tinted([0.16, 0.24, 0.27], 0.75 + variation(key, 11) * 0.65);
+                models.window.place(
+                    b,
+                    [a, c],
+                    center,
                     bottom - 0.07,
-                    top + 0.07,
-                    0.025,
-                    frame,
-                );
-                panel(center - half, center + half, bottom, top, 0.035, glass);
-                // Narrow mullions and a sill make the openings read at street level.
-                if style == 2 || half > 0.68 {
-                    panel(center - 0.025, center + 0.025, bottom, top, 0.042, frame);
-                }
-                panel(
-                    center - half - 0.10,
-                    center + half + 0.10,
-                    bottom - 0.12,
-                    bottom - 0.045,
-                    0.055,
-                    trim,
+                    [
+                        half * 2.0 + 0.14,
+                        top - bottom + 0.14,
+                        models.window.size[2],
+                    ],
+                    &tints,
                 );
                 if style == 0 && length / columns as f32 > window_width + 0.8 {
                     for side in [-1.0, 1.0] {
                         let edge = center + side * (half + 0.24);
-                        panel(edge - 0.15, edge + 0.15, bottom, top, 0.045, shutter);
+                        panel(b, edge - 0.15, edge + 0.15, bottom, top, 0.045, shutter);
                     }
                 } else if variation(key, 12) > 0.70 {
                     let blind = Surface::matte(tinted(wall_color, 0.72));
                     panel(
+                        b,
                         center - half,
                         center + half,
                         top - (top - bottom) * (0.20 + variation(key, 13) * 0.45),
@@ -355,34 +401,66 @@ fn building_mesh(b: &mut Builder, building: &Building, city: &City, detailed: bo
             }
         }
         // One recessed-looking entrance, reserved for a single substantial wall.
-        if i == 0 && length > 4.0 && building.height > 3.0 {
+        if i == 0
+            && length > models.placement.entrance_min_wall
+            && building.height > models.placement.entrance_min_height
+        {
             let center = length * 0.5;
             let bottom = building.base_y + 0.02;
-            panel(
-                center - 0.62,
-                center + 0.62,
-                bottom,
-                bottom + 2.25,
-                0.065,
-                frame,
-            );
-            panel(
-                center - 0.50,
-                center + 0.50,
-                bottom,
-                bottom + 2.12,
-                0.075,
-                shutter,
-            );
-            panel(
-                center + 0.31,
-                center + 0.35,
-                bottom + 0.85,
-                bottom + 1.02,
-                0.085,
-                trim,
-            );
+            models
+                .entrance
+                .place(b, [a, c], center, bottom, models.entrance.size, &tints);
         }
+        // Broad stacked terraces on two substantial exterior faces. Keep them
+        // off concave footprints, where an outward projection could fill a court.
+        let convex = (0..building.polygon.len()).all(|j| {
+            cross(
+                building.polygon[j],
+                building.polygon[(j + 1) % building.polygon.len()],
+                building.polygon[(j + 2) % building.polygon.len()],
+            ) >= -0.0001
+        });
+        if nicosia
+            && convex
+            && (style == 1 || style == 2)
+            && building.height >= models.placement.balcony_min_height
+            && length >= models.placement.balcony_min_wall
+            && i < models.placement.balcony_max_walls
+        {
+            apartment_balconies(b, a, c, building, storey, style, models, &tints);
+        }
+    }
+}
+
+fn apartment_balconies(
+    b: &mut Builder,
+    a: [f32; 2],
+    c: [f32; 2],
+    building: &Building,
+    storey: f32,
+    style: u64,
+    models: &Catalog,
+    tints: &Tints,
+) {
+    let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+    let rules = &models.placement;
+    let width = (length * rules.balcony_width_ratio).min(rules.balcony_max_width);
+    let depth = rules.balcony_depth[0]
+        + variation(building.id, 21) * (rules.balcony_depth[1] - rules.balcony_depth[0]);
+    let model = &models.balconies[usize::from(style == 2)];
+    for floor in 1..((building.height / storey + 0.001).floor() as usize).min(16) {
+        let y = building.base_y + floor as f32 * storey + rules.balcony_floor_offset;
+        if y + rules.balcony_headroom >= building.base_y + building.height {
+            continue;
+        }
+        model.place(
+            b,
+            [a, c],
+            length * 0.5,
+            y,
+            [width, model.size[1], depth],
+            tints,
+        );
     }
 }
 
@@ -536,6 +614,10 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn models() -> &'static Catalog {
+        static MODELS: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
+        MODELS.get_or_init(|| Catalog::load_default().unwrap())
+    }
     fn small_city() -> City {
         City::parse("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
     }
@@ -681,9 +763,9 @@ mod tests {
             let mut near = Builder::default();
             let mut again = Builder::default();
             let mut far = Builder::default();
-            building_mesh(&mut near, &building, &city, true);
-            building_mesh(&mut again, &building, &city, true);
-            building_mesh(&mut far, &building, &city, false);
+            building_mesh(&mut near, &building, &city, true, models());
+            building_mesh(&mut again, &building, &city, true, models());
+            building_mesh(&mut far, &building, &city, false, models());
             assert_eq!(near.vertices, again.vertices);
             assert_eq!(
                 &near.vertices[..far.vertices.len()],
@@ -702,6 +784,57 @@ mod tests {
             );
         }
         assert_eq!(appearances.len(), 32);
+    }
+
+    #[test]
+    fn nicosia_terraces_are_bounded_and_leave_the_mapped_shell_intact() {
+        let city = City::parse(
+            "CITY 2\norigin 35.17 33.32\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
+        )
+        .unwrap();
+        let mut terraces = 0;
+        for id in 0..32 {
+            let building = Building {
+                id,
+                height: 9.3,
+                base_y: 0.0,
+                polygon: vec![[-6.0, -5.0], [6.0, -5.0], [6.0, 5.0], [-6.0, 5.0]],
+            };
+            let mut near = Builder::default();
+            let mut far = Builder::default();
+            let mut again = Builder::default();
+            building_mesh(&mut near, &building, &city, true, models());
+            building_mesh(&mut far, &building, &city, false, models());
+            building_mesh(&mut again, &building, &city, true, models());
+            assert_eq!(near.vertices, again.vertices);
+            assert_eq!(
+                &near.vertices[..far.vertices.len()],
+                far.vertices.as_slice()
+            );
+            assert!(near.vertices.len() < 5000);
+            assert!(far.vertices[0].color.iter().all(|c| *c >= 0.76));
+            let has_terrace = near
+                .vertices
+                .iter()
+                .any(|v| v.position[0].abs() > 6.2 || v.position[2].abs() > 5.2);
+            assert_eq!(has_terrace, matches!(visual_seed(id, 4) % 4, 1 | 2));
+            if has_terrace {
+                assert!(
+                    near.vertices.iter().any(|v| v.normal[1] > 0.9
+                        && v.position[1] > 6.3
+                        && (v.position[0].abs() > 6.2 || v.position[2].abs() > 5.2)),
+                    "a three-storey apartment needs an upper balcony too"
+                );
+            }
+            terraces += usize::from(has_terrace);
+            for v in near.vertices {
+                assert!(v.position.iter().all(|x| x.is_finite()));
+                assert!((-0.031..=9.3).contains(&v.position[1]));
+                assert!(v.position[0].abs() <= 7.63 && v.position[2].abs() <= 6.63);
+                assert!((v.normal.iter().map(|n| n * n).sum::<f32>() - 1.0).abs() < 0.001);
+            }
+        }
+        assert!(terraces > 0 && terraces < 32);
     }
 
     #[test]
@@ -751,8 +884,8 @@ mod tests {
             .unwrap();
         let mut near = Builder::default();
         let mut far = Builder::default();
-        building_mesh(&mut near, building, city, true);
-        building_mesh(&mut far, building, city, false);
+        building_mesh(&mut near, building, city, true, models());
+        building_mesh(&mut far, building, city, false, models());
         assert!(near.vertices.len() > far.vertices.len());
         let shell = &near.vertices[..far.vertices.len()];
         assert_eq!(

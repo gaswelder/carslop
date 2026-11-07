@@ -1,5 +1,3 @@
-//! Procedural coastal scenery and file-backed car artwork. No physics lives here.
-
 use crate::{
     cars::{self, CarModel},
     track,
@@ -7,10 +5,14 @@ use crate::{
 use std::f32::consts::TAU;
 use std::ops::Range;
 
+#[path = "building_assets.rs"]
+mod building_assets;
 #[path = "car_glb.rs"]
 pub(crate) mod car_glb;
 #[path = "city_scene.rs"]
 mod city_scene;
+#[path = "mesh_glb.rs"]
+mod mesh_glb;
 #[path = "road_furniture.rs"]
 mod road_furniture;
 
@@ -143,19 +145,21 @@ pub fn build(track: &track::Track) -> Geometry {
     finish(b)
 }
 
-pub fn city_layers(city: &crate::city::City) -> [Vec<crate::chunks::Chunk>; 3] {
-    std::array::from_fn(|layer| {
-        let mut b = Builder {
-            chunks: Some(crate::chunks::ChunkBuilder::default()),
-            ..Builder::default()
-        };
-        if layer == 0 {
-            city_scene::ground_mesh(&mut b, city);
-        } else {
-            city_scene::buildings(&mut b, city, layer == 1);
-        }
-        b.chunks.unwrap().finish()
-    })
+pub fn city_layer_spooled(
+    city: &crate::city::City,
+    layer: usize,
+    directory: &std::path::Path,
+) -> std::io::Result<crate::scene_archive::Spool> {
+    let mut b = Builder {
+        chunks: Some(crate::chunks::ChunkBuilder::spooled(directory)?),
+        ..Builder::default()
+    };
+    if layer == 0 {
+        city_scene::ground_mesh(&mut b, city);
+    } else {
+        city_scene::buildings(&mut b, city, layer == 1)?;
+    }
+    b.chunks.unwrap().finish_spooled()
 }
 
 #[cfg(test)]
