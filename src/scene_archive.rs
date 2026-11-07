@@ -208,7 +208,7 @@ impl Spool {
         Ok(())
     }
 }
-fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Result<()> {
+pub(crate) fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Result<()> {
     let cells: std::collections::BTreeSet<_> = layers
         .iter()
         .flat_map(|layer| layer.chunks.keys().copied())
@@ -307,53 +307,6 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
     }
     write_spooled(path, &mut spools)
 }
-pub fn bake_default() -> std::io::Result<()> {
-    let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
-    bake_assets(&assets)
-}
-
-pub fn bake_assets(assets: &crate::city_assets::CityAsset) -> std::io::Result<()> {
-    let city = crate::city::City::load(assets).map_err(|e| error(&e))?;
-    let directory = assets.directory();
-    let path = directory.join("scene.pack");
-    let started = std::time::Instant::now();
-    println!(
-        "Generating city geometry with {} trees...",
-        city.landscape.trees.len()
-    );
-    let mut layers = Vec::new();
-    let decorations = directory.join("decorations.pack");
-    let mut decorations = if decorations.is_file() {
-        Some(Archive::open(&decorations)?)
-    } else {
-        None
-    };
-    for layer in 0..3 {
-        println!("Generating layer {layer} with bounded geometry buffers...");
-        let mut spool = crate::scene::city_layer_spooled(&city, layer, directory)?;
-        if let Some(archive) = &mut decorations {
-            for entry in 0..archive.entries.len() {
-                let mut builder = crate::chunks::ChunkBuilder::default();
-                for tri in archive.read_layer(entry, layer)?.as_chunks::<3>().0 {
-                    builder.push(*tri);
-                }
-                for chunk in builder.finish() {
-                    spool.append(chunk)?;
-                }
-            }
-        }
-        layers.push(spool);
-    }
-    println!("Writing city render archive...");
-    write_spooled(&path, &mut layers)?;
-    let archive = Archive::open(&path)?;
-    let counts: [usize; 3] =
-        std::array::from_fn(|layer| archive.entries.iter().map(|e| e.layers[layer].count).sum());
-    println!("Baked {} chunks: {} ground, {} detailed building, {} distant building vertices; {:.1} MiB; {:.2}s",archive.entries.len(),counts[0],counts[1],counts[2],std::fs::metadata(&path)?.len() as f32/1048576.0,started.elapsed().as_secs_f32());
-    drop(archive);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

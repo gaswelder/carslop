@@ -4,6 +4,7 @@ use geo::{Area, BooleanOps, Buffer, Contains, Intersects, Point};
 
 fn map(nodes: &[P], roads: &[(usize, usize, f64, usize)], buildings: &[Vec<P>]) -> Map {
     Map {
+        boundary: None,
         origin: [35.162, 33.320],
         bounds: [-100.0, -100.0, 100.0, 100.0],
         nodes: nodes.to_vec(),
@@ -689,9 +690,9 @@ fn full_nicosia_import_preserves_network_buildings_and_surface_area() {
         "total land cover area changed: {original_total} vs {rebuilt_total}"
     );
     let report = serde_json::json!({"nodes":new.nodes.len(),"road_segments":new.streets.len(),"buildings":new.buildings.len(),"road_area_m2":area,"reference_road_area_m2":reference_area,"triangles":triangles,"curbs":curbs,"mapped_controls":new_controls.values().sum::<u64>(),"trees":new_trees.len(),"landscape_relative_area_differences":landscape_deltas,"landscape_total_relative_area_difference":total_delta,"scene_pack_bytes":std::fs::metadata(imported.join("scene.pack")).unwrap().len(),"reference_scene_pack_bytes":std::fs::metadata(bundled.join("scene.pack")).unwrap().len(),"checks":"geographic node positions; complete road metadata; building IDs/heights/ring sizes; asphalt area and winding; elevation loader; scenery CRC headers; mapped control/tree identities; land cover area per style within 0.25%, total within 0.01%"});
-    json(
+    fs::write(
         &imported.parent().unwrap().join("validation-report.json"),
-        report.clone(),
+        serde_json::to_string_pretty(&report).unwrap() + "\n",
     )
     .unwrap();
     println!("{report}");

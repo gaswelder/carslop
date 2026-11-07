@@ -2,7 +2,6 @@
 //! The text remains the source of truth. Its SHA-256 hash invalidates stale caches.
 //! Bump MAGIC when changing grid cell sizes, padding or collision index semantics.
 use super::{Curb, RoadPaths, SourceChecksums, StreetSurface, SurfaceTriangle};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
@@ -115,7 +114,7 @@ pub(super) fn load(directory: &Path, city_checksum: u32, roads: usize) -> io::Re
     let fingerprint = r.bytes::<64>()?;
     if checksums.city != city_checksum
         || fingerprint.as_slice()
-            != crate::location::sha(&directory.join("streets.txt"))?.as_bytes()
+            != crate::location_compiler::sha(&directory.join("streets.txt"))?.as_bytes()
     {
         return Err(invalid("stale collision cache"));
     }
@@ -217,7 +216,7 @@ fn grid(out: &mut impl Write, cells: &Grid) -> io::Result<()> {
     }
     Ok(())
 }
-fn write(
+pub(crate) fn write(
     path: &Path,
     surfaces: &StreetSurface,
     paths: &RoadPaths,
@@ -279,37 +278,10 @@ fn write(
     out.sync_all()
 }
 
-pub(crate) fn bake(directory: &Path) -> crate::location::Result<()> {
-    let started = std::time::Instant::now();
-    let source = std::fs::read_to_string(directory.join("city.txt"))?;
-    let streets = std::fs::read_to_string(directory.join("streets.txt"))?;
-    let city = crate::city::City::parse(&source)?;
-    let checksums = SourceChecksums::new(&source, &streets);
-    let (surfaces, paths) = StreetSurface::load(&streets, &source, city.streets.len())?;
-    let fingerprint: String = Sha256::digest(streets.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if fingerprint != crate::location::sha(&directory.join("streets.txt"))? {
-        return Err(invalid("street source changed during collision bake").into());
-    }
-    let temporary = tempfile::NamedTempFile::new_in(directory)?;
-    write(temporary.path(), &surfaces, &paths, checksums, &fingerprint)?;
-    let bytes = temporary.as_file().metadata()?.len();
-    temporary.persist(directory.join("streets.bin"))?;
-    println!(
-        "Baked collision cache: {} triangles, {} curbs, {:.1} MiB; {:.2}s",
-        surfaces.triangles.len(),
-        surfaces.curbs.len(),
-        bytes as f64 / 1048576.0,
-        started.elapsed().as_secs_f64()
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::location_compiler::bake_collision as bake;
     fn fixture(root: &Path) -> String {
         let source = "CITY 2\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0\n";
         std::fs::write(root.join("city.txt"), source).unwrap();

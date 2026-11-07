@@ -155,7 +155,18 @@ pub fn city_layer_spooled(
         ..Builder::default()
     };
     if layer == 0 {
-        city_scene::ground_mesh(&mut b, city);
+        let manifest = serde_json::from_slice(&std::fs::read(directory.join("manifest.json"))?)?;
+        let boundary = crate::location_compiler::boundary::Boundary::from_manifest(&manifest)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let boundary = if let Some(boundary) = boundary {
+            let origin = city
+                .geographic_origin()
+                .ok_or_else(|| std::io::Error::other("boundary needs a geographic origin"))?;
+            Some(boundary.local(origin))
+        } else {
+            None
+        };
+        city_scene::ground_mesh(&mut b, city, boundary.as_ref());
     } else {
         city_scene::buildings(&mut b, city, layer == 1)?;
     }

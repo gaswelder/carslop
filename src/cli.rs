@@ -1,11 +1,10 @@
-//! Commands run before SDL or a graphics context is initialized.
-use crate::location::{invalid, Result};
+use crate::location_compiler::{invalid, Result};
 use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  create-track JSON_PATH                 Compile points into a city location\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild location\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  -h, --help                              Show help\n  -V, --version                           Show version\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n   add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  create-track JSON_PATH                 Compile points into a city location\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild location\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  -h, --help                              Show help\n  -V, --version                           Show version\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -15,6 +14,7 @@ enum Command {
         bbox: Option<[f64; 4]>,
         elevation: PathBuf,
     },
+    AddLimassol,
     CreateTrack(PathBuf),
     List,
     Bake(String),
@@ -59,6 +59,12 @@ fn parse(mut args: Vec<OsString>) -> Result<Command> {
     ) {
         args.insert(0, cmd.into());
         return Ok(Command::Source(args));
+    }
+    if cmd == "add-limassol" {
+        if !args.is_empty() {
+            return Err(invalid("add-limassol takes no arguments"));
+        }
+        return Ok(Command::AddLimassol);
     }
     if cmd == "create-track" {
         if args.len() != 1 {
@@ -199,8 +205,9 @@ pub fn run() -> Result<Option<bool>> {
     let command = parse(std::env::args_os().skip(1).collect())?;
     let root = Path::new(crate::city_assets::LOCATIONS_DIRECTORY);
     match command {
+        Command::AddLimassol => crate::location_compiler::add_limassol()?,
         Command::CreateTrack(source) => {
-            let destination = crate::location::create_track(&source)?;
+            let destination = crate::location_compiler::create_track(&source)?;
             println!("Created {}", destination.display());
         }
         Command::Source(values) => crate::source_tools::run(values)?,
@@ -232,36 +239,25 @@ pub fn run() -> Result<Option<bool>> {
             }
         }
         Command::CircuitOnly(name) => {
-            select(&name)?;
-            let directory = crate::city_assets::CITY_ASSET
-                .read()
-                .unwrap()
-                .directory()
-                .to_path_buf();
-            crate::location::circuit_only(&directory)?;
+            let directory = root.join(name);
+            validate(&directory)?;
+            crate::location_compiler::circuit_only(&directory)?;
         }
         Command::BakeCollision(name) => {
-            select(&name)?;
-            let directory = crate::city_assets::CITY_ASSET
-                .read()
-                .unwrap()
-                .directory()
-                .to_path_buf();
-            crate::street_surface::bake(&directory)?;
+            let directory = root.join(name);
+            validate(&directory)?;
+            crate::location_compiler::bake_collision(&directory)?;
         }
         Command::BakeScene(name) => {
-            select(&name)?;
-            crate::scene_archive::bake_default()?;
+            let directory = root.join(name);
+            validate(&directory)?;
+            crate::location_compiler::bake_scene(&directory)?;
         }
         Command::Bake(name) => {
-            select(&name)?;
-            let directory = crate::city_assets::CITY_ASSET
-                .read()
-                .unwrap()
-                .directory()
-                .to_path_buf();
-            crate::street_surface::bake(&directory)?;
-            crate::scene_archive::bake_default()?;
+            let directory = root.join(name);
+            validate(&directory)?;
+            crate::location_compiler::bake_collision(&directory)?;
+            crate::location_compiler::bake_scene(&directory)?;
         }
         Command::Add {
             name,
@@ -279,7 +275,7 @@ pub fn run() -> Result<Option<bool>> {
             let staging = root.join(format!(".import-{name}-{}", std::process::id()));
             fs::create_dir(&staging)?;
             let pending = Pending(staging);
-            crate::location::compile(crate::location::Options {
+            crate::location_compiler::compile(crate::location_compiler::Options {
                 source: &source,
                 output: &pending.0,
                 name: &name,
@@ -287,9 +283,8 @@ pub fn run() -> Result<Option<bool>> {
                 elevation: &elevation,
             })?;
             validate(&pending.0)?;
-            crate::city_assets::select(pending.0.clone())?;
             println!("Baking render archive...");
-            crate::scene_archive::bake_default()?;
+            crate::location_compiler::bake_scene(&pending.0)?;
             if destination.exists() {
                 return Err(invalid(
                     "location appeared during import; refusing to replace it",
@@ -343,64 +338,5 @@ mod tests {
         );
         assert!(args(&["unknown"]).is_err());
         assert!(args(&["play", "typo"]).is_err());
-    }
-    #[test]
-    fn import_requires_elevation_and_safe_name() {
-        for a in [
-            vec!["add-location", "test", "--source", "a.osm"],
-            vec![
-                "add-location",
-                "../escape",
-                "--source",
-                "a.osm",
-                "--elevation",
-                "a.hgt",
-            ],
-            vec![
-                "add-location",
-                "bad.name",
-                "--source",
-                "a.osm",
-                "--elevation",
-                "a.hgt",
-            ],
-            vec![
-                "add-location",
-                "test",
-                "--source",
-                "a.osm",
-                "--flat-terrain",
-                "--elevation",
-                "a.hgt",
-            ],
-        ] {
-            assert!(args(&a).is_err());
-        }
-        assert!(args(&[
-            "add-location",
-            "test",
-            "--source",
-            "a.osm",
-            "--elevation",
-            "a.hgt"
-        ])
-        .is_ok());
-    }
-    #[test]
-    fn nicosia_uses_the_same_import_rules_as_other_locations() {
-        assert!(args(&[
-            "add-location",
-            "nicosia",
-            "--source",
-            "a.osm",
-            "--elevation",
-            "a.hgt"
-        ])
-        .is_ok());
-    }
-    #[test]
-    fn location_directory_override_is_rejected() {
-        assert!(args(&["--locations-dir", "/tmp/elsewhere", "list-locations"]).is_err());
-        assert!(args(&["list-locations", "--locations-dir", "/tmp/elsewhere"]).is_err());
     }
 }

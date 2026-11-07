@@ -342,6 +342,10 @@ pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
             .cloned()
             .collect::<Vec<_>>(),
     );
+    let asphalt = map
+        .boundary
+        .as_ref()
+        .map_or_else(|| asphalt.clone(), |b| asphalt.intersection(b));
     let inner = asphalt.buffer(-0.16);
     let gutter = asphalt.difference(&inner);
     let mut remaining = inner.clone();
@@ -511,6 +515,10 @@ pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
     println!("  Triangulating surfaces...");
     let mut counts = BTreeMap::new();
     for (style, geometry) in groups {
+        let geometry = map
+            .boundary
+            .as_ref()
+            .map_or_else(|| geometry.clone(), |b| geometry.intersection(b));
         let n = triangles(&mut file, &format!("t {style}"), &geometry)?;
         *counts.entry(style).or_insert(0) += n;
     }
@@ -537,9 +545,11 @@ pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
         }
     }
     file.flush()?;
-    json(
+    fs::write(
         &output.join("streets.json"),
-        serde_json::json!({"compiler":"native-rust-v1","road_area_m2":asphalt.unsigned_area(),"junction_fillets":patches.len(),"curb_segments":curbs,"surface_triangles":counts,"max_centreline_rounding_metres":0.6}),
+        serde_json::to_string_pretty(
+            &serde_json::json!({"compiler":"native-rust-v1","road_area_m2":asphalt.unsigned_area(),"junction_fillets":patches.len(),"curb_segments":curbs,"surface_triangles":counts,"max_centreline_rounding_metres":0.6}),
+        )? + "\n",
     )?;
     let text_crc = crc_file(&path)?;
     // Index the small input pieces, rather than a city-wide connected polygon.

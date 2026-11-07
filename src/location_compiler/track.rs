@@ -48,6 +48,7 @@ fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<
     let scenery = crate::scene::authored_scenery(track);
     let bounds = track.terrain_bounds();
     let map = Map {
+        boundary: None,
         // Authored locations have local coordinates, with no geographic origin.
         origin: [0.0; 2],
         bounds: [
@@ -138,22 +139,22 @@ fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<
             quick_xml::escape::escape(&track.name),
         ),
     )?;
-    json(
+    fs::write(
         &output.join("manifest.json"),
-        serde_json::json!({
+        serde_json::to_string_pretty(&serde_json::json!({
             "name": track.name, "compiler": "native-track-v1", "raceways_only": true,
             "source_file": "source.track.json", "source_sha256": sha(source)?,
             "bounds_metres": map.bounds, "coordinates": "local metres: X east, Y up, Z south",
             "statistics": {"nodes": count, "road_segments": count, "buildings": map.buildings.len(), "trees": scenery.trees.len()}
-        }),
+        }))? + "\n",
     )?;
     println!("Building stored scenery decorations...");
     crate::scene_archive::write(
         &output.join("decorations.pack"),
         crate::scene::authored_decorations(track),
     )?;
-    crate::street_surface::bake(output)?;
-    crate::scene_archive::bake_assets(&crate::city_assets::CityAsset::new(output.to_path_buf()))?;
+    crate::location_compiler::bake_collision(output)?;
+    crate::location_compiler::bake_scene(output)?;
     // Validate using the regular runtime loader before publishing the directory.
     let loaded = crate::city::City::load(&crate::city_assets::CityAsset::new(output.to_path_buf()))
         .map_err(invalid)?;
@@ -366,8 +367,8 @@ mod tests {
         }
         let before = sha(&output.join("scene.pack")).unwrap();
         fs::remove_file(output.join("source.track.json")).unwrap();
-        crate::street_surface::bake(&output).unwrap();
-        crate::scene_archive::bake_assets(&assets).unwrap();
+        crate::location_compiler::bake_collision(&output).unwrap();
+        crate::location_compiler::bake_scene(assets.directory()).unwrap();
         assert_eq!(sha(&output.join("scene.pack")).unwrap(), before);
         let archive = crate::scene_archive::Archive::open(&output.join("scene.pack")).unwrap();
         assert!(!archive.entries.is_empty());

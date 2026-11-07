@@ -71,7 +71,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
         .env("TEST_LOCATION_CACHE", &temp.0)
         .args([
             "--exact",
-            "location::tests::runtime_location_failure_and_eviction_probe",
+            "location_compiler::tests::runtime_location_failure_and_eviction_probe",
             "--nocapture",
         ])
         .output()

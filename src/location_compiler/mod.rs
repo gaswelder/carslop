@@ -1,11 +1,23 @@
 //! Offline location compiler. No subprocesses or Python runtime are used.
 #[cfg(test)]
 mod acceptance;
+mod add_limassol;
+mod bake_collision;
+mod bake_scene;
+pub(crate) mod boundary;
+mod download;
+mod imagery;
 mod osm;
 mod scenery;
+mod sources;
 mod surfaces;
 mod terrain;
 mod track;
+pub(crate) use add_limassol::add_limassol;
+pub(crate) use bake_collision::bake_collision;
+pub(crate) use bake_scene::bake_scene;
+pub(crate) use imagery::prepare_imagery;
+pub(crate) use sources::{extract_osmpbf, merge};
 pub use track::create_track;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -15,6 +27,32 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io, path::Path};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub type P = [f64; 2];
+
+/// Geographic bounds in degrees, with named latitude and longitude limits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BoundingBox {
+    pub south: f64,
+    pub west: f64,
+    pub north: f64,
+    pub east: f64,
+}
+impl BoundingBox {
+    pub fn is_valid(&self) -> bool {
+        self.to_array().iter().all(|v| v.is_finite())
+            && self.south < self.north
+            && self.west < self.east
+            && self.south >= -90.0
+            && self.north <= 90.0
+            && self.west >= -180.0
+            && self.east <= 180.0
+    }
+
+    /// Ordering used by the existing OSM extraction and compiler APIs.
+    pub fn to_array(self) -> [f64; 4] {
+        [self.south, self.west, self.north, self.east]
+    }
+}
+
 pub fn invalid(message: impl Into<String>) -> Box<dyn std::error::Error> {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
@@ -35,10 +73,6 @@ pub fn sha(path: &Path) -> io::Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
-}
-pub fn json(path: &Path, value: serde_json::Value) -> Result<()> {
-    fs::write(path, serde_json::to_string_pretty(&value)? + "\n")?;
-    Ok(())
 }
 pub fn add(a: P, b: P) -> P {
     [a[0] + b[0], a[1] + b[1]]
@@ -149,6 +183,7 @@ pub struct Building {
     pub points: Vec<P>,
 }
 pub struct Map {
+    pub boundary: Option<MultiPolygon<f64>>,
     pub origin: P,
     pub bounds: [f64; 4],
     pub nodes: Vec<P>,
@@ -167,6 +202,10 @@ impl Map {
             && p[0] <= self.bounds[2]
             && p[1] >= self.bounds[1]
             && p[1] <= self.bounds[3]
+            && self.boundary.as_ref().is_none_or(|b| {
+                use geo::Intersects;
+                b.intersects(&geo::Point::new(p[0], p[1]))
+            })
     }
 }
 pub struct Options<'a> {
@@ -177,7 +216,7 @@ pub struct Options<'a> {
     pub elevation: &'a Path,
 }
 pub fn compile(options: Options<'_>) -> Result<()> {
-    compile_filtered(options, false)
+    compile_filtered(options, false, None)
 }
 fn retain_raceways(source: &mut Source) -> Result<()> {
     if !source.ways.values().any(|w| w.tag("highway") == "raceway") {
@@ -188,13 +227,24 @@ fn retain_raceways(source: &mut Source) -> Result<()> {
         .retain(|_, w| matches!(w.tag("highway"), "" | "raceway"));
     Ok(())
 }
-fn compile_filtered(options: Options<'_>, circuit_only: bool) -> Result<()> {
+pub(crate) fn compile_boundary(options: Options<'_>, boundary: &boundary::Boundary) -> Result<()> {
+    compile_filtered(options, false, Some(boundary))
+}
+fn compile_filtered(
+    options: Options<'_>,
+    circuit_only: bool,
+    boundary: Option<&boundary::Boundary>,
+) -> Result<()> {
     println!("Reading OSM XML...");
     let mut source = osm::read(options.source)?;
     if circuit_only {
         retain_raceways(&mut source)?;
     }
-    let map = osm::compile(&source, options.bbox)?;
+    let map = if let Some(boundary) = boundary {
+        osm::compile_boundary(&source, options.bbox, Some(boundary))?
+    } else {
+        osm::compile(&source, options.bbox)?
+    };
     fs::create_dir_all(options.output.join("elevation"))?;
     let city = osm::write(&map, options.output)?;
     println!("Building streets ({} segments)...", map.roads.len());
@@ -221,18 +271,15 @@ fn compile_filtered(options: Options<'_>, circuit_only: bool) -> Result<()> {
         "copyright_url":"https://www.openstreetmap.org/copyright","compiler":"native-rust-v1",
         "statistics":{"nodes":map.nodes.len(),"road_segments":map.roads.len(),"buildings":map.buildings.len()}
     });
-    let provenance = options
-        .source
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("sources/manifest.json");
-    if provenance.is_file() {
-        manifest["source_snapshots"] = serde_json::from_str(&fs::read_to_string(provenance)?)?;
-        manifest["source_timestamp"] = "mixed snapshots; see source_snapshots".into();
+    if let Some(boundary) = boundary {
+        manifest["boundary"] = boundary.to_geojson();
     }
-    json(&options.output.join("manifest.json"), manifest)?;
+    fs::write(
+        &options.output.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
     println!("Baking collision data...");
-    crate::street_surface::bake(options.output)?;
+    crate::location_compiler::bake_collision(options.output)?;
     Ok(())
 }
 
@@ -256,6 +303,7 @@ pub fn circuit_only(path: &Path) -> Result<()> {
         .find(|p| p.to_string_lossy().ends_with(".hgt") || p.to_string_lossy().ends_with(".hgt.gz"))
         .ok_or_else(|| invalid("location has no preserved HGT elevation tile"))?;
     let bbox = serde_json::from_value(manifest["bbox_south_west_north_east"].clone())?;
+    let boundary = boundary::Boundary::from_manifest(&manifest)?;
     compile_filtered(
         Options {
             source: &path.join("source.osm"),
@@ -265,9 +313,9 @@ pub fn circuit_only(path: &Path) -> Result<()> {
             elevation: &elevation,
         },
         true,
+        boundary.as_ref(),
     )?;
-    crate::city_assets::select(output.clone())?;
-    crate::scene_archive::bake_default()?;
+    bake_scene(&output)?;
     fn copy_tree(from: &Path, to: &Path) -> Result<()> {
         fs::create_dir_all(to)?;
         for entry in fs::read_dir(from)? {

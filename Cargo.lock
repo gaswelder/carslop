@@ -973,6 +973,7 @@ dependencies = [
  "log",
  "osmpbf",
  "quick-xml",
+ "regex",
  "rstar",
  "sdl3",
  "serde_json",

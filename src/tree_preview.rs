@@ -1,5 +1,5 @@
 //! Experimental RGB vegetation/crown proposals for human review, not confirmed trees.
-use crate::location::{invalid, Result};
+use crate::location_compiler::{invalid, Result};
 use image::{Rgb, RgbImage};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
@@ -423,7 +423,7 @@ pub fn run(
     fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(
-            &json!({"candidate_count":candidates.len(),"map_filter_directory":city_data.map(|p|p.to_string_lossy()),"automatically_rejected_on_road":road_rejections,"automatically_rejected_on_building":building_rejections,"kept_after_map_filter":candidates.len()-road_rejections-building_rejections,"candidates_near_osm_trees":matches,"osm_trees_in_image":mapped.len(),"ground_metres_per_pixel":scale,"image":image_path.to_string_lossy(),"image_sha256":crate::location::sha(image_path)?,"export_metadata":v,"limitations":["Heuristic vegetation proposals, not a trained tree detector or measured accuracy.","Grass, shrubs, textured roofs and shadows can be false positives; dark, dry and overlapping trees can be missed.","Circles approximate visible canopy interiors, not measured crown outlines or trunk positions.","No heights or species inferred; no game assets modified."]}),
+            &json!({"candidate_count":candidates.len(),"map_filter_directory":city_data.map(|p|p.to_string_lossy()),"automatically_rejected_on_road":road_rejections,"automatically_rejected_on_building":building_rejections,"kept_after_map_filter":candidates.len()-road_rejections-building_rejections,"candidates_near_osm_trees":matches,"osm_trees_in_image":mapped.len(),"ground_metres_per_pixel":scale,"image":image_path.to_string_lossy(),"image_sha256":crate::location_compiler::sha(image_path)?,"export_metadata":v,"limitations":["Heuristic vegetation proposals, not a trained tree detector or measured accuracy.","Grass, shrubs, textured roofs and shadows can be false positives; dark, dry and overlapping trees can be missed.","Circles approximate visible canopy interiors, not measured crown outlines or trunk positions.","No heights or species inferred; no game assets modified."]}),
         )?,
     )?;
     let data = serde_json::to_string(&collection)?.replace('<', "\\u003c");

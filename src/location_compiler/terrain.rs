@@ -232,10 +232,13 @@ pub fn build(map: &Map, city: &str, source: &Path, output: &Path) -> Result<()> 
         fs::copy(attribution, output.join("elevation/source-attribution.md"))?;
     }
     let saved_tile = name.to_string_lossy();
-    json(
+    fs::write(
         &output.join("elevation/heightfield.json"),
-        serde_json::json!({"compiler":"native-rust-v1","source_tile":saved_tile,"source_sha256":sha(source)?,"source_tiles":source_tiles,"grid_dimensions":size,"grid_step_metres":step,"local_datum_metres_egm96":datum,"processing":"3x3 [1,2,1] native-post Gaussian, bilinear resampling; heights relative to location origin."}),
-    )
+        serde_json::to_string_pretty(
+            &serde_json::json!({"compiler":"native-rust-v1","source_tile":saved_tile,"source_sha256":sha(source)?,"source_tiles":source_tiles,"grid_dimensions":size,"grid_step_metres":step,"local_datum_metres_egm96":datum,"processing":"3x3 [1,2,1] native-post Gaussian, bilinear resampling; heights relative to location origin."}),
+        )? + "\n",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -243,7 +246,7 @@ mod tests {
     use super::*;
     #[test]
     fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
-        let temp = crate::location::tests::Temp::new();
+        let temp = crate::location_compiler::tests::Temp::new();
         for (x, offset) in [(6, 0), (7, 8)] {
             let values: Vec<u8> = (0..9)
                 .flat_map(|_| (0..9).flat_map(|c| (100_i16 + offset + c).to_be_bytes()))
@@ -251,6 +254,7 @@ mod tests {
             fs::write(temp.0.join(format!("N50E{x:03}.hgt")), values).unwrap();
         }
         let map = Map {
+            boundary: None,
             origin: [50.5, 7.0],
             bounds: [-100.0, -100.0, 100.0, 100.0],
             nodes: vec![],
@@ -269,7 +273,7 @@ mod tests {
     }
     #[test]
     fn hgt_endian_orientation_interpolation_and_voids() {
-        let temp = crate::location::tests::Temp::new();
+        let temp = crate::location_compiler::tests::Temp::new();
         let path = temp.0.join("N35E033.hgt");
         let mut samples: Vec<i16> = (0..9)
             .flat_map(|r| (0..9).map(move |c| 100 + r * 2 + c))

@@ -18,3 +18,6 @@ __pycache__/
 /data/locations/*
 !/data/locations/scenic.track.json
 /Screenshot From *.png
+
+# Import download cache
+/.cache/

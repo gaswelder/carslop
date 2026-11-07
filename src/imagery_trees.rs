@@ -1,5 +1,5 @@
 //! Compile accepted imagery proposals into an optional, repeatable tree supplement.
-use crate::location::{invalid, Result};
+use crate::location_compiler::{invalid, Result};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -142,7 +142,7 @@ pub fn import(candidates: &Path, directory: &Path) -> Result<()> {
             "no candidates remain after map and duplicate checks",
         ));
     }
-    let metadata = json!({"source":candidates.to_string_lossy(),"source_sha256":crate::location::sha(candidates)?,"count":trees.len(),"skipped_road_or_building":conflicts,"skipped_duplicates":duplicates,"skipped_outside_city":outside,"skipped_unaccepted":excluded_status,"sizes":"Artistic estimates from crown radius, not measured heights or species.","scope":"Only the supplied imagery coverage; not all Engomi.","trees":trees});
+    let metadata = json!({"source":candidates.to_string_lossy(),"source_sha256":crate::location_compiler::sha(candidates)?,"count":trees.len(),"skipped_road_or_building":conflicts,"skipped_duplicates":duplicates,"skipped_outside_city":outside,"skipped_unaccepted":excluded_status,"sizes":"Artistic estimates from crown radius, not measured heights or species.","scope":"Only the supplied imagery coverage; not all Engomi.","trees":trees});
     atomic(
         &directory.join("imagery-trees.json"),
         &serde_json::to_vec_pretty(&metadata)?,

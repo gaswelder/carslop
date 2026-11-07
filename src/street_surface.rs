@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 #[path = "street_surface_binary.rs"]
 mod binary;
-pub(crate) use binary::bake;
+pub(crate) use binary::write as write_binary;
 pub const COLORS: [[f32; 3]; 8] = [
     [0.18, 0.20, 0.22],
     [0.25, 0.26, 0.26],

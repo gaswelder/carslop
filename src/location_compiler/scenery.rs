@@ -42,7 +42,7 @@ fn style(e: &Element) -> Option<usize> {
     }
 }
 // Join split relation members by node identity, including reversed OSM ways.
-fn rings(mut parts: Vec<Vec<i64>>) -> Option<Vec<Vec<i64>>> {
+pub(super) fn rings(mut parts: Vec<Vec<i64>>) -> Option<Vec<Vec<i64>>> {
     let mut rings = vec![];
     while let Some(mut ring) = parts.pop() {
         while ring.first() != ring.last() {
@@ -68,12 +68,14 @@ pub fn build(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
     let mut groups: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
     let mut consumed = std::collections::BTreeSet::new();
     let mut incomplete = 0;
-    let crop = polygon(&[
-        [map.bounds[0], map.bounds[1]],
-        [map.bounds[2], map.bounds[1]],
-        [map.bounds[2], map.bounds[3]],
-        [map.bounds[0], map.bounds[3]],
-    ]);
+    let crop = map.boundary.clone().unwrap_or_else(|| {
+        MultiPolygon(vec![polygon(&[
+            [map.bounds[0], map.bounds[1]],
+            [map.bounds[2], map.bounds[1]],
+            [map.bounds[2], map.bounds[3]],
+            [map.bounds[0], map.bounds[3]],
+        ])])
+    });
     for relation in &source.relations {
         let Some(kind) = style(relation) else {
             continue;
@@ -188,9 +190,11 @@ pub fn build(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
         trees += 1;
     }
     file.flush()?;
-    json(
+    fs::write(
         &output.join("landscape.json"),
-        serde_json::json!({"compiler":"native-rust-v1","triangles":count,"trees":trees,"suppressed_conflicting_trees":suppressed,"incomplete_relations_skipped":incomplete,"area_m2_by_style":areas,"decisions":"Mapped areas layered below roads and buildings; trees retain mapped positions or are suppressed on conflicts."}),
+        serde_json::to_string_pretty(
+            &serde_json::json!({"compiler":"native-rust-v1","triangles":count,"trees":trees,"suppressed_conflicting_trees":suppressed,"incomplete_relations_skipped":incomplete,"area_m2_by_style":areas,"decisions":"Mapped areas layered below roads and buildings; trees retain mapped positions or are suppressed on conflicts."}),
+        )? + "\n",
     )?;
     println!("  Placing road controls...");
     furniture(source, map, s, city, output)
@@ -509,10 +513,13 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
         )?;
     }
     file.flush()?;
-    json(
+    fs::write(
         &output.join("furniture.json"),
-        serde_json::json!({"compiler":"native-rust-v1","features":unique.len(),"skipped_source_nodes":skipped,"signal_program":"Fictional 50-second alternating cycle; no real timing or traffic-rule enforcement."}),
-    )
+        serde_json::to_string_pretty(
+            &serde_json::json!({"compiler":"native-rust-v1","features":unique.len(),"skipped_source_nodes":skipped,"signal_program":"Fictional 50-second alternating cycle; no real timing or traffic-rule enforcement."}),
+        )? + "\n",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

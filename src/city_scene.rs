@@ -59,7 +59,7 @@ fn roof_triangles(polygon: &[[f32; 2]]) -> Vec<[usize; 3]> {
 
 #[cfg(test)]
 pub(super) fn build(b: &mut Builder, city: &City) {
-    ground_mesh(b, city);
+    ground_mesh(b, city, None);
     buildings(b, city, true).unwrap();
 }
 pub(super) fn buildings(b: &mut Builder, city: &City, detailed: bool) -> std::io::Result<()> {
@@ -69,11 +69,12 @@ pub(super) fn buildings(b: &mut Builder, city: &City, detailed: bool) -> std::io
     }
     Ok(())
 }
-pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
-    let field = city
-        .elevation
-        .as_ref()
-        .expect("city rendering requires elevation");
+fn terrain_mesh(
+    b: &mut Builder,
+    field: &crate::elevation::HeightField,
+    boundary: Option<&geo::MultiPolygon<f64>>,
+) {
+    use geo::{BooleanOps, Contains, Intersects, TriangulateEarcut};
     for row in 0..field.rows - 1 {
         for col in 0..field.columns - 1 {
             let mut p = [
@@ -85,6 +86,36 @@ pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
             for v in &mut p {
                 v[1] -= 0.02;
             }
+            if let Some(boundary) = boundary {
+                let cell =
+                    crate::location_compiler::polygon(&p.map(|v| [v[0] as f64, v[2] as f64]));
+                if !boundary.intersects(&cell) {
+                    continue;
+                }
+                if !boundary.contains(&cell) {
+                    // Preserve the height field's diagonal and its two planar faces.
+                    for indices in [[0, 1, 2], [0, 2, 3]] {
+                        let face = crate::location_compiler::polygon(
+                            &indices.map(|i| [p[i][0] as f64, p[i][2] as f64]),
+                        );
+                        for polygon in boundary.intersection(&face) {
+                            for triangle in polygon.earcut_triangles() {
+                                let points =
+                                    [triangle.v1(), triangle.v2(), triangle.v3()].map(|c| {
+                                        let x = c.x as f32;
+                                        let z = c.y as f32;
+                                        [x, field.height([x, z]) - 0.02, z]
+                                    });
+                                b.upward_quad(
+                                    [points[0], points[1], points[2], points[0]],
+                                    Surface::road([0.64, 0.63, 0.54]),
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             for t in [[0, 1, 2], [0, 2, 3]] {
                 b.upward_quad(
                     [p[t[0]], p[t[1]], p[t[2]], p[t[0]]],
@@ -93,6 +124,13 @@ pub(super) fn ground_mesh(b: &mut Builder, city: &City) {
             }
         }
     }
+}
+pub(super) fn ground_mesh(b: &mut Builder, city: &City, boundary: Option<&geo::MultiPolygon<f64>>) {
+    let field = city
+        .elevation
+        .as_ref()
+        .expect("city rendering requires elevation");
+    terrain_mesh(b, field, boundary);
     let ground_colors = [
         [0.39, 0.48, 0.25],
         [0.43, 0.53, 0.30],
@@ -620,6 +658,53 @@ mod tests {
     }
     fn small_city() -> City {
         City::parse("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
+    }
+
+    #[test]
+    fn administrative_terrain_preserves_holes_area_and_height_planes() {
+        use geo::{Area, BooleanOps, MultiPolygon};
+        let mut city = small_city();
+        city.elevation = Some(crate::elevation::HeightField::generate(
+            [[-8., -8.], [8., 8.]],
+            |p| p[0] * p[1] * 0.1,
+        ));
+        let shell =
+            crate::location_compiler::polygon(&[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]);
+        let hole = crate::location_compiler::polygon(&[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]);
+        let boundary = shell.difference(&hole);
+        let mut builder = Builder::default();
+        terrain_mesh(
+            &mut builder,
+            city.elevation.as_ref().unwrap(),
+            Some(&boundary),
+        );
+        let mut area = 0.;
+        for vertices in builder.vertices.as_chunks::<3>().0 {
+            let triangle = crate::location_compiler::polygon(
+                &vertices.map(|v| [v.position[0] as f64, v.position[2] as f64]),
+            );
+            area += triangle.unsigned_area();
+            assert!(
+                MultiPolygon(vec![triangle])
+                    .difference(&boundary)
+                    .unsigned_area()
+                    < 0.0001
+            );
+            for v in vertices {
+                assert!(
+                    (v.position[1]
+                        - city
+                            .elevation
+                            .as_ref()
+                            .unwrap()
+                            .height([v.position[0], v.position[2]])
+                        + 0.02)
+                        .abs()
+                        < 0.0001
+                );
+            }
+        }
+        assert!((area - boundary.unsigned_area()).abs() < 0.0001);
     }
 
     #[test]

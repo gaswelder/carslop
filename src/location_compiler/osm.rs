@@ -207,6 +207,14 @@ pub fn clip(a: P, b: P, bounds: [f64; 4]) -> Option<(P, P)> {
     Some((add(a, mul(d, lo)), add(a, mul(d, hi))))
 }
 pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
+    compile_boundary(source, bbox, None)
+}
+pub fn compile_boundary(
+    source: &Source,
+    bbox: Option<[f64; 4]>,
+    boundary: Option<&super::boundary::Boundary>,
+) -> Result<Map> {
+    use geo::{BooleanOps, Contains, MultiLineString};
     let bbox = bbox.or(source.bounds).unwrap_or_else(|| {
         let mut b = [90.0_f64, 180.0_f64, -90.0_f64, -180.0_f64];
         for e in source.nodes.values() {
@@ -235,6 +243,7 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
         ));
     }
     let mut map = Map {
+        boundary: None,
         origin,
         bounds: [0.0; 4],
         nodes: vec![],
@@ -244,6 +253,7 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
     let a = map.metres([bbox[0], bbox[1]]);
     let b = map.metres([bbox[2], bbox[3]]);
     map.bounds = [a[0], b[1], b[0], a[1]];
+    map.boundary = boundary.map(|b| b.local(map.origin));
     // Bound geometry and height-field allocations before processing an accidental country extract.
     if b[0] - a[0] > 80000.0 || a[1] - b[1] > 80000.0 {
         return Err(invalid(
@@ -339,38 +349,61 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
             let Some((a, b)) = clip(*a, *b, map.bounds) else {
                 continue;
             };
-            if dist(a, b) < 0.5 {
-                continue;
-            }
-            let mut ends = [0; 2];
-            for (i, p) in [a, b].iter().enumerate() {
-                let key = (
-                    (p[0] * 1000.0).round() as i64,
-                    (p[1] * 1000.0).round() as i64,
-                );
-                ends[i] = *positions.entry(key).or_insert_with(|| {
-                    let id = map.nodes.len();
-                    map.nodes
-                        .push([key.0 as f64 / 1000.0, key.1 as f64 / 1000.0]);
-                    id
-                });
-            }
-            map.roads.push(Road {
-                ends,
-                width,
-                direction,
-                way: way.id,
-                kind: if major.contains(&kind) {
-                    0
-                } else if matches!(kind, "service" | "living_street") {
-                    2
-                } else {
-                    1
+            let forward = sub(b, a);
+            let pieces = map.boundary.as_ref().map_or_else(
+                || vec![line(&[a, b])],
+                |boundary| {
+                    boundary
+                        .clip(&MultiLineString(vec![line(&[a, b])]), false)
+                        .0
                 },
-                lanes: (number(way.tag("lanes")).unwrap_or(if direction == 0 { 2.0 } else { 1.0 })
-                    as usize)
-                    .clamp(1, 6),
-            });
+            );
+            for piece in pieces {
+                for pair in piece.0.windows(2) {
+                    let (a, b) = ([pair[0].x, pair[0].y], [pair[1].x, pair[1].y]);
+                    // Preserve the original OSM direction after boolean line clipping.
+                    let (a, b) = if dot(sub(b, a), forward) < 0.0 {
+                        (b, a)
+                    } else {
+                        (a, b)
+                    };
+                    if dist(a, b) < 0.5 {
+                        continue;
+                    }
+                    let mut ends = [0; 2];
+                    for (i, p) in [a, b].iter().enumerate() {
+                        let key = (
+                            (p[0] * 1000.0).round() as i64,
+                            (p[1] * 1000.0).round() as i64,
+                        );
+                        ends[i] = *positions.entry(key).or_insert_with(|| {
+                            let id = map.nodes.len();
+                            map.nodes
+                                .push([key.0 as f64 / 1000.0, key.1 as f64 / 1000.0]);
+                            id
+                        });
+                    }
+                    map.roads.push(Road {
+                        ends,
+                        width,
+                        direction,
+                        way: way.id,
+                        kind: if major.contains(&kind) {
+                            0
+                        } else if matches!(kind, "service" | "living_street") {
+                            2
+                        } else {
+                            1
+                        },
+                        lanes: (number(way.tag("lanes")).unwrap_or(if direction == 0 {
+                            2.0
+                        } else {
+                            1.0
+                        }) as usize)
+                            .clamp(1, 6),
+                    });
+                }
+            }
         }
     }
     if map.roads.is_empty() {
@@ -425,6 +458,13 @@ pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
             .map(|(_, p)| *p)
             .collect();
         if points.len() < 3 || points.iter().any(|p| !map.contains(*p)) {
+            continue;
+        }
+        if map
+            .boundary
+            .as_ref()
+            .is_some_and(|b| !b.contains(&polygon(&points)))
+        {
             continue;
         }
         let area = points

@@ -1,9 +1,10 @@
 //! Resumable city-wide aerial preparation. Downloads are explicit; gameplay is offline.
+use super::{invalid, Result};
 use crate::{
     imagery_trees::atomic,
-    location::{invalid, Result},
     tree_preview::{proposals, Geo},
 };
+use geo::{Intersects, MapCoords};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -200,7 +201,7 @@ fn blank(im: &image::RgbImage, x: u32, y: u32) -> bool {
 fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Value> {
     let meta_path = work.join(format!("block-{}_{}.json", b.x, b.y));
     let image_file = image_path(work, b);
-    let hash = crate::location::sha(&image_file)?;
+    let hash = super::sha(&image_file)?;
     if meta_path.exists() {
         let value: Value = serde_json::from_slice(&fs::read(&meta_path)?)?;
         if value["image_sha256"] == hash
@@ -276,7 +277,7 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
     atomic(&meta_path, &serde_json::to_vec(&value)?)?;
     Ok(value)
 }
-pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
+pub(crate) fn prepare_imagery(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
     if limit == Some(0) {
         return Err(invalid("--limit-blocks must be positive"));
     }
@@ -301,13 +302,40 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
     {
         return Err(invalid("invalid city geographic bounds"));
     }
-    let all = blocks(bbox);
+    let boundary = super::boundary::Boundary::from_manifest(&manifest)?;
+    let local_boundary = boundary.as_ref().map(|b| b.local(origin));
+    let mercator_boundary = boundary.as_ref().map(|b| {
+        b.geometry.map_coords(|c| {
+            let p = mercator(c.x, c.y);
+            geo::Coord { x: p[0], y: p[1] }
+        })
+    });
+    let all: Vec<_> = blocks(bbox)
+        .into_iter()
+        .filter(|b| {
+            mercator_boundary.as_ref().is_none_or(|g| {
+                g.intersects(&geo::Rect::new(
+                    geo::Coord {
+                        x: b.extent[0],
+                        y: b.extent[1],
+                    },
+                    geo::Coord {
+                        x: b.extent[2],
+                        y: b.extent[3],
+                    },
+                ))
+            })
+        })
+        .collect();
     if all.is_empty() || all.len() > 2000 {
         return Err(invalid(
             "imagery job must contain 1..2000 blocks; crop the map",
         ));
     }
-    let plan = json!({"version":1,"source":SERVICE,"bbox":bbox,"origin":origin,"resolution_mercator":RES,"core":CORE,"padding":PAD,"tile_size":TILE,"gutter":GUTTER,"blocks":all.len(),"city_sha256":crate::location::sha(&city_dir.join("city.txt"))?});
+    let mut plan = json!({"version":1,"source":SERVICE,"bbox":bbox,"origin":origin,"resolution_mercator":RES,"core":CORE,"padding":PAD,"tile_size":TILE,"gutter":GUTTER,"blocks":all.len(),"city_sha256":super::sha(&city_dir.join("city.txt"))?});
+    if boundary.is_some() {
+        plan["boundary"] = manifest["boundary"].clone();
+    }
     let plan_path = work.join("plan.json");
     if plan_path.exists() {
         let previous: Value = serde_json::from_slice(&fs::read(&plan_path)?)?;
@@ -331,7 +359,7 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
         return Ok(());
     }
     download(work, &all)?;
-    let plan_hash = crate::location::sha(&plan_path)?;
+    let plan_hash = super::sha(&plan_path)?;
     let installed = city_dir.join("aerial/source.json");
     let installed_plan = fs::read(&installed)
         .ok()
@@ -361,6 +389,20 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
             let bounds = t["bounds"]
                 .as_array()
                 .ok_or_else(|| invalid("missing tile bounds"))?;
+            if local_boundary.as_ref().is_some_and(|g| {
+                !g.intersects(&geo::Rect::new(
+                    geo::Coord {
+                        x: bounds[0].as_f64().unwrap(),
+                        y: bounds[1].as_f64().unwrap(),
+                    },
+                    geo::Coord {
+                        x: bounds[2].as_f64().unwrap(),
+                        y: bounds[3].as_f64().unwrap(),
+                    },
+                ))
+            }) {
+                continue;
+            }
             catalog.push_str(&format!(
                 "tile {:.6} {:.6} {:.6} {:.6} {} {:08x}\n",
                 bounds[0].as_f64().unwrap(),
@@ -434,7 +476,11 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
     // Preserve the already approved pilot; new imagery proposals are deduplicated around it.
     let mut append = |p: [f64; 2], radius: f64, height: f64| {
         let p = p.map(|v| (v * 1000.).round() / 1000.);
-        if !inside(p) {
+        if !inside(p)
+            || local_boundary
+                .as_ref()
+                .is_some_and(|b| !b.intersects(&geo::Point::new(p[0], p[1])))
+        {
             outside += 1;
             return;
         }
@@ -472,7 +518,7 @@ pub fn run(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
         let radius = d[2].clamp(0.7, 4.5);
         append(local(origin, [d[0], d[1]]), radius, radius * 2.8);
     }
-    if plan["city_sha256"] != crate::location::sha(&city_dir.join("city.txt"))? {
+    if plan["city_sha256"] != super::sha(&city_dir.join("city.txt"))? {
         return Err(invalid(
             "city changed during imagery preparation; choose a fresh work directory",
         ));
