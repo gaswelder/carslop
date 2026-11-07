@@ -327,7 +327,12 @@ mod tests {
         let source = fixture(root);
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
         let (expected, paths) = StreetSurface::load(&streets, &source, 1).unwrap();
-        bake(root).unwrap();
+        bake(
+            &root.join("city.txt"),
+            &root.join("streets.txt"),
+            &root.join("streets.bin"),
+        )
+        .unwrap();
         let (actual, actual_paths, sums) = load(root, super::super::crc32(&source), 1).unwrap();
         compare(&expected, &actual);
         assert_eq!(paths, actual_paths);
@@ -335,10 +340,29 @@ mod tests {
         let changed = streets.replace("10 1", "10 2");
         std::fs::write(root.join("streets.txt"), &changed).unwrap();
         assert!(StreetSurface::load_city(root, &source, 1).is_err());
-        bake(root).unwrap();
+        bake(
+            &root.join("city.txt"),
+            &root.join("streets.txt"),
+            &root.join("streets.bin"),
+        )
+        .unwrap();
         let (_, updated_paths, sums) = StreetSurface::load_city(root, &source, 1).unwrap();
         assert_eq!(updated_paths[0][1], [10.0, 0.0, 2.0]);
         assert_eq!(sums.streets, super::super::crc32(&changed));
+
+        let city_path = root.join("map.data");
+        let streets_path = root.join("roads.data");
+        let output_directory = root.join("collision");
+        std::fs::create_dir(&output_directory).unwrap();
+        let output_path = output_directory.join("cache.bin");
+        std::fs::rename(root.join("city.txt"), &city_path).unwrap();
+        std::fs::rename(root.join("streets.txt"), &streets_path).unwrap();
+        bake(&city_path, &streets_path, &output_path).unwrap();
+        assert_eq!(
+            std::fs::read(output_path).unwrap(),
+            std::fs::read(root.join("streets.bin")).unwrap()
+        );
+        assert_eq!(std::fs::read_dir(output_directory).unwrap().count(), 1);
     }
     #[test]
     fn required_collision_data_rejects_missing_stale_or_damaged_assets() {
@@ -347,7 +371,12 @@ mod tests {
         let source = fixture(root);
         let error = StreetSurface::load_city(root, &source, 1).err().unwrap();
         assert!(error.contains("bake-collision --location"));
-        bake(root).unwrap();
+        bake(
+            &root.join("city.txt"),
+            &root.join("streets.txt"),
+            &root.join("streets.bin"),
+        )
+        .unwrap();
         let path = root.join("streets.bin");
         let original = std::fs::read(&path).unwrap();
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
@@ -368,7 +397,12 @@ mod tests {
         let updated = streets.replace("p 0 3 0 0 10 1 20 0", "p 0 3 0 0 10 2 20 0");
         std::fs::write(root.join("streets.txt"), &updated).unwrap();
         assert!(StreetSurface::load_city(root, &source, 1).is_err());
-        bake(root).unwrap();
+        bake(
+            &root.join("city.txt"),
+            &root.join("streets.txt"),
+            &root.join("streets.bin"),
+        )
+        .unwrap();
         let (_, paths, _) = StreetSurface::load_city(root, &source, 1).unwrap();
         assert_eq!(paths[0][1], [10.0, 0.0, 2.0]);
     }

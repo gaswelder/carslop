@@ -228,8 +228,14 @@ mod tests {
         }
         let output = temp.path().join("compiled");
         fs::create_dir(&output).unwrap();
-        let city = super::super::osm::write(&map, &output).unwrap();
-        let surfaces = super::super::surfaces::build(&map, &city, &output).unwrap();
+        let city = super::super::osm::write(&map, &output.join("city.txt")).unwrap();
+        let surfaces = super::super::surfaces::build(
+            &map,
+            &city,
+            &output.join("streets.txt"),
+            &output.join("streets.json"),
+        )
+        .unwrap();
         let outside = surfaces.asphalt.difference(map.boundary.as_ref().unwrap());
         assert!(outside.unsigned_area() < 0.001);
     }

@@ -1,13 +1,13 @@
-//! OSM source extraction and merging for the location compiler.
+//! OSM PBF source extraction for the location compiler.
 use super::{invalid, BoundingBox, Result};
 use quick_xml::{
     events::{BytesEnd, BytesStart, Event},
-    Reader, Writer,
+    Writer,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufWriter, Write},
     path::Path,
 };
 
@@ -19,124 +19,6 @@ struct Object {
     xml: Vec<u8>,
     refs: Vec<i64>,
     members: Vec<(String, i64)>,
-}
-fn xml_objects(path: &Path) -> Result<Vec<Object>> {
-    let file = fs::File::open(path)?;
-    let input: Box<dyn Read> = if path.extension().is_some_and(|e| e == "gz") {
-        Box::new(flate2::read::GzDecoder::new(file))
-    } else {
-        Box::new(file)
-    };
-    let mut r = Reader::from_reader(BufReader::new(input));
-    let mut buf = Vec::new();
-    let mut objects = Vec::new();
-    let mut current: Option<(Object, Writer<Vec<u8>>)> = None;
-    let mut root = false;
-    let mut closed = false;
-    loop {
-        let event = r.read_event_into(&mut buf)?.into_owned();
-        match &event {
-            Event::Start(e) | Event::Empty(e) => {
-                let name = e.name().as_ref().to_owned();
-                if name == "remark" {
-                    return Err(invalid("incomplete Overpass snapshot"));
-                }
-                if name == "osm" {
-                    if root {
-                        return Err(invalid("multiple OSM roots"));
-                    }
-                    root = true;
-                    if matches!(event, Event::Empty(_)) {
-                        closed = true;
-                    }
-                }
-                if ["node", "way", "relation"].contains(&name.as_str()) {
-                    if current.is_some() {
-                        return Err(invalid("nested OSM object"));
-                    }
-                    let mut attrs = BTreeMap::new();
-                    for a in e.attributes() {
-                        let a = a?;
-                        attrs.insert(
-                            a.key.as_ref().to_owned(),
-                            a.normalized_value(quick_xml::XmlVersion::Implicit1_0)?
-                                .into_owned(),
-                        );
-                    }
-                    let o = Object {
-                        kind: name,
-                        id: attrs
-                            .get("id")
-                            .ok_or_else(|| invalid("missing object id"))?
-                            .parse()?,
-                        version: attrs.get("version").map(|s| s.parse()).transpose()?,
-                        xml: vec![],
-                        refs: vec![],
-                        members: vec![],
-                    };
-                    current = Some((o, Writer::new(Vec::new())));
-                }
-            }
-            Event::End(e) if e.name().as_ref() == "osm" => closed = true,
-            Event::Eof => break,
-            _ => {}
-        }
-        if let Some((o, w)) = &mut current {
-            w.write_event(event.clone())?;
-            let done = match &event {
-                Event::Empty(e) => e.name().as_ref() == o.kind.as_str(),
-                Event::End(e) => e.name().as_ref() == o.kind.as_str(),
-                _ => false,
-            };
-            if done {
-                let (mut o, w) = current.take().unwrap();
-                o.xml = w.into_inner();
-                objects.push(o);
-            }
-        }
-        buf.clear();
-    }
-    if !root || !closed || current.is_some() {
-        return Err(invalid("incomplete OSM XML"));
-    }
-    Ok(objects)
-}
-fn write_objects(output: &Path, objects: impl IntoIterator<Item = Object>) -> Result<()> {
-    let mut out = BufWriter::new(fs::File::create(output)?);
-    writeln!(out,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<osm version=\"0.6\" generator=\"nfs5like offline source tools\">\n<note>OpenStreetMap contributors, ODbL. See sources/manifest.json.</note>")?;
-    for o in objects {
-        out.write_all(&o.xml)?;
-        out.write_all(b"\n")?;
-    }
-    writeln!(out, "</osm>")?;
-    out.flush()?;
-    Ok(())
-}
-pub fn merge(original: &Path, extension: &Path, output: &Path) -> Result<()> {
-    if output == original || output == extension {
-        return Err(invalid("output must differ from inputs"));
-    }
-    let mut items = BTreeMap::new();
-    for o in xml_objects(extension)?
-        .into_iter()
-        .chain(xml_objects(original)?)
-    {
-        let key = (
-            match o.kind.as_str() {
-                "node" => 0,
-                "way" => 1,
-                _ => 2,
-            },
-            o.id,
-        );
-        let replace = items.get(&key).is_none_or(|p: &Object| {
-            p.version.is_none() || o.version.is_some_and(|v| Some(v) >= p.version)
-        });
-        if replace {
-            items.insert(key, o);
-        }
-    }
-    write_objects(output, items.into_values())
 }
 fn pbf_object(e: osmpbf::Element<'_>) -> Result<Object> {
     use osmpbf::{Element, RelMemberType};
@@ -387,38 +269,6 @@ pub fn extract_osmpbf(source: &Path, output: &Path, bounds: BoundingBox) -> Resu
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn merge_versions_gzip_tags_and_incomplete_inputs() {
-        let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join("old.gz");
-        let ext = dir.path().join("extension.osm");
-        let out = dir.path().join("out.osm");
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(br#"<osm><node id="1" version="2" lat="35.16" lon="33.32"><tag k="name" v="A &amp; B"/></node><node id="2" version="1"/></osm>"#).unwrap();
-        fs::write(&old, gz.finish().unwrap()).unwrap();
-        fs::write(&ext,br#"<osm><node id="1" lat="35.17"/><node id="2" version="3"/><way id="10"><nd ref="1"/></way></osm>"#).unwrap();
-        merge(&old, &ext, &out).unwrap();
-        let objects = xml_objects(&out).unwrap();
-        assert_eq!(objects.len(), 3);
-        assert_eq!(objects[0].version, Some(2));
-        assert_eq!(objects[1].version, Some(3));
-        assert!(String::from_utf8(objects[0].xml.clone())
-            .unwrap()
-            .contains("A &amp; B"));
-        let first = fs::read(&out).unwrap();
-        merge(&old, &ext, &out).unwrap();
-        assert_eq!(first, fs::read(&out).unwrap());
-        fs::write(&ext, "<osm><remark>timeout</remark></osm>").unwrap();
-        assert!(merge(&old, &ext, &out).is_err());
-        assert_eq!(first, fs::read(&out).unwrap());
-        fs::write(&ext, "<osm><node id=\"1\"/>").unwrap();
-        assert!(xml_objects(&ext).is_err());
-    }
-}
-
-#[cfg(test)]
 mod pbf_tests {
     use super::*;
     fn var(mut n: u64) -> Vec<u8> {
@@ -507,26 +357,20 @@ mod pbf_tests {
             },
         )
         .unwrap();
-        let o = xml_objects(&output).unwrap();
+        let source = crate::location_compiler::osm::read(&output).unwrap();
         assert_eq!(
-            o.iter()
-                .filter(|o| o.kind == "node")
-                .map(|o| o.id)
-                .collect::<Vec<_>>(),
+            source.nodes.keys().copied().collect::<Vec<_>>(),
             vec![1, 2, 3, 4]
         );
         assert_eq!(
-            o.iter()
-                .filter(|o| o.kind == "way")
-                .map(|o| o.id)
-                .collect::<Vec<_>>(),
+            source.ways.keys().copied().collect::<Vec<_>>(),
             vec![10, 11]
         );
-        assert_eq!(o.last().unwrap().id, 20);
-        assert_eq!(o[0].version, Some(7));
-        assert!(String::from_utf8(o[0].xml.clone())
-            .unwrap()
-            .contains("A &amp; B"));
+        assert_eq!(source.relations[0].id, 20);
+        assert_eq!(source.nodes[&1].tag("name"), "A & B");
+        let xml = fs::read_to_string(&output).unwrap();
+        assert!(xml.contains("version=\"7\""));
+        assert!(xml.contains("A &amp; B"));
         let report: serde_json::Value =
             serde_json::from_slice(&fs::read(output.with_extension("json")).unwrap()).unwrap();
         assert_eq!(report["nodes"], 4);

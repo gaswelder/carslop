@@ -1,4 +1,153 @@
 use super::*;
+
+struct FixtureOptions<'a> {
+    source: &'a Path,
+    paths: CompilePaths<'a>,
+    name: &'a str,
+    bbox: Option<[f64; 4]>,
+    elevation: &'a Path,
+}
+struct CompilePaths<'a> {
+    city: &'a Path,
+    streets: &'a Path,
+    streets_report: &'a Path,
+    landscape: &'a Path,
+    landscape_report: &'a Path,
+    furniture: &'a Path,
+    furniture_report: &'a Path,
+    heightfield: &'a Path,
+    elevation_tiles_directory: &'a Path,
+    elevation_attribution_source: &'a Path,
+    elevation_attribution: &'a Path,
+    source_copy: &'a Path,
+    manifest: &'a Path,
+    collision: &'a Path,
+}
+fn compile_fixture(
+    options: FixtureOptions<'_>,
+    boundary: Option<&boundary::Boundary>,
+) -> Result<()> {
+    println!("Reading OSM XML...");
+    let source = osm::read(options.source)?;
+    let map = if let Some(boundary) = boundary {
+        osm::compile_boundary(&source, options.bbox, Some(boundary))?
+    } else {
+        osm::compile(&source, options.bbox)?
+    };
+    let paths = &options.paths;
+    for path in [
+        paths.city,
+        paths.streets,
+        paths.streets_report,
+        paths.landscape,
+        paths.landscape_report,
+        paths.furniture,
+        paths.furniture_report,
+        paths.heightfield,
+        paths.elevation_attribution,
+        paths.source_copy,
+        paths.manifest,
+        paths.collision,
+    ] {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::create_dir_all(paths.elevation_tiles_directory)?;
+    let city = osm::write(&map, paths.city)?;
+    println!("Building streets ({} segments)...", map.roads.len());
+    let surfaces = surfaces::build(&map, &city, paths.streets, paths.streets_report)?;
+    println!("Building mapped landscape and roadside controls...");
+    scenery::build(
+        &source,
+        &map,
+        &surfaces,
+        &city,
+        paths.landscape,
+        paths.landscape_report,
+        paths.furniture,
+        paths.furniture_report,
+    )?;
+    println!("Building elevation...");
+    terrain::build(
+        &map,
+        &city,
+        options.elevation,
+        paths.heightfield,
+        paths.elevation_tiles_directory,
+        paths.elevation_attribution_source,
+        paths.elevation_attribution,
+    )?;
+    fs::copy(options.source, paths.source_copy)?;
+    let south_west = [
+        map.origin[0] - map.bounds[3].to_degrees() / 6371000.0,
+        map.origin[1] + map.bounds[0].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
+    ];
+    let north_east = [
+        map.origin[0] - map.bounds[1].to_degrees() / 6371000.0,
+        map.origin[1] + map.bounds[2].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
+    ];
+    let mut manifest = serde_json::json!({
+        "name":options.name,"raceways_only":false,"origin_lat_lon":map.origin,"bounds_metres":map.bounds,
+        "bbox_south_west_north_east":[south_west[0],south_west[1],north_east[0],north_east[1]],
+        "source_timestamp":source.timestamp,"source_file":paths.source_copy.file_name().ok_or_else(|| invalid("missing source copy filename"))?.to_string_lossy(),"source_sha256":sha(options.source)?,
+        "package_sha256":sha(paths.city)?,
+        "attribution":"© OpenStreetMap contributors","license":"ODbL-1.0",
+        "copyright_url":"https://www.openstreetmap.org/copyright","compiler":"native-rust-v1",
+        "statistics":{"nodes":map.nodes.len(),"road_segments":map.roads.len(),"buildings":map.buildings.len()}
+    });
+    if let Some(boundary) = boundary {
+        manifest["boundary"] = boundary.to_geojson();
+    }
+    fs::write(
+        paths.manifest,
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
+    println!("Baking collision data...");
+    crate::location_compiler::bake_collision(paths.city, paths.streets, paths.collision)?;
+    Ok(())
+}
+
+struct TestOptions<'a> {
+    source: &'a Path,
+    output: &'a Path,
+    name: &'a str,
+    bbox: Option<[f64; 4]>,
+    elevation: &'a Path,
+}
+
+fn compile(options: TestOptions<'_>) -> Result<()> {
+    compile_fixture(
+        FixtureOptions {
+            source: options.source,
+            name: options.name,
+            bbox: options.bbox,
+            elevation: options.elevation,
+            paths: CompilePaths {
+                city: &options.output.join("city.txt"),
+                streets: &options.output.join("streets.txt"),
+                streets_report: &options.output.join("streets.json"),
+                landscape: &options.output.join("landscape.txt"),
+                landscape_report: &options.output.join("landscape.json"),
+                furniture: &options.output.join("furniture.txt"),
+                furniture_report: &options.output.join("furniture.json"),
+                heightfield: &options.output.join("elevation/heightfield.txt"),
+                elevation_tiles_directory: &options.output.join("elevation"),
+                elevation_attribution_source: &options
+                    .elevation
+                    .parent()
+                    .unwrap()
+                    .join("README.md"),
+                elevation_attribution: &options.output.join("elevation/source-attribution.md"),
+                source_copy: &options.output.join("source.osm"),
+                manifest: &options.output.join("manifest.json"),
+                collision: &options.output.join("streets.bin"),
+            },
+        },
+        None,
+    )
+}
+
 pub struct Temp(pub std::path::PathBuf);
 impl Temp {
     pub fn new() -> Self {
@@ -35,6 +184,80 @@ const FIXTURE: &str = r#"<osm version="0.6" timestamp="2026-01-01T00:00:00Z">
 <way id="105"><nd ref="5"/><nd ref="6"/><nd ref="7"/><nd ref="8"/><nd ref="5"/><tag k="leisure" v="park"/></way>
 </osm>"#;
 #[test]
+fn compiler_writes_assets_to_explicit_paths() {
+    let temp = Temp::new();
+    let root = &temp.0;
+    let source = root.join("input.osm");
+    let elevation = root.join("N35E033.hgt");
+    let attribution = root.join("provider.txt");
+    fs::write(&source, FIXTURE).unwrap();
+    fs::write(&elevation, vec![0; 65 * 65 * 2]).unwrap();
+    fs::write(&attribution, "Elevation provider").unwrap();
+    let paths = CompilePaths {
+        city: &root.join("geometry/map.data"),
+        streets: &root.join("roads/surfaces.data"),
+        streets_report: &root.join("reports/roads.json"),
+        landscape: &root.join("vegetation/ground.data"),
+        landscape_report: &root.join("reports/ground.json"),
+        furniture: &root.join("controls/objects.data"),
+        furniture_report: &root.join("reports/objects.json"),
+        heightfield: &root.join("terrain/grid.data"),
+        elevation_tiles_directory: &root.join("preserved-tiles"),
+        elevation_attribution_source: &attribution,
+        elevation_attribution: &root.join("credits/elevation.txt"),
+        source_copy: &root.join("provenance/snapshot.osm"),
+        manifest: &root.join("reports/location.json"),
+        collision: &root.join("physics/roads.cache"),
+    };
+    let manifest_path = paths.manifest;
+    let source_copy = paths.source_copy;
+    let attribution_copy = paths.elevation_attribution;
+    let outputs = [
+        paths.city,
+        paths.streets,
+        paths.streets_report,
+        paths.landscape,
+        paths.landscape_report,
+        paths.furniture,
+        paths.furniture_report,
+        paths.heightfield,
+        paths.elevation_attribution,
+        paths.source_copy,
+        paths.manifest,
+        paths.collision,
+    ];
+    compile_fixture(
+        FixtureOptions {
+            source: &source,
+            paths,
+            name: "explicit-paths",
+            bbox: None,
+            elevation: &elevation,
+        },
+        None,
+    )
+    .unwrap();
+    for path in outputs {
+        assert!(path.is_file(), "{}", path.display());
+    }
+    let city = fs::read_to_string(outputs[0]).unwrap();
+    let streets = fs::read_to_string(outputs[1]).unwrap();
+    let parsed = crate::city::City::parse(&city).unwrap();
+    crate::street_surface::StreetSurface::load(&streets, &city, parsed.streets.len()).unwrap();
+    let manifest: Value = serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["source_file"], "snapshot.osm");
+    assert_eq!(manifest["package_sha256"], sha(outputs[0]).unwrap());
+    assert_eq!(fs::read(source_copy).unwrap(), fs::read(source).unwrap());
+    assert_eq!(
+        fs::read_to_string(attribution_copy).unwrap(),
+        "Elevation provider"
+    );
+    assert!(root.join("preserved-tiles/N35E033.hgt").is_file());
+    assert!(!root.join("city.txt").exists());
+    assert!(!root.join("elevation").exists());
+}
+
+#[test]
 fn native_import_loads_in_game_and_preserves_topology() {
     let temp = Temp::new();
     let tile = temp.0.join("N35E033.hgt");
@@ -48,7 +271,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
     let source = temp.0.join("fixture.osm");
     fs::write(&source, FIXTURE).unwrap();
     let output = temp.0.join("compiled");
-    compile(Options {
+    compile(TestOptions {
         source: &source,
         output: &output,
         name: "fixture",
@@ -57,7 +280,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
     })
     .unwrap();
     let second = temp.0.join("second");
-    compile(Options {
+    compile(TestOptions {
         source: &source,
         output: &second,
         name: "second",
@@ -113,7 +336,7 @@ fn native_import_loads_in_game_and_preserves_topology() {
     assert_eq!(elevation.height([0.0, 0.0]), 0.0);
     assert!(elevation.height([100.0, 0.0]).abs() > 0.01);
     let second = temp.0.join("second");
-    compile(Options {
+    compile(TestOptions {
         source: &source,
         output: &second,
         name: "fixture",
@@ -204,7 +427,7 @@ fn mapped_multipolygon_holes_stay_empty() {
 </osm>"#;
     fs::write(&source, FIXTURE.replace("</osm>", extra)).unwrap();
     let output = temp.0.join("out");
-    compile(Options {
+    compile(TestOptions {
         source: &source,
         output: &output,
         name: "holes",
@@ -290,33 +513,4 @@ fn runtime_location_failure_and_eviction_probe() {
         &second,
         &crate::track::TrackId::Engomi.try_track().unwrap()
     ));
-}
-
-#[test]
-fn circuit_filter_excludes_public_and_service_roads_but_preserves_scenery() {
-    let temp = Temp::new();
-    let path = temp.0.join("source.osm");
-    fs::write(&path, FIXTURE.replace("</osm>", "<way id=\"999\"><nd ref=\"1\"/><nd ref=\"2\"/><tag k=\"highway\" v=\"raceway\"/></way></osm>")).unwrap();
-    let mut source = osm::read(&path).unwrap();
-    let buildings = source
-        .ways
-        .values()
-        .filter(|w| !w.tag("building").is_empty())
-        .count();
-    retain_raceways(&mut source).unwrap();
-    assert!(source
-        .ways
-        .values()
-        .all(|w| matches!(w.tag("highway"), "" | "raceway")));
-    assert_eq!(
-        source
-            .ways
-            .values()
-            .filter(|w| !w.tag("building").is_empty())
-            .count(),
-        buildings
-    );
-    assert!(source.ways.contains_key(&999));
-    source.ways.remove(&999);
-    assert!(retain_raceways(&mut source).is_err());
 }

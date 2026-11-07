@@ -12,7 +12,13 @@ pub fn create_track(source: &Path) -> Result<PathBuf> {
         .and_then(|s| s.to_str())
         .ok_or_else(|| invalid("track JSON must have a UTF-8 filename"))?;
     let name = stem.strip_suffix(".track").unwrap_or(stem);
-    if !crate::cli::valid_name(name) {
+    if name.is_empty()
+        || name.len() > 64
+        || !name.as_bytes()[0].is_ascii_alphanumeric()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return Err(invalid("track filename must contain a valid location name"));
     }
     let root = Path::new(crate::city_assets::LOCATIONS_DIRECTORY);
@@ -153,11 +159,21 @@ fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<
         &output.join("decorations.pack"),
         crate::scene::authored_decorations(track),
     )?;
-    crate::location_compiler::bake_collision(output)?;
-    crate::location_compiler::bake_scene(output)?;
+    crate::location_compiler::bake_collision(
+        &output.join("city.txt"),
+        &output.join("streets.txt"),
+        &output.join("streets.bin"),
+    )?;
     // Validate using the regular runtime loader before publishing the directory.
     let loaded = crate::city::City::load(&crate::city_assets::CityAsset::new(output.to_path_buf()))
         .map_err(invalid)?;
+    crate::location_compiler::bake_scene(
+        &loaded,
+        &output.join("manifest.json"),
+        &output.join("decorations.pack"),
+        &output.join("scene.pack"),
+        output,
+    )?;
     if loaded.streets.len() != count {
         return Err(invalid("compiled road count mismatch"));
     }
@@ -367,12 +383,43 @@ mod tests {
         }
         let before = sha(&output.join("scene.pack")).unwrap();
         fs::remove_file(output.join("source.track.json")).unwrap();
-        crate::location_compiler::bake_collision(&output).unwrap();
-        crate::location_compiler::bake_scene(assets.directory()).unwrap();
+        crate::location_compiler::bake_collision(
+            &output.join("city.txt"),
+            &output.join("streets.txt"),
+            &output.join("streets.bin"),
+        )
+        .unwrap();
+        crate::location_compiler::bake_scene(
+            &city,
+            &output.join("manifest.json"),
+            &output.join("decorations.pack"),
+            &output.join("scene.pack"),
+            &output,
+        )
+        .unwrap();
         assert_eq!(sha(&output.join("scene.pack")).unwrap(), before);
         let archive = crate::scene_archive::Archive::open(&output.join("scene.pack")).unwrap();
         assert!(!archive.entries.is_empty());
         assert!(assets.get_manifest().unwrap().get("scenery").is_none());
+
+        // Inputs, output, and spool files can all live outside the location directory.
+        let manifest_path = temp.path().join("metadata.json");
+        let decorations_path = temp.path().join("props.pack");
+        let output_path = temp.path().join("render.pack");
+        let spool_directory = temp.path().join("spool");
+        fs::rename(output.join("manifest.json"), &manifest_path).unwrap();
+        fs::rename(output.join("decorations.pack"), &decorations_path).unwrap();
+        fs::create_dir(&spool_directory).unwrap();
+        crate::location_compiler::bake_scene(
+            &city,
+            &manifest_path,
+            &decorations_path,
+            &output_path,
+            &spool_directory,
+        )
+        .unwrap();
+        assert_eq!(sha(&output_path).unwrap(), before);
+        assert_eq!(fs::read_dir(&spool_directory).unwrap().count(), 0);
     }
 
     #[test]

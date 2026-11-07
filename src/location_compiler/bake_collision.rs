@@ -4,10 +4,14 @@ use crate::street_surface::{SourceChecksums, StreetSurface};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-pub(crate) fn bake_collision(directory: &Path) -> Result<()> {
+pub(crate) fn bake_collision(
+    city_path: &Path,
+    streets_path: &Path,
+    output_path: &Path,
+) -> Result<()> {
     let started = std::time::Instant::now();
-    let source = std::fs::read_to_string(directory.join("city.txt"))?;
-    let streets = std::fs::read_to_string(directory.join("streets.txt"))?;
+    let source = std::fs::read_to_string(city_path)?;
+    let streets = std::fs::read_to_string(streets_path)?;
     let city = crate::city::City::parse(&source)?;
     let checksums = SourceChecksums::new(&source, &streets);
     let (surfaces, paths) = StreetSurface::load(&streets, &source, city.streets.len())?;
@@ -15,13 +19,17 @@ pub(crate) fn bake_collision(directory: &Path) -> Result<()> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    if fingerprint != super::sha(&directory.join("streets.txt"))? {
+    if fingerprint != super::sha(streets_path)? {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "street source changed during collision bake",
         )
         .into());
     }
+    let directory = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(directory)?;
     crate::street_surface::write_binary(
         temporary.path(),
@@ -31,7 +39,7 @@ pub(crate) fn bake_collision(directory: &Path) -> Result<()> {
         &fingerprint,
     )?;
     let bytes = temporary.as_file().metadata()?.len();
-    temporary.persist(directory.join("streets.bin"))?;
+    temporary.persist(output_path)?;
     println!(
         "Baked collision cache: {} triangles, {} curbs, {:.1} MiB; {:.2}s",
         surfaces.triangles.len(),

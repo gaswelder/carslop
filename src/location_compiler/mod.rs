@@ -16,13 +16,17 @@ mod track;
 pub(crate) use add_limassol::add_limassol;
 pub(crate) use bake_collision::bake_collision;
 pub(crate) use bake_scene::bake_scene;
-pub(crate) use imagery::prepare_imagery;
-pub(crate) use sources::{extract_osmpbf, merge};
+pub(crate) use sources::extract_osmpbf;
 pub use track::create_track;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use geo::{Coord, LineString, MultiPolygon, Polygon};
+use crate::imagery_trees::atomic;
+use geo::{Coord, Intersects, LineString, MapCoords, MultiPolygon, Polygon};
+use imagery::{
+    blocks, city_origin, download, local, mercator, process, CORE, GUTTER, PAD, RES, SERVICE, TILE,
+};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io, path::Path};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -208,126 +212,325 @@ impl Map {
             })
     }
 }
-pub struct Options<'a> {
-    pub source: &'a Path,
-    pub output: &'a Path,
-    pub name: &'a str,
-    pub bbox: Option<[f64; 4]>,
-    pub elevation: &'a Path,
-}
-pub fn compile(options: Options<'_>) -> Result<()> {
-    compile_filtered(options, false, None)
-}
-fn retain_raceways(source: &mut Source) -> Result<()> {
-    if !source.ways.values().any(|w| w.tag("highway") == "raceway") {
-        return Err(invalid("source contains no racing circuit"));
-    }
-    source
-        .ways
-        .retain(|_, w| matches!(w.tag("highway"), "" | "raceway"));
-    Ok(())
-}
-pub(crate) fn compile_boundary(options: Options<'_>, boundary: &boundary::Boundary) -> Result<()> {
-    compile_filtered(options, false, Some(boundary))
-}
-fn compile_filtered(
-    options: Options<'_>,
-    circuit_only: bool,
-    boundary: Option<&boundary::Boundary>,
-) -> Result<()> {
-    println!("Reading OSM XML...");
-    let mut source = osm::read(options.source)?;
-    if circuit_only {
-        retain_raceways(&mut source)?;
-    }
-    let map = if let Some(boundary) = boundary {
-        osm::compile_boundary(&source, options.bbox, Some(boundary))?
-    } else {
-        osm::compile(&source, options.bbox)?
-    };
-    fs::create_dir_all(options.output.join("elevation"))?;
-    let city = osm::write(&map, options.output)?;
-    println!("Building streets ({} segments)...", map.roads.len());
-    let surfaces = surfaces::build(&map, &city, options.output)?;
-    println!("Building mapped landscape and roadside controls...");
-    scenery::build(&source, &map, &surfaces, &city, options.output)?;
-    println!("Building elevation...");
-    terrain::build(&map, &city, options.elevation, options.output)?;
-    fs::copy(options.source, options.output.join("source.osm"))?;
-    let south_west = [
-        map.origin[0] - map.bounds[3].to_degrees() / 6371000.0,
-        map.origin[1] + map.bounds[0].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
-    ];
-    let north_east = [
-        map.origin[0] - map.bounds[1].to_degrees() / 6371000.0,
-        map.origin[1] + map.bounds[2].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
-    ];
-    let mut manifest = serde_json::json!({
-        "name":options.name,"raceways_only":circuit_only,"origin_lat_lon":map.origin,"bounds_metres":map.bounds,
-        "bbox_south_west_north_east":[south_west[0],south_west[1],north_east[0],north_east[1]],
-        "source_timestamp":source.timestamp,"source_file":"source.osm","source_sha256":sha(options.source)?,
-        "package_sha256":sha(&options.output.join("city.txt"))?,
-        "attribution":"© OpenStreetMap contributors","license":"ODbL-1.0",
-        "copyright_url":"https://www.openstreetmap.org/copyright","compiler":"native-rust-v1",
-        "statistics":{"nodes":map.nodes.len(),"road_segments":map.roads.len(),"buildings":map.buildings.len()}
-    });
-    if let Some(boundary) = boundary {
-        manifest["boundary"] = boundary.to_geojson();
-    }
-    fs::write(
-        &options.output.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest)? + "\n",
-    )?;
-    println!("Baking collision data...");
-    crate::location_compiler::bake_collision(options.output)?;
-    Ok(())
+struct AerialPaths<'a> {
+    directory: &'a Path,
+    service: &'a Path,
+    plan: &'a Path,
+    catalog: &'a Path,
+    source: &'a Path,
 }
 
-/// Rebuild an existing location using only its racing roads, preserving scenery
-/// and source provenance.
-pub fn circuit_only(path: &Path) -> Result<()> {
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path.join("manifest.json"))?)?;
-    if manifest["raceways_only"] == true {
-        println!("Location already contains racing roads only");
-        return Ok(());
+struct ImageryPaths<'a> {
+    city: &'a Path,
+    streets: &'a Path,
+    landscape: &'a Path,
+    manifest: &'a Path,
+    downloads_directory: &'a Path,
+    blocks_directory: &'a Path,
+    service: &'a Path,
+    plan: &'a Path,
+    previous_trees: &'a Path,
+    report: &'a Path,
+    trees: &'a Path,
+    installed_trees: &'a Path,
+    installed_trees_report: &'a Path,
+    aerial_backup: &'a Path,
+    staged_aerial_directory: &'a Path,
+    installed_aerial: AerialPaths<'a>,
+}
+
+fn prepare_imagery(paths: &ImageryPaths<'_>, bbox: [f64; 4]) -> Result<()> {
+    for path in [
+        paths.service,
+        paths.plan,
+        paths.previous_trees,
+        paths.report,
+        paths.trees,
+        paths.installed_trees,
+        paths.installed_trees_report,
+        paths.aerial_backup,
+        paths.installed_aerial.directory,
+    ] {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
     }
-    let temp = tempfile::tempdir()?;
-    let output = temp.path().join("circuit");
-    let mut tiles = fs::read_dir(path.join("elevation"))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    tiles.sort();
-    let elevation = tiles
-        .into_iter()
-        .find(|p| p.to_string_lossy().ends_with(".hgt") || p.to_string_lossy().ends_with(".hgt.gz"))
-        .ok_or_else(|| invalid("location has no preserved HGT elevation tile"))?;
-    let bbox = serde_json::from_value(manifest["bbox_south_west_north_east"].clone())?;
+    let city_text = std::fs::read_to_string(paths.city)?;
+    let city = crate::city::City::parse(&city_text).map_err(invalid)?;
+    let origin = city_origin(&city_text)?;
+    let manifest: Value = serde_json::from_slice(&std::fs::read(paths.manifest)?)?;
+    if bbox.iter().any(|v| !v.is_finite())
+        || bbox[0] >= bbox[2]
+        || bbox[1] >= bbox[3]
+        || bbox[0] < -85.
+        || bbox[2] > 85.
+        || bbox[1] < -180.
+        || bbox[3] > 180.
+    {
+        return Err(invalid("invalid city geographic bounds"));
+    }
     let boundary = boundary::Boundary::from_manifest(&manifest)?;
-    compile_filtered(
-        Options {
-            source: &path.join("source.osm"),
-            output: &output,
-            name: manifest["name"].as_str().unwrap_or("circuit"),
-            bbox: Some(bbox),
-            elevation: &elevation,
-        },
-        true,
-        boundary.as_ref(),
+    let local_boundary = boundary.as_ref().map(|b| b.local(origin));
+    let mercator_boundary = boundary.as_ref().map(|b| {
+        b.geometry.map_coords(|c| {
+            let p = mercator(c.x, c.y);
+            geo::Coord { x: p[0], y: p[1] }
+        })
+    });
+    let all: Vec<_> = blocks(bbox)
+        .into_iter()
+        .filter(|b| {
+            mercator_boundary.as_ref().is_none_or(|g| {
+                g.intersects(&geo::Rect::new(
+                    geo::Coord {
+                        x: b.extent[0],
+                        y: b.extent[1],
+                    },
+                    geo::Coord {
+                        x: b.extent[2],
+                        y: b.extent[3],
+                    },
+                ))
+            })
+        })
+        .collect();
+    if all.is_empty() || all.len() > 2000 {
+        return Err(invalid(
+            "imagery job must contain 1..2000 blocks; crop the map",
+        ));
+    }
+    let mut plan = json!({"version":1,"source":SERVICE,"bbox":bbox,"origin":origin,"resolution_mercator":RES,"core":CORE,"padding":PAD,"tile_size":TILE,"gutter":GUTTER,"blocks":all.len(),"city_sha256":sha(paths.city)?});
+    if boundary.is_some() {
+        plan["boundary"] = manifest["boundary"].clone();
+    }
+    let plan_path = paths.plan;
+    if plan_path.exists() {
+        let previous: Value = serde_json::from_slice(&fs::read(&plan_path)?)?;
+        if previous != plan {
+            return Err(invalid(
+                "work directory contains a different imagery plan; choose a new directory",
+            ));
+        }
+    } else {
+        atomic(&plan_path, &serde_json::to_vec_pretty(&plan)?)?;
+    }
+    println!(
+        "City imagery: {} blocks, up to {} tiles; approximately {:.2} m/pixel on the ground.",
+        all.len(),
+        all.len() * 16,
+        RES * origin[0].to_radians().cos()
+    );
+    download(paths.downloads_directory, paths.service, &all)?;
+    let plan_hash = sha(&plan_path)?;
+    let installed = paths.installed_aerial.source;
+    let installed_plan = fs::read(&installed)
+        .ok()
+        .and_then(|s| serde_json::from_slice::<Value>(&s).ok())
+        .is_some_and(|v| v["plan_sha256"] == plan_hash);
+    let aerial = if installed_plan {
+        paths.installed_aerial.directory
+    } else {
+        paths.staged_aerial_directory
+    };
+    fs::create_dir_all(aerial)?;
+    let pilot = paths.previous_trees;
+    if !pilot.exists() {
+        if let Ok(data) = fs::read(paths.installed_trees) {
+            atomic(&pilot, &data)?;
+        }
+    }
+    let mut catalog = format!("AERIAL 1\nsize {TILE} {GUTTER}\n");
+    let mut drafts = vec![];
+    let (mut tile_count, mut missing) = (0, 0);
+    for (i, b) in all.iter().enumerate() {
+        let meta = process(
+            paths.downloads_directory,
+            paths.blocks_directory,
+            aerial,
+            b,
+            origin,
+        )?;
+        for t in meta["tiles"]
+            .as_array()
+            .ok_or_else(|| invalid("missing block tiles"))?
+        {
+            let bounds = t["bounds"]
+                .as_array()
+                .ok_or_else(|| invalid("missing tile bounds"))?;
+            if local_boundary.as_ref().is_some_and(|g| {
+                !g.intersects(&geo::Rect::new(
+                    geo::Coord {
+                        x: bounds[0].as_f64().unwrap(),
+                        y: bounds[1].as_f64().unwrap(),
+                    },
+                    geo::Coord {
+                        x: bounds[2].as_f64().unwrap(),
+                        y: bounds[3].as_f64().unwrap(),
+                    },
+                ))
+            }) {
+                continue;
+            }
+            catalog.push_str(&format!(
+                "tile {:.6} {:.6} {:.6} {:.6} {} {:08x}\n",
+                bounds[0].as_f64().unwrap(),
+                bounds[1].as_f64().unwrap(),
+                bounds[2].as_f64().unwrap(),
+                bounds[3].as_f64().unwrap(),
+                t["name"].as_str().unwrap(),
+                t["crc"].as_u64().unwrap()
+            ));
+            tile_count += 1;
+        }
+        for t in meta["trees"]
+            .as_array()
+            .ok_or_else(|| invalid("missing block crowns"))?
+        {
+            drafts.push([
+                t[0].as_f64().unwrap(),
+                t[1].as_f64().unwrap(),
+                t[2].as_f64().unwrap(),
+            ]);
+        }
+        missing += meta["missing_tiles"].as_u64().unwrap_or(0);
+        if (i + 1) % 10 == 0 || i + 1 == all.len() {
+            println!(
+                "Prepared blocks: {}/{}; {tile_count} tiles, {} crown proposals",
+                i + 1,
+                all.len(),
+                drafts.len()
+            );
+        }
+    }
+    if tile_count == 0 {
+        return Err(invalid(
+            "source returned no usable imagery; city assets unchanged",
+        ));
+    }
+    println!(
+        "Filtering {} crown proposals against roads, buildings and mapped trees...",
+        drafts.len()
+    );
+    let obstacles = crate::tree_obstacles::Obstacles::read_paths(
+        paths.city,
+        paths.streets,
+        [bbox[1], bbox[0], bbox[3], bbox[2]],
     )?;
-    bake_scene(&output)?;
-    fn copy_tree(from: &Path, to: &Path) -> Result<()> {
-        fs::create_dir_all(to)?;
-        for entry in fs::read_dir(from)? {
-            let entry = entry?;
-            let target = to.join(entry.file_name());
-            if entry.file_type()?.is_dir() {
-                copy_tree(&entry.path(), &target)?;
-            } else {
-                fs::copy(entry.path(), target)?;
+    let landscape = fs::read_to_string(paths.landscape)?;
+    let header = landscape
+        .lines()
+        .next()
+        .ok_or_else(|| invalid("missing landscape header"))?;
+    let expected = format!(
+        "LANDSCAPE 1 {:08x} {:08x}",
+        crate::street_surface::crc32(&city_text),
+        crate::imagery_trees::checksum(paths.streets)?
+    );
+    if header != expected {
+        return Err(invalid("landscape does not match city and roads"));
+    }
+    let mut index = rstar::RTree::new();
+    for line in landscape.lines() {
+        let f: Vec<_> = line.split_whitespace().collect();
+        if f.first() == Some(&"t") && f.len() == 6 {
+            index.insert([f[2].parse::<f64>()?, f[3].parse::<f64>()?]);
+        }
+    }
+    let mut output = format!("{header}\n");
+    let (mut count, mut conflicts, mut duplicates, mut outside) = (0, 0, 0, 0);
+    let inside = |p: [f64; 2]| {
+        p[0] >= city.bounds[0][0] as f64
+            && p[1] >= city.bounds[0][1] as f64
+            && p[0] <= city.bounds[1][0] as f64
+            && p[1] <= city.bounds[1][1] as f64
+    };
+    // Preserve the already approved pilot; new imagery proposals are deduplicated around it.
+    let mut append = |p: [f64; 2], radius: f64, height: f64| {
+        let p = p.map(|v| (v * 1000.).round() / 1000.);
+        if !inside(p)
+            || local_boundary
+                .as_ref()
+                .is_some_and(|b| !b.intersects(&geo::Point::new(p[0], p[1])))
+        {
+            outside += 1;
+            return;
+        }
+        if obstacles.rejection_at(p).is_some() {
+            conflicts += 1;
+            return;
+        }
+        if index
+            .nearest_neighbor(&p)
+            .is_some_and(|q| (q[0] - p[0]).hypot(q[1] - p[1]) < 2.)
+        {
+            duplicates += 1;
+            return;
+        }
+        let id = (1_u64 << 63) | count;
+        output.push_str(&format!(
+            "t {id} {:.3} {:.3} {:.3} {:.3}\n",
+            p[0],
+            p[1],
+            height.clamp(3.5, 14.),
+            radius.clamp(0.7, 4.5)
+        ));
+        index.insert(p);
+        count += 1;
+    };
+    if pilot.exists() {
+        for line in fs::read_to_string(&pilot)?.lines().skip(1) {
+            let f: Vec<_> = line.split_whitespace().collect();
+            if f.len() == 6 && f[0] == "t" {
+                append([f[2].parse()?, f[3].parse()?], f[5].parse()?, f[4].parse()?);
             }
         }
-        Ok(())
     }
-    copy_tree(&output, path)
+    for d in drafts {
+        let radius = d[2].clamp(0.7, 4.5);
+        append(local(origin, [d[0], d[1]]), radius, radius * 2.8);
+    }
+    if plan["city_sha256"] != sha(paths.city)? {
+        return Err(invalid(
+            "city changed during imagery preparation; choose a fresh work directory",
+        ));
+    }
+    let report = json!({"plan_sha256":plan_hash,"source":SERVICE,"attribution":"Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community","local_development_only":true,"bbox":bbox,"blocks":all.len(),"tile_count":tile_count,"missing_tiles":missing,"imagery_trees":count,"excluded_road_or_building":conflicts,"excluded_duplicates":duplicates,"excluded_outside_city":outside,"ground_sampling_metres":RES*origin[0].to_radians().cos(),"sizes":"Tree sizes are artistic estimates; candidates inferred by RGB vegetation/texture heuristics.","rights":"Local development pack; redistribution rights have not been established."});
+    atomic(paths.report, &serde_json::to_vec_pretty(&report)?)?;
+    atomic(paths.trees, output.as_bytes())?;
+    if !installed_plan {
+        let backup = paths.aerial_backup;
+        let destination = paths.installed_aerial.directory;
+        if destination.exists() {
+            if backup.exists() {
+                return Err(invalid(
+                    "previous-aerial backup already exists; inspect it before installing",
+                ));
+            }
+            fs::rename(&destination, &backup)?;
+        }
+        if let Err(e) = fs::rename(aerial, destination) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(e.into());
+        }
+    }
+    // Provenance belongs to the installed pack, not the disposable work cache.
+    let aerial = &paths.installed_aerial;
+    for path in [aerial.service, aerial.plan, aerial.catalog, aerial.source] {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    atomic(aerial.service, &fs::read(paths.service)?)?;
+    atomic(aerial.plan, &fs::read(paths.plan)?)?;
+    atomic(aerial.catalog, catalog.as_bytes())?;
+    atomic(aerial.source, &serde_json::to_vec_pretty(&report)?)?;
+    atomic(
+        paths.installed_trees_report,
+        &serde_json::to_vec_pretty(&report)?,
+    )?;
+    atomic(paths.installed_trees, output.as_bytes())?;
+    println!("Installed {tile_count} imagery tiles and {count} trees; {missing} missing imagery tiles. Run bake-city --location NAME to rebuild the playable scene.");
+    Ok(())
 }

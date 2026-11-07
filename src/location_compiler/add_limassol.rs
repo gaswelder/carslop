@@ -1,7 +1,7 @@
-//! Explicit, end-to-end Limassol preparation. Nothing runs during game startup.
 use super::{
-    bake_collision, bake_scene, boundary::Boundary, compile_boundary, download::download,
-    extract_osmpbf, invalid, prepare_imagery, BoundingBox, Options, Result,
+    bake_collision, bake_scene, boundary::Boundary, download::download, extract_osmpbf, invalid,
+    osm, prepare_imagery, scenery, surfaces, terrain, AerialPaths, BoundingBox, ImageryPaths,
+    Result,
 };
 use std::{fs, path::Path, time::Duration};
 
@@ -34,6 +34,24 @@ pub(crate) fn add_limassol() -> Result<()> {
     let dir_elevation = dir_sources.join("elevation");
     let path_source = cache_dir.join("limassol.osm");
     let path_pbf = dir_sources.join("cyprus.osm.pbf");
+
+    let staging = tempfile::Builder::new()
+        .prefix(".import-limassol-")
+        .tempdir_in(root)?;
+    let path_city = staging.path().join("city.txt");
+    let path_streets = staging.path().join("streets.txt");
+    let path_streets_report = staging.path().join("streets.json");
+    let path_landscape = staging.path().join("landscape.txt");
+    let path_landscape_report = staging.path().join("landscape.json");
+    let path_furniture = staging.path().join("furniture.txt");
+    let path_furniture_report = staging.path().join("furniture.json");
+    let path_heightfield = staging.path().join("elevation/heightfield.txt");
+    let path_elevation_tiles_directory = staging.path().join("elevation");
+    let path_elevation_attribution_source = dir_elevation.join("README.md");
+    let path_elevation_attribution = staging.path().join("elevation/source-attribution.md");
+    let path_source_copy = staging.path().join("source.osm");
+    let path_manifest = staging.path().join("manifest.json");
+    let path_collision = staging.path().join("streets.bin");
 
     // Fetch the OSM relation from boundary_url and assemble its way
     // members by node identity, including reversed ways. Validate closed outer
@@ -84,53 +102,117 @@ pub(crate) fn add_limassol() -> Result<()> {
     //
     extract_osmpbf(&path_pbf, &path_source, bbox)?;
 
-    //
-    //
-    //
-    let staging = tempfile::Builder::new()
-        .prefix(".import-limassol-")
-        .tempdir_in(root)?;
-
     // Compile roads against the administrative polygon, splitting crossings and
     // excluding holes. Keep buildings whose entire footprint is inside the
     // border. Clip street surfaces and mapped land cover, and filter mapped
     // trees and furniture using the same polygon.
-    compile_boundary(
-        Options {
-            source: &path_source,
-            output: staging.path(),
-            name: "limassol",
-            bbox: Some(bbox.to_array()),
-            elevation: &dir_elevation.join(format!("{}.hgt.gz", tiles[0])),
-        },
-        &boundary,
+
+    println!("Reading OSM XML...");
+    let source = osm::read(&path_source)?;
+    let map = osm::compile_boundary(&source, Some(bbox.to_array()), Some(&boundary))?;
+    fs::create_dir_all(&path_elevation_tiles_directory)?;
+    let city = osm::write(&map, &path_city)?;
+    println!("Building streets ({} segments)...", map.roads.len());
+    let surfaces = surfaces::build(&map, &city, &path_streets, &path_streets_report)?;
+    println!("Building mapped landscape and roadside controls...");
+    scenery::build(
+        &source,
+        &map,
+        &surfaces,
+        &city,
+        &path_landscape,
+        &path_landscape_report,
+        &path_furniture,
+        &path_furniture_report,
     )?;
+    println!("Building elevation...");
+    terrain::build(
+        &map,
+        &city,
+        &dir_elevation.join(format!("{}.hgt.gz", tiles[0])),
+        &path_heightfield,
+        &path_elevation_tiles_directory,
+        &path_elevation_attribution_source,
+        &path_elevation_attribution,
+    )?;
+    fs::copy(&path_source, &path_source_copy)?;
+    let south_west = [
+        map.origin[0] - map.bounds[3].to_degrees() / 6371000.0,
+        map.origin[1] + map.bounds[0].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
+    ];
+    let north_east = [
+        map.origin[0] - map.bounds[1].to_degrees() / 6371000.0,
+        map.origin[1] + map.bounds[2].to_degrees() / 6371000.0 / map.origin[0].to_radians().cos(),
+    ];
+    let manifest = serde_json::json!({
+        "name": "limassol",
+        "boundary": boundary.to_geojson(),
+    });
+    fs::write(
+        &path_manifest,
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
+    println!("Baking collision data...");
+    bake_collision(&path_city, &path_streets, &path_collision)?;
 
     // Run the existing Esri World Imagery pipeline: textures, gutters, tile
     // checksums, and tree proposals. Skip blocks and texture tiles wholly outside
     // the polygon and exclude outside tree proposals. Boundary tiles retain
     // their rectangular storage and gutters.
     println!("Preparing satellite textures and imagery trees...");
-    prepare_imagery(staging.path(), &cache_dir.join("imagery"), None)?;
+    let imagery_work = cache_dir.join("imagery");
+    let aerial_staging = imagery_work.join("aerial");
+    let aerial_destination = staging.path().join("aerial");
+    prepare_imagery(
+        &ImageryPaths {
+            city: &path_city,
+            streets: &path_streets,
+            landscape: &path_landscape,
+            manifest: &path_manifest,
+            downloads_directory: &imagery_work.join("downloads"),
+            blocks_directory: &imagery_work,
+            service: &imagery_work.join("service.json"),
+            plan: &imagery_work.join("plan.json"),
+            previous_trees: &imagery_work.join("previous-imagery-trees.txt"),
+            report: &imagery_work.join("report.json"),
+            trees: &imagery_work.join("imagery-trees.txt"),
+            installed_trees: &staging.path().join("imagery-trees.txt"),
+            installed_trees_report: &staging.path().join("imagery-trees.json"),
+            aerial_backup: &imagery_work.join("previous-aerial"),
+            staged_aerial_directory: &aerial_staging,
+            installed_aerial: AerialPaths {
+                directory: &aerial_destination,
+                service: &aerial_destination.join("service.json"),
+                plan: &aerial_destination.join("plan.json"),
+                catalog: &aerial_destination.join("tiles.txt"),
+                source: &aerial_destination.join("source.json"),
+            },
+        },
+        [south_west[0], south_west[1], north_east[0], north_east[1]],
+    )?;
 
     // Bake collision data and all scene layers, clipping the visible terrain
     // mesh to the border. The elevation raster and geographic extent remain
     // rectangular for the terrain format; the polygon determines which roads,
     // buildings, and terrain triangles are imported.
-    println!("Baking collision and scene archives...");
-    bake_collision(staging.path())?;
-    bake_scene(staging.path())?;
+    println!("Compiling collisions");
+    bake_collision(&path_city, &path_streets, &path_collision)?;
+
+    println!("Compiling scene");
+    let city = crate::city::City::load(&crate::city_assets::CityAsset::new(
+        staging.path().to_owned(),
+    ))
+    .map_err(invalid)?;
+    bake_scene(
+        &city,
+        &path_manifest,
+        &staging.path().join("decorations.pack"),
+        &staging.path().join("scene.pack"),
+        staging.path(),
+    )?;
     // Check required assets before renaming staging into data/locations/limassol.
     // Select the completed location with: cars play --location limassol.
-    for file in [
-        "city.txt",
-        "streets.txt",
-        "landscape.txt",
-        "furniture.txt",
-        "elevation/heightfield.txt",
-        "scene.pack",
-        "aerial/tiles.txt",
-    ] {
+    for file in ["aerial/tiles.txt"] {
         if !staging.path().join(file).is_file() {
             return Err(invalid(format!("missing completed asset {file}")));
         }

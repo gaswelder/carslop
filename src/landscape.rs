@@ -62,13 +62,6 @@ impl Landscape {
         }
     }
     #[cfg(test)]
-    pub fn append_imagery(&mut self, text: &str, city: &str, streets: &str) -> Result<(), String> {
-        self.append_imagery_with_checksums(
-            text,
-            crate::street_surface::SourceChecksums::new(city, streets),
-        )
-    }
-    #[cfg(test)]
     fn append_imagery_with_checksums(
         &mut self,
         text: &str,

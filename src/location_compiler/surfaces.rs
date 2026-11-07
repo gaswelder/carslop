@@ -240,7 +240,7 @@ pub fn index(paths: &[Vec<P>]) -> rstar::RTree<Segment> {
             .collect(),
     )
 }
-pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
+pub fn build(map: &Map, city: &str, streets_path: &Path, report_path: &Path) -> Result<Surfaces> {
     let mut adjacency = vec![vec![]; map.nodes.len()];
     for (i, r) in map.roads.iter().enumerate() {
         for n in r.ends {
@@ -491,7 +491,7 @@ pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
         }
     }
     groups.push((4, union(&marks).intersection(&inner).difference(&junctions)));
-    let path = output.join("streets.txt");
+    let path = streets_path;
     let mut file = BufWriter::new(fs::File::create(&path)?);
     writeln!(
         file,
@@ -546,7 +546,7 @@ pub fn build(map: &Map, city: &str, output: &Path) -> Result<Surfaces> {
     }
     file.flush()?;
     fs::write(
-        &output.join("streets.json"),
+        report_path,
         serde_json::to_string_pretty(
             &serde_json::json!({"compiler":"native-rust-v1","road_area_m2":asphalt.unsigned_area(),"junction_fillets":patches.len(),"curb_segments":curbs,"surface_triangles":counts,"max_centreline_rounding_metres":0.6}),
         )? + "\n",

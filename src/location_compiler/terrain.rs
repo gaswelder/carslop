@@ -164,7 +164,15 @@ impl Hgt {
             + filtered(r + 1, c + 1)? * x * z)
     }
 }
-pub fn build(map: &Map, city: &str, source: &Path, output: &Path) -> Result<()> {
+pub fn build(
+    map: &Map,
+    city: &str,
+    source: &Path,
+    heightfield_path: &Path,
+    tiles_directory: &Path,
+    attribution_source: &Path,
+    attribution_path: &Path,
+) -> Result<()> {
     let (dem, sources) = Hgt::covering(source, map)?;
     let datum = dem.sample(map.origin)?;
     let step = 20.0;
@@ -181,7 +189,7 @@ pub fn build(map: &Map, city: &str, source: &Path, output: &Path) -> Result<()> 
             "terrain grid exceeds runtime limit of 4096 posts per axis",
         ));
     }
-    let mut file = BufWriter::new(fs::File::create(output.join("elevation/heightfield.txt"))?);
+    let mut file = BufWriter::new(fs::File::create(heightfield_path)?);
     writeln!(
         file,
         "ELEVATION 1 {:08x}\ngrid {} {} {:.3} {:.3} {:.3} {:.3}",
@@ -215,29 +223,15 @@ pub fn build(map: &Map, city: &str, source: &Path, output: &Path) -> Result<()> 
         writeln!(file)?;
     }
     file.flush()?;
-    let name = source
-        .file_name()
-        .ok_or_else(|| invalid("missing HGT filename"))?;
-    let mut source_tiles = Vec::new();
     for path in &sources {
         let tile_name = path
             .file_name()
             .ok_or_else(|| invalid("missing HGT filename"))?;
-        fs::copy(path, output.join("elevation").join(tile_name))?;
-        source_tiles
-            .push(serde_json::json!({"file":tile_name.to_string_lossy(),"sha256":sha(path)?}));
+        fs::copy(path, tiles_directory.join(tile_name))?;
     }
-    let attribution = source.parent().unwrap_or(Path::new(".")).join("README.md");
-    if attribution.is_file() {
-        fs::copy(attribution, output.join("elevation/source-attribution.md"))?;
+    if attribution_source.is_file() {
+        fs::copy(attribution_source, attribution_path)?;
     }
-    let saved_tile = name.to_string_lossy();
-    fs::write(
-        &output.join("elevation/heightfield.json"),
-        serde_json::to_string_pretty(
-            &serde_json::json!({"compiler":"native-rust-v1","source_tile":saved_tile,"source_sha256":sha(source)?,"source_tiles":source_tiles,"grid_dimensions":size,"grid_step_metres":step,"local_datum_metres_egm96":datum,"processing":"3x3 [1,2,1] native-post Gaussian, bilinear resampling; heights relative to location origin."}),
-        )? + "\n",
-    )?;
     Ok(())
 }
 

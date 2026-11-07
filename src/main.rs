@@ -5,7 +5,6 @@ mod cars;
 mod chunks;
 mod city;
 mod city_assets;
-mod cli;
 mod elevation;
 mod engine_sample;
 mod feedback;
@@ -20,7 +19,6 @@ mod prefetch;
 mod scene;
 mod scene_archive;
 mod shadows;
-mod source_tools;
 mod street_surface;
 #[cfg(test)]
 mod test_support;
@@ -31,6 +29,7 @@ mod tree_preview;
 mod vehicle;
 
 use cars::CarModel;
+use location_compiler::invalid;
 use log::{info, warn};
 use sdl3::{
     event::{Event, WindowEvent},
@@ -39,10 +38,19 @@ use sdl3::{
 };
 use std::{
     collections::HashSet,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 use track::{Track, TrackId};
 use vehicle::{Controls, Vehicle};
+
+const HELP: &str = "Arguments: <command>
+Commands:
+
+    play
+    add-limassol
+    create-track <track.json>
+";
 
 const TICK: Duration = Duration::from_nanos(16_666_667);
 const WINDOW_WIDTH: i32 = 1280;
@@ -853,11 +861,33 @@ impl App {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let Some(city) = cli::run()? else {
-        return Ok(());
-    };
+    let mut args = std::env::args_os().skip(1);
+    if let Some(command) = args.next() {
+        let command = command
+            .into_string()
+            .map_err(|_| invalid("expected UTF-8 command"))?;
+        match command.as_str() {
+            "add-limassol" => {
+                location_compiler::add_limassol()?;
+                return Ok(());
+            }
+            "create-track" => {
+                let source = args
+                    .next()
+                    .ok_or_else(|| invalid("create-track requires exactly one JSON path"))?;
+                if args.next().is_some() {
+                    return Err(invalid("create-track requires exactly one JSON path"));
+                }
+                let destination = location_compiler::create_track(&PathBuf::from(source))?;
+                println!("Created {}", destination.display());
+                return Ok(());
+            }
+            "play" => {}
+            _ => return Err(invalid(format!("unknown command: {command}\n\n{HELP}"))),
+        }
+    }
     info!("Cars LOP: starting");
-    App::with_location(city).run()
+    App::with_location(false).run()
 }
 
 #[cfg(test)]

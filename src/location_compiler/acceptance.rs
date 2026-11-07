@@ -40,8 +40,14 @@ fn surfaces(
     crate::street_surface::StreetSurface,
 ) {
     let temp = tests::Temp::new();
-    let city = osm::write(map, &temp.0).unwrap();
-    let s = surfaces::build(map, &city, &temp.0).unwrap();
+    let city = osm::write(map, &temp.0.join("city.txt")).unwrap();
+    let s = surfaces::build(
+        map,
+        &city,
+        &temp.0.join("streets.txt"),
+        &temp.0.join("streets.json"),
+    )
+    .unwrap();
     let loaded = crate::street_surface::StreetSurface::load(
         &std::fs::read_to_string(temp.0.join("streets.txt")).unwrap(),
         &city,
@@ -338,7 +344,17 @@ fn controls(oneway: bool, enabled: bool) -> Vec<crate::traffic::Furniture> {
     let m = osm::compile(&s, None).unwrap();
     let (temp, surfaces, _) = surfaces(&m);
     let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
-    scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
+    scenery::build(
+        &s,
+        &m,
+        &surfaces,
+        &city,
+        &temp.0.join("landscape.txt"),
+        &temp.0.join("landscape.json"),
+        &temp.0.join("furniture.txt"),
+        &temp.0.join("furniture.json"),
+    )
+    .unwrap();
     crate::traffic::load(
         &std::fs::read_to_string(temp.0.join("furniture.txt")).unwrap(),
         &city,
@@ -411,7 +427,17 @@ fn landscape_priorities_crop_and_tree_conflicts_are_preserved() {
     );
     let (temp, surfaces, _) = surfaces(&m);
     let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
-    scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
+    scenery::build(
+        &s,
+        &m,
+        &surfaces,
+        &city,
+        &temp.0.join("landscape.txt"),
+        &temp.0.join("landscape.json"),
+        &temp.0.join("furniture.txt"),
+        &temp.0.join("furniture.json"),
+    )
+    .unwrap();
     let streets = std::fs::read_to_string(temp.0.join("streets.txt")).unwrap();
     let l = crate::landscape::Landscape::load(
         &std::fs::read_to_string(temp.0.join("landscape.txt")).unwrap(),
@@ -468,7 +494,17 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
     let m = map(&[[-50., 0.], [50., 0.]], &[(0, 1, 8., 1)], &[]);
     let (temp, surfaces, _) = surfaces(&m);
     let city = std::fs::read_to_string(temp.0.join("city.txt")).unwrap();
-    scenery::build(&s, &m, &surfaces, &city, &temp.0).unwrap();
+    scenery::build(
+        &s,
+        &m,
+        &surfaces,
+        &city,
+        &temp.0.join("landscape.txt"),
+        &temp.0.join("landscape.json"),
+        &temp.0.join("furniture.txt"),
+        &temp.0.join("furniture.json"),
+    )
+    .unwrap();
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(temp.0.join("landscape.json")).unwrap())
             .unwrap();

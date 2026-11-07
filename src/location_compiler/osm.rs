@@ -206,6 +206,7 @@ pub fn clip(a: P, b: P, bounds: [f64; 4]) -> Option<(P, P)> {
     }
     Some((add(a, mul(d, lo)), add(a, mul(d, hi))))
 }
+#[cfg(test)]
 pub fn compile(source: &Source, bbox: Option<[f64; 4]>) -> Result<Map> {
     compile_boundary(source, bbox, None)
 }
@@ -534,6 +535,6 @@ pub fn write(map: &Map, output: &Path) -> Result<String> {
         }
         text.push('\n');
     }
-    fs::write(output.join("city.txt"), &text)?;
+    fs::write(output, &text)?;
     Ok(text)
 }

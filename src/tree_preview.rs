@@ -1,8 +1,5 @@
 //! Experimental RGB vegetation/crown proposals for human review, not confirmed trees.
-use crate::location_compiler::{invalid, Result};
-use image::{Rgb, RgbImage};
-use serde_json::{json, Value};
-use std::{fs, path::Path};
+use image::RgbImage;
 
 #[derive(Debug)]
 pub(crate) struct Candidate {
@@ -24,17 +21,6 @@ impl Geo {
         [
             (mx / 6378137.).to_degrees(),
             (2. * (my / 6378137.).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees(),
-        ]
-    }
-    fn pixel(self, lon: f64, lat: f64) -> [f64; 2] {
-        let mx = lon.to_radians() * 6378137.;
-        let my = (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.)
-            .tan()
-            .ln()
-            * 6378137.;
-        [
-            (mx - self.extent[0]) / (self.extent[2] - self.extent[0]) * self.width as f64,
-            (self.extent[3] - my) / (self.extent[3] - self.extent[1]) * self.height as f64,
         ]
     }
     pub(crate) fn metres_per_pixel(self) -> [f64; 2] {
@@ -184,268 +170,10 @@ pub(crate) fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
     selected.sort_by_key(|p| (p.y, p.x));
     selected
 }
-fn osm_trees(path: &Path) -> Result<Vec<(String, f64, f64)>> {
-    use quick_xml::{events::Event, Reader};
-    let mut r = Reader::from_reader(std::io::BufReader::new(std::fs::File::open(path)?));
-    let mut buf = vec![];
-    let mut node = None;
-    let mut trees = vec![];
-    let mut tree = false;
-    loop {
-        match r.read_event_into(&mut buf)? {
-            Event::Start(e) | Event::Empty(e) => {
-                let name = e.name().as_ref().to_owned();
-                if name == "remark" {
-                    return Err(invalid("incomplete OSM snapshot"));
-                }
-                if name == "node" || name == "tag" {
-                    let mut a = std::collections::BTreeMap::new();
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        a.insert(
-                            attr.key.as_ref().to_owned(),
-                            attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?
-                                .into_owned(),
-                        );
-                    }
-                    if name == "node" {
-                        tree = false;
-                        node = Some((
-                            a.get("id").cloned().unwrap_or_default(),
-                            a.get("lon")
-                                .ok_or_else(|| invalid("node missing longitude"))?
-                                .parse::<f64>()?,
-                            a.get("lat")
-                                .ok_or_else(|| invalid("node missing latitude"))?
-                                .parse::<f64>()?,
-                        ));
-                    } else if a.get("k").is_some_and(|s| s == "natural")
-                        && a.get("v").is_some_and(|s| s == "tree")
-                    {
-                        tree = true;
-                    }
-                }
-            }
-            Event::End(e) if e.name().as_ref() == "node" => {
-                if tree {
-                    if let Some(n) = node.take() {
-                        trees.push(n);
-                    }
-                }
-                node = None;
-                tree = false;
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(trees)
-}
-fn ring(im: &mut RgbImage, x: f64, y: f64, rx: f64, ry: f64, colour: [u8; 3]) {
-    let steps = (rx.max(ry) * 10.).ceil().max(24.) as usize;
-    for i in 0..steps {
-        let angle = i as f64 / steps as f64 * std::f64::consts::TAU;
-        let px = (x + rx * angle.cos()).round() as i64;
-        let py = (y + ry * angle.sin()).round() as i64;
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let (xx, yy) = (px + dx, py + dy);
-                if xx >= 0 && yy >= 0 && xx < im.width() as i64 && yy < im.height() as i64 {
-                    im.put_pixel(xx as u32, yy as u32, Rgb(colour));
-                }
-            }
-        }
-    }
-}
-pub fn run(
-    image_path: &Path,
-    export: &Path,
-    output: &Path,
-    osm: Option<&Path>,
-    city_data: Option<&Path>,
-) -> Result<()> {
-    let v: Value = serde_json::from_slice(&fs::read(export)?)?;
-    let e = &v["extent"];
-    let mut extent = [0.; 4];
-    for (i, k) in ["xmin", "ymin", "xmax", "ymax"].iter().enumerate() {
-        extent[i] = e[k]
-            .as_f64()
-            .filter(|n| n.is_finite())
-            .ok_or_else(|| invalid(format!("invalid extent {k}")))?;
-    }
-    if extent[0] >= extent[2] || extent[1] >= extent[3] {
-        return Err(invalid("invalid export bounds"));
-    }
-    let sr = &e["spatialReference"];
-    if ![sr["wkid"].as_u64(), sr["latestWkid"].as_u64()]
-        .iter()
-        .any(|n| matches!(n, Some(3857 | 102100 | 102113)))
-    {
-        return Err(invalid(
-            "tree preview requires Web Mercator (EPSG:3857) export metadata",
-        ));
-    }
-    let im = image::ImageReader::open(image_path)?.decode()?.to_rgb8();
-    if v["width"].as_u64().is_some_and(|w| w != im.width() as u64)
-        || v["height"]
-            .as_u64()
-            .is_some_and(|h| h != im.height() as u64)
-    {
-        return Err(invalid("image dimensions differ from export metadata"));
-    }
-    let geo = Geo {
-        extent,
-        width: im.width() as usize,
-        height: im.height() as usize,
-    };
-    let scale = geo.metres_per_pixel();
-    if !scale.iter().all(|s| s.is_finite() && *s > 0.) {
-        return Err(invalid("invalid image ground scale"));
-    }
-    let sw = geo.lonlat(0., geo.height as f64);
-    let ne = geo.lonlat(geo.width as f64, 0.);
-    let obstacles = city_data
-        .map(|dir| crate::tree_obstacles::Obstacles::read(dir, [sw[0], sw[1], ne[0], ne[1]]))
-        .transpose()?;
-    let candidates = proposals(&im, scale);
-    let mapped = if let Some(path) = osm {
-        osm_trees(path)?
-    } else {
-        vec![]
-    };
-    let mapped: Vec<_> = mapped
-        .into_iter()
-        .filter_map(|(id, lon, lat)| {
-            let [x, y] = geo.pixel(lon, lat);
-            if x >= 0. && y >= 0. && x < geo.width as f64 && y < geo.height as f64 {
-                Some((id, x, y, lon, lat))
-            } else {
-                None
-            }
-        })
-        .collect();
-    let mut overlay = im.clone();
-    let mut features = vec![];
-    let mut matches = 0;
-    let mut road_rejections = 0;
-    let mut building_rejections = 0;
-    for (i, p) in candidates.iter().enumerate() {
-        let nearby = mapped
-            .iter()
-            .filter(|(_, x, y, _, _)| {
-                ((p.x as f64 - x) * scale[0]).hypot((p.y as f64 - y) * scale[1]) <= p.radius + 2.
-            })
-            .map(|(id, _, _, _, _)| id.clone())
-            .collect::<Vec<_>>();
-        if !nearby.is_empty() {
-            matches += 1;
-        }
-        let ll = geo.lonlat(p.x as f64, p.y as f64);
-        let rejection = obstacles.as_ref().and_then(|o| o.rejection(ll[0], ll[1]));
-        match rejection {
-            Some("road") => road_rejections += 1,
-            Some("building") => building_rejections += 1,
-            _ => {}
-        }
-        let status = if rejection.is_some() {
-            "rejected"
-        } else if obstacles.is_some() {
-            "accepted"
-        } else {
-            "unreviewed"
-        };
-        let colour = if rejection.is_some() {
-            [255, 80, 90]
-        } else if obstacles.is_some() {
-            [100, 255, 90]
-        } else if nearby.is_empty() {
-            [255, 210, 0]
-        } else {
-            [0, 230, 255]
-        };
-        ring(
-            &mut overlay,
-            p.x as f64,
-            p.y as f64,
-            p.radius / scale[0],
-            p.radius / scale[1],
-            colour,
-        );
-        if rejection.is_some() {
-            let (x, y) = (p.x as i64, p.y as i64);
-            for d in -6_i64..=6 {
-                for sign in [-1_i64, 1] {
-                    let (xx, yy) = (x + d, y + sign * d);
-                    if xx >= 0
-                        && yy >= 0
-                        && xx < overlay.width() as i64
-                        && yy < overlay.height() as i64
-                    {
-                        overlay.put_pixel(xx as u32, yy as u32, Rgb([255, 80, 90]));
-                    }
-                }
-            }
-        }
-        let mut polygon: Vec<_> = (0..48)
-            .map(|j| {
-                let a = j as f64 / 48. * std::f64::consts::TAU;
-                geo.lonlat(
-                    p.x as f64 + p.radius / scale[0] * a.cos(),
-                    p.y as f64 + p.radius / scale[1] * a.sin(),
-                )
-            })
-            .collect();
-        polygon.push(polygon[0]);
-        features.push(json!({"type":"Feature","id":i+1,"geometry":{"type":"Polygon","coordinates":[polygon]},"properties":{"id":i+1,"status":status,"automatic_rejection":rejection,"decision_source":if obstacles.is_some(){"map_filter"}else{"unreviewed"},"method":"rgb-vegetation-texture-peaks-v2","pixel_center":[p.x,p.y],"center_lon_lat":geo.lonlat(p.x as f64,p.y as f64),"estimated_crown_radius_m":p.radius,"nearby_osm_tree_ids":nearby,"height_m":null}}));
-    }
-    let collection = json!({"type":"FeatureCollection","features":features});
-    fs::create_dir_all(output)?;
-    im.save(output.join("source.png"))?;
-    overlay.save(output.join("annotated.png"))?;
-    fs::write(
-        output.join("candidates.geojson"),
-        serde_json::to_vec_pretty(&collection)?,
-    )?;
-    if obstacles.is_some() {
-        let kept: Vec<_> = collection["features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|f| f["properties"]["status"] != "rejected")
-            .cloned()
-            .collect();
-        fs::write(
-            output.join("kept-candidates.geojson"),
-            serde_json::to_vec_pretty(&json!({"type":"FeatureCollection","features":kept}))?,
-        )?;
-    }
-    fs::write(
-        output.join("report.json"),
-        serde_json::to_vec_pretty(
-            &json!({"candidate_count":candidates.len(),"map_filter_directory":city_data.map(|p|p.to_string_lossy()),"automatically_rejected_on_road":road_rejections,"automatically_rejected_on_building":building_rejections,"kept_after_map_filter":candidates.len()-road_rejections-building_rejections,"candidates_near_osm_trees":matches,"osm_trees_in_image":mapped.len(),"ground_metres_per_pixel":scale,"image":image_path.to_string_lossy(),"image_sha256":crate::location_compiler::sha(image_path)?,"export_metadata":v,"limitations":["Heuristic vegetation proposals, not a trained tree detector or measured accuracy.","Grass, shrubs, textured roofs and shadows can be false positives; dark, dry and overlapping trees can be missed.","Circles approximate visible canopy interiors, not measured crown outlines or trunk positions.","No heights or species inferred; no game assets modified."]}),
-        )?,
-    )?;
-    let data = serde_json::to_string(&collection)?.replace('<', "\\u003c");
-    let mapped_json = serde_json::to_string(&mapped)?;
-    let html = include_str!("tree_review.html")
-        .replace("__DATA__", &data)
-        .replace("__MAPPED__", &mapped_json.replace('<', "\\u003c"))
-        .replace("__SCALE__", &serde_json::to_string(&scale)?)
-        .replace("__WIDTH__", &geo.width.to_string())
-        .replace("__HEIGHT__", &geo.height.to_string());
-    fs::write(output.join("review.html"), html)?;
-    println!(
-        "{} crown candidates; {road_rejections} excluded on roads, {building_rejections} on buildings; {matches} near mapped trees; {} mapped trees in image. Review: {}",
-        candidates.len(),
-        mapped.len(),
-        output.join("review.html").display()
-    );
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::Rgb;
     #[test]
     fn detects_separate_canopies_and_ignores_neutral_roofs() {
         let mut im = RgbImage::from_pixel(160, 100, Rgb([120, 120, 120]));
@@ -496,56 +224,20 @@ mod tests {
         );
     }
     #[test]
-    fn georeference_round_trip_and_review_outputs() {
+    fn georeference_converts_mercator_pixels_to_longitude_latitude_and_scale() {
         let g = Geo {
-            extent: [3708893., 4185645., 3709437., 4186190.],
-            width: 128,
-            height: 128,
+            extent: [-100., -100., 100., 100.],
+            width: 200,
+            height: 200,
         };
-        let ll = g.lonlat(31., 72.);
-        let xy = g.pixel(ll[0], ll[1]);
-        assert!((xy[0] - 31.).abs() < 1e-6);
-        assert!((xy[1] - 72.).abs() < 1e-6);
-        let t = tempfile::tempdir().unwrap();
-        let image = t.path().join("image.png");
-        let export = t.path().join("export.json");
-        let output = t.path().join("review");
-        let mut im = RgbImage::from_pixel(128, 128, Rgb([100, 100, 100]));
-        for y in 50..70 {
-            for x in 50..70 {
-                im.put_pixel(x, y, Rgb([40, 85, 40]));
-            }
-        }
-        im.save(&image).unwrap();
-        fs::write(&export,json!({"width":128,"height":128,"extent":{"xmin":3708893.,"ymin":4185645.,"xmax":3709000.,"ymax":4185752.,"spatialReference":{"wkid":3857}}}).to_string()).unwrap();
-        run(&image, &export, &output, None, None).unwrap();
-        assert!(output.join("annotated.png").is_file());
-        let html = fs::read_to_string(output.join("review.html")).unwrap();
-        assert!(!html.contains("__DATA__"));
-        let report: Value =
-            serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
-        assert_eq!(report["candidate_count"], 1);
-        let candidates: Value =
-            serde_json::from_slice(&fs::read(output.join("candidates.geojson")).unwrap()).unwrap();
-        let ring = candidates["features"][0]["geometry"]["coordinates"][0]
-            .as_array()
-            .unwrap();
-        assert_eq!(ring.first(), ring.last());
-        let centre = candidates["features"][0]["properties"]["center_lon_lat"]
-            .as_array()
-            .unwrap();
-        let osm = t.path().join("trees.osm");
-        fs::write(&osm, format!(r#"<osm><node id="5" lon="{}" lat="{}"><tag k="natural" v="tree"/></node><node id="6" lon="0" lat="0"/></osm>"#, centre[0],centre[1])).unwrap();
-        run(&image, &export, &output, Some(&osm), None).unwrap();
-        let report: Value =
-            serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
-        assert_eq!(report["osm_trees_in_image"], 1);
-        assert_eq!(report["candidates_near_osm_trees"], 1);
-        fs::write(
-            &export,
-            r#"{"extent":{"xmin":0,"ymin":0,"xmax":1,"ymax":1,"spatialReference":{"wkid":4326}}}"#,
-        )
-        .unwrap();
-        assert!(run(&image, &export, &output, None, None).is_err());
+        assert_eq!(g.lonlat(100., 100.), [0., 0.]);
+        let northwest = g.lonlat(0., 0.);
+        let southeast = g.lonlat(200., 200.);
+        let degrees = (100_f64 / 6378137.).to_degrees();
+        assert!((northwest[0] + degrees).abs() < 1e-10);
+        assert!((northwest[1] - degrees).abs() < 1e-10);
+        assert!((southeast[0] - degrees).abs() < 1e-10);
+        assert!((southeast[1] + degrees).abs() < 1e-10);
+        assert_eq!(g.metres_per_pixel(), [1., 1.]);
     }
 }

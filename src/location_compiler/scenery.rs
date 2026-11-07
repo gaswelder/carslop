@@ -63,7 +63,16 @@ pub(super) fn rings(mut parts: Vec<Vec<i64>>) -> Option<Vec<Vec<i64>>> {
     }
     Some(rings)
 }
-pub fn build(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path) -> Result<()> {
+pub fn build(
+    source: &Source,
+    map: &Map,
+    s: &Surfaces,
+    city: &str,
+    landscape_path: &Path,
+    landscape_report_path: &Path,
+    furniture_path: &Path,
+    furniture_report_path: &Path,
+) -> Result<()> {
     let coord = |id: &i64| source.nodes.get(id).map(|e| map.metres(e.coord.unwrap()));
     let mut groups: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
     let mut consumed = std::collections::BTreeSet::new();
@@ -147,7 +156,7 @@ pub fn build(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
         };
         groups[kind].push(polygon(&points).intersection(&crop));
     }
-    let mut file = BufWriter::new(fs::File::create(output.join("landscape.txt"))?);
+    let mut file = BufWriter::new(fs::File::create(landscape_path)?);
     let city_crc = crate::street_surface::crc32(city);
     writeln!(file, "LANDSCAPE 1 {city_crc:08x} {:08x}", s.text_crc)?;
     let mut covered = empty();
@@ -191,13 +200,13 @@ pub fn build(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
     }
     file.flush()?;
     fs::write(
-        &output.join("landscape.json"),
+        landscape_report_path,
         serde_json::to_string_pretty(
             &serde_json::json!({"compiler":"native-rust-v1","triangles":count,"trees":trees,"suppressed_conflicting_trees":suppressed,"incomplete_relations_skipped":incomplete,"area_m2_by_style":areas,"decisions":"Mapped areas layered below roads and buildings; trees retain mapped positions or are suppressed on conflicts."}),
         )? + "\n",
     )?;
     println!("  Placing road controls...");
-    furniture(source, map, s, city, output)
+    furniture(source, map, s, city, furniture_path, furniture_report_path)
 }
 struct Feature {
     id: i64,
@@ -242,7 +251,14 @@ fn directions(e: &Element, kind: usize) -> (Vec<i8>, bool, Option<P>) {
     }
 }
 
-fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path) -> Result<()> {
+fn furniture(
+    source: &Source,
+    map: &Map,
+    s: &Surfaces,
+    city: &str,
+    output_path: &Path,
+    report_path: &Path,
+) -> Result<()> {
     let tree = super::surfaces::index(&s.paths);
     let obstacles = super::surfaces::PolygonIndex::new(&s.obstacles);
     let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
@@ -491,7 +507,7 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
                 % 50;
         }
     }
-    let mut file = BufWriter::new(fs::File::create(output.join("furniture.txt"))?);
+    let mut file = BufWriter::new(fs::File::create(output_path)?);
     writeln!(
         file,
         "FURNITURE 3 {:08x} {:08x}",
@@ -514,7 +530,7 @@ fn furniture(source: &Source, map: &Map, s: &Surfaces, city: &str, output: &Path
     }
     file.flush()?;
     fs::write(
-        &output.join("furniture.json"),
+        report_path,
         serde_json::to_string_pretty(
             &serde_json::json!({"compiler":"native-rust-v1","features":unique.len(),"skipped_source_nodes":skipped,"signal_program":"Fictional 50-second alternating cycle; no real timing or traffic-rule enforcement."}),
         )? + "\n",

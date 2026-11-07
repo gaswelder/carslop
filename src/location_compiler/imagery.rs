@@ -4,7 +4,6 @@ use crate::{
     imagery_trees::atomic,
     tree_preview::{proposals, Geo},
 };
-use geo::{Intersects, MapCoords};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -15,20 +14,20 @@ use std::{
     },
     time::Duration,
 };
-const SERVICE: &str =
+pub(super) const SERVICE: &str =
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
-const RES: f64 = 0.5971642835598172; // zoom-18 Web Mercator sampling, ~0.49 m on the ground here
-const CORE: u32 = 2048;
-const PAD: u32 = 32;
-const TILE: u32 = 512;
-const GUTTER: u32 = 8;
+pub(super) const RES: f64 = 0.5971642835598172; // zoom-18 Web Mercator sampling, ~0.49 m on the ground here
+pub(super) const CORE: u32 = 2048;
+pub(super) const PAD: u32 = 32;
+pub(super) const TILE: u32 = 512;
+pub(super) const GUTTER: u32 = 8;
 #[derive(Clone, Debug)]
-struct Block {
+pub(super) struct Block {
     x: usize,
     y: usize,
-    extent: [f64; 4],
+    pub(super) extent: [f64; 4],
 }
-fn mercator(lon: f64, lat: f64) -> [f64; 2] {
+pub(super) fn mercator(lon: f64, lat: f64) -> [f64; 2] {
     [
         lon.to_radians() * 6378137.,
         (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.)
@@ -37,7 +36,7 @@ fn mercator(lon: f64, lat: f64) -> [f64; 2] {
             * 6378137.,
     ]
 }
-fn blocks(bbox: [f64; 4]) -> Vec<Block> {
+pub(super) fn blocks(bbox: [f64; 4]) -> Vec<Block> {
     let sw = mercator(bbox[1], bbox[0]);
     let ne = mercator(bbox[3], bbox[2]);
     let span = CORE as f64 * RES;
@@ -63,7 +62,7 @@ fn blocks(bbox: [f64; 4]) -> Vec<Block> {
         .collect()
 }
 fn image_path(work: &Path, b: &Block) -> PathBuf {
-    work.join("downloads").join(format!("{}_{}.jpg", b.x, b.y))
+    work.join(format!("{}_{}.jpg", b.x, b.y))
 }
 fn url(b: &Block) -> String {
     let e = b.extent;
@@ -106,13 +105,12 @@ fn fetch(agent: &ureq::Agent, work: &Path, b: &Block) -> Result<()> {
     }
     Err(invalid(format!("block {},{}: {last}", b.x, b.y)))
 }
-fn download(work: &Path, all: &[Block]) -> Result<()> {
-    fs::create_dir_all(work.join("downloads"))?;
+pub(super) fn download(work: &Path, service_path: &Path, all: &[Block]) -> Result<()> {
+    fs::create_dir_all(work)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into();
-    let service_path = work.join("service.json");
     if !service_path.exists() {
         let metadata = agent
             .get(format!("{SERVICE}?f=pjson"))
@@ -169,7 +167,7 @@ fn download(work: &Path, all: &[Block]) -> Result<()> {
         }
     })
 }
-fn city_origin(text: &str) -> Result<[f64; 2]> {
+pub(super) fn city_origin(text: &str) -> Result<[f64; 2]> {
     let line = text
         .lines()
         .find(|l| l.starts_with("origin "))
@@ -177,7 +175,7 @@ fn city_origin(text: &str) -> Result<[f64; 2]> {
     let v: Vec<_> = line.split_whitespace().collect();
     Ok([v[1].parse()?, v[2].parse()?])
 }
-fn local(origin: [f64; 2], ll: [f64; 2]) -> [f64; 2] {
+pub(super) fn local(origin: [f64; 2], ll: [f64; 2]) -> [f64; 2] {
     [
         (ll[0] - origin[1]).to_radians() * 6371000. * origin[0].to_radians().cos(),
         -(ll[1] - origin[0]).to_radians() * 6371000.,
@@ -198,9 +196,16 @@ fn blank(im: &image::RgbImage, x: u32, y: u32) -> bool {
     }
     nonwhite * 100 < n
 }
-fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Value> {
+pub(super) fn process(
+    downloads: &Path,
+    work: &Path,
+    aerial: &Path,
+    b: &Block,
+    origin: [f64; 2],
+) -> Result<Value> {
+    fs::create_dir_all(work)?;
     let meta_path = work.join(format!("block-{}_{}.json", b.x, b.y));
-    let image_file = image_path(work, b);
+    let image_file = image_path(downloads, b);
     let hash = super::sha(&image_file)?;
     if meta_path.exists() {
         let value: Value = serde_json::from_slice(&fs::read(&meta_path)?)?;
@@ -277,296 +282,92 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
     atomic(&meta_path, &serde_json::to_vec(&value)?)?;
     Ok(value)
 }
-pub(crate) fn prepare_imagery(city_dir: &Path, work: &Path, limit: Option<usize>) -> Result<()> {
-    if limit == Some(0) {
-        return Err(invalid("--limit-blocks must be positive"));
-    }
-    fs::create_dir_all(work)?;
-    let city_text = std::fs::read_to_string(city_dir.join("city.txt"))?;
-    let city = crate::city::City::parse(&city_text).map_err(invalid)?;
-    let origin = city_origin(&city_text)?;
-    let manifest: Value = serde_json::from_slice(&std::fs::read(&city_dir.join("manifest.json"))?)?;
-    let mut bbox = [0.; 4];
-    for (i, v) in bbox.iter_mut().enumerate() {
-        *v = manifest["bbox_south_west_north_east"][i]
-            .as_f64()
-            .filter(|v| v.is_finite())
-            .ok_or_else(|| invalid("missing city geographic bounds"))?;
-    }
-    if bbox[0] >= bbox[2]
-        || bbox[1] >= bbox[3]
-        || bbox[0] < -85.
-        || bbox[2] > 85.
-        || bbox[1] < -180.
-        || bbox[3] > 180.
-    {
-        return Err(invalid("invalid city geographic bounds"));
-    }
-    let boundary = super::boundary::Boundary::from_manifest(&manifest)?;
-    let local_boundary = boundary.as_ref().map(|b| b.local(origin));
-    let mercator_boundary = boundary.as_ref().map(|b| {
-        b.geometry.map_coords(|c| {
-            let p = mercator(c.x, c.y);
-            geo::Coord { x: p[0], y: p[1] }
-        })
-    });
-    let all: Vec<_> = blocks(bbox)
-        .into_iter()
-        .filter(|b| {
-            mercator_boundary.as_ref().is_none_or(|g| {
-                g.intersects(&geo::Rect::new(
-                    geo::Coord {
-                        x: b.extent[0],
-                        y: b.extent[1],
-                    },
-                    geo::Coord {
-                        x: b.extent[2],
-                        y: b.extent[3],
-                    },
-                ))
-            })
-        })
-        .collect();
-    if all.is_empty() || all.len() > 2000 {
-        return Err(invalid(
-            "imagery job must contain 1..2000 blocks; crop the map",
-        ));
-    }
-    let mut plan = json!({"version":1,"source":SERVICE,"bbox":bbox,"origin":origin,"resolution_mercator":RES,"core":CORE,"padding":PAD,"tile_size":TILE,"gutter":GUTTER,"blocks":all.len(),"city_sha256":super::sha(&city_dir.join("city.txt"))?});
-    if boundary.is_some() {
-        plan["boundary"] = manifest["boundary"].clone();
-    }
-    let plan_path = work.join("plan.json");
-    if plan_path.exists() {
-        let previous: Value = serde_json::from_slice(&fs::read(&plan_path)?)?;
-        if previous != plan {
-            return Err(invalid(
-                "work directory contains a different imagery plan; choose a new directory",
-            ));
-        }
-    } else {
-        atomic(&plan_path, &serde_json::to_vec_pretty(&plan)?)?;
-    }
-    println!(
-        "City imagery: {} blocks, up to {} tiles; approximately {:.2} m/pixel on the ground.",
-        all.len(),
-        all.len() * 16,
-        RES * origin[0].to_radians().cos()
-    );
-    if let Some(n) = limit {
-        download(work, &all[..n.min(all.len())])?;
-        println!("Download sample complete; city assets unchanged. Run without --limit-blocks for full preparation.");
-        return Ok(());
-    }
-    download(work, &all)?;
-    let plan_hash = super::sha(&plan_path)?;
-    let installed = city_dir.join("aerial/source.json");
-    let installed_plan = fs::read(&installed)
-        .ok()
-        .and_then(|s| serde_json::from_slice::<Value>(&s).ok())
-        .is_some_and(|v| v["plan_sha256"] == plan_hash);
-    let aerial = if installed_plan {
-        city_dir.join("aerial")
-    } else {
-        work.join("aerial")
-    };
-    fs::create_dir_all(&aerial)?;
-    let pilot = work.join("previous-imagery-trees.txt");
-    if !pilot.exists() {
-        if let Ok(data) = fs::read(city_dir.join("imagery-trees.txt")) {
-            atomic(&pilot, &data)?;
-        }
-    }
-    let mut catalog = format!("AERIAL 1\nsize {TILE} {GUTTER}\n");
-    let mut drafts = vec![];
-    let (mut tile_count, mut missing) = (0, 0);
-    for (i, b) in all.iter().enumerate() {
-        let meta = process(work, &aerial, b, origin)?;
-        for t in meta["tiles"]
-            .as_array()
-            .ok_or_else(|| invalid("missing block tiles"))?
-        {
-            let bounds = t["bounds"]
-                .as_array()
-                .ok_or_else(|| invalid("missing tile bounds"))?;
-            if local_boundary.as_ref().is_some_and(|g| {
-                !g.intersects(&geo::Rect::new(
-                    geo::Coord {
-                        x: bounds[0].as_f64().unwrap(),
-                        y: bounds[1].as_f64().unwrap(),
-                    },
-                    geo::Coord {
-                        x: bounds[2].as_f64().unwrap(),
-                        y: bounds[3].as_f64().unwrap(),
-                    },
-                ))
-            }) {
-                continue;
-            }
-            catalog.push_str(&format!(
-                "tile {:.6} {:.6} {:.6} {:.6} {} {:08x}\n",
-                bounds[0].as_f64().unwrap(),
-                bounds[1].as_f64().unwrap(),
-                bounds[2].as_f64().unwrap(),
-                bounds[3].as_f64().unwrap(),
-                t["name"].as_str().unwrap(),
-                t["crc"].as_u64().unwrap()
-            ));
-            tile_count += 1;
-        }
-        for t in meta["trees"]
-            .as_array()
-            .ok_or_else(|| invalid("missing block crowns"))?
-        {
-            drafts.push([
-                t[0].as_f64().unwrap(),
-                t[1].as_f64().unwrap(),
-                t[2].as_f64().unwrap(),
-            ]);
-        }
-        missing += meta["missing_tiles"].as_u64().unwrap_or(0);
-        if (i + 1) % 10 == 0 || i + 1 == all.len() {
-            println!(
-                "Prepared blocks: {}/{}; {tile_count} tiles, {} crown proposals",
-                i + 1,
-                all.len(),
-                drafts.len()
-            );
-        }
-    }
-    if tile_count == 0 {
-        return Err(invalid(
-            "source returned no usable imagery; city assets unchanged",
-        ));
-    }
-    println!(
-        "Filtering {} crown proposals against roads, buildings and mapped trees...",
-        drafts.len()
-    );
-    let obstacles =
-        crate::tree_obstacles::Obstacles::read(city_dir, [bbox[1], bbox[0], bbox[3], bbox[2]])?;
-    let landscape = fs::read_to_string(city_dir.join("landscape.txt"))?;
-    let header = landscape
-        .lines()
-        .next()
-        .ok_or_else(|| invalid("missing landscape header"))?;
-    let expected = format!(
-        "LANDSCAPE 1 {:08x} {:08x}",
-        crate::street_surface::crc32(&city_text),
-        crate::imagery_trees::checksum(&city_dir.join("streets.txt"))?
-    );
-    if header != expected {
-        return Err(invalid("landscape does not match city and roads"));
-    }
-    let mut index = rstar::RTree::new();
-    for line in landscape.lines() {
-        let f: Vec<_> = line.split_whitespace().collect();
-        if f.first() == Some(&"t") && f.len() == 6 {
-            index.insert([f[2].parse::<f64>()?, f[3].parse::<f64>()?]);
-        }
-    }
-    let mut output = format!("{header}\n");
-    let (mut count, mut conflicts, mut duplicates, mut outside) = (0, 0, 0, 0);
-    let inside = |p: [f64; 2]| {
-        p[0] >= city.bounds[0][0] as f64
-            && p[1] >= city.bounds[0][1] as f64
-            && p[0] <= city.bounds[1][0] as f64
-            && p[1] <= city.bounds[1][1] as f64
-    };
-    // Preserve the already approved pilot; new imagery proposals are deduplicated around it.
-    let mut append = |p: [f64; 2], radius: f64, height: f64| {
-        let p = p.map(|v| (v * 1000.).round() / 1000.);
-        if !inside(p)
-            || local_boundary
-                .as_ref()
-                .is_some_and(|b| !b.intersects(&geo::Point::new(p[0], p[1])))
-        {
-            outside += 1;
-            return;
-        }
-        if obstacles.rejection_at(p).is_some() {
-            conflicts += 1;
-            return;
-        }
-        if index
-            .nearest_neighbor(&p)
-            .is_some_and(|q| (q[0] - p[0]).hypot(q[1] - p[1]) < 2.)
-        {
-            duplicates += 1;
-            return;
-        }
-        let id = (1_u64 << 63) | count;
-        output.push_str(&format!(
-            "t {id} {:.3} {:.3} {:.3} {:.3}\n",
-            p[0],
-            p[1],
-            height.clamp(3.5, 14.),
-            radius.clamp(0.7, 4.5)
-        ));
-        index.insert(p);
-        count += 1;
-    };
-    if pilot.exists() {
-        for line in fs::read_to_string(&pilot)?.lines().skip(1) {
-            let f: Vec<_> = line.split_whitespace().collect();
-            if f.len() == 6 && f[0] == "t" {
-                append([f[2].parse()?, f[3].parse()?], f[5].parse()?, f[4].parse()?);
-            }
-        }
-    }
-    for d in drafts {
-        let radius = d[2].clamp(0.7, 4.5);
-        append(local(origin, [d[0], d[1]]), radius, radius * 2.8);
-    }
-    if plan["city_sha256"] != super::sha(&city_dir.join("city.txt"))? {
-        return Err(invalid(
-            "city changed during imagery preparation; choose a fresh work directory",
-        ));
-    }
-    let report = json!({"plan_sha256":plan_hash,"source":SERVICE,"attribution":"Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community","local_development_only":true,"bbox":bbox,"blocks":all.len(),"tile_count":tile_count,"missing_tiles":missing,"imagery_trees":count,"excluded_road_or_building":conflicts,"excluded_duplicates":duplicates,"excluded_outside_city":outside,"ground_sampling_metres":RES*origin[0].to_radians().cos(),"sizes":"Tree sizes are artistic estimates; candidates inferred by RGB vegetation/texture heuristics.","rights":"Local development pack; redistribution rights have not been established."});
-    // Provenance belongs to the installed pack, not the disposable work cache.
-    for name in ["service.json", "plan.json"] {
-        atomic(&aerial.join(name), &fs::read(work.join(name))?)?;
-    }
-    atomic(&aerial.join("tiles.txt"), catalog.as_bytes())?;
-    atomic(
-        &aerial.join("source.json"),
-        &serde_json::to_vec_pretty(&report)?,
-    )?;
-    atomic(
-        &work.join("report.json"),
-        &serde_json::to_vec_pretty(&report)?,
-    )?;
-    atomic(&work.join("imagery-trees.txt"), output.as_bytes())?;
-    if !installed_plan {
-        let backup = work.join("previous-aerial");
-        let destination = city_dir.join("aerial");
-        if destination.exists() {
-            if backup.exists() {
-                return Err(invalid(
-                    "previous-aerial backup already exists; inspect it before installing",
-                ));
-            }
-            fs::rename(&destination, &backup)?;
-        }
-        if let Err(e) = fs::rename(&aerial, &destination) {
-            if backup.exists() {
-                let _ = fs::rename(&backup, &destination);
-            }
-            return Err(e.into());
-        }
-    }
-    atomic(
-        &city_dir.join("imagery-trees.json"),
-        &serde_json::to_vec_pretty(&report)?,
-    )?;
-    atomic(&city_dir.join("imagery-trees.txt"), output.as_bytes())?;
-    println!("Installed {tile_count} imagery tiles and {count} trees; {missing} missing imagery tiles. Run bake-city --location NAME to rebuild the playable scene.");
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::location_compiler::{prepare_imagery, AerialPaths, ImageryPaths};
+
+    #[test]
+    fn preparation_uses_explicit_paths_and_resumes_installed_imagery() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let paths = ImageryPaths {
+            city: &root.join("map.data"),
+            streets: &root.join("roads.data"),
+            landscape: &root.join("vegetation.data"),
+            manifest: &root.join("metadata.json"),
+            downloads_directory: &root.join("raw-images"),
+            blocks_directory: &root.join("block-cache"),
+            service: &root.join("cache/provider.json"),
+            plan: &root.join("cache/job.json"),
+            previous_trees: &root.join("cache/original-trees.data"),
+            report: &root.join("cache/result.json"),
+            trees: &root.join("cache/crowns.data"),
+            installed_trees: &root.join("outputs/trees.data"),
+            installed_trees_report: &root.join("outputs/trees-report.json"),
+            aerial_backup: &root.join("backup/old-imagery"),
+            staged_aerial_directory: &root.join("scratch/textures"),
+            installed_aerial: AerialPaths {
+                directory: &root.join("outputs/textures"),
+                service: &root.join("outputs/provenance/provider.json"),
+                plan: &root.join("outputs/provenance/job.json"),
+                catalog: &root.join("outputs/catalog.data"),
+                source: &root.join("outputs/provenance/source.json"),
+            },
+        };
+        let city =
+            "CITY 2\norigin 35.162 33.32\nbounds -100 -100 100 100\nn -20 0\nn 20 0\nr 0 1 8 0 1\n";
+        let streets = format!("STREETS 1 1 {:08x}\n", crate::street_surface::crc32(city));
+        fs::write(paths.city, city).unwrap();
+        fs::write(paths.streets, &streets).unwrap();
+        fs::write(
+            paths.landscape,
+            format!(
+                "LANDSCAPE 1 {:08x} {:08x}\n",
+                crate::street_surface::crc32(city),
+                crate::street_surface::crc32(&streets)
+            ),
+        )
+        .unwrap();
+        let bbox = [35.162, 33.32, 35.163, 33.321];
+        fs::write(paths.manifest, b"{}").unwrap();
+        fs::create_dir_all(paths.downloads_directory).unwrap();
+        fs::create_dir_all(paths.service.parent().unwrap()).unwrap();
+        fs::write(paths.service, "{}").unwrap();
+        let side = CORE + 2 * PAD;
+        let image = image::RgbImage::from_pixel(side, side, image::Rgb([50, 70, 60]));
+        for block in blocks(bbox) {
+            image
+                .save(image_path(paths.downloads_directory, &block))
+                .unwrap();
+        }
+        fs::create_dir_all(paths.installed_aerial.directory).unwrap();
+        fs::write(paths.installed_aerial.directory.join("old-marker"), "old").unwrap();
+
+        prepare_imagery(&paths, bbox).unwrap();
+        assert!(paths.aerial_backup.join("old-marker").is_file());
+        assert!(!paths.staged_aerial_directory.exists());
+        for path in [
+            paths.installed_aerial.service,
+            paths.installed_aerial.plan,
+            paths.installed_aerial.catalog,
+            paths.installed_aerial.source,
+            paths.report,
+            paths.trees,
+            paths.installed_trees,
+            paths.installed_trees_report,
+        ] {
+            assert!(path.is_file(), "{}", path.display());
+        }
+        let catalog = fs::read(paths.installed_aerial.catalog).unwrap();
+        prepare_imagery(&paths, bbox).unwrap();
+        assert_eq!(fs::read(paths.installed_aerial.catalog).unwrap(), catalog);
+        assert_eq!(
+            fs::read(paths.trees).unwrap(),
+            fs::read(paths.installed_trees).unwrap()
+        );
+    }
+
     #[test]
     fn grid_is_contiguous_and_gutters_match() {
         let b = blocks([35.1, 33.25, 35.23, 33.47]);
@@ -593,8 +394,8 @@ mod tests {
         let im = image::RgbImage::from_fn(side, side, |x, y| {
             image::Rgb([(40 + x % 128) as u8, (40 + y % 128) as u8, 80])
         });
-        im.save(image_path(work, &b)).unwrap();
-        let first = process(work, &aerial, &b, [35.162, 33.32]).unwrap();
+        im.save(image_path(&work.join("downloads"), &b)).unwrap();
+        let first = process(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap();
         assert_eq!(first["tiles"].as_array().unwrap().len(), 16);
         let a = fs::read(aerial.join("0_0_0_0.jpg")).unwrap();
         let decoded = image::load_from_memory(&a).unwrap().to_rgb8().into_raw();
@@ -608,9 +409,15 @@ mod tests {
             let right = &right[y * width * 3..(y * width + 2 * GUTTER as usize) * 3];
             assert!(left.iter().zip(right).all(|(a, b)| a.abs_diff(*b) <= 12));
         }
-        assert_eq!(first, process(work, &aerial, &b, [35.162, 33.32]).unwrap());
+        assert_eq!(
+            first,
+            process(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap()
+        );
         fs::write(aerial.join("0_0_0_0.jpg"), b"damaged").unwrap();
-        assert_eq!(first, process(work, &aerial, &b, [35.162, 33.32]).unwrap());
+        assert_eq!(
+            first,
+            process(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap()
+        );
         assert_eq!(a, fs::read(aerial.join("0_0_0_0.jpg")).unwrap());
     }
     #[test]

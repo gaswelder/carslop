@@ -18,7 +18,6 @@ impl RTreeObject for Obstacle {
     }
 }
 pub struct Obstacles {
-    origin: [f64; 2],
     index: RTree<Obstacle>,
 }
 fn local(origin: [f64; 2], lon: f64, lat: f64) -> [f64; 2] {
@@ -57,8 +56,12 @@ fn obstacle(
     })
 }
 impl Obstacles {
-    pub fn read(directory: &Path, lonlat_bounds: [f64; 4]) -> Result<Self> {
-        let text = std::fs::read_to_string(directory.join("city.txt"))?;
+    pub(crate) fn read_paths(
+        city_path: &Path,
+        streets_path: &Path,
+        lonlat_bounds: [f64; 4],
+    ) -> Result<Self> {
+        let text = std::fs::read_to_string(city_path)?;
         let city = crate::city::City::parse(&text).map_err(invalid)?;
         let origin_line = text
             .lines()
@@ -93,7 +96,7 @@ impl Obstacles {
             }
         }
         println!("Checking road surfaces for tree exclusions...");
-        let mut input = BufReader::new(std::fs::File::open(&directory.join("streets.txt"))?);
+        let mut input = BufReader::new(std::fs::File::open(streets_path)?);
         let mut line = String::new();
         input.read_line(&mut line)?;
         let expected = format!(
@@ -149,15 +152,8 @@ impl Obstacles {
             }
         }
         Ok(Self {
-            origin,
             index: RTree::bulk_load(objects),
         })
-    }
-    pub fn metres(&self, lon: f64, lat: f64) -> [f64; 2] {
-        local(self.origin, lon, lat)
-    }
-    pub fn rejection(&self, lon: f64, lat: f64) -> Option<&'static str> {
-        self.rejection_at(self.metres(lon, lat))
     }
     pub fn rejection_at(&self, p: [f64; 2]) -> Option<&'static str> {
         let point = Point::new(p[0], p[1]);
@@ -192,13 +188,13 @@ mod tests {
         let header = format!("STREETS 1 1 {:08x}\n", crate::street_surface::crc32(city));
         let mesh = "t 0 -20 -2 20 -2 20 2\nt 0 -20 -2 20 2 -20 2\nt 4 -20 3 20 3 20 6\n";
         fs::write(temp.path().join("streets.txt"), format!("{header}{mesh}")).unwrap();
-        let o = Obstacles::read(temp.path(), [33.319, 35.161, 33.321, 35.163]).unwrap();
-        let check = |x: f64, z: f64| {
-            o.rejection(
-                33.32 + (x / (6371000. * 35.162_f64.to_radians().cos())).to_degrees(),
-                35.162 - (z / 6371000.).to_degrees(),
-            )
-        };
+        let o = Obstacles::read_paths(
+            &temp.path().join("city.txt"),
+            &temp.path().join("streets.txt"),
+            [33.319, 35.161, 33.321, 35.163],
+        )
+        .unwrap();
+        let check = |x: f64, z: f64| o.rejection_at([x, z]);
         assert_eq!(check(0., 0.), Some("road"));
         assert_eq!(check(15., 15.), Some("building"));
         assert_eq!(
@@ -207,7 +203,12 @@ mod tests {
             "pavement must remain available for trees"
         );
         fs::write(temp.path().join("streets.txt"), "STREETS 1 1 00000000\n").unwrap();
-        assert!(Obstacles::read(temp.path(), [33.319, 35.161, 33.321, 35.163]).is_err());
+        assert!(Obstacles::read_paths(
+            &temp.path().join("city.txt"),
+            &temp.path().join("streets.txt"),
+            [33.319, 35.161, 33.321, 35.163]
+        )
+        .is_err());
     }
     #[test]
     fn rejects_centres_on_buildings_and_road_junctions_not_overhanging_crowns() {
@@ -223,11 +224,9 @@ mod tests {
             obstacle(vec![[-20., -2.], [20., 2.], [-20., 2.]], "road", &region).unwrap(),
         ];
         let o = Obstacles {
-            origin: [0., 0.],
             index: RTree::bulk_load(objects.into()),
         };
-        let check =
-            |x: f64, z: f64| o.rejection((x / 6371000.).to_degrees(), (-z / 6371000.).to_degrees());
+        let check = |x: f64, z: f64| o.rejection_at([x, z]);
         assert_eq!(check(15., 15.), Some("building"));
         assert_eq!(check(0., 0.), Some("road"));
         assert_eq!(check(10., 10.), Some("building"));
