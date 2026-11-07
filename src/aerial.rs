@@ -299,7 +299,7 @@ impl Aerial {
             gl::TexParameteri(
                 gl::TEXTURE_2D_ARRAY,
                 gl::TEXTURE_MAG_FILTER,
-                gl::LINEAR as i32,
+                gl::NEAREST as i32,
             );
             for axis in [gl::TEXTURE_WRAP_S, gl::TEXTURE_WRAP_T] {
                 gl::TexParameteri(gl::TEXTURE_2D_ARRAY, axis, gl::CLAMP_TO_EDGE as i32);
@@ -315,9 +315,9 @@ impl Aerial {
                     )
             });
             if supported {
-                let mut maximum = 1.0;
-                gl::GetFloatv(0x84FF, &mut maximum);
-                gl::TexParameterf(gl::TEXTURE_2D_ARRAY, 0x84FE, maximum.min(16.0));
+                // Anisotropic filtering may override NEAREST magnification.
+                // Keep it disabled for the nearest-neighbour comparison.
+                gl::TexParameterf(gl::TEXTURE_2D_ARRAY, 0x84FE, 1.0);
             }
         }
         let loader = TileLoader::new(directory, catalog.clone());
