@@ -47,10 +47,8 @@ pub struct CarSpec {
     pub brake_force: f32,
     pub tire_friction_coefficient: f32,
     pub wheelbase: f32,
-    pub steering_response: f32,
     pub audio: EngineVoice,
     pub rear_combined_slip: Option<[f32; 3]>, // baseline, reduction, slip angle
-    pub steering_brake_falloff: f32,
     pub front_weight: f32,
     /// Metres above ground, derived from the authored fraction and model height.
     pub cg_height: f32,
@@ -63,8 +61,6 @@ pub struct CarSpec {
     pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
     pub engine_max_torque_nm: f32,
     pub suspension_hz: f32,
-    pub steering_low_speed_squared: f32,
-    pub steering_speed_squared: f32, // additional steering-lock falloff per (m/s)^2
     pub gearbox: Gearbox,
     pub engine_power_hp: f32,
     /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
@@ -382,15 +378,10 @@ fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarS
         brake_force: num(&v["brake_force"])?,
         tire_friction_coefficient: num(&v["tire_friction_coefficient"])?,
         wheelbase,
-        steering_response: num(&v["steering_response"])?,
         engine_power_hp: num(&v["engine_power_hp"])?,
         drag_coefficient: num(&v["drag_coefficient"])?,
         frontal_area_m2,
         rear_combined_slip,
-        steering_brake_falloff: nonnegative(
-            v.get("steering_brake_falloff")
-                .unwrap_or(&serde_json::Value::from(0)),
-        )?,
         front_weight: frac(&v["front_weight"])?,
         cg_height,
         track_width,
@@ -399,11 +390,6 @@ fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarS
         brake_bias: frac(&v["brake_bias"])?,
         engine_max_torque_nm: num(&v["engine_max_torque_nm"])?,
         suspension_hz: num(&v["suspension_hz"])?,
-        steering_low_speed_squared: nonnegative(
-            v.get("steering_low_speed_squared")
-                .unwrap_or(&v["steering_speed_squared"]),
-        )?,
-        steering_speed_squared: nonnegative(&v["steering_speed_squared"])?,
         corner_stiffness: [num(&stiffness[0])?, num(&stiffness[1])?],
         gearbox,
     };
@@ -630,7 +616,6 @@ mod tests {
                 s.brake_force,
                 s.tire_friction_coefficient,
                 s.wheelbase,
-                s.steering_response,
                 s.gearbox.final_drive,
                 s.gearbox.rolling_radius,
                 s.drag_coefficient,
@@ -864,10 +849,6 @@ mod runtime_tests {
                 model.spec().gearbox.rolling_radius
             );
             assert_eq!(car.rear_combined_slip, model.spec().rear_combined_slip);
-            assert_eq!(
-                car.steering_brake_falloff,
-                model.spec().steering_brake_falloff
-            );
             assert_eq!(car.audio.samples, expected_samples);
         }
     }

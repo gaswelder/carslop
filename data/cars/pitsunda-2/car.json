@@ -3,7 +3,6 @@
   "weight_kg": 1040,
   "brake_force": 18720,
   "tire_friction_coefficient": 1.121305,
-  "steering_response": 8.5,
   "engine_power_hp": 92.4,
   "drag_coefficient": 0.26827704,
   "front_weight": 0.6,
@@ -17,8 +16,6 @@
   ],
   "engine_max_torque_nm": 125,
   "suspension_hz": 1.55,
-  "steering_speed_squared": 0.002,
-  "steering_low_speed_squared": 0.002,
   "gearbox": {
     "ratios": [
       3.552,

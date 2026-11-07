@@ -8,6 +8,11 @@ pub const REDLINE_RPM: f32 = 6500.0;
 const REV_MATCH_SECONDS: f32 = 0.22;
 const SOUND_SHIFT_SECONDS: f32 = 0.36;
 
+// Base rate of normalized steering input change per second.
+const STEERING_RATE: f32 = 9.0;
+// Forward speed (m/s) at which released steering reaches its full return rate.
+const STEERING_CENTERING_SPEED: f32 = 10.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
     Drive,
@@ -259,7 +264,7 @@ impl Vehicle {
             let lateral = dot(self.velocity, right);
             let a = spec.wheelbase * (1.0 - spec.front_weight);
             let b = spec.wheelbase * spec.front_weight;
-            let delta = -self.steering_angle(longitudinal);
+            let delta = -self.steering_angle();
             let (sin, cos) = delta.sin_cos();
 
             // Suspension supports the chassis rather than pinning it to terrain.
@@ -707,59 +712,33 @@ impl Vehicle {
 
     fn update_steering(&mut self, requested: f32, dt: f32) {
         let requested = requested.clamp(-1.0, 1.0);
+        if requested == 0.0 {
+            // Stationary wheels hold their angle. Forward motion progressively
+            // restores self-centering, independently of deliberate countersteering.
+            let motion = (self.speed / STEERING_CENTERING_SPEED).clamp(0.0, 1.0);
+            let step = STEERING_RATE * 0.85 * motion * dt;
+            self.steering -= self.steering.clamp(-step, step);
+            return;
+        }
         // Cross the centre quickly when countersteering, then build the new
         // turn progressively. Small digital taps never request instant lock.
         let reversing = requested * self.steering < 0.0;
         let centering = reversing || requested.abs() < self.steering.abs();
         let target = if reversing { 0.0 } else { requested };
-        let response = self.model.spec().steering_response;
         let rate = if centering {
-            response * 0.85
+            STEERING_RATE * 0.85
         } else {
-            response * 0.45 / (1.0 + self.speed.abs() * 0.008)
+            STEERING_RATE * 0.45 / (1.0 + self.speed.abs() * 0.008)
         };
         self.steering += (target - self.steering).clamp(-rate * dt, rate * dt);
     }
 
-    fn steering_angle(&self, speed: f32) -> f32 {
-        // Keep parking manoeuvres close to full lock. Blend the additional
-        // speed limiter in between 18 and 40 km/h; applying speed squared all
-        // the way to zero made even walking-speed turns unnecessarily wide.
-        let blend = ((speed.abs() - 5.0) / 6.0).clamp(0.0, 1.0);
-        let high_speed = blend * blend * (3.0 - 2.0 * blend);
-        // Above 60 km/h grow the extra restriction linearly. Continuing the
-        // quadratic falloff takes away too much lock on faster road bends.
-        let road_speed = speed.abs().min(60.0 / 3.6);
-        // Braking needs more of the tire budget. Smoothly restore the original
-        // restriction with pedal pressure to keep trail braking settled.
-        let braking = (self.brake_pressure / 0.35).clamp(0.0, 1.0);
-        let limited_speed = road_speed + (speed.abs() - road_speed) * braking;
-        // Reserve the extra high-speed lock reduction for large inputs so
-        // a held key cannot overwhelm the tires, while taps stay responsive.
-        // Use a linear input factor: a squared factor can reduce wheel angle
-        // as the driver adds steering at road speeds.
-        let spec = self.model.spec();
-        // Retain the settled city-speed response, then release the extra lock
-        // restriction progressively from 40 to 80 km/h for ordinary road bends.
-        let road_blend = ((speed.abs() * 3.6 - 40.0) / 40.0).clamp(0.0, 1.0);
-        let road_blend = road_blend * road_blend * (3.0 - 2.0 * road_blend);
-        let falloff = spec.steering_low_speed_squared
-            + (spec.steering_speed_squared - spec.steering_low_speed_squared) * road_blend;
-        // Keep trail braking settled while allowing quicker unbraked turn-in.
-        let falloff = falloff * (1.0 + spec.steering_brake_falloff * braking);
-        let lock = 0.54
-            / (1.0
-                + speed.abs() / 22.0
-                + falloff
-                    * speed.abs()
-                    * limited_speed
-                    * high_speed
-                    * (0.35 + 0.65 * self.steering.abs()));
-        self.steering.signum() * self.steering.abs().powf(1.10) * lock
+    fn steering_angle(&self) -> f32 {
+        self.steering.signum() * self.steering.abs().powf(1.10) * 0.54
     }
 
     pub fn front_wheel_angle(&self) -> f32 {
-        -self.steering_angle(self.speed)
+        -self.steering_angle()
     }
 
     pub fn resolve_road(&mut self) -> f32 {
@@ -1517,16 +1496,15 @@ mod tests {
                 let mut car = level_route_car(track::TrackId::scenic(), model);
                 for steering in [-1.0, 1.0] {
                     steering_run(&mut car, speed, steering, 5.0, 240.0);
-                    let angle = car.steering_angle(speed).abs();
-                    let parking_lock = car.steering_angle(0.0).abs();
+                    let angle = car.steering_angle().abs();
                     let expected_yaw = speed.abs() * angle.tan() / model.spec().wheelbase;
                     println!(
                         "{model:?} at {speed}: lock {angle}, yaw {} expected {expected_yaw}",
                         car.yaw_rate.abs()
                     );
                     assert!(
-                        angle > parking_lock * 0.8,
-                        "{model:?}: parking-speed steering loses too much lock"
+                        (angle - 0.54).abs() < 0.001,
+                        "{model:?}: full input must retain full steering lock"
                     );
                     assert!(
                         car.yaw_rate.abs() > expected_yaw * 0.75,
@@ -1540,19 +1518,21 @@ mod tests {
     #[test]
     fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
         for model in crate::cars::ALL {
-            let mut car = level_route_car(track::TrackId::scenic(), model);
-            for speed_kmh in [40.0, 80.0, 120.0, 200.0] {
+            let mut car = level_route_car(track::TrackId::Compact, model);
+            for speed_kmh in [0.0, 40.0, 80.0, 120.0, 200.0] {
+                car.speed = speed_kmh / 3.6;
                 for direction in [-1.0, 1.0] {
                     let mut previous = 0.0;
                     for step in 1..=100 {
                         car.steering = direction * step as f32 / 100.0;
-                        let angle = car.steering_angle(speed_kmh / 3.6).abs();
+                        let angle = car.front_wheel_angle().abs();
                         assert!(
                             angle > previous,
                             "{model:?} at {speed_kmh} km/h: more input reduced wheel angle"
                         );
                         previous = angle;
                     }
+                    assert!((previous - 0.54).abs() < 0.001);
                 }
             }
         }
@@ -1566,7 +1546,7 @@ mod tests {
         {
             let mut car = level_route_car(track::TrackId::scenic(), model);
             car.steering = 1.0;
-            assert!(car.steering_angle(80.0 / 3.6).abs() > 0.08);
+            assert!(car.steering_angle().abs() > 0.08);
             car.steering = 0.0;
             steering_run(&mut car, 80.0 / 3.6, 0.5, 2.0, 240.0);
             let lateral_accel = car.yaw_rate.abs() * 80.0 / 3.6;
@@ -1725,9 +1705,62 @@ mod tests {
     }
 
     #[test]
-    fn steering_builds_progressively_centres_faster_and_preserves_car_identity() {
-        let results = crate::cars::ALL.map(|model| {
-            let mut car = route_car(track::TrackId::scenic(), model);
+    fn stationary_steering_holds_its_angle_and_can_be_countersteered() {
+        let mut car = Vehicle::new([0.0; 3], 0.0, crate::cars::ALL[0]);
+        for direction in [-1.0, 1.0] {
+            car.steering = 0.0;
+            for _ in 0..240 {
+                car.update_steering(direction, 1.0 / 240.0);
+            }
+            assert_eq!(car.steering, direction);
+            for _ in 0..240 {
+                car.update_steering(0.0, 1.0 / 240.0);
+            }
+            assert_eq!(car.steering, direction);
+            for _ in 0..240 {
+                car.update_steering(-direction, 1.0 / 240.0);
+            }
+            assert_eq!(car.steering, -direction);
+        }
+    }
+
+    #[test]
+    fn released_steering_centres_faster_with_forward_speed() {
+        let mut car = Vehicle::new([0.0; 3], 0.0, crate::cars::ALL[0]);
+        for direction in [-1.0, 1.0] {
+            let mut previous = 1.0;
+            for speed in [0.5, 2.0, 5.0, 10.0] {
+                car.speed = speed;
+                let mut reference: Option<f32> = None;
+                for hz in [30, 60, 240] {
+                    car.steering = direction;
+                    for _ in 0..hz / 10 {
+                        car.update_steering(0.0, 1.0 / hz as f32);
+                    }
+                    let remaining = car.steering.abs();
+                    if let Some(expected) = reference {
+                        assert!((remaining - expected).abs() < 0.00001);
+                    } else {
+                        assert!(remaining < previous);
+                        previous = remaining;
+                        reference = Some(remaining);
+                    }
+                }
+            }
+            car.speed = -5.0;
+            car.steering = direction;
+            car.update_steering(0.0, 1.0);
+            assert_eq!(car.steering, direction);
+            car.speed = 10.0;
+            car.update_steering(0.0, 1.0);
+            assert_eq!(car.steering, 0.0);
+        }
+    }
+
+    #[test]
+    fn steering_builds_progressively_and_centres_faster() {
+        for model in crate::cars::ALL {
+            let mut car = route_car(track::TrackId::Compact, model);
             steering_run(&mut car, 15.0, 1.0, 0.1, 240.0);
             let built = car.front_wheel_angle().abs();
             steering_run(&mut car, 15.0, 0.0, 0.05, 240.0);
@@ -1736,15 +1769,11 @@ mod tests {
                 0.0,
                 "a brief correction must centre promptly"
             );
-            built
-        });
-        assert!(
-            results[CarModel::fixture("club").index()]
-                > results[CarModel::fixture("muscle").index()]
-                && results[CarModel::fixture("muscle").index()]
-                    > results[CarModel::fixture("kestrel").index()],
-            "city-speed lock: Club > Muscle > stabilized Kestrel: {results:?}"
-        );
+            assert!(
+                built > 0.0 && built < 0.54,
+                "a brief input must build gradually"
+            );
+        }
     }
 
     #[test]
