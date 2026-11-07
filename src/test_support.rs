@@ -182,3 +182,20 @@ pub fn write_car(directory: &std::path::Path) -> serde_json::Value {
     std::fs::write(directory.join("model.glb"), model_glb(&car_spec().design)).unwrap();
     definition
 }
+
+// Index zero is the standard fixture; other entries belong to individual tests.
+static SPECS: std::sync::Mutex<Vec<&'static CarSpec>> = std::sync::Mutex::new(Vec::new());
+
+pub fn register_spec(spec: CarSpec) -> usize {
+    let mut specs = SPECS.lock().unwrap();
+    specs.push(Box::leak(Box::new(spec)));
+    specs.len()
+}
+
+pub fn fixture_spec(index: usize) -> &'static CarSpec {
+    if index == 0 {
+        car_spec()
+    } else {
+        SPECS.lock().unwrap()[index - 1]
+    }
+}

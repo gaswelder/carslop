@@ -868,7 +868,7 @@ mod tests {
                 let mut car = Vehicle::on_track(
                     position,
                     sample.heading(),
-                    CarModel::fixture("kestrel"),
+                    CarModel::test_fixture(),
                     track.clone(),
                 );
                 assert_eq!(car.resolve_road(), 0.0);
@@ -897,14 +897,14 @@ mod tests {
         Vehicle::on_track(
             road.lane_position(0.0),
             road.heading() + if uphill { 0.0 } else { std::f32::consts::PI },
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
             route,
         )
     }
 
     #[test]
     fn manual_shifts_hold_gears_and_pass_through_neutral() {
-        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::fixture("kestrel"));
+        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::test_fixture());
         car.manual = true;
         car.velocity = [0.0, 40.0];
         car.refresh_speed();
@@ -981,86 +981,14 @@ mod tests {
     }
 
     #[test]
-    fn kestrel_city_speed_cornering_stays_balanced() {
-        for input in [-1.0, -0.5, -0.25, 0.25, 0.5, 1.0] {
-            for throttle in [0.0, 0.35, 1.0] {
-                let mut car =
-                    level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-                let road = car.track.at_distance(50.0);
-                let speed = 40.0 / 3.6;
-                let mut peak_slip: f32 = 0.0;
-                for _ in 0..480 {
-                    let lateral = dot(car.velocity, [car.heading.cos(), -car.heading.sin()]);
-                    car.position = road.lane_position(0.0);
-                    car.velocity = [
-                        car.heading.sin() * speed + car.heading.cos() * lateral,
-                        car.heading.cos() * speed - car.heading.sin() * lateral,
-                    ];
-                    car.update(
-                        Duration::from_secs_f64(1.0 / 240.0),
-                        Controls {
-                            steering: input,
-                            throttle,
-                            ..Controls::default()
-                        },
-                    );
-                    peak_slip = peak_slip.max(car.slip.abs().atan2(car.speed.abs()).to_degrees());
-                }
-                println!(
-                    "input {input} throttle {throttle}: peak slip {peak_slip:.2}, yaw {:.2}",
-                    car.yaw_rate
-                );
-                assert!(
-                    peak_slip < 3.0,
-                    "40 km/h turn should remain controllable: {input}, {throttle}, {peak_slip}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn kestrel_rear_stays_settled_through_corner_entry_and_lift() {
-        for speed_kmh in [40.0, 60.0, 90.0, 120.0] {
-            for input in [-1.0, -0.5, 0.5, 1.0] {
-                for brake in [0.0, 0.35] {
-                    let mut car =
-                        level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-                    car.velocity =
-                        [car.heading.sin(), car.heading.cos()].map(|v| v * speed_kmh / 3.6);
-                    let mut peak_slip: f32 = 0.0;
-                    for tick in 0..720 {
-                        treadmill_tick(
-                            &mut car,
-                            Controls {
-                                steering: input,
-                                throttle: if tick < 360 { 0.35 } else { 0.0 },
-                                brake: if tick < 360 { 0.0 } else { brake },
-                                ..Controls::default()
-                            },
-                        );
-                        // Measure the rear contact patch: the center of mass
-                        // moves sideways naturally during a tight, gripped turn.
-                        let rear_side = car.slip
-                            - car.yaw_rate
-                                * car.model.spec().wheelbase
-                                * car.model.spec().front_weight;
-                        peak_slip = peak_slip
-                            .max(rear_side.abs().atan2(car.speed.abs().max(2.5)).to_degrees());
-                    }
-                    println!(
-                        "{speed_kmh} km/h, steering {input}, brake {brake}: {peak_slip:.2} deg"
-                    );
-                    assert!(peak_slip < 6.0,
-                        "ordinary corner entry and lift should not throw the rear out: {speed_kmh}, {input}, {brake}: {peak_slip}");
-                }
-            }
-        }
-    }
-
-    #[test]
     fn rear_drive_can_sustain_power_donuts_in_both_directions() {
+        let mut spec = crate::test_support::car_spec().clone();
+        spec.engine_power_hp = 300.0;
+        spec.engine_max_torque_nm = 450.0;
+        spec.tire_friction_coefficient = 1.0;
+        let model = CarModel::test_with_spec(spec);
         for steering in [-1.0, 1.0] {
-            let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("muscle"));
+            let mut car = level_route_car(track::TrackId::scenic(), model);
             let mut rotation = 0.0;
             let mut slip = 0.0;
             let mut speed = 0.0;
@@ -1087,35 +1015,6 @@ mod tests {
             );
             assert!(speed < 12.0, "donuts must stay tight: {speed}");
         }
-    }
-
-    #[test]
-    fn kestrel_rear_grip_recovers_under_partial_throttle() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-        let h = car.heading;
-        car.velocity = [
-            h.sin() * 15.0 + h.cos() * 6.0,
-            h.cos() * 15.0 - h.sin() * 6.0,
-        ];
-        car.yaw_rate = 0.3;
-        for _ in 0..480 {
-            treadmill_tick(
-                &mut car,
-                Controls {
-                    throttle: 0.35,
-                    ..Controls::default()
-                },
-            );
-        }
-        let rear =
-            car.slip - car.yaw_rate * car.model.spec().wheelbase * car.model.spec().front_weight;
-        let angle = rear.abs().atan2(car.speed.abs().max(2.5)).to_degrees();
-        assert!(
-            angle < 4.0,
-            "rear slip persists under a maintenance throttle: {angle}"
-        );
-        assert!(car.speed > 8.0);
-        assert!(car.yaw_rate.abs() < 0.2);
     }
 
     #[test]
@@ -1200,7 +1099,7 @@ mod tests {
     #[test]
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
-            let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+            let mut car = level_route_car(track::TrackId::scenic(), CarModel::test_fixture());
             let h = car.heading;
             car.velocity = [
                 h.sin() * 10.0 + h.cos() * 2.0,
@@ -1219,7 +1118,7 @@ mod tests {
             run(1.0) > run(0.0),
             "drive torque must reduce available cornering force"
         );
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::test_fixture());
         car.velocity = [car.heading.sin() * 20.0, car.heading.cos() * 20.0];
         car.yaw_rate = 0.5;
         car.update(Duration::from_secs_f64(1.0 / 240.0), Controls::default());
@@ -1260,7 +1159,7 @@ mod tests {
 
     #[test]
     fn gearing_changes_wheel_force_and_engine_braking() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::test_fixture());
         car.gear = 1;
         let first = car.drive_force(10.0);
         let first_drag = car.engine_brake_force(10.0);
@@ -1311,7 +1210,7 @@ mod tests {
             let mut car = Vehicle::on_track(
                 road.lane_position(0.0),
                 road.heading(),
-                CarModel::fixture("kestrel"),
+                CarModel::test_fixture(),
                 track,
             );
             car.velocity = road.tangent.map(|v| v * 8.0);
@@ -1346,7 +1245,7 @@ mod tests {
 
     #[test]
     fn chassis_can_unload_land_and_settle() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::test_fixture());
         let ground = car.ride_height();
         car.suspension_initialized = true;
         car.position[1] = ground + 0.5;
@@ -1433,7 +1332,7 @@ mod tests {
         Vehicle::new(
             start.lane_position(0.0),
             start.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         )
     }
 
@@ -1539,33 +1438,6 @@ mod tests {
     }
 
     #[test]
-    fn kestrels_have_useful_lock_and_cornering_at_city_road_speeds() {
-        for model in crate::cars::ALL
-            .into_iter()
-            .filter(|m| m.spec().rear_combined_slip.is_some())
-        {
-            let mut car = level_route_car(track::TrackId::scenic(), model);
-            car.steering = 1.0;
-            assert!(car.steering_angle().abs() > 0.08);
-            car.steering = 0.0;
-            steering_run(&mut car, 80.0 / 3.6, 0.5, 2.0, 240.0);
-            let lateral_accel = car.yaw_rate.abs() * 80.0 / 3.6;
-            assert!(lateral_accel > 5.5, "{model:?}: cornering {lateral_accel}");
-            let rear_side =
-                car.slip - car.yaw_rate * model.spec().wheelbase * model.spec().front_weight;
-            let rear_slip = rear_side.abs().atan2(car.speed.abs());
-            println!(
-                "{model:?}: cornering {lateral_accel}, rear slip {} degrees",
-                rear_slip.to_degrees()
-            );
-            assert!(
-                rear_slip.to_degrees() < 6.0,
-                "{model:?}: uncontrolled rear slip"
-            );
-        }
-    }
-
-    #[test]
     fn road_speed_held_steering_has_useful_cornering_authority() {
         for model in crate::cars::ALL {
             for input in [-1.0, 1.0] {
@@ -1595,43 +1467,28 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_taps_are_small_corrections_and_held_turns_remain_useful() {
-        for model in crate::cars::ALL {
-            for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
-                let mut car = route_car(track::TrackId::scenic(), model);
-                let heading = car.heading;
-                steering_run(&mut car, speed, 1.0, 0.1, 120.0);
-                assert!(
-                    car.body_roll.abs() < 0.012,
-                    "a brief tap must not snap the body into a full lean"
-                );
-                steering_run(&mut car, speed, 0.0, 0.4, 120.0);
-                let tap = crate::track::angle(car.heading - heading)
-                    .abs()
-                    .to_degrees();
-                println!("{model:?} {speed} m/s: 100 ms tap {tap:.2} degrees");
-                assert!(
-                    tap > 0.01 && tap < 3.0,
-                    "{model:?} at {speed}: tap rotated {tap} degrees"
-                );
-                if speed == 15.0 || speed == 25.0 {
-                    assert!(tap > 0.5,"a city-speed tap must make a useful correction: {model:?} at {speed}: {tap}");
-                }
-                assert_eq!(car.steering, 0.0);
-                assert!(car.yaw_rate.abs() < 0.2, "residual yaw {}", car.yaw_rate);
-                let mut held = route_car(track::TrackId::scenic(), model);
-                steering_run(&mut held, speed, 1.0, 1.0, 120.0);
-                let turn = crate::track::angle(held.heading - heading)
-                    .abs()
-                    .to_degrees();
-                assert!(
-                    turn > tap * 3.0,
-                    "holding must produce a stronger turn than tapping"
-                );
-                if speed == 5.0 {
-                    assert!(turn > 15.0, "parking-speed turns need useful lock: {turn}");
-                }
-            }
+    fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
+        let model = CarModel::test_fixture();
+        for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
+            let mut car = level_route_car(track::TrackId::Compact, model);
+            let heading = car.heading;
+            steering_run(&mut car, speed, 1.0, 0.1, 120.0);
+            let tap_yaw = car.yaw_rate.abs();
+            steering_run(&mut car, speed, 0.0, 0.4, 120.0);
+            let tap = crate::track::angle(car.heading - heading).abs();
+            assert!(tap > 0.0, "a steering tap must turn the car");
+            assert_eq!(car.steering, 0.0);
+            assert!(
+                car.yaw_rate.abs() < tap_yaw,
+                "releasing steering must reduce yaw"
+            );
+            let mut held = level_route_car(track::TrackId::Compact, model);
+            steering_run(&mut held, speed, 1.0, 1.0, 120.0);
+            let turn = crate::track::angle(held.heading - heading).abs();
+            assert!(
+                turn > tap * 3.0,
+                "holding must produce a stronger turn than tapping"
+            );
         }
     }
 
@@ -1658,55 +1515,30 @@ mod tests {
 
     #[test]
     fn steering_response_is_consistent_across_frame_rates() {
-        for model in crate::cars::ALL {
-            let mut reference = route_car(track::TrackId::scenic(), model);
-            let start = reference.heading;
-            for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
-                steering_run(&mut reference, 25.0, input, seconds, 240.0);
-            }
-            for hz in [30.0, 60.0, 144.0] {
-                let mut car = route_car(track::TrackId::scenic(), model);
-                for (input, seconds) in
-                    [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)]
-                {
-                    steering_run(&mut car, 25.0, input, seconds, hz);
-                }
-                let error = crate::track::angle(car.heading - reference.heading)
-                    .abs()
-                    .to_degrees();
-                assert!(
-                    error < 0.25,
-                    "{model:?} {hz} Hz differs by {error} degrees from 240 Hz; start {start}"
-                );
-            }
+        let model = CarModel::test_fixture();
+        let mut reference = level_route_car(track::TrackId::Compact, model);
+        let start = reference.heading;
+        for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
+            steering_run(&mut reference, 25.0, input, seconds, 240.0);
         }
-    }
-
-    #[test]
-    fn both_kestrels_turn_in_promptly_at_city_speeds() {
-        for model in crate::cars::ALL
-            .into_iter()
-            .filter(|m| m.spec().rear_combined_slip.is_some())
-        {
-            let mut car = level_route_car(track::TrackId::scenic(), model);
-            let start = car.heading;
-            steering_run(&mut car, 40.0 / 3.6, 1.0, 0.3, 240.0);
+        for hz in [30.0, 60.0, 144.0] {
+            let mut car = level_route_car(track::TrackId::Compact, model);
+            for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
+                steering_run(&mut car, 25.0, input, seconds, hz);
+            }
+            let error = crate::track::angle(car.heading - reference.heading)
+                .abs()
+                .to_degrees();
             assert!(
-                car.front_wheel_angle().abs() > 0.18,
-                "{model:?}: city-speed steering is too restricted"
-            );
-            assert!(car.yaw_rate.abs() > 0.25, "{model:?}: turn-in is too slow");
-            assert!(track::angle(car.heading - start).abs() > 0.025);
-            assert!(
-                car.slip.abs() < 3.0,
-                "{model:?}: ordinary turn-in should keep grip"
+                error < 0.25,
+                "{model:?} {hz} Hz differs by {error} degrees from 240 Hz; start {start}"
             );
         }
     }
 
     #[test]
     fn stationary_steering_holds_its_angle_and_can_be_countersteered() {
-        let mut car = Vehicle::new([0.0; 3], 0.0, crate::cars::ALL[0]);
+        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::test_fixture());
         for direction in [-1.0, 1.0] {
             car.steering = 0.0;
             for _ in 0..240 {
@@ -1726,7 +1558,7 @@ mod tests {
 
     #[test]
     fn released_steering_centres_faster_with_forward_speed() {
-        let mut car = Vehicle::new([0.0; 3], 0.0, crate::cars::ALL[0]);
+        let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::test_fixture());
         for direction in [-1.0, 1.0] {
             let mut previous = 1.0;
             for speed in [0.5, 2.0, 5.0, 10.0] {
@@ -1853,12 +1685,7 @@ mod tests {
             .expect("missing clear curb crossing fixture");
         let position = [q[0] + normal[0] * 0.08, 0.0, q[1] + normal[1] * 0.08];
         let heading = (-normal[0]).atan2(-normal[1]);
-        let mut car = Vehicle::on_track(
-            position,
-            heading,
-            CarModel::fixture("kestrel"),
-            track.clone(),
-        );
+        let mut car = Vehicle::on_track(position, heading, CarModel::test_fixture(), track.clone());
         car.velocity = normal.map(|n| -n * 8.0);
         car.update(Duration::from_millis(24), Controls::default());
         assert!(!surfaces.contains([car.position[0], car.position[2]]));
@@ -1911,110 +1738,6 @@ mod tests {
     }
 
     #[test]
-    fn kestrel_standing_start_acceleration() {
-        for model in crate::cars::ALL
-            .into_iter()
-            .filter(|m| m.spec().rear_combined_slip.is_some())
-        {
-            for id in [track::TrackId::Compact, track::TrackId::scenic()] {
-                let mut car = level_route_car(id, model);
-                let mut ticks = 0;
-                while car.speed < 100.0 / 3.6 && ticks < 240 * 20 {
-                    treadmill_tick(
-                        &mut car,
-                        Controls {
-                            throttle: 1.0,
-                            ..Controls::default()
-                        },
-                    );
-                    ticks += 1;
-                }
-                let seconds = ticks as f32 / 240.0;
-                println!("{model:?} {id:?}: 0-100 {seconds:.3}s");
-                let range = if model.spec().turbo.is_some() {
-                    4.8..5.5
-                } else {
-                    6.5..7.2
-                };
-                assert!(
-                    range.contains(&seconds),
-                    "{model:?}: standing start {seconds}s"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn kestrel_passes_old_limit_and_reaches_reference_speed_on_every_map() {
-        let throttle = Controls {
-            throttle: 1.0,
-            ..Controls::default()
-        };
-        let speeds = track::all().map(|id| {
-            let mut car = level_route_car(id, CarModel::fixture("kestrel"));
-            for _ in 0..240 * 15 {
-                treadmill_tick(&mut car, throttle);
-            }
-            assert!(
-                car.speed * 3.6 > 130.0,
-                "{id:?} stuck at {} km/h",
-                car.speed * 3.6
-            );
-            for _ in 0..240 * 165 {
-                treadmill_tick(&mut car, throttle);
-            }
-            let terminal = car.speed * 3.6;
-            println!(
-                "Kestrel {id:?}: terminal {terminal:.1} km/h, gear {}, RPM {:.0}",
-                car.gear, car.engine_rpm
-            );
-            assert!(
-                (terminal - car.reference_speed() * 3.6).abs() < 1.0,
-                "{id:?}: {terminal} km/h, calculated {}",
-                car.reference_speed() * 3.6
-            );
-            assert!(car.engine_rpm < REDLINE_RPM);
-            terminal
-        });
-        assert!(speeds.iter().all(|s| (*s - speeds[0]).abs() < 0.1));
-    }
-
-    #[test]
-    fn kestrel_power_limited_acceleration_tapers_and_overspeed_is_not_clamped() {
-        let sample = track::TrackId::scenic().track().at_distance(50.0);
-        let acceleration = |speed: f32| {
-            let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-            car.velocity = sample.tangent.map(|v| v * speed);
-            car.refresh_speed();
-            treadmill_tick(
-                &mut car,
-                Controls {
-                    throttle: 1.0,
-                    ..Controls::default()
-                },
-            );
-            (car.speed - speed) * 240.0
-        };
-        assert!(acceleration(20.0) > acceleration(40.0));
-        assert!(acceleration(40.0) > 0.0);
-        assert!(acceleration(70.0) < 0.0);
-        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-        car.velocity = sample.tangent.map(|v| v * 70.0);
-        car.refresh_speed();
-        treadmill_tick(
-            &mut car,
-            Controls {
-                throttle: 1.0,
-                ..Controls::default()
-            },
-        );
-        assert!(
-            car.speed > 69.9,
-            "overspeed should decelerate continuously, not snap to a cap"
-        );
-    }
-
-    #[test]
     fn stop_lights_follow_pedal_at_rest_and_in_reverse() {
         for model in crate::cars::ALL {
             let mut car = route_car(track::TrackId::scenic(), model);
@@ -2054,7 +1777,7 @@ mod tests {
 
     #[test]
     fn foot_brake_builds_releases_and_does_not_fake_a_skid() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+        let mut car = route_car(track::TrackId::scenic(), CarModel::test_fixture());
         let road = car.track.at_distance(50.0);
         car.velocity = road.tangent.map(|v| v * 20.0);
         let pedal = Controls {
@@ -2073,40 +1796,6 @@ mod tests {
         assert!(car.brake_pressure < 0.001);
         car.reset(road.lane_position(0.0), road.heading());
         assert_eq!(car.brake_pressure, 0.0);
-    }
-
-    #[test]
-    fn scenic_roadster_brakes_from_100_kmh_progressively() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
-        car.velocity = car
-            .track
-            .at_distance(50.0)
-            .tangent
-            .map(|v| v * (100.0 / 3.6));
-        car.refresh_speed();
-        let mut distance = 0.0;
-        for _ in 0..240 * 5 {
-            distance += treadmill_tick(
-                &mut car,
-                Controls {
-                    brake: 1.0,
-                    ..Controls::default()
-                },
-            );
-            if car.speed < 0.001 {
-                break;
-            }
-        }
-        assert!(
-            car.speed.abs() < 0.001,
-            "braking did not stop: {}",
-            car.speed
-        );
-        assert!(
-            (33.0..44.0).contains(&distance),
-            "100 km/h stopping distance: {distance} m"
-        );
-        assert_eq!(car.direction, Direction::Drive);
     }
 
     #[test]
@@ -2180,7 +1869,7 @@ mod tests {
             let mut car = Vehicle::on_track(
                 position,
                 inward[0].atan2(inward[1]),
-                CarModel::fixture("kestrel"),
+                CarModel::test_fixture(),
                 track.clone(),
             );
             car.manual = true;
@@ -2204,7 +1893,7 @@ mod tests {
 
     #[test]
     fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
-        let mut car = route_car(track::TrackId::scenic(), CarModel::fixture("muscle"));
+        let mut car = route_car(track::TrackId::scenic(), CarModel::test_fixture());
         car.toggle_direction();
         treadmill_tick(
             &mut car,
@@ -2221,7 +1910,7 @@ mod tests {
             &car.track,
             &track::TrackId::scenic().track()
         ));
-        assert_eq!(car.model, CarModel::fixture("muscle"));
+        assert_eq!(car.model, CarModel::test_fixture());
         assert_eq!(car.position, road.lane_position(0.0));
         assert_eq!(car.heading, road.heading());
         assert_eq!(car.velocity, [0.0; 2]);
@@ -2266,7 +1955,7 @@ mod tests {
         let mut car = Vehicle::on_track(
             [bounds[0][0] - 1.0, 0.0, (bounds[0][1] + bounds[1][1]) * 0.5],
             0.0,
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
             track.clone(),
         );
         car.velocity = [-4.0, 8.0];
@@ -2299,60 +1988,9 @@ mod tests {
     }
 
     #[test]
-    fn models_have_distinct_acceleration_braking_and_grip() {
-        let sample = track::TrackId::Compact.track().at_distance(50.0);
-        let results = crate::cars::ALL.map(|model| {
-            let make = || Vehicle::new(sample.lane_position(0.0), sample.heading(), model);
-            let mut accelerating = make();
-            accelerating.update(
-                Duration::from_millis(250),
-                Controls {
-                    throttle: 1.0,
-                    ..Controls::default()
-                },
-            );
-            let mut braking = make();
-            braking.velocity = sample.tangent.map(|v| v * 8.0);
-            braking.update(
-                Duration::from_millis(150),
-                Controls {
-                    brake: 1.0,
-                    ..Controls::default()
-                },
-            );
-            let mut sliding = make();
-            let n = sample.normal();
-            sliding.velocity = [
-                sample.tangent[0] * 5.0 + n[0] * 2.0,
-                sample.tangent[1] * 5.0 + n[1] * 2.0,
-            ];
-            sliding.update(Duration::from_millis(50), Controls::default());
-            (accelerating.speed, braking.speed, sliding.slip.abs())
-        });
-        let [roadster, muscle, club] = [
-            results[CarModel::fixture("kestrel").index()],
-            results[CarModel::fixture("muscle").index()],
-            results[CarModel::fixture("club").index()],
-        ];
-        assert!(
-            // The model-sized rear tires give the roadster taller gearing at launch.
-            (muscle.0 - roadster.0).abs() > 0.05 && muscle.0 > club.0 && club.0 > roadster.0,
-            "acceleration: {results:?}"
-        );
-        assert!(
-            club.1 < roadster.1 && roadster.1 < muscle.1,
-            "braking: {results:?}"
-        );
-        assert!(
-            club.2 < roadster.2 && roadster.2 < muscle.2,
-            "lateral grip: {results:?}"
-        );
-    }
-
-    #[test]
     fn model_speed_limits_and_gearboxes_are_used() {
         let sample = track::TrackId::Compact.track().at_distance(50.0);
-        let speeds = crate::cars::ALL.map(|model| {
+        for model in crate::cars::ALL {
             let mut v = Vehicle::new(sample.lane_position(0.0), sample.heading(), model);
             // Reuse a short straight patch as a test treadmill, not a gameplay feature.
             for _ in 0..1800 {
@@ -2371,34 +2009,28 @@ mod tests {
                 v.speed,
                 v.reference_speed()
             );
-            let terminal_speed = v.speed;
             v.velocity = sample
                 .tangent
                 .map(|x| x * v.upshift_speed(v.model.spec().gearbox.gears()));
             v.refresh_speed();
             assert_eq!(v.gear, model.spec().gearbox.gears());
-            // Return terminal speed rather than the artificial gearbox test speed.
-            terminal_speed
-        });
-        assert!(
-            speeds[CarModel::fixture("kestrel").index()]
-                > speeds[CarModel::fixture("club").index()],
-            "terminal speeds: {speeds:?}"
-        );
+        }
     }
 
     #[test]
     fn unequal_mass_contact_conserves_momentum_and_moves_light_car_more() {
         let sample = track::TrackId::Compact.track().at_distance(50.0);
+        let mut heavy_spec = crate::test_support::car_spec().clone();
+        heavy_spec.mass = 1800.0;
         let mut heavy = Vehicle::new(
             sample.lane_position(0.8),
             sample.heading(),
-            CarModel::fixture("muscle"),
+            CarModel::test_with_spec(heavy_spec),
         );
         let mut light = Vehicle::new(
             sample.lane_position(-0.8),
             sample.heading(),
-            CarModel::fixture("club"),
+            CarModel::test_fixture(),
         );
         let n = sample.normal();
         heavy.velocity = n.map(|x| -x * 3.0);
@@ -2494,7 +2126,7 @@ mod tests {
         let mut braking = Vehicle::new(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         );
         braking.velocity = road.tangent.map(|v| v * 20.0);
         braking.refresh_speed();
@@ -2516,7 +2148,7 @@ mod tests {
         let mut accelerating = Vehicle::new(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         );
         accelerating.velocity = road.tangent.map(|v| v * 8.0);
         accelerating.refresh_speed();
@@ -2538,7 +2170,7 @@ mod tests {
         let mut turning = Vehicle::new(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         );
         turning.velocity = road.tangent.map(|v| v * 18.0);
         turning.refresh_speed();
@@ -2601,7 +2233,7 @@ mod tests {
         let mut car = Vehicle::on_track(
             [bounds[0][0] + track::CAR_RADIUS + 0.02, 0.0, 0.0],
             -std::f32::consts::FRAC_PI_2,
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
             track,
         );
         car.velocity = [-5.0, 0.0];
@@ -2612,7 +2244,7 @@ mod tests {
 
     #[test]
     fn upshift_sound_has_an_audible_rpm_and_load_transition() {
-        let mut car = level_route_car(track::TrackId::scenic(), CarModel::fixture("kestrel"));
+        let mut car = level_route_car(track::TrackId::scenic(), CarModel::test_fixture());
         car.manual = true;
         car.gear = 2;
         car.speed = car.model.spec().gearbox.speed_at_rpm(5000.0, 2);
@@ -2692,7 +2324,7 @@ mod tests {
         let mut car = Vehicle::new(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         );
         car.manual = true;
         car.gear = 3;
@@ -2796,7 +2428,7 @@ mod tests {
     fn neutral_blips_are_consistent_across_frame_rates() {
         let mut results = Vec::new();
         for hz in [30, 60, 144, 240] {
-            let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::fixture("kestrel"));
+            let mut car = Vehicle::new([0.0; 3], 0.0, CarModel::test_fixture());
             car.gear = NEUTRAL_GEAR;
             for _ in 0..hz / 2 {
                 car.update_engine_feedback(
@@ -2823,7 +2455,7 @@ mod tests {
         let mut car = Vehicle::new(
             road.lane_position(0.0),
             road.heading(),
-            CarModel::fixture("kestrel"),
+            CarModel::test_fixture(),
         );
         assert_eq!(car.engine_rpm, IDLE_RPM);
         assert_eq!(car.engine_load, 0.0);

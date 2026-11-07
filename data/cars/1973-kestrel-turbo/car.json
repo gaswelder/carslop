@@ -55,7 +55,7 @@
       0.06
     ],
     "pulses_per_revolution": 3,
-    "samples": "../kestrel/audio"
+    "samples": "../1964-kestrel/audio"
   },
   "turbo": {
     "off_boost_fraction": 0.6,

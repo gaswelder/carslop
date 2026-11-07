@@ -4,7 +4,7 @@ use std::fs;
 pub enum CarModel {
     Catalog(usize),
     #[cfg(test)]
-    TestFixture,
+    TestFixture(usize),
 }
 
 pub const ALL: Catalog = Catalog;
@@ -456,7 +456,7 @@ impl CarModel {
         match self {
             Self::Catalog(index) => index,
             #[cfg(test)]
-            Self::TestFixture => panic!("module test fixture has no catalog index"),
+            Self::TestFixture(_) => panic!("module test fixture has no catalog index"),
         }
     }
     #[cfg(test)]
@@ -467,7 +467,7 @@ impl CarModel {
         match self {
             Self::Catalog(index) => &catalog()[index].spec,
             #[cfg(test)]
-            Self::TestFixture => crate::test_support::car_spec(),
+            Self::TestFixture(index) => crate::test_support::fixture_spec(index),
         }
     }
     pub fn first() -> Self {
@@ -475,15 +475,12 @@ impl CarModel {
     }
     #[cfg(test)]
     pub fn test_fixture() -> Self {
-        Self::TestFixture
+        Self::TestFixture(0)
     }
 
-    // Named fixtures are only available to regression tests.
     #[cfg(test)]
-    pub fn fixture(folder: &str) -> Self {
-        ALL.into_iter()
-            .find(|m| m.folder_name() == folder)
-            .expect("missing car fixture")
+    pub fn test_with_spec(spec: CarSpec) -> Self {
+        Self::TestFixture(crate::test_support::register_spec(spec))
     }
 }
 
@@ -710,7 +707,14 @@ mod runtime_tests {
             return;
         }
         assert_eq!(ALL.len(), 2);
-        assert_eq!(CarModel::fixture("template").spec().mass, 999.0);
+        assert_eq!(
+            ALL.into_iter()
+                .find(|m| m.folder_name() == "template")
+                .unwrap()
+                .spec()
+                .mass,
+            999.0
+        );
         let car = ALL[0];
         assert_eq!(car.index(), 0);
         assert_eq!(car.spec().name, "NEW CAR");

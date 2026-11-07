@@ -436,5 +436,5 @@ if __name__ == '__main__':
     parser.add_argument('car',choices=['agolf','mosquito','pitsunda'])
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()
-    builder, folder = {'agolf': (agolf,'club'), 'mosquito': (mosquito,'muscle'), 'pitsunda': (pitsunda,'pitsunda-2')}[args.car]
+    builder, folder = {'agolf': (agolf,'1991-agolf-gti'), 'mosquito': (mosquito,'1969-mosquito-ss'), 'pitsunda': (pitsunda,'2016-pitsunda-2')}[args.car]
     export(args.output or ROOT/f'data/cars/{folder}/model.glb',*builder())

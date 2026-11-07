@@ -72,7 +72,7 @@ def extract(samples, start, approximate):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
-    parser.add_argument('--output', type=Path, default=ROOT / 'data/cars/kestrel/audio')
+    parser.add_argument('--output', type=Path, default=ROOT / 'data/cars/1964-kestrel/audio')
     args = parser.parse_args()
     digest = hashlib.sha256(args.source.read_bytes()).hexdigest()
     if digest != SOURCE_SHA256:

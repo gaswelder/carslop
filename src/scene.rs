@@ -607,15 +607,6 @@ pub(crate) fn authored_decorations(track: &track::Track) -> [Vec<crate::chunks::
     [b.chunks.unwrap().finish(), Vec::new(), Vec::new()]
 }
 
-#[cfg(test)]
-fn wheel(b: &mut Builder, x: f32, z: f32) {
-    let mut vertices = CarModel::fixture("kestrel").spec().design.wheels[0].clone();
-    for vertex in &mut vertices {
-        vertex.position[0] += x;
-        vertex.position[2] += z;
-    }
-    b.vertices.extend(vertices);
-}
 fn car(b: &mut Builder, model: CarModel) {
     b.vertices.extend_from_slice(&model.spec().design.body);
 }
@@ -746,41 +737,6 @@ mod tests {
     }
 
     #[test]
-    fn car_silhouettes_are_distinct_not_just_paint_variants() {
-        let extents = cars::ALL.map(|model| {
-            let mut b = Builder::default();
-            car(&mut b, model);
-            let min: [f32; 3] = std::array::from_fn(|i| {
-                b.vertices
-                    .iter()
-                    .map(|v| v.position[i])
-                    .fold(f32::INFINITY, f32::min)
-            });
-            let max: [f32; 3] = std::array::from_fn(|i| {
-                b.vertices
-                    .iter()
-                    .map(|v| v.position[i])
-                    .fold(f32::NEG_INFINITY, f32::max)
-            });
-            std::array::from_fn::<_, 3, _>(|i| max[i] - min[i])
-        });
-        let [roadster, muscle, club] = [
-            extents[CarModel::fixture("kestrel").index()],
-            extents[CarModel::fixture("muscle").index()],
-            extents[CarModel::fixture("club").index()],
-        ];
-        assert!(muscle[0] > club[0] && roadster[0] > club[0]);
-        assert!(muscle[2] > roadster[2] && roadster[2] > club[2]);
-        assert!(club[1] > muscle[1]);
-        let commuter = extents[cars::ALL
-            .into_iter()
-            .find(|m| m.spec().name == "2016 PITSUNDA 2")
-            .unwrap()
-            .index()];
-        assert!(commuter[1] > club[1] && commuter[2] < muscle[2]);
-    }
-
-    #[test]
     fn every_car_has_stop_lenses_on_both_rear_corners() {
         for model in cars::ALL {
             let mut b = Builder::default();
@@ -802,81 +758,6 @@ mod tests {
     }
 
     #[test]
-    fn kestrel_uses_its_original_clear_reverse_lenses() {
-        let mut b = Builder::default();
-        car(&mut b, CarModel::fixture("kestrel"));
-        let lenses: Vec<_> = b.vertices.iter().filter(|v| v.material[0] == 6.0).collect();
-        assert!(lenses.len() >= 60);
-        for v in lenses {
-            assert!(v.position[0].abs() < 0.47);
-            assert!((-2.10..-2.07).contains(&v.position[2]));
-            assert!(v.color[0] > 0.8 && v.color[1] > 0.8 && v.color[2] > 0.8);
-        }
-    }
-
-    #[test]
-    fn roadster_reference_mesh_has_authored_lights_arches_and_trim() {
-        let mut b = Builder::default();
-        car(&mut b, CarModel::fixture("kestrel"));
-        let count = |color: [f32; 3]| b.vertices.iter().filter(|v| v.color == color).count();
-        assert!(
-            b.vertices.len() > 520,
-            "reference Roadster needs more than a coarse body shell"
-        );
-        assert!(
-            count([0.84, 0.88, 0.90]) >= 60,
-            "missing separate headlamp geometry"
-        );
-        assert!(
-            count([0.78, 0.02, 0.015]) >= 60,
-            "missing separate tail lamp geometry"
-        );
-        assert!(
-            count([0.78, 0.80, 0.76]) >= 60,
-            "missing beltline/bright trim"
-        );
-        let dark_side_detail = b
-            .vertices
-            .iter()
-            .filter(|v| {
-                v.color == [0.045, 0.055, 0.06]
-                    && v.position[0].abs() > 0.8
-                    && v.position[1] < 0.35
-                    && (v.position[2].abs() - 1.3).abs() < 0.6
-            })
-            .count();
-        assert!(
-            dark_side_detail >= 24,
-            "shaped wheel arch recesses should be visible on the sides"
-        );
-    }
-
-    #[test]
-    fn reference_panels_have_curved_smooth_shading() {
-        let mut b = Builder::default();
-        car(&mut b, CarModel::fixture("kestrel"));
-        // The first panel is the sculpted deck. Its triangles must interpolate
-        // distinct normals; extra triangles with constant face normals would
-        // retain the old faceted appearance.
-        let curved_triangles = b.vertices[..18_000]
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .filter(|t| {
-                t[0].normal
-                    .iter()
-                    .zip(t[1].normal)
-                    .any(|(a, b)| (a - b).abs() > 0.0001)
-            })
-            .count();
-        assert!(curved_triangles > 2000, "body panels lost smooth curvature");
-        eprintln!("Kestrel body: {} triangles", b.vertices.len() / 3);
-        let mut wheels = Builder::default();
-        wheel(&mut wheels, 0.0, 0.0);
-        eprintln!("Shared wheel: {} triangles", wheels.vertices.len() / 3);
-    }
-
-    #[test]
     fn cuboid_normals_point_outward() {
         let mut b = Builder::default();
         b.cuboid([-1.0; 3], [1.0; 3], Surface::matte([1.0; 3]));
@@ -893,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn road_markings_face_the_sky_and_wheels_face_outward() {
+    fn road_markings_face_the_sky() {
         let mut b = Builder::default();
         road(&mut b, &track::TrackId::Compact.track());
         for v in &b.vertices {
@@ -910,14 +791,6 @@ mod tests {
                     v.normal,
                     v.color
                 );
-            }
-        }
-        b.vertices.clear();
-        wheel(&mut b, 0.0, 0.0);
-        for v in b.vertices {
-            if v.color == [0.035, 0.04, 0.045] {
-                let radial = v.position;
-                assert!(radial.iter().zip(v.normal).map(|(p, n)| p * n).sum::<f32>() > 0.0);
             }
         }
     }

@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(catalog.placement.modern_window_spacing, 4.0);
         definition["window"]["model"] = "missing.glb".into();
         assert!(Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).is_err());
-        definition["window"]["model"] = "../cars/club/model.glb".into();
+        definition["window"]["model"] = "../entrance.glb".into();
         assert!(Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).is_err());
         definition["window"]["model"] = "window.glb".into();
         definition["placement"]["balcony_depth"] = serde_json::json!([2.0, 1.0]);

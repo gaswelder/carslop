@@ -134,9 +134,11 @@ impl TrackId {
     /// Load the bundled authoring fixture through the ordinary point parser.
     #[cfg(test)]
     pub fn scenic() -> Self {
-        register_file(std::path::Path::new("data/locations/scenic.track.json"))
-            .expect("cannot load Coastal Highway track definition")
-            .0
+        register_file(std::path::Path::new(
+            "data/locations/scenic/source.track.json",
+        ))
+        .expect("cannot load Coastal Highway track definition")
+        .0
     }
 
     pub fn index(self) -> usize {
@@ -661,7 +663,7 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("renamed.track.json");
         let mut data: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string("data/locations/scenic.track.json").unwrap(),
+            &std::fs::read_to_string("data/locations/scenic/source.track.json").unwrap(),
         )
         .unwrap();
         data["name"] = "Another coast".into();
