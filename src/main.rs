@@ -1,5 +1,4 @@
 mod aerial;
-mod ambience;
 mod audio;
 mod camera;
 mod cars;
@@ -67,6 +66,7 @@ struct Session {
 }
 
 impl Session {
+    #[cfg(test)]
     fn new(model: CarModel) -> Self {
         Self::on_track(model, TrackId::scenic())
     }
@@ -249,7 +249,13 @@ impl App {
         });
         let default_location = locations
             .iter()
-            .position(|entry| entry.track == TrackId::scenic())
+            .position(|entry| {
+                entry
+                    .path
+                    .as_ref()
+                    .is_some_and(|p| p.file_name().is_some_and(|name| name == "scenic"))
+                    || entry.name == "COASTAL HIGHWAY"
+            })
             .unwrap_or(0);
         let selected_location = selected_city.map_or(default_location, |path| {
             if let Some(index) = locations.iter().position(|entry| {
@@ -270,10 +276,13 @@ impl App {
                 locations.len() - 1
             }
         });
-        let selected_location = track::selected_file()
-            .and_then(|id| locations.iter().position(|entry| entry.track == id))
-            .unwrap_or(selected_location);
-        let mut session = Session::new(CarModel::Roadster);
+        // City data loads only after Start. The menu needs a car preview, not
+        // the original point file used to author a compiled location.
+        let preview = locations
+            .get(selected_location)
+            .filter(|entry| entry.path.is_none())
+            .map_or(TrackId::Compact, |entry| entry.track);
+        let mut session = Session::on_track(CarModel::Roadster, preview);
         session.state = GameState::Menu;
         let _ = window.set_title(&session.track().name);
 
@@ -2326,7 +2335,7 @@ mod tests {
     #[ignore = "requires SDL/OpenGL; starts and renders a circuit created after compilation"]
     fn runtime_track_renderer() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), r#"{"version":1,"name":"Runtime Circuit","width":9,"points":[[0,0,0],[100,2,0],[100,4,100],[0,1,100]]}"#).unwrap();
+        std::fs::write(file.path(), r#"{"version":2,"name":"Runtime Circuit","points":[[0,0,0,9],[100,2,0,9],[100,4,100,9],[0,1,100,9]]}"#).unwrap();
         let (id, name) = track::register_file(file.path()).unwrap();
         let mut app = App::with_location(false);
         app.locations.push(city_assets::MenuLocation {
@@ -2338,7 +2347,7 @@ mod tests {
         app.start_selected();
         assert_eq!(app.session.track().id, id);
         assert!(app.session.state == GameState::Driving);
-        assert_eq!(app.session.track().width, 9.0);
+        assert_eq!(app.session.track().at_distance(0.0).width, 9.0);
         for _ in 0..120 {
             app.session.tick(vehicle::Controls {
                 throttle: 1.0,
@@ -2348,6 +2357,51 @@ mod tests {
         app.render(Duration::ZERO);
         assert!(app.session.vehicle.position.iter().all(|v| v.is_finite()));
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL and a location produced by create-track"]
+    fn created_track_renderer_smoke() {
+        if let Some(root) = std::env::var_os("CREATED_TRACK_PREVIEW_ROOT") {
+            std::env::set_current_dir(root).unwrap();
+        }
+        city_assets::select(std::path::PathBuf::from("data/locations/scenic")).unwrap();
+        let mut app = App::with_location(true);
+        app.start_selected();
+        assert!(app.session.track().city().is_some());
+        let road = app.session.track().at_distance(50.0);
+        for (side, label) in [(0.0, "road"), (-1.0, "left"), (1.0, "right")] {
+            app.session
+                .vehicle
+                .reset(road.lane_position(side * 40.0), road.heading());
+            assert_eq!(app.session.vehicle.resolve_road(), 0.0);
+            app.chase.snap(&app.session.vehicle);
+            app.capture_path = Some(std::path::PathBuf::from(format!(
+                "/tmp/carslop-created-track-{label}.ppm"
+            )));
+            app.render(Duration::ZERO);
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; captures drivable terrain on both sides of an authored road"]
+    fn authored_offroad_renderer_smoke() {
+        let mut app = App::with_location(false);
+        let road = app.session.track().at_distance(50.0);
+        for (side, label) in [(-1.0, "left"), (1.0, "right")] {
+            app.session
+                .vehicle
+                .reset(road.lane_position(side * 40.0), road.heading());
+            assert_eq!(app.session.vehicle.resolve_road(), 0.0);
+            app.session.state = GameState::Driving;
+            app.chase.snap(&app.session.vehicle);
+            app.capture_path = Some(std::path::PathBuf::from(format!(
+                "/tmp/carslop-offroad-{label}.ppm"
+            )));
+            app.render(Duration::ZERO);
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
     }
 
     #[test]
@@ -2377,14 +2431,14 @@ mod tests {
         let scenic_choice = app
             .locations
             .iter()
-            .position(|entry| entry.track == TrackId::scenic())
+            .position(|entry| entry.path.as_ref().is_some_and(|p| p.ends_with("scenic")))
             .unwrap();
         app.menu_action(hud::MenuAction::Choice(scenic_choice));
-        assert_eq!(app.session.track().id, TrackId::scenic());
+        assert_eq!(app.session.track().id, TrackId::Compact);
         app.key_down(Keycode::Return);
-        assert_eq!(app.session.track().id, TrackId::scenic());
+        assert_eq!(app.session.track().id, TrackId::Engomi);
         assert!(app.session.state == GameState::Driving);
-        assert!(app.meshes[TrackId::Engomi.index()].is_none());
+        assert!(app.meshes[TrackId::Engomi.index()].is_some());
         app.render(Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         drop(app);

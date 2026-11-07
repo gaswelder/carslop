@@ -30,6 +30,16 @@ In-game screenshot at [Engomi, Nicosia](https://www.google.com/maps/search/?api=
 | L                   | Return to location and car selection |
 | V                   | Toggle audio mute                    |
 
+## Usage
+
+Run:
+
+    $ cars <subcommand>
+
+Subcommands:
+
+- create-track track.json - compile a track from waypoints and add it to the location directory
+
 ## GLB models of the cars
 
 Export static triangulated glTF 2.0 GLB: metres, Y up, +Z forward, one embedded

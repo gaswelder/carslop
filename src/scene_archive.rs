@@ -241,20 +241,38 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
     Ok(())
 }
 pub fn bake_default() -> std::io::Result<()> {
-    let city_track = crate::track::TrackId::Engomi.track();
-    let city = city_track.city().expect("city");
-    let directory = crate::city_assets::CITY_ASSET
-        .read()
-        .unwrap()
-        .directory()
-        .to_path_buf();
+    let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
+    bake_assets(&assets)
+}
+
+pub fn bake_assets(assets: &crate::city_assets::CityAsset) -> std::io::Result<()> {
+    let city = crate::city::City::load(assets).map_err(|e| error(&e))?;
+    let directory = assets.directory();
     let path = directory.join("scene.pack");
     let started = std::time::Instant::now();
     println!(
         "Generating city geometry with {} trees...",
         city.landscape.trees.len()
     );
-    let layers = crate::scene::city_layers(city);
+    let mut layers = crate::scene::city_layers(&city);
+    let decorations = directory.join("decorations.pack");
+    if decorations.is_file() {
+        let mut archive = Archive::open(&decorations)?;
+        for (layer, chunks) in layers.iter_mut().enumerate() {
+            let mut builder = crate::chunks::ChunkBuilder::default();
+            for chunk in std::mem::take(chunks) {
+                for tri in chunk.vertices.as_chunks::<3>().0 {
+                    builder.push(*tri);
+                }
+            }
+            for entry in 0..archive.entries.len() {
+                for tri in archive.read_layer(entry, layer)?.as_chunks::<3>().0 {
+                    builder.push(*tri);
+                }
+            }
+            *chunks = builder.finish();
+        }
+    }
     println!("Writing city render archive...");
     write(&path, layers)?;
     let archive = Archive::open(&path)?;

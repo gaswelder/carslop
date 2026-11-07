@@ -5,6 +5,8 @@ mod osm;
 mod scenery;
 mod surfaces;
 mod terrain;
+mod track;
+pub use track::create_track;
 #[cfg(test)]
 pub(crate) mod tests;
 

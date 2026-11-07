@@ -185,6 +185,10 @@ fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
 impl City {
     pub fn engomi() -> Result<Self, String> {
         let assets = crate::city_assets::CITY_ASSET.read().unwrap().clone();
+        Self::load(&assets)
+    }
+
+    pub(crate) fn load(assets: &crate::city_assets::CityAsset) -> Result<Self, String> {
         let mut city = assets.get_city()?;
         match assets.get_source_osm() {
             Ok(source) => match read_osm_labels(std::io::BufReader::new(source)) {
@@ -333,7 +337,7 @@ impl City {
                     let b = city.nodes[ends[1]];
                     let length = (b[0] - a[0]).hypot(b[2] - a[2]);
                     let width = f(3)?;
-                    if length < 0.1 || !(5.0..=30.0).contains(&width) {
+                    if length < 0.1 || !(2.0..=30.0).contains(&width) {
                         return Err("invalid road dimensions".into());
                     }
                     let oneway = fields
@@ -671,6 +675,20 @@ impl City {
                         s.tangent = s.tangent.map(|v| -v);
                     }
                     return s;
+                }
+            }
+        }
+        // A narrow authored road may be smaller than the car: its verges are
+        // drivable too. Keep the spawn clear of buildings without requiring
+        // every wheel to fit inside the asphalt polygon.
+        if self.surfaces.is_some() {
+            for i in 0..self.streets.len() {
+                let mut sample = self.sample(i, 0.5);
+                if self.building_clearance([sample.point[0], sample.point[2]]) > CAR_RADIUS + 0.15 {
+                    if self.streets[i].oneway == -1 {
+                        sample.tangent = sample.tangent.map(|v| -v);
+                    }
+                    return sample;
                 }
             }
         }

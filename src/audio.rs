@@ -1,17 +1,15 @@
-use crate::ambience::{CoastalAmbience, Levels};
 use crate::cars::CarModel;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
 
-const RATE: f32 = crate::ambience::SAMPLE_RATE;
+pub(crate) const SAMPLE_RATE: f32 = 48_000.0;
 const QUEUE_SAMPLES: usize = 2400;
 
-// Recorded Roadster engine with procedural fallback voices, tires and environment.
+// Recorded Roadster engine with procedural fallback voices and driving effects.
 pub struct EngineAudio {
     stream: AudioStreamOwner,
     _subsystem: sdl3::AudioSubsystem,
     synth: Synth,
-    ambience: CoastalAmbience,
     spatial: SpatialAudio,
     pub muted: bool,
 }
@@ -76,7 +74,7 @@ impl Synth {
         };
         self.load += (load - self.load) * 0.001;
         self.master += (f32::from(u8::from(voice.enabled)) - self.master) * 0.002;
-        self.phase = (self.phase + self.frequency / RATE).rem_euclid(2.0);
+        self.phase = (self.phase + self.frequency / SAMPLE_RATE).rem_euclid(2.0);
         let p = self.phase * TAU;
         let harmonics = match voice.model.appearance() {
             CarModel::Roadster => p.sin() * 0.65 + (p * 2.0).sin() * 0.23 + (p * 4.0).sin() * 0.12,
@@ -123,19 +121,19 @@ impl Synth {
         let low_cutoff = 900.0 + 1500.0 * self.turbo_spool;
         let high_cutoff = 3500.0 + 3500.0 * self.turbo_spool;
         self.turbo_air_low +=
-            (noise - self.turbo_air_low) * (1.0 - (-TAU * low_cutoff / RATE).exp());
+            (noise - self.turbo_air_low) * (1.0 - (-TAU * low_cutoff / SAMPLE_RATE).exp());
         self.turbo_air_high +=
-            (noise - self.turbo_air_high) * (1.0 - (-TAU * high_cutoff / RATE).exp());
+            (noise - self.turbo_air_high) * (1.0 - (-TAU * high_cutoff / SAMPLE_RATE).exp());
         let whoosh = (self.turbo_air_high - self.turbo_air_low) * 0.10 * self.turbo_spool.powf(1.4);
         let road_target = (self.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
         self.road_gain += (road_target - self.road_gain) * 0.0005;
         self.road_noise += (noise - self.road_noise) * 0.025;
         let rolling = (self.road_noise * 0.18 + self.filtered_noise * 0.035) * self.road_gain;
         let tires = self.tires.sample(tire, self.road_speed);
-        self.impact_phase = (self.impact_phase + (48.0 + self.impact * 42.0) / RATE).fract();
+        self.impact_phase = (self.impact_phase + (48.0 + self.impact * 42.0) / SAMPLE_RATE).fract();
         let impact = ((self.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * self.impact * 0.22;
         self.impact *= 0.99981;
-        self.impact_cooldown = (self.impact_cooldown - 1.0 / RATE).max(0.0);
+        self.impact_cooldown = (self.impact_cooldown - 1.0 / SAMPLE_RATE).max(0.0);
         ((engine + whoosh + tires + rolling + impact) * self.master).clamp(-0.3, 0.3)
     }
 }
@@ -174,7 +172,7 @@ impl TireSound {
             .wrapping_add(1_013_904_223);
         let noise = (self.noise >> 8) as f32 / 8_388_607.5 - 1.0;
         self.wander += (noise - self.wander) * 0.0008;
-        self.flutter = (self.flutter + (11.0 + self.speed * 0.18) / RATE).fract();
+        self.flutter = (self.flutter + (11.0 + self.speed * 0.18) / SAMPLE_RATE).fract();
         let flutter = (self.flutter * TAU).sin();
         let pitch = 850.0 + self.slip * 460.0 + self.speed * 3.0;
         let pitch = pitch * (1.0 + self.wander * 1.8 + flutter * 0.012);
@@ -184,12 +182,12 @@ impl TireSound {
             let frequency = pitch * if i == 0 { 1.0 } else { 1.47 };
             // Damped state-variable bandpass: energy stays around rubber's
             // resonances rather than spraying high-frequency noise into the mix.
-            let coefficient = 2.0 * (std::f32::consts::PI * frequency / RATE).sin();
+            let coefficient = 2.0 * (std::f32::consts::PI * frequency / SAMPLE_RATE).sin();
             self.low[i] += coefficient * self.band[i];
             let high = noise - self.low[i] - 0.24 * self.band[i];
             self.band[i] += coefficient * high;
             resonance += self.band[i] * if i == 0 { 0.032 } else { 0.018 };
-            self.phase[i] = (self.phase[i] + frequency / RATE).fract();
+            self.phase[i] = (self.phase[i] + frequency / SAMPLE_RATE).fract();
             tone += (self.phase[i] * TAU).sin() * if i == 0 { 0.024 } else { 0.010 };
         }
         self.scrub_low += (noise - self.scrub_low) * 0.025;
@@ -217,7 +215,7 @@ impl Default for SpatialAudio {
             gain: 0.0,
             pan: 0.0,
             filtered: 0.0,
-            reflections: vec![0.0; (RATE * 0.15) as usize],
+            reflections: vec![0.0; (SAMPLE_RATE * 0.15) as usize],
             cursor: 0,
             reflection_low: 0.0,
         }
@@ -243,13 +241,13 @@ impl SpatialAudio {
             0.0
         };
         let cutoff = 6500.0 / (1.0 + distance / 8.0);
-        let filter = 1.0 - (-TAU * cutoff.max(350.0) / RATE).exp();
+        let filter = 1.0 - (-TAU * cutoff.max(350.0) / SAMPLE_RATE).exp();
         (gain, pan, filter)
     }
 
     fn sample(&mut self, input: f32, placement: (f32, f32, f32)) -> [f32; 2] {
         let (gain, pan, filter) = placement;
-        let blend = 1.0 - (-1.0 / (RATE * 0.03)).exp();
+        let blend = 1.0 - (-1.0 / (SAMPLE_RATE * 0.03)).exp();
         self.gain += (gain - self.gain) * blend;
         self.pan += (pan - self.pan) * blend;
         self.filtered += (input - self.filtered) * filter;
@@ -259,7 +257,7 @@ impl SpatialAudio {
         // centred source. A damped feedback path adds a short diffuse decay,
         // rather than a long indoor/hall reverb.
         let tap = |ms: f32| {
-            let delay = (RATE * ms / 1000.0) as usize;
+            let delay = (SAMPLE_RATE * ms / 1000.0) as usize;
             self.reflections
                 [(self.cursor + self.reflections.len() - delay) % self.reflections.len()]
         };
@@ -289,7 +287,7 @@ impl EngineAudio {
     pub fn new(sdl: &sdl3::Sdl) -> Result<Self, String> {
         let audio = sdl.audio().map_err(|e| e.to_string())?;
         let spec = AudioSpec {
-            freq: Some(RATE as i32),
+            freq: Some(SAMPLE_RATE as i32),
             channels: Some(2),
             format: Some(AudioFormat::f32_sys()),
         };
@@ -304,7 +302,6 @@ impl EngineAudio {
             stream,
             _subsystem: audio,
             synth: Synth::default(),
-            ambience: CoastalAmbience::default(),
             spatial: SpatialAudio::default(),
             muted: false,
         })
@@ -344,17 +341,11 @@ impl EngineAudio {
             model: car.model,
             enabled,
         };
-        let levels = Levels::on_track(
-            car.position,
-            car.velocity[0].hypot(car.velocity[1]),
-            &car.track,
-        );
         let placement = SpatialAudio::placement(car.position, listener);
         let samples: Vec<f32> = (0..count)
             .flat_map(|_| {
                 let driving = self.spatial.sample(self.synth.sample(voice), placement);
-                let ambience = self.ambience.sample(levels, enabled);
-                driving.map(|channel| mix(channel, ambience))
+                driving.map(output_sample)
             })
             .collect();
         if !samples.is_empty() {
@@ -366,9 +357,9 @@ impl EngineAudio {
     }
 }
 
-fn mix(driving: f32, ambience: f32) -> f32 {
-    // Keep the environment behind driving cues with headroom and one final safety limit.
-    (driving * 0.92 + ambience).clamp(-0.3, 0.3)
+fn output_sample(driving: f32) -> f32 {
+    // Preserve driving gain and output headroom.
+    (driving * 0.92).clamp(-0.3, 0.3)
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
@@ -553,8 +544,8 @@ mod tests {
         let mut synth = Synth::default();
         let mut pcm = Vec::new();
         let mut peak = 0.0_f32;
-        for i in 0..(RATE as usize * 18) {
-            let t = i as f32 / RATE;
+        for i in 0..(SAMPLE_RATE as usize * 18) {
+            let t = i as f32 / SAMPLE_RATE;
             // Idle, accelerate through three shifts, coast, skid, then mute.
             let rpm = if t < 2.0 {
                 900.0
@@ -587,8 +578,8 @@ mod tests {
         wav.extend_from_slice(b"RIFF");
         wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
         wav.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
-        wav.extend_from_slice(&(RATE as u32).to_le_bytes());
-        wav.extend_from_slice(&(RATE as u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&(SAMPLE_RATE as u32).to_le_bytes());
+        wav.extend_from_slice(&(SAMPLE_RATE as u32 * 2).to_le_bytes());
         wav.extend_from_slice(b"\x02\0\x10\0data");
         wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
         wav.extend_from_slice(pcm);
@@ -730,10 +721,9 @@ mod tests {
     }
 
     #[test]
-    fn full_coastal_mix_is_bounded_subordinate_and_fades_on_mute_or_pause() {
+    fn driving_output_is_bounded_and_fades_on_mute_or_pause() {
         for model in crate::cars::ALL {
             let mut engine = Synth::default();
-            let mut coast = CoastalAmbience::default();
             let mut voice = Voice {
                 frequency: 180.0,
                 load: 1.0,
@@ -741,28 +731,22 @@ mod tests {
                 model,
                 enabled: true,
             };
-            let levels = Levels {
-                wind: 1.0,
-                surf: 1.0,
-            };
-            let (mut driving_energy, mut coast_energy) = (0.0, 0.0);
+            let mut driving_energy = 0.0;
             for i in 0..48000 {
                 if i % 6000 == 0 {
                     engine.hit(20.0);
                 }
                 let driving = engine.sample(voice);
-                let ambience = coast.sample(levels, true);
-                let sample = mix(driving, ambience);
+                let sample = output_sample(driving);
                 assert!(sample.is_finite() && sample.abs() <= 0.3);
                 driving_energy += driving * driving;
-                coast_energy += ambience * ambience;
             }
-            assert!(coast_energy > 0.01 && coast_energy < driving_energy * 0.05);
+            assert!(driving_energy > 0.01);
             voice.enabled = false;
             engine.suppress_impacts();
             let mut tail: f32 = 0.0;
             for i in 0..24000 {
-                let sample = mix(engine.sample(voice), coast.sample(levels, false));
+                let sample = output_sample(engine.sample(voice));
                 if i > 20000 {
                     tail = tail.max(sample.abs());
                 }
@@ -822,8 +806,8 @@ mod tests {
         let path = std::env::temp_dir().join("carslop-tires.wav");
         let mut tires = TireSound::default();
         let mut pcm = Vec::new();
-        for i in 0..(RATE as usize * 12) {
-            let t = i as f32 / RATE;
+        for i in 0..(SAMPLE_RATE as usize * 12) {
+            let t = i as f32 / SAMPLE_RATE;
             // Gentle cornering, building slide, recovery, then a slower skid.
             let slip = match t {
                 t if t < 2.0 => 0.08,

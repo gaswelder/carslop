@@ -1,4 +1,5 @@
 //! A single triangulated height surface for terrain, pavement and ground contact.
+pub const SEA_LEVEL: f32 = -3.35;
 #[derive(Debug)]
 pub struct HeightField {
     pub columns: usize,
@@ -8,6 +9,29 @@ pub struct HeightField {
     values: Vec<f32>,
 }
 impl HeightField {
+    pub fn generate(bounds: [[f32; 2]; 2], mut height: impl FnMut([f32; 2]) -> f32) -> Self {
+        let span = [bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1]];
+        let step = 4.0_f32.max(span[0].max(span[1]) / 511.0);
+        let columns = (span[0] / step).ceil() as usize + 1;
+        let rows = (span[1] / step).ceil() as usize + 1;
+        let mut values = Vec::with_capacity(columns * rows);
+        for row in 0..rows {
+            for column in 0..columns {
+                values.push(height([
+                    bounds[0][0] + column as f32 * step,
+                    bounds[0][1] + row as f32 * step,
+                ]));
+            }
+        }
+        Self {
+            columns,
+            rows,
+            origin: bounds[0],
+            step,
+            values,
+        }
+    }
+
     #[cfg(test)]
     pub fn load(text: &str, city: &str) -> Result<Self, String> {
         Self::load_with_checksum(text, crate::street_surface::crc32(city))

@@ -493,8 +493,12 @@ fn load_extra(path: &std::path::Path) -> Result<ExtraCar, String> {
             return Err("invalid shift thresholds".into());
         }
     }
-    spec.wheel_power_watts = num(&object["wheel_power_watts"])?;
-    spec.drag_accel = num(&object["drag_accel"])?;
+    if let Some(value) = object.get("wheel_power_watts") {
+        spec.wheel_power_watts = num(value)?;
+    }
+    if let Some(value) = object.get("drag_accel") {
+        spec.drag_accel = num(value)?;
+    }
     if let Some(value) = object.get("turbo") {
         spec.turbo = turbo(value)?;
     }

@@ -564,10 +564,7 @@ impl Hud {
             );
         }
         let spec = menu.car.spec();
-        let power = spec.road_engine.as_ref().map_or_else(
-            || "N/A".into(),
-            |engine| format!("{:.0} HP", engine.wheel_power_watts / 745.7),
-        );
+        let power = format!("{:.0} HP", spec.wheel_power_watts / 745.7);
         for (x, y, label, value) in [
             (-0.84, 0.66, "WHEEL POWER", power),
             (

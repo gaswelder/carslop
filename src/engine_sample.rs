@@ -1,5 +1,5 @@
 //! File-backed Kestrel engine voice, cached once alongside the car artwork.
-use crate::ambience::SAMPLE_RATE;
+use crate::audio::SAMPLE_RATE;
 use std::{io, io::Read, path::Path, sync::OnceLock};
 
 const AUDIO_DIR: &str = "data/cars/kestrel/audio";

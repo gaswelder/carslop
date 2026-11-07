@@ -1261,10 +1261,7 @@ fn vehicle_wheel_local_matrix(
     let mounted: [f32; 3] = std::array::from_fn(|i| {
         body[i] * center[0] + body[4 + i] * center[1] + body[8 + i] * center[2] + body[12 + i]
     });
-    let ground = car.track.city().map_or_else(
-        || car.track.project(mounted).point[1],
-        |city| city.drive_height([mounted[0], mounted[2]]),
-    );
+    let ground = car.track.drive_height([mounted[0], mounted[2]]);
     let radius = car.model.spec().design.wheel_radii[index];
     // Bounded compression/droop keeps tires following bumps while the body
     // heaves and tilts on its springs. Airborne wheels stop at full extension.
@@ -1532,7 +1529,7 @@ mod tests {
         let wheel_y: [f32; 4] = std::array::from_fn(|i| {
             let matrix = vehicle_wheel_matrix(&car, body, i);
             let center = transform(matrix, [0.0; 3]);
-            let ground = car.track.project(center).point[1];
+            let ground = car.track.drive_height([center[0], center[2]]);
             assert!((center[1] - car.model.spec().design.wheel_radii[i] - ground).abs() < 0.005);
             center[1]
         });

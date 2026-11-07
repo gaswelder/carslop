@@ -281,22 +281,6 @@ pub fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
         .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
-        if path.is_file()
-            && path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| !n.starts_with('.') && n.ends_with(".track.json"))
-        {
-            match crate::track::register_file(&path) {
-                Ok((track, name)) => locations.push(MenuLocation {
-                    name: name.into(),
-                    track,
-                    path: None,
-                }),
-                Err(error) => log::warn!("Cannot load track {}: {error}", path.display()),
-            }
-            continue;
-        }
         if !path.is_dir() || !path.join("city.txt").is_file() {
             continue;
         }
@@ -363,16 +347,13 @@ mod tests {
     }
 
     #[test]
-    fn discovery_finds_new_data_only_circuits_and_skips_broken_files() {
+    fn discovery_ignores_authoring_json() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("new.track.json");
-        std::fs::write(&path, r#"{"version":1,"name":"New Circuit","points":[[0,0,0],[100,0,0],[100,0,100],[0,0,100]]}"#).unwrap();
+        std::fs::write(&path, r#"{"version":2,"name":"New Circuit","points":[[0,0,0,7.2],[100,0,0,7.2],[100,0,100,7.2],[0,0,100,7.2]]}"#).unwrap();
         std::fs::write(root.path().join("broken.track.json"), b"{}").unwrap();
         let entries = discover(root.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "NEW CIRCUIT");
-        assert!(entries[0].path.is_none());
-        assert!(entries[0].track.try_track().unwrap().city().is_none());
+        assert!(entries.is_empty());
     }
 
     #[test]
@@ -389,6 +370,9 @@ mod tests {
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].name, "ALPHA CITY");
         assert_eq!(locations[0].path.as_deref(), Some(folder.as_path()));
+        // Discovery never loads authoring sources at runtime.
+        std::fs::write(root.path().join("alpha_city.track.json"), b"invalid source").unwrap();
+        assert_eq!(discover(root.path()).unwrap().len(), 1);
         std::fs::write(
             root.path().join("alpha_city.sqlite"),
             b"legacy file is ignored",

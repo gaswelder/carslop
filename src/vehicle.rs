@@ -478,10 +478,9 @@ impl Vehicle {
     }
 
     fn ride_height(&self) -> f32 {
-        self.track.city().map_or_else(
-            || self.track.project(self.position).point[1],
-            |city| city.drive_height([self.position[0], self.position[2]]),
-        ) + 0.48
+        self.track
+            .drive_height([self.position[0], self.position[2]])
+            + 0.48
     }
 
     fn flywheel_energy(&self) -> f32 {
@@ -630,10 +629,7 @@ impl Vehicle {
                 self.position[1],
                 self.position[2] + dz,
             ];
-            self.track.city().map_or_else(
-                || self.track.project(p).point[1],
-                |c| c.drive_height([p[0], p[2]]),
-            )
+            self.track.drive_height([p[0], p[2]])
         };
         let length = self.model.spec().wheelbase;
         let width = self.model.spec().dynamics.track_width;
@@ -814,20 +810,26 @@ impl Vehicle {
         if let Some(city) = self.track.city() {
             return city.constrain(&mut self.position, &mut self.velocity);
         }
-        let road = self.track.project(self.position);
-        let normal = road.normal();
-        let limit = road.width * 0.5 - track::CAR_RADIUS;
-        let excess = road.offset - road.offset.clamp(-limit, limit);
-        let mut impact = 0.0;
-        if excess.abs() > 0.0001 {
-            self.position[0] -= normal[0] * excess;
-            self.position[2] -= normal[1] * excess;
-            impact = crate::city::deflect(
-                &mut self.velocity,
-                normal.map(|component| component * excess.signum()),
-            );
+        let bounds = self.track.terrain_bounds();
+        let mut impact = 0.0_f32;
+        for (axis, coordinate) in [0, 2].into_iter().enumerate() {
+            let limit = [
+                bounds[0][axis] + track::CAR_RADIUS,
+                bounds[1][axis] - track::CAR_RADIUS,
+            ];
+            let clamped = self.position[coordinate].clamp(limit[0], limit[1]);
+            let excess = self.position[coordinate] - clamped;
+            if excess.abs() > 0.0001 {
+                self.position[coordinate] = clamped;
+                let mut normal = [0.0; 2];
+                normal[axis] = excess.signum();
+                impact = impact.max(crate::city::deflect(&mut self.velocity, normal));
+            }
         }
-        self.position[1] = road.point[1] + 0.48;
+        self.position[1] = self
+            .track
+            .drive_height([self.position[0], self.position[2]])
+            + 0.48;
         impact
     }
 
@@ -920,6 +922,32 @@ fn dot(a: [f32; 2], b: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn road_verges_are_drivable_at_narrow_and_wide_sections() {
+        let track = crate::track::tests::variable_width_track();
+        for point in [[0.0, 0.0, 0.0], [400.0, 0.0, 0.0]] {
+            let sample = track.project(point);
+            for side in [-1.0, 1.0] {
+                let position = sample.lane_position(side * 40.0);
+                let mut car = Vehicle::on_track(
+                    position,
+                    sample.heading(),
+                    CarModel::Roadster,
+                    track.clone(),
+                );
+                assert_eq!(car.resolve_road(), 0.0);
+                assert_eq!(
+                    [car.position[0], car.position[2]],
+                    [position[0], position[2]]
+                );
+                assert!(
+                    (car.position[1] - track.drive_height([position[0], position[2]]) - 0.48).abs()
+                        < 0.001
+                );
+            }
+        }
+    }
 
     fn hill_car(uphill: bool) -> Vehicle {
         let route = track::TrackId::scenic().track();
@@ -2168,40 +2196,35 @@ mod tests {
     }
 
     #[test]
-    fn road_resolution_uses_each_cars_route_width_and_elevation() {
-        let mut compact = route_car(track::TrackId::Compact, CarModel::Roadster);
-        let compact_position = compact.position;
-        let mut scenic = route_car(track::TrackId::scenic(), CarModel::Roadster);
-        let road = scenic.track.at_distance(50.0);
-        scenic.position = road.lane_position(2.4);
-        scenic.resolve_road();
-        assert!(
-            (scenic.track.project(scenic.position).offset - 2.4).abs() < 0.05,
-            "scenic must not inherit the compact barrier at 2.2 m"
-        );
-        scenic.position = road.lane_position(4.0);
-        scenic.velocity = road.normal().map(|v| v * 5.0);
-        assert!(scenic.resolve_road() > 4.0);
-        let projection = scenic.track.project(scenic.position);
-        assert!(projection.offset.abs() <= scenic.track.width * 0.5 - track::CAR_RADIUS + 0.02);
-        assert!((scenic.position[1] - projection.point[1] - 0.48).abs() < 0.05);
-        assert!(
-            (track::TrackId::Compact
-                .track()
-                .project(scenic.position)
-                .point[2]
-                - scenic.position[2])
-                .abs()
-                > 100.0
-        );
-        compact.resolve_road();
-        for (actual, expected) in compact.position.into_iter().zip(compact_position) {
-            assert!((actual - expected).abs() < 0.001);
+    fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
+        let track = track::TrackId::scenic().track();
+        let road = track.at_distance(50.0);
+        for side in [-1.0, 1.0] {
+            let position = road.lane_position(side * (road.width * 0.5 + 8.0));
+            let inward = road.normal().map(|v| -side * v);
+            let mut car = Vehicle::on_track(
+                position,
+                inward[0].atan2(inward[1]),
+                CarModel::Roadster,
+                track.clone(),
+            );
+            car.manual = true;
+            car.gear = NEUTRAL_GEAR;
+            car.velocity = inward.map(|v| v * 10.0);
+            assert_eq!(car.resolve_road(), 0.0);
+            assert_eq!(
+                [car.position[0], car.position[2]],
+                [position[0], position[2]]
+            );
+            for _ in 0..288 {
+                assert!(
+                    car.update(Duration::from_secs_f64(1.0 / 240.0), Controls::default()) < 0.01
+                );
+                assert!(car.position.iter().all(|v| v.is_finite()));
+            }
+            assert!(track.project(car.position).offset.abs() < road.width * 0.5);
+            assert!((car.position[1] - car.ride_height()).abs() < 0.15);
         }
-        assert!(std::sync::Arc::ptr_eq(
-            &compact.track,
-            &track::TrackId::Compact.track()
-        ));
     }
 
     #[test]
@@ -2262,29 +2285,23 @@ mod tests {
     }
 
     #[test]
-    fn wall_response_preserves_tangential_motion_and_height() {
-        let sample = track::TrackId::Compact.track().at_distance(50.0);
-        let mut v = Vehicle::new(
-            sample.lane_position(4.0),
-            sample.heading(),
+    fn outer_terrain_boundary_preserves_tangential_motion_and_ground_height() {
+        let track = track::TrackId::Compact.track();
+        let bounds = track.terrain_bounds();
+        let mut car = Vehicle::on_track(
+            [bounds[0][0] - 1.0, 0.0, (bounds[0][1] + bounds[1][1]) * 0.5],
+            0.0,
             CarModel::Roadster,
+            track.clone(),
         );
-        let normal = sample.normal();
-        v.velocity = [
-            sample.tangent[0] * 8.0 + normal[0] * 4.0,
-            sample.tangent[1] * 8.0 + normal[1] * 4.0,
-        ];
-        assert!(v.resolve_road() > 0.0);
+        car.velocity = [-4.0, 8.0];
+        assert!(car.resolve_road() > 0.0);
+        assert_eq!(car.position[0], bounds[0][0] + track::CAR_RADIUS);
+        assert!(car.velocity[1] > 6.0);
         assert!(
-            track::TrackId::Compact
-                .track()
-                .project(v.position)
-                .offset
-                .abs()
-                < 2.3
+            (car.position[1] - track.drive_height([car.position[0], car.position[2]]) - 0.48).abs()
+                < 0.001
         );
-        assert!((v.position[1] - sample.point[1] - 0.48).abs() < 0.2);
-        assert!(dot(v.velocity, sample.tangent) > 6.0);
     }
 
     #[test]
@@ -2586,13 +2603,19 @@ mod tests {
     }
 
     #[test]
-    fn update_reports_road_impacts_without_losing_substep_peaks() {
-        let road = track::TrackId::Compact.track().at_distance(50.0);
-        let mut v = Vehicle::new(road.lane_position(2.3), road.heading(), CarModel::Roadster);
-        v.velocity = road.normal().map(|x| x * 5.0);
-        let impact = v.update(Duration::from_millis(16), Controls::default());
+    fn update_reports_outer_boundary_impacts_without_losing_substep_peaks() {
+        let track = track::TrackId::Compact.track();
+        let bounds = track.terrain_bounds();
+        let mut car = Vehicle::on_track(
+            [bounds[0][0] + track::CAR_RADIUS + 0.02, 0.0, 0.0],
+            -std::f32::consts::FRAC_PI_2,
+            CarModel::Roadster,
+            track,
+        );
+        car.velocity = [-5.0, 0.0];
+        let impact = car.update(Duration::from_millis(16), Controls::default());
         assert!(impact > 3.0);
-        assert_eq!(v.update(Duration::ZERO, Controls::default()), 0.0);
+        assert_eq!(car.update(Duration::ZERO, Controls::default()), 0.0);
     }
 
     #[test]

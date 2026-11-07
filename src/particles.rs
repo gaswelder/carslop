@@ -99,18 +99,12 @@ impl TireParticles {
             let x = car.position[0] + center[0] * c + center[2] * s;
             let z = car.position[2] - center[0] * s + center[2] * c;
             let road = car.track.project([x, 0.0, z]);
-            let distance = (x - road.point[0]).hypot(z - road.point[2]);
-            let (beyond, dusty) = if let Some(city) = car.track.city() {
-                (false, !city.paved([x, z]))
+            let dusty = if let Some(city) = car.track.city() {
+                !city.paved([x, z])
             } else {
-                (
-                    distance > road.width * 0.5 + 0.7,
-                    road.offset.abs() > road.width * 0.5 - 0.6,
-                )
+                road.offset.abs() > road.width * 0.5 - 0.6
             };
-            let effect = if beyond {
-                None
-            } else if dusty && motion > 5.0 {
+            let effect = if dusty && motion > 5.0 {
                 Some((Kind::Dust, (motion / 14.0).clamp(0.0, 1.0) * 0.6))
             } else if car.tire_scrub > 0.25 {
                 Some((Kind::Smoke, car.tire_scrub.clamp(0.0, 1.0)))
@@ -135,14 +129,7 @@ impl TireParticles {
                 self.puffs.push(Puff {
                     owner,
                     kind,
-                    position: [
-                        x,
-                        car.track
-                            .city()
-                            .map_or(road.point[1], |c| c.drive_height([x, z]))
-                            + 0.18,
-                        z,
-                    ],
+                    position: [x, car.track.drive_height([x, z]) + 0.18, z],
                     velocity: [
                         car.velocity[0] * 0.08 - s * 0.35 + jitter * 0.2,
                         if smoke { 0.48 } else { 0.30 },
@@ -257,7 +244,11 @@ mod tests {
         for puff in &particles.puffs {
             assert_eq!(puff.kind, Kind::Smoke);
             assert!(
-                (puff.position[1] - track.project(puff.position).point[1] - 0.18).abs() < 0.001
+                (puff.position[1]
+                    - track.drive_height([puff.position[0], puff.position[2]])
+                    - 0.18)
+                    .abs()
+                    < 0.001
             );
         }
     }
@@ -290,7 +281,7 @@ mod tests {
         assert!(!p.puffs.is_empty() && p.puffs.iter().all(|p| p.kind == Kind::Smoke));
         // Place the mounted outer tire on the verge, regardless of track width.
         let half_track = v.model.wheel_centers()[0][0].abs();
-        let mut edge = car(v.track.width * 0.5 - half_track);
+        let mut edge = car(v.track.project(v.position).width * 0.5 - half_track);
         edge.tire_scrub = 0.0;
         let mut dust = TireParticles::default();
         emit(&mut dust, &edge, 30);

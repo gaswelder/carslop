@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild location\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  -h, --help                              Show help\n  -V, --version                           Show version\n";
+const HELP:&str="Usage: nfs5like [COMMAND]\n\nCommands:\n  play [--location NAME]                  Open the game (default command)\n  add-location NAME --source FILE.osm     Import a local OSM XML extract\n      [--bbox SOUTH WEST NORTH EAST]      Crop; defaults to OSM bounds\n      --elevation TILE.hgt[.gz]\n  create-track JSON_PATH                 Compile points into a city location\n  list-locations                         List imported locations\n  circuit-only --location NAME          Keep racing roads; rebuild location\n  bake-city --location NAME             Rebuild render and collision data\n  bake-collision --location NAME        Rebuild collision data only\n  bake-scene --location NAME            Rebuild visual geometry only\n\n  extract-region SOURCE.pbf OUTPUT.osm [--bbox SOUTH WEST NORTH EAST]\n  merge-osm ORIGINAL.osm[.gz] EXTENSION.osm[.gz] OUTPUT.osm\n  build-aerial-tiles --image FILE --export FILE --output DIR\n\n  preview-trees --image FILE --export FILE --output DIR [--osm FILE.osm] [--city-data DIR]\n\n  import-imagery-trees --candidates FILE.geojson --city-data DIR\n\n  prepare-city-imagery --city-data DIR --work-dir DIR [--limit-blocks N]\n\nGlobal options:\n  -h, --help                              Show help\n  -V, --version                           Show version\n";
 #[derive(Debug, PartialEq)]
 enum Command {
     Play(Option<String>),
@@ -15,6 +15,7 @@ enum Command {
         bbox: Option<[f64; 4]>,
         elevation: PathBuf,
     },
+    CreateTrack(PathBuf),
     List,
     Bake(String),
     CircuitOnly(String),
@@ -24,7 +25,7 @@ enum Command {
     Help,
     Version,
 }
-fn valid_name(s: &str) -> bool {
+pub(crate) fn valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.as_bytes()[0].is_ascii_alphanumeric()
@@ -58,6 +59,12 @@ fn parse(mut args: Vec<OsString>) -> Result<Command> {
     ) {
         args.insert(0, cmd.into());
         return Ok(Command::Source(args));
+    }
+    if cmd == "create-track" {
+        if args.len() != 1 {
+            return Err(invalid("create-track requires exactly one JSON path"));
+        }
+        return Ok(Command::CreateTrack(PathBuf::from(args.remove(0))));
     }
     let mut location = None;
     let mut source = None;
@@ -192,16 +199,15 @@ pub fn run() -> Result<Option<bool>> {
     let command = parse(std::env::args_os().skip(1).collect())?;
     let root = Path::new(crate::city_assets::LOCATIONS_DIRECTORY);
     match command {
+        Command::CreateTrack(source) => {
+            let destination = crate::location::create_track(&source)?;
+            println!("Created {}", destination.display());
+        }
         Command::Source(values) => crate::source_tools::run(values)?,
         Command::Help => print!("{HELP}"),
         Command::Version => println!("nfs5like {}", env!("CARGO_PKG_VERSION")),
         Command::Play(location) => {
             if let Some(name) = location {
-                let file = root.join(format!("{name}.track.json"));
-                if file.is_file() {
-                    crate::track::select_file(&file).map_err(invalid)?;
-                    return Ok(Some(false));
-                }
                 select(&name)?;
                 return Ok(Some(true));
             }
@@ -213,18 +219,6 @@ pub fn run() -> Result<Option<bool>> {
                 entries.sort_by_key(|e| e.file_name());
                 for entry in entries {
                     let path = entry.path();
-                    if path.is_file() {
-                        if let Some(name) = path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .and_then(|s| s.strip_suffix(".track.json"))
-                        {
-                            if valid_name(name) && crate::track::register_file(&path).is_ok() {
-                                println!("{name}\t{}", path.display());
-                            }
-                        }
-                        continue;
-                    }
                     let name = path
                         .is_dir()
                         .then(|| path.file_name().and_then(|s| s.to_str()))
@@ -318,6 +312,12 @@ mod tests {
     }
     #[test]
     fn command_routing() {
+        assert_eq!(
+            args(&["create-track", "/tmp/course.json"]).unwrap(),
+            Command::CreateTrack(PathBuf::from("/tmp/course.json"))
+        );
+        assert!(args(&["create-track"]).is_err());
+        assert!(args(&["create-track", "first.json", "second.json"]).is_err());
         assert_eq!(args(&[]).unwrap(), Command::Play(None));
         assert_eq!(
             args(&["play", "--location", "limassol"]).unwrap(),

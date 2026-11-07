@@ -48,14 +48,7 @@ impl SkidMarks {
             let z = car.position[2] - p[0] * s + p[2] * c;
             let road = car.track.project([x, 0.0, z]);
             (
-                [
-                    x,
-                    car.track
-                        .city()
-                        .map_or(road.point[1], |c| c.drive_height([x, z]))
-                        + 0.078,
-                    z,
-                ],
+                [x, car.track.drive_height([x, z]) + 0.078, z],
                 (if let Some(city) = car.track.city() {
                     city.paved([x, z])
                 } else {
@@ -176,7 +169,7 @@ mod tests {
         for vertex in marks.vertices() {
             let road = track.project(vertex.position);
             assert!((vertex.position[1] - road.point[1] - 0.078).abs() < 0.1);
-            assert!(road.offset.abs() < track.width * 0.5);
+            assert!(road.offset.abs() < road.width * 0.5);
         }
     }
 

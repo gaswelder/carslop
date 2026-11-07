@@ -4,6 +4,8 @@ use std::sync::OnceLock;
 
 pub const ROAD_WIDTH: f32 = 7.2;
 pub const CAR_RADIUS: f32 = 1.4;
+pub const OFFROAD_MARGIN: f32 = 75.0;
+const TERRAIN_PADDING: f32 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackId {
@@ -20,16 +22,17 @@ pub fn all() -> [TrackId; 3] {
 struct RuntimeTrack {
     path: std::path::PathBuf,
     name: &'static str,
-    width: f32,
     coastal: bool,
-    points: Vec<[f32; 3]>,
+    points: Vec<[f32; 4]>,
     track: OnceLock<Result<std::sync::Arc<Track>, String>>,
 }
 fn runtime_tracks() -> &'static std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>> {
     static TRACKS: OnceLock<std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>>> = OnceLock::new();
     TRACKS.get_or_init(Default::default)
 }
-/// Register a data-only closed circuit. Spline and render geometry load on selection.
+/// Register a closed circuit with [x, y, z, width] control points in metres.
+/// Version 2 uses per-point full road widths, each between 2 and 30 metres.
+/// The compiler samples the spline and generates location assets.
 /// Optional `scenery` selects `standard` (default) or `coastal` terrain and roadside scenery.
 pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), String> {
     let path = path.canonicalize().map_err(|e| e.to_string())?;
@@ -39,19 +42,15 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
     }
     let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    if v["version"].as_u64() != Some(1) {
-        return Err("track version must be 1".into());
+    if v["version"].as_u64() != Some(2) {
+        return Err("track version must be 2".into());
     }
     let name = v["name"]
         .as_str()
         .filter(|s| !s.trim().is_empty() && s.chars().count() <= 80)
         .ok_or("track needs a name of 1..80 characters")?;
-    let width = match v.get("width") {
-        None => ROAD_WIDTH,
-        Some(value) => value.as_f64().ok_or("track width must be a number")? as f32,
-    };
-    if !width.is_finite() || !(2.0..=30.0).contains(&width) {
-        return Err("track width must be 2..30 metres".into());
+    if v.get("width").is_some() {
+        return Err("put width in each [x, y, z, width] point".into());
     }
     let coastal = match v.get("scenery").and_then(serde_json::Value::as_str) {
         None if v.get("scenery").is_none() => false,
@@ -59,7 +58,7 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
         Some("coastal") => true,
         _ => return Err("track scenery must be standard or coastal".into()),
     };
-    let points: Vec<[f32; 3]> =
+    let points: Vec<[f32; 4]> =
         serde_json::from_value(v["points"].clone()).map_err(|e| e.to_string())?;
     if !(4..=4096).contains(&points.len())
         || points
@@ -67,7 +66,12 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
             .flatten()
             .any(|p| !p.is_finite() || p.abs() > 1_000_000.0)
     {
-        return Err("track needs 4..4096 finite XYZ points within one million metres".into());
+        return Err(
+            "track needs 4..4096 finite [x, y, z, width] points within one million metres".into(),
+        );
+    }
+    if points.iter().any(|point| !(2.0..=30.0).contains(&point[3])) {
+        return Err("point width must be 2..30 metres".into());
     }
     let mut perimeter = 0.0;
     for i in 0..points.len() {
@@ -87,24 +91,12 @@ pub fn register_file(path: &std::path::Path) -> Result<(TrackId, &'static str), 
     tracks.push(std::sync::Arc::new(RuntimeTrack {
         path,
         name,
-        width,
         coastal,
         points,
         track: OnceLock::new(),
     }));
     Ok((TrackId::File(index), name))
 }
-static SELECTED_FILE: OnceLock<TrackId> = OnceLock::new();
-pub fn select_file(path: &std::path::Path) -> Result<(), String> {
-    let (id, _) = register_file(path)?;
-    SELECTED_FILE
-        .set(id)
-        .map_err(|_| "track already selected".into())
-}
-pub fn selected_file() -> Option<TrackId> {
-    SELECTED_FILE.get().copied()
-}
-
 // Preserve the original compact route and its sampling exactly.
 pub const ROAD_POINTS: [[f32; 3]; 12] = [
     [0.0, 0.0, -35.0],
@@ -124,22 +116,23 @@ pub const ROAD_POINTS: [[f32; 3]; 12] = [
 pub struct Track {
     pub id: TrackId,
     pub name: String,
-    pub width: f32,
     coastal: bool,
     pub bounds: [[f32; 2]; 2], // min/max XZ, from actual spline samples
     points: Vec<[f32; 3]>,
+    widths: Vec<f32>,
     distances: Vec<f32>,
     lengths: Vec<f32>,
     tangents: Vec<[f32; 2]>,
     total: f32,
-    shoreline: Vec<[f32; 3]>,
     // Conservative broad-phase cells make long-route projection inexpensive.
     buckets: std::collections::HashMap<(i32, i32), Vec<usize>>,
     city: Option<crate::city::City>,
+    terrain: Option<crate::elevation::HeightField>,
 }
 
 impl TrackId {
-    /// The bundled default uses the same registry and format as other disk circuits.
+    /// Load the bundled authoring fixture through the ordinary point parser.
+    #[cfg(test)]
     pub fn scenic() -> Self {
         register_file(std::path::Path::new("data/locations/scenic.track.json"))
             .expect("cannot load Coastal Highway track definition")
@@ -178,12 +171,8 @@ impl TrackId {
                 definition
                     .track
                     .get_or_init(|| {
-                        let mut track = Track::build_width(
-                            self,
-                            &definition.points,
-                            definition.width,
-                            definition.coastal,
-                        )?;
+                        let mut track =
+                            Track::build_points(self, &definition.points, definition.coastal)?;
                         track.name = definition.name.to_owned();
                         Ok(std::sync::Arc::new(track))
                     })
@@ -248,13 +237,15 @@ impl RoadSample {
 impl Track {
     #[cfg(test)]
     pub fn flat_test_track(&self) -> Self {
-        Self::build_width(
+        let mut track = Self::build_points(
             self.id,
-            &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z]),
-            self.width,
+            &ROAD_POINTS.map(|[x, _, z]| [x, 0.0, z, self.at_distance(50.0).width]),
             self.coastal,
         )
-        .unwrap()
+        .unwrap();
+        // Analytic fixtures retain sub-grid bumps used by suspension tests.
+        track.terrain = None;
+        track
     }
 
     #[cfg(test)]
@@ -275,32 +266,79 @@ impl Track {
                 .unwrap()
                 .name()
                 .to_owned(),
-            width: 8.0,
             coastal: false,
             bounds: city.bounds,
             points: city.nodes.clone(),
+            widths: Vec::new(),
             distances: Vec::new(),
             lengths: Vec::new(),
             tangents: Vec::new(),
             total: city.length,
-            shoreline: Vec::new(),
             buckets: Default::default(),
             city: Some(city),
+            terrain: None,
         })
     }
     pub fn city(&self) -> Option<&crate::city::City> {
         self.city.as_ref()
     }
 
+    pub fn terrain(&self) -> Option<&crate::elevation::HeightField> {
+        self.terrain.as_ref()
+    }
+
+    pub fn terrain_bounds(&self) -> [[f32; 2]; 2] {
+        if let Some(field) = self.terrain() {
+            [
+                field.origin,
+                [
+                    field.origin[0] + (field.columns - 1) as f32 * field.step,
+                    field.origin[1] + (field.rows - 1) as f32 * field.step,
+                ],
+            ]
+        } else {
+            [
+                self.bounds[0].map(|v| v - TERRAIN_PADDING),
+                self.bounds[1].map(|v| v + TERRAIN_PADDING),
+            ]
+        }
+    }
+
+    pub fn ground_height(&self, position: [f32; 2]) -> f32 {
+        if let Some(city) = &self.city {
+            city.height(position)
+        } else if let Some(field) = self.terrain() {
+            field.height(position)
+        } else {
+            self.project([position[0], 0.0, position[1]]).point[1]
+        }
+    }
+
+    pub fn terrain_height(&self, position: [f32; 2]) -> f32 {
+        self.ground_height(position) - 0.02
+    }
+
+    /// Vehicle origin uses the same five-centimetre asphalt reference as cities.
+    pub fn drive_height(&self, position: [f32; 2]) -> f32 {
+        if let Some(city) = &self.city {
+            return city.drive_height(position);
+        }
+        if self.terrain.is_none() {
+            return self.ground_height(position);
+        }
+        let road = self.project([position[0], 0.0, position[1]]);
+        self.ground_height(position)
+            - if road.offset.abs() > road.width * 0.5 {
+                0.07
+            } else {
+                0.0
+            }
+    }
+
     /// Ground rise per horizontal metre (XZ). Ignore discrete curb heights:
     /// those already have their own impact response.
     pub fn ground_gradient(&self, position: [f32; 3]) -> [f32; 2] {
-        let height = |x, z| {
-            self.city.as_ref().map_or_else(
-                || self.project([x, position[1], z]).point[1],
-                |city| city.height([x, z]),
-            )
-        };
+        let height = |x, z| self.ground_height([x, z]);
         let [x, _, z] = position;
         [
             height(x + 0.5, z) - height(x - 0.5, z),
@@ -342,15 +380,19 @@ impl Track {
         }
     }
     fn build(id: TrackId, controls: &[[f32; 3]]) -> Self {
-        Self::build_width(id, controls, ROAD_WIDTH, false).expect("invalid built-in route")
+        Self::build_points(
+            id,
+            &controls
+                .iter()
+                .map(|p| [p[0], p[1], p[2], ROAD_WIDTH])
+                .collect::<Vec<_>>(),
+            false,
+        )
+        .expect("invalid built-in route")
     }
-    fn build_width(
-        id: TrackId,
-        controls: &[[f32; 3]],
-        width: f32,
-        coastal: bool,
-    ) -> Result<Self, String> {
+    fn build_points(id: TrackId, controls: &[[f32; 4]], coastal: bool) -> Result<Self, String> {
         let mut points = Vec::new();
+        let mut widths = Vec::new();
         let n = controls.len();
         for segment in 0..n {
             let a = controls[(segment + n - 1) % n];
@@ -364,6 +406,8 @@ impl Track {
             };
             for i in 0..steps {
                 let t = i as f32 / steps as f32;
+                let blend = t * t * (3.0 - 2.0 * t);
+                widths.push(b[3] + (c[3] - b[3]) * blend);
                 points.push(std::array::from_fn(|axis| {
                     0.5 * (2.0 * b[axis]
                         + (-a[axis] + c[axis]) * t
@@ -407,35 +451,34 @@ impl Track {
         let mut track = Self {
             id,
             name: "COASTAL LOOP".into(),
-            width,
             coastal,
             bounds,
             points,
+            widths,
             distances,
             lengths,
             tangents,
             total,
-            shoreline: Vec::new(),
             buckets,
             city: None,
+            terrain: None,
         };
-        let count = if coastal {
-            (total / 8.0).ceil() as usize
-        } else {
-            64
-        };
-        track.shoreline = (0..count)
-            .map(|i| {
-                let sample = track.at_distance(total * i as f32 / count as f32);
-                let n = sample.normal();
-                let offset = track.width * 0.5 + if coastal { 22.0 } else { 10.0 };
-                [
-                    sample.point[0] - n[0] * offset,
-                    crate::ambience::SEA_LEVEL,
-                    sample.point[2] - n[1] * offset,
-                ]
-            })
-            .collect();
+        let terrain_bounds = track.terrain_bounds();
+        track.terrain = Some(crate::elevation::HeightField::generate(
+            terrain_bounds,
+            |position| {
+                let road = track.project([position[0], 0.0, position[1]]);
+                let beyond = (road.offset.abs() - road.width * 0.5 - OFFROAD_MARGIN).max(0.0);
+                let t = (beyond / (TERRAIN_PADDING - OFFROAD_MARGIN)).clamp(0.0, 1.0);
+                let blend = t * t * (3.0 - 2.0 * t);
+                let outer = if coastal {
+                    crate::elevation::SEA_LEVEL - 0.4
+                } else {
+                    road.point[1] - 2.0
+                };
+                road.point[1] + (outer - road.point[1]) * blend
+            },
+        ));
         Ok(track)
     }
 
@@ -449,9 +492,6 @@ impl Track {
     }
     pub fn length(&self) -> f32 {
         self.total
-    }
-    pub fn shoreline(&self) -> &[[f32; 3]] {
-        &self.shoreline
     }
 
     /// Circuit arc length, or enumeration of city street segments. City samples
@@ -474,7 +514,8 @@ impl Track {
             tangent: self.tangents[index],
             distance,
             offset: 0.0,
-            width: self.width,
+            width: self.widths[index]
+                + (self.widths[(index + 1) % self.widths.len()] - self.widths[index]) * t,
         }
     }
 
@@ -503,7 +544,8 @@ impl Track {
                     tangent,
                     distance: self.distances[i] + t * len,
                     offset: -dx * tangent[1] + dz * tangent[0],
-                    width: self.width,
+                    width: self.widths[i]
+                        + (self.widths[(i + 1) % self.widths.len()] - self.widths[i]) * t,
                 };
             }
         }
@@ -537,18 +579,71 @@ pub fn angle(value: f32) -> f32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) fn variable_width_track() -> std::sync::Arc<super::Track> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
+        super::register_file(file.path()).unwrap().0.track()
+    }
+
+    #[test]
+    fn point_widths_interpolate_and_agree_with_projection_including_the_seam() {
+        let track = variable_width_track();
+        for (point, width) in [
+            ([0.0, 0.0, 0.0], 4.0),
+            ([400.0, 0.0, 0.0], 12.0),
+            ([400.0, 0.0, 400.0], 6.0),
+            ([0.0, 0.0, 400.0], 8.0),
+            ([200.0, 0.0, -50.0], 8.0),
+        ] {
+            assert!((track.project(point).width - width).abs() < 0.001);
+        }
+        for i in 0..1000 {
+            let sample = track.at_distance(track.length() * i as f32 / 1000.0);
+            assert!((4.0..=12.0).contains(&sample.width));
+            let projected = track.project(sample.point);
+            assert!((sample.width - projected.width).abs() < 0.001);
+        }
+        assert_eq!(track.at_distance(0.0).width, 4.0);
+        assert_eq!(track.at_distance(track.length()).width, 4.0);
+        assert!((track.at_distance(track.length() - 0.01).width - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn per_point_widths_are_required_and_bounded() {
+        for width in [
+            serde_json::json!(1.99),
+            serde_json::json!(30.01),
+            serde_json::Value::Null,
+            serde_json::json!("wide"),
+        ] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let data = serde_json::json!({"version":2,"name":"Invalid width","points":[[0,0,0,width],[100,0,0,8],[100,0,100,8],[0,0,100,8]]});
+            std::fs::write(file.path(), serde_json::to_vec(&data).unwrap()).unwrap();
+            assert!(super::register_file(file.path()).is_err());
+        }
+        for data in [
+            r#"{"version":1,"name":"Old format","width":8,"points":[[0,0,0],[100,0,0],[100,0,100],[0,0,100]]}"#,
+            r#"{"version":2,"name":"Missing widths","points":[[0,0,0],[100,0,0],[100,0,100],[0,0,100]]}"#,
+            r#"{"version":2,"name":"Global width","width":8,"points":[[0,0,0,8],[100,0,0,8],[100,0,100,8],[0,0,100,8]]}"#,
+        ] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), data).unwrap();
+            assert!(super::register_file(file.path()).is_err());
+        }
+    }
+
     #[test]
     fn runtime_circuit_loads_without_a_compiled_identity() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("hills.track.json");
-        std::fs::write(&path, r#"{"version":1,"name":"Hills","width":11,"points":[[0,0,0],[100,2,0],[100,4,100],[0,1,100]]}"#).unwrap();
+        std::fs::write(&path, r#"{"version":2,"name":"Hills","points":[[0,0,0,11],[100,2,0,11],[100,4,100,11],[0,1,100,11]]}"#).unwrap();
         let (id, name) = super::register_file(&path).unwrap();
         assert_eq!(name, "HILLS");
         assert!(matches!(id, super::TrackId::File(_)));
         assert_eq!(id, super::register_file(&path).unwrap().0);
         let track = id.try_track().unwrap();
-        assert_eq!(track.width, 11.0);
+        assert_eq!(track.at_distance(0.0).width, 11.0);
         assert!(track.city().is_none());
         assert!(!track.is_coastal());
         assert!(std::sync::Arc::ptr_eq(&track, &id.try_track().unwrap()));
@@ -579,21 +674,20 @@ mod tests {
         assert_eq!(copied.name, "ANOTHER COAST");
         assert!(copied.is_coastal());
         assert_eq!(copied.centerline(), original.centerline());
-        assert_eq!(copied.shoreline(), original.shoreline());
-        assert_eq!(copied.width, original.width);
+        assert_eq!(copied.widths, original.widths);
     }
 
     #[test]
     fn runtime_circuit_rejects_invalid_definitions() {
         for data in [
             r#"{"version":2}"#,
-            r#"{"version":1,"name":"bad","scenery":"unknown"}"#,
-            r#"{"version":1,"name":"bad","scenery":null}"#,
-            r#"{"version":1,"name":"bad","width":"wide","points":[]}"#,
-            r#"{"version":1,"name":"bad","width":0,"points":[]}"#,
-            r#"{"version":1,"name":"bad","points":[[0,0,0],[1,0,0],[1,0,1]]}"#,
-            r#"{"version":1,"name":"bad","points":[[0,0,0],[0,1,0],[1,0,1],[2,0,2]]}"#,
-            r#"{"version":1,"name":"bad","points":[[0,0,0],[20000,0,0],[20000,0,20000],[0,0,20000]]}"#,
+            r#"{"version":2,"name":"bad","scenery":"unknown"}"#,
+            r#"{"version":2,"name":"bad","scenery":null}"#,
+            r#"{"version":2,"name":"bad","points":[],"width":"wide"}"#,
+            r#"{"version":2,"name":"bad","points":[]}"#,
+            r#"{"version":2,"name":"bad","points":[[0,0,0,7.2],[1,0,0,7.2],[1,0,1,7.2]]}"#,
+            r#"{"version":2,"name":"bad","points":[[0,0,0,7.2],[0,1,0,7.2],[1,0,1,7.2],[2,0,2,7.2]]}"#,
+            r#"{"version":2,"name":"bad","points":[[0,0,0,7.2],[20000,0,0,7.2],[20000,0,20000,7.2],[0,0,20000,7.2]]}"#,
         ] {
             let file = tempfile::NamedTempFile::new().unwrap();
             std::fs::write(file.path(), data).unwrap();
@@ -711,7 +805,7 @@ mod tests {
                 }
                 let gap = (a.point[0] - b.point[0]).hypot(a.point[2] - b.point[2]);
                 assert!(
-                    gap > route.width * 2.0,
+                    gap > a.width.max(b.width) * 2.0,
                     "ambiguous road near {} / {} m",
                     a.distance,
                     b.distance

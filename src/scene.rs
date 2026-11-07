@@ -192,138 +192,124 @@ fn finish(mut b: Builder) -> Geometry {
 }
 
 fn terrain_height(track: &track::Track, x: f32, z: f32) -> f32 {
-    let s = track.project([x, 0.0, z]);
-    if track.is_coastal() {
-        let half = track.width * 0.5;
-        let levels = [
-            (-half - 22.0, crate::ambience::SEA_LEVEL - 0.4),
-            (
-                -half - 10.0,
-                s.point[1] * 0.3 + crate::ambience::SEA_LEVEL * 0.7,
-            ),
-            (-half - 1.0, s.point[1] - 0.18),
-            (half + 1.0, s.point[1] - 0.18),
-            (half + 15.0, s.point[1] - 2.0),
-            (half + 50.0, -1.8),
-        ];
-        for pair in levels.windows(2) {
-            if s.offset <= pair[1].0 {
-                let t = ((s.offset - pair[0].0) / (pair[1].0 - pair[0].0)).clamp(0.0, 1.0);
-                return pair[0].1 + (pair[1].1 - pair[0].1) * t;
-            }
-        }
-        return -1.8;
-    }
-    let distance = (x - s.point[0]).hypot(z - s.point[2]);
-    let blend = ((distance - track.width * 0.5 - 1.0) / 9.0).clamp(0.0, 1.0);
-    let floor = if s.offset > 0.0 { -1.8 } else { -3.6 };
-    (s.point[1] - 0.25) * (1.0 - blend) + floor * blend
+    track.terrain_height([x, z])
 }
 
 fn terrain(b: &mut Builder, track: &track::Track) {
-    // Sea extends past the camera's fog distance; land slopes down from the road.
-    let sea = crate::ambience::SEA_LEVEL;
-    let [min, max] = track.bounds;
-    let pad = 700.0;
+    water(b, track);
+    let field = track.terrain().expect("authored track terrain");
+    for row in 0..field.rows - 1 {
+        for column in 0..field.columns - 1 {
+            let mut points = [
+                field.point(column, row),
+                field.point(column + 1, row),
+                field.point(column + 1, row + 1),
+                field.point(column, row + 1),
+            ];
+            for point in &mut points {
+                point[1] -= 0.02;
+            }
+            let sample = track.project(points[0]);
+            let color = if track.is_coastal() && sample.offset < 0.0 {
+                [0.43, 0.42, 0.32]
+            } else if (column + row * 2) % 5 == 0 {
+                [0.33, 0.42, 0.21]
+            } else {
+                [0.28, 0.38, 0.19]
+            };
+            b.upward_quad(points, Surface::road(color));
+        }
+    }
+    perimeter_fence(b, track);
+}
+
+fn water(b: &mut Builder, track: &track::Track) {
+    let sea = crate::elevation::SEA_LEVEL;
+    let [min, max] = track.terrain_bounds();
     b.quad(
         [
-            [min[0] - pad, sea, min[1] - pad],
-            [min[0] - pad, sea, max[1] + pad],
-            [max[0] + pad, sea, max[1] + pad],
-            [max[0] + pad, sea, min[1] - pad],
+            [min[0] - 700.0, sea, min[1] - 700.0],
+            [min[0] - 700.0, sea, max[1] + 700.0],
+            [max[0] + 700.0, sea, max[1] + 700.0],
+            [max[0] + 700.0, sea, min[1] - 700.0],
         ],
         Surface {
             color: [0.16, 0.43, 0.52],
             material: [0.0, 0.35],
         },
     );
-    if track.is_coastal() {
-        scenic_terrain(b, track);
-        return;
-    }
-    for x in -26..26 {
-        for z in -26..26 {
-            let point = |x: i32, z: i32| {
-                let (x, z) = (x as f32 * 2.0, z as f32 * 2.0);
-                [x, terrain_height(track, x, z), z]
-            };
-            let p = [
-                point(x, z),
-                point(x, z + 1),
-                point(x + 1, z + 1),
-                point(x + 1, z),
-            ];
-            let s = track.project(p[0]);
-            let color = if s.offset < -5.0 {
-                [0.48, 0.45, 0.34]
-            } else if (x + 2 * z).rem_euclid(5) == 0 {
-                [0.33, 0.42, 0.21]
-            } else {
-                [0.28, 0.38, 0.19]
-            };
-            b.quad(p, Surface::matte(color));
+}
+
+fn perimeter_fence(b: &mut Builder, track: &track::Track) {
+    let [min, max] = track.terrain_bounds();
+    let field = track.terrain().expect("authored track terrain");
+    // Fence only the outer terrain perimeter, leaving both verges open.
+    let corners = [min, [max[0], min[1]], max, [min[0], max[1]]];
+    let metal = Surface {
+        color: [0.52, 0.57, 0.56],
+        material: [0.0, 0.2],
+    };
+    for edge in 0..4 {
+        for (i, pair) in field
+            .segment(corners[edge], corners[(edge + 1) % 4])
+            .windows(2)
+            .enumerate()
+        {
+            let [a, c] = [pair[0], pair[1]];
+            b.quad(
+                [
+                    [a[0], a[1], a[2]],
+                    [c[0], c[1], c[2]],
+                    [c[0], c[1] + 0.8, c[2]],
+                    [a[0], a[1] + 0.8, a[2]],
+                ],
+                metal,
+            );
+            if i % 3 == 0 {
+                b.cuboid(
+                    [a[0] - 0.06, a[1] - 0.02, a[2] - 0.06],
+                    [a[0] + 0.06, a[1] + 0.9, a[2] + 0.06],
+                    metal,
+                );
+            }
         }
     }
 }
 
-fn scenic_terrain(b: &mut Builder, track: &track::Track) {
-    // Corridor ribbons scale with road length, not the area of a huge dense grid.
-    let count = (track.length() / 4.0).ceil() as usize;
-    let half = track.width * 0.5;
-    let center = [
-        (track.bounds[0][0] + track.bounds[1][0]) * 0.5,
-        -1.8,
-        (track.bounds[0][1] + track.bounds[1][1]) * 0.5,
-    ];
-    for i in 0..count {
-        let a = track.at_distance(track.length() * i as f32 / count as f32);
-        let c = track.at_distance(track.length() * (i + 1) as f32 / count as f32);
-        let point = |s: track::RoadSample, offset: f32, height: f32| {
-            let n = s.normal();
-            [
-                s.point[0] + n[0] * offset,
-                height,
-                s.point[2] + n[1] * offset,
-            ]
-        };
-        let levels = |s: track::RoadSample| {
-            [
-                point(s, -half - 22.0, crate::ambience::SEA_LEVEL - 0.4),
-                point(
-                    s,
-                    -half - 10.0,
-                    s.point[1] * 0.3 + crate::ambience::SEA_LEVEL * 0.7,
-                ),
-                point(s, -half - 1.0, s.point[1] - 0.18),
-                point(s, half + 1.0, s.point[1] - 0.18),
-                point(s, half + 15.0, s.point[1] - 2.0),
-                point(s, half + 50.0, -1.8),
-            ]
-        };
-        let p = levels(a);
-        let q = levels(c);
-        for j in [0, 1, 3, 4] {
-            let color = if j < 2 {
-                [0.43, 0.42, 0.32]
-            } else {
-                [0.27, 0.38, 0.21]
-            };
-            b.upward_quad([p[j], p[j + 1], q[j + 1], q[j]], Surface::matte(color));
+fn road_quad(
+    b: &mut Builder,
+    track: &track::Track,
+    points: [[f32; 3]; 4],
+    lift: f32,
+    surface: Surface,
+) {
+    if let Some(field) = track.terrain() {
+        for indices in [[0, 1, 2], [0, 2, 3]] {
+            field.drape(
+                indices.map(|i| [points[i][0], points[i][2]]),
+                |mut triangle| {
+                    for point in &mut triangle {
+                        point[1] += lift;
+                    }
+                    b.upward_quad(
+                        [triangle[0], triangle[1], triangle[2], triangle[0]],
+                        surface,
+                    );
+                },
+            );
         }
-        // Low interior fill remains below every road section, even on concave bends.
-        b.upward_quad(
-            [center, p[5], q[5], center],
-            Surface::matte([0.25, 0.35, 0.20]),
-        );
+    } else {
+        b.upward_quad(points, surface);
     }
 }
 
 fn road(b: &mut Builder, track: &track::Track) {
-    let half = track.width * 0.5;
     let count = (track.length() / 0.7).ceil() as usize;
     for i in 0..count {
         let a = track.at_distance(track.length() * i as f32 / count as f32);
         let c = track.at_distance(track.length() * (i + 1) as f32 / count as f32);
+        let half_a = a.width * 0.5;
+        let half_c = c.width * 0.5;
         let point = |s: track::RoadSample, offset: f32, height: f32| {
             let n = s.normal();
             [
@@ -332,25 +318,52 @@ fn road(b: &mut Builder, track: &track::Track) {
                 s.point[2] + n[1] * offset,
             ]
         };
-        let strip = |b: &mut Builder, left: f32, right: f32, y: f32, color| {
-            b.upward_quad(
+        let strip = |b: &mut Builder, edge_a: [f32; 2], edge_c: [f32; 2], y: f32, color| {
+            road_quad(
+                b,
+                track,
                 [
-                    point(a, left, y),
-                    point(a, right, y),
-                    point(c, right, y),
-                    point(c, left, y),
+                    point(a, edge_a[0], y),
+                    point(a, edge_a[1], y),
+                    point(c, edge_c[1], y),
+                    point(c, edge_c[0], y),
                 ],
+                y,
                 Surface::road(color),
             );
         };
-        strip(b, -half - 1.0, half + 1.0, 0.0, [0.38, 0.40, 0.26]);
+        strip(
+            b,
+            [-half_a - 1.0, half_a + 1.0],
+            [-half_c - 1.0, half_c + 1.0],
+            0.0,
+            [0.38, 0.40, 0.26],
+        );
         if track.is_coastal() && a.distance < 320.0 {
             // First representative coast section: mineral shoulders sit below
             // the asphalt lip, with muted gravel against the dry verge.
-            strip(b, -half - 0.9, -half, 0.02, [0.53, 0.49, 0.38]);
-            strip(b, half, half + 0.9, 0.02, [0.53, 0.49, 0.38]);
+            strip(
+                b,
+                [-half_a - 0.9, -half_a],
+                [-half_c - 0.9, -half_c],
+                0.02,
+                [0.53, 0.49, 0.38],
+            );
+            strip(
+                b,
+                [half_a, half_a + 0.9],
+                [half_c, half_c + 0.9],
+                0.02,
+                [0.53, 0.49, 0.38],
+            );
         }
-        strip(b, -half, half, 0.05, [0.23, 0.25, 0.26]);
+        strip(
+            b,
+            [-half_a, half_a],
+            [-half_c, half_c],
+            0.05,
+            [0.23, 0.25, 0.26],
+        );
         let curb = if track.is_coastal() {
             [0.80, 0.81, 0.73]
         } else if i / 3 % 2 == 0 {
@@ -358,48 +371,34 @@ fn road(b: &mut Builder, track: &track::Track) {
         } else {
             [0.86, 0.83, 0.69]
         };
-        strip(b, -half, -half + 0.25, 0.065, curb);
-        strip(b, half - 0.25, half, 0.065, curb);
+        strip(
+            b,
+            [-half_a, -half_a + 0.25],
+            [-half_c, -half_c + 0.25],
+            0.065,
+            curb,
+        );
+        strip(
+            b,
+            [half_a - 0.25, half_a],
+            [half_c - 0.25, half_c],
+            0.065,
+            curb,
+        );
         if i / 4 % 2 == 0 {
-            strip(b, -0.04, 0.04, 0.07, [0.92, 0.82, 0.55]);
-        }
-        for side in [-1.0, 1.0] {
-            let metal = Surface {
-                color: [0.52, 0.57, 0.56],
-                material: [0.0, 0.2],
-            };
-            let p = point(a, side * half, 0.36);
-            let q = point(c, side * half, 0.36);
-            let top = |p: [f32; 3]| [p[0], p[1] + 0.29, p[2]];
-            b.quad([p, q, top(q), top(p)], metal);
-            // Rail tops are not part of the road's contact-shadow receiver.
-            b.upward_quad(
-                [
-                    point(a, side * half - 0.09, 0.65),
-                    point(a, side * half + 0.09, 0.65),
-                    point(c, side * half + 0.09, 0.65),
-                    point(c, side * half - 0.09, 0.65),
-                ],
-                metal,
-            );
-            if i % 5 == 0 {
-                b.cuboid(
-                    [p[0] - 0.06, p[1] - 0.36, p[2] - 0.06],
-                    [p[0] + 0.06, p[1] + 0.3, p[2] + 0.06],
-                    metal,
-                );
-            }
+            strip(b, [-0.04, 0.04], [-0.04, 0.04], 0.07, [0.92, 0.82, 0.55]);
         }
     }
     if track.is_coastal() {
         return;
     }
     let start = track.at_distance(0.0);
+    let half = start.width * 0.5;
     let n = start.normal();
     for row in 0..2 {
         for col in 0..12 {
             let point = |x: f32, z: f32| {
-                let across = -half + (col as f32 + x) * track.width / 12.0;
+                let across = -half + (col as f32 + x) * start.width / 12.0;
                 let along = (row as f32 + z) * 0.45 - 0.45;
                 [
                     start.point[0] + n[0] * across + start.tangent[0] * along,
@@ -407,13 +406,16 @@ fn road(b: &mut Builder, track: &track::Track) {
                     start.point[2] + n[1] * across + start.tangent[1] * along,
                 ]
             };
-            b.upward_quad(
+            road_quad(
+                b,
+                track,
                 [
                     point(0.0, 0.0),
                     point(1.0, 0.0),
                     point(1.0, 1.0),
                     point(0.0, 1.0),
                 ],
+                0.09,
                 Surface::road(if (row + col) % 2 == 0 {
                     [0.95; 3]
                 } else {
@@ -494,36 +496,83 @@ fn house(b: &mut Builder, track: &track::Track, x: f32, z: f32) {
     }
 }
 
-fn scenery(b: &mut Builder, track: &track::Track) {
+pub(crate) struct AuthoredScenery {
+    pub trees: Vec<crate::landscape::Tree>,
+    pub buildings: Vec<crate::city::Building>,
+}
+
+pub(crate) fn authored_scenery(track: &track::Track) -> AuthoredScenery {
+    let mut trees = Vec::new();
+    let mut buildings = Vec::new();
+    let mut add_tree = |p: [f32; 3], scale: f32| {
+        trees.push(crate::landscape::Tree {
+            id: trees.len() as u64 + 1,
+            point: [p[0], p[2]],
+            height: 4.3 * scale,
+            radius: 1.35 * scale,
+        });
+    };
     if track.is_coastal() {
-        // Start with a single 320 m coast section. Keep the sea side open and
-        // set inland vegetation beyond both the barrier and chase-camera path.
         for i in 0..18 {
             let sample = track.at_distance(24.0 + i as f32 * 16.0);
-            let p = sample.lane_position(track.width * 0.5 + 9.0 + (i % 3) as f32 * 1.5);
+            let p = sample.lane_position(sample.width * 0.5 + 9.0 + (i % 3) as f32 * 1.5);
             let nearest = track.project(p);
-            if (p[0] - nearest.point[0]).hypot(p[2] - nearest.point[2]) > track.width * 0.5 + 6.0 {
-                tree(b, track, p[0], p[2], 1.15 + (i % 4) as f32 * 0.13);
+            if (p[0] - nearest.point[0]).hypot(p[2] - nearest.point[2]) > nearest.width * 0.5 + 6.0
+            {
+                add_tree(p, 1.15 + (i % 4) as f32 * 0.13);
             }
         }
-        return;
-    }
-    // Every prop's footprint is checked against the whole route, not one sample.
-    for i in 0..42 {
-        let sample = track.at_distance(i as f32 * track.length() / 42.0);
-        let p = sample.lane_position(7.5 + (i % 3) as f32 * 1.5);
-        let nearest = track.project(p);
-        let clearance = (p[0] - nearest.point[0]).hypot(p[2] - nearest.point[2]);
-        if clearance > track.width * 0.5 + 2.1 {
-            tree(b, track, p[0], p[2], 0.8 + (i % 4) as f32 * 0.12);
+    } else {
+        for i in 0..42 {
+            let sample = track.at_distance(i as f32 * track.length() / 42.0);
+            let p = sample.lane_position(
+                sample.width * 0.5 + (7.5 - track::ROAD_WIDTH * 0.5) + (i % 3) as f32 * 1.5,
+            );
+            let nearest = track.project(p);
+            if (p[0] - nearest.point[0]).hypot(p[2] - nearest.point[2]) > nearest.width * 0.5 + 2.1
+            {
+                add_tree(p, 0.8 + (i % 4) as f32 * 0.12);
+            }
+        }
+        for [x, z] in [[-9.0, -7.0], [-4.0, 4.0], [8.0, 9.0], [11.0, -7.0]] {
+            let sample = track.project([x, 0.0, z]);
+            if (x - sample.point[0]).hypot(z - sample.point[2]) > sample.width * 0.5 + 3.5 {
+                buildings.push(crate::city::Building {
+                    id: buildings.len() as u64 + 1,
+                    height: 5.0,
+                    base_y: 0.0,
+                    polygon: vec![
+                        [x - 2.0, z - 2.0],
+                        [x + 2.0, z - 2.0],
+                        [x + 2.0, z + 2.0],
+                        [x - 2.0, z + 2.0],
+                    ],
+                });
+            }
         }
     }
-    for [x, z] in [[-9.0, -7.0], [-4.0, 4.0], [8.0, 9.0], [11.0, -7.0]] {
-        let s = track.project([x, 0.0, z]);
-        if (x - s.point[0]).hypot(z - s.point[2]) > track.width * 0.5 + 3.5 {
-            house(b, track, x, z);
-        }
+    AuthoredScenery { trees, buildings }
+}
+
+fn scenery(b: &mut Builder, track: &track::Track) {
+    let assets = authored_scenery(track);
+    for t in assets.trees {
+        tree(b, track, t.point[0], t.point[1], t.height / 4.3);
     }
+    for building in assets.buildings {
+        house(
+            b,
+            track,
+            building.polygon[0][0] + 2.0,
+            building.polygon[0][1] + 2.0,
+        );
+    }
+    if !track.is_coastal() {
+        rocks(b);
+    }
+}
+
+fn rocks(b: &mut Builder) {
     // Offshore rock stacks provide silhouettes beyond the circuit.
     for [x, z, height] in [[-50.0, -12.0, 8.0], [-48.0, 9.0, 5.0], [46.0, 22.0, 7.0]] {
         for i in 0..7 {
@@ -541,6 +590,19 @@ fn scenery(b: &mut Builder, track: &track::Track) {
     }
 }
 
+pub(crate) fn authored_decorations(track: &track::Track) -> [Vec<crate::chunks::Chunk>; 3] {
+    let mut b = Builder {
+        chunks: Some(crate::chunks::ChunkBuilder::default()),
+        ..Builder::default()
+    };
+    water(&mut b, track);
+    perimeter_fence(&mut b, track);
+    if !track.is_coastal() {
+        rocks(&mut b);
+    }
+    [b.chunks.unwrap().finish(), Vec::new(), Vec::new()]
+}
+
 #[cfg(test)]
 fn wheel(b: &mut Builder, x: f32, z: f32) {
     let mut vertices = CarModel::Roadster.spec().design.wheels[0].clone();
@@ -556,6 +618,37 @@ fn car(b: &mut Builder, model: CarModel) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rendered_road_edges_follow_the_local_width() {
+        let track = crate::track::tests::variable_width_track();
+        let mut builder = super::Builder::default();
+        super::road(&mut builder, &track);
+        let mut widths = [f32::INFINITY, f32::NEG_INFINITY];
+        let mut count = 0;
+        for vertex in builder
+            .vertices
+            .iter()
+            .filter(|v| v.color == [0.23, 0.25, 0.26])
+        {
+            let sample = track.project(vertex.position);
+            assert!(sample.offset.abs() - sample.width * 0.5 < 0.03);
+            assert!(
+                (vertex.position[1]
+                    - track.ground_height([vertex.position[0], vertex.position[2]])
+                    - 0.05)
+                    .abs()
+                    < 0.001
+            );
+            if (sample.offset.abs() - sample.width * 0.5).abs() < 0.03 {
+                widths[0] = widths[0].min(sample.width);
+                widths[1] = widths[1].max(sample.width);
+            }
+            count += 1;
+        }
+        assert!(count > 100);
+        assert!(widths[0] < 4.1 && widths[1] > 11.9);
+    }
+
     #[test]
     fn chunked_builder_preserves_triangle_geometry() {
         let mut regular = super::Builder::default();
@@ -828,6 +921,7 @@ mod tests {
     #[test]
     fn contact_receivers_include_markings_but_exclude_guardrails() {
         let mut b = Builder::default();
+        terrain(&mut b, &track::TrackId::Compact.track());
         road(&mut b, &track::TrackId::Compact.track());
         let mut markings = 0;
         let mut rails = 0;
@@ -849,7 +943,7 @@ mod tests {
         let route = track::TrackId::scenic().track();
         let geometry = build(&route);
         assert!(
-            geometry.world_count > 100_000 && geometry.world_count < 800_000,
+            geometry.world_count > 100_000 && geometry.world_count < 1_800_000,
             "scenic geometry budget exceeded: {} world / {} total vertices",
             geometry.world_count,
             geometry.vertices.len()
@@ -861,9 +955,13 @@ mod tests {
                 .chain(v.normal.iter())
                 .all(|p| p.is_finite()));
             assert!((v.normal.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 0.001);
-            if v.material[0] == -1.0 {
+            if v.material[0] == -1.0 && v.color == [0.23, 0.25, 0.26] {
                 assert!(v.normal[1] > 0.9);
-                assert!((v.position[1] - route.project(v.position).point[1]).abs() < 0.25);
+                assert!(
+                    (v.position[1] - route.ground_height([v.position[0], v.position[2]]) - 0.05)
+                        .abs()
+                        < 0.001
+                );
             }
         }
         assert!(geometry.vertices[..geometry.world_count]

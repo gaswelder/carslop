@@ -133,12 +133,7 @@ impl ChaseCamera {
             self.anchor[2] - self.heading.cos() * self.distance,
         ];
         // Conservative road-height clearance, not full scenery collision.
-        eye[1] = eye[1].max(
-            self.track.city().map_or_else(
-                || self.track.project(eye).point[1],
-                |c| c.height([eye[0], eye[2]]),
-            ) + 1.5,
-        );
+        eye[1] = eye[1].max(self.track.ground_height([eye[0], eye[2]]) + 1.5);
         let target = std::array::from_fn(|i| {
             self.anchor[i] + self.look_ahead[i] + if i == 1 { 0.4 } else { 0.0 }
         });
@@ -320,7 +315,7 @@ mod tests {
                 // Exercise clearance independently of the usual high chase rig.
                 camera.height = -10.0;
                 let pose = camera.pose();
-                let clearance = track.project(pose.eye).point[1] + 1.5;
+                let clearance = track.ground_height([pose.eye[0], pose.eye[2]]) + 1.5;
                 assert!((pose.eye[1] - clearance).abs() < 0.001);
                 assert!(pose
                     .eye
@@ -442,7 +437,10 @@ mod tests {
                     .all(|x| x.is_finite()));
                 assert!(
                     pose.eye[1]
-                        >= track::TrackId::Compact.track().project(pose.eye).point[1] + 1.499
+                        >= track::TrackId::Compact
+                            .track()
+                            .ground_height([pose.eye[0], pose.eye[2]])
+                            + 1.499
                 );
                 let gap = (0..3)
                     .map(|i| (pose.eye[i] - pose.target[i]).powi(2))
