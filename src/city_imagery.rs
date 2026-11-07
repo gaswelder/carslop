@@ -204,6 +204,7 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
     if meta_path.exists() {
         let value: Value = serde_json::from_slice(&fs::read(&meta_path)?)?;
         if value["image_sha256"] == hash
+            && value["jpeg_quality"] == 80
             && value["tiles"].as_array().is_some_and(|tiles| {
                 tiles.iter().all(|t| {
                     let Some(name) = t["name"].as_str() else {
@@ -212,7 +213,7 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
                     let Ok(bytes) = fs::read(aerial.join(name)) else {
                         return false;
                     };
-                    bytes.len() == ((TILE + 2 * GUTTER).pow(2) * 3) as usize
+                    name.ends_with(".jpg")
                         && t["crc"].as_u64() == Some(crc32fast::hash(&bytes) as u64)
                 })
             })
@@ -247,7 +248,8 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
             )
             .to_image()
             .into_raw();
-            let name = format!("{}_{}_{}_{}.rgb", b.x, b.y, x, z);
+            let raw = crate::aerial::encode_jpeg(&raw, TILE + 2 * GUTTER, TILE + 2 * GUTTER)?;
+            let name = format!("{}_{}_{}_{}.jpg", b.x, b.y, x, z);
             atomic(&aerial.join(&name), &raw)?;
             let nw = local(origin, geo.lonlat(px as f64, py as f64));
             let se = local(origin, geo.lonlat((px + TILE) as f64, (py + TILE) as f64));
@@ -270,7 +272,7 @@ fn process(work: &Path, aerial: &Path, b: &Block, origin: [f64; 2]) -> Result<Va
             [ll[0], ll[1], p.radius]
         })
         .collect();
-    let value = json!({"image_sha256":hash,"extent":b.extent,"tiles":tiles,"missing_tiles":missing,"trees":trees});
+    let value = json!({"jpeg_quality":80,"image_sha256":hash,"extent":b.extent,"tiles":tiles,"missing_tiles":missing,"trees":trees});
     atomic(&meta_path, &serde_json::to_vec(&value)?)?;
     Ok(value)
 }
@@ -534,7 +536,7 @@ mod tests {
         assert!(last.extent[2] > ne[0] && last.extent[1] < sw[1]);
     }
     #[test]
-    fn block_resume_validates_checksums_and_internal_gutters_share_pixels() {
+    fn block_resume_validates_jpeg_checksums_and_gutters() {
         let temp = tempfile::tempdir().unwrap();
         let work = temp.path();
         fs::create_dir(work.join("downloads")).unwrap();
@@ -548,19 +550,22 @@ mod tests {
         im.save(image_path(work, &b)).unwrap();
         let first = process(work, &aerial, &b, [35.162, 33.32]).unwrap();
         assert_eq!(first["tiles"].as_array().unwrap().len(), 16);
-        let a = fs::read(aerial.join("0_0_0_0.rgb")).unwrap();
-        let right = fs::read(aerial.join("0_0_1_0.rgb")).unwrap();
+        let a = fs::read(aerial.join("0_0_0_0.jpg")).unwrap();
+        let decoded = image::load_from_memory(&a).unwrap().to_rgb8().into_raw();
+        let right = image::open(aerial.join("0_0_1_0.jpg"))
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
         let width = (TILE + 2 * GUTTER) as usize;
         for y in 0..width {
-            assert_eq!(
-                &a[(y * width + TILE as usize) * 3..(y + 1) * width * 3],
-                &right[y * width * 3..(y * width + 2 * GUTTER as usize) * 3]
-            );
+            let left = &decoded[(y * width + TILE as usize) * 3..(y + 1) * width * 3];
+            let right = &right[y * width * 3..(y * width + 2 * GUTTER as usize) * 3];
+            assert!(left.iter().zip(right).all(|(a, b)| a.abs_diff(*b) <= 12));
         }
         assert_eq!(first, process(work, &aerial, &b, [35.162, 33.32]).unwrap());
-        fs::write(aerial.join("0_0_0_0.rgb"), b"damaged").unwrap();
+        fs::write(aerial.join("0_0_0_0.jpg"), b"damaged").unwrap();
         assert_eq!(first, process(work, &aerial, &b, [35.162, 33.32]).unwrap());
-        assert_eq!(a, fs::read(aerial.join("0_0_0_0.rgb")).unwrap());
+        assert_eq!(a, fs::read(aerial.join("0_0_0_0.jpg")).unwrap());
     }
     #[test]
     fn white_coverage_is_not_published_as_imagery() {

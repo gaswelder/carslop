@@ -445,7 +445,8 @@ pub fn aerial(image: &Path, export: &Path, output: &Path, size: u32, gutter: u32
                     raw.extend_from_slice(&im.get_pixel(sx, sy).0);
                 }
             }
-            let name = format!("{x}_{z}.rgb");
+            let raw = crate::aerial::encode_jpeg(&raw, side, side)?;
+            let name = format!("{x}_{z}.jpg");
             fs::write(output.join(&name), &raw)?;
             let bounds = [
                 nw[0] + (se[0] - nw[0]) * x as f64 / nx as f64,
@@ -634,21 +635,33 @@ mod tests {
         for line in index.lines().skip(2) {
             let f: Vec<_> = line.split_whitespace().collect();
             let raw = fs::read(out.join(f[5])).unwrap();
-            assert_eq!(raw.len(), 72 * 72 * 3);
+            assert_eq!(
+                image::load_from_memory(&raw)
+                    .unwrap()
+                    .to_rgb8()
+                    .dimensions(),
+                (72, 72)
+            );
             assert_eq!(
                 crate::street_surface::crc32_bytes(&raw),
                 u32::from_str_radix(f[6], 16).unwrap()
             );
         }
-        let a = fs::read(out.join("0_0.rgb")).unwrap();
-        let b = fs::read(out.join("1_0.rgb")).unwrap();
+        let a = image::open(out.join("0_0.jpg"))
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
+        let b = image::open(out.join("1_0.jpg"))
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
         for y in 0..72 {
-            assert_eq!(
-                &a[(y * 72 + 64) * 3..(y * 72 + 72) * 3],
-                &b[y * 72 * 3..(y * 72 + 8) * 3]
-            );
+            assert!(a[(y * 72 + 64) * 3..(y * 72 + 72) * 3]
+                .iter()
+                .zip(&b[y * 72 * 3..(y * 72 + 8) * 3])
+                .all(|(a, b)| a.abs_diff(*b) <= 12));
         }
-        assert_eq!(&a[..3], &[0, 0, 0]);
+        assert!(a[..3].iter().all(|v| *v <= 5));
         assert!(aerial(&image, &export, &out, 0, 4).is_err());
         assert!(aerial(&image, &export, &out, 63, 4).is_err());
     }

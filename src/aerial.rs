@@ -1,8 +1,9 @@
 //! Optional disk-backed aerial tiles, projected onto existing surface geometry.
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     ffi::CString,
     path::{Path, PathBuf},
+    sync::{mpsc, Arc, Condvar, Mutex},
 };
 const CAPACITY: usize = 48;
 const GPU_BUDGET: usize = 64 * 1024 * 1024;
@@ -21,13 +22,13 @@ fn capacity(catalog: &Catalog) -> usize {
         .min(catalog.tiles.len())
         .min(GPU_BUDGET / layer_bytes(catalog.size + 2 * catalog.gutter))
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Tile {
     bounds: [f32; 4],
     name: String,
     crc: u32,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Catalog {
     size: usize,
     gutter: usize,
@@ -111,13 +112,98 @@ fn wanted(catalog: &Catalog, eye: [f32; 3], capacity: usize) -> Vec<usize> {
 fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, String> {
     let tile = &catalog.tiles[id];
     let bytes = std::fs::read(&directory.join(&tile.name)).map_err(|e| e.to_string())?;
-    if bytes.len() != (catalog.size + catalog.gutter * 2).pow(2) * 3
-        || crate::street_surface::crc32_bytes(&bytes) != tile.crc
-    {
+    if crate::street_surface::crc32_bytes(&bytes) != tile.crc {
         return Err(format!("corrupt aerial tile {}", tile.name));
     }
+    let dimension = (catalog.size + catalog.gutter * 2) as u32;
+    if tile.name.ends_with(".rgb") {
+        if bytes.len() != dimension as usize * dimension as usize * 3 {
+            return Err(format!("invalid aerial dimensions {}", tile.name));
+        }
+        return Ok(bytes);
+    }
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes))
+        .map_err(|e| e.to_string())?;
+    if image::ImageDecoder::dimensions(&decoder) != (dimension, dimension) {
+        return Err(format!("invalid aerial dimensions {}", tile.name));
+    }
+    image::DynamicImage::from_decoder(decoder)
+        .map(|im| im.to_rgb8().into_raw())
+        .map_err(|e| e.to_string())
+}
+
+/// All aerial builders use the same quality and checksum the encoded file bytes.
+pub(crate) fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80).encode(
+        rgb,
+        width,
+        height,
+        image::ExtendedColorType::Rgb8,
+    )?;
     Ok(bytes)
 }
+
+type DecodedTile = (usize, Result<Vec<u8>, String>);
+#[derive(Default)]
+struct DecodeQueue {
+    wanted: VecDeque<usize>,
+    active: HashSet<usize>,
+    stop: bool,
+}
+struct TileLoader {
+    queue: Arc<(Mutex<DecodeQueue>, Condvar)>,
+    ready: mpsc::Receiver<DecodedTile>,
+}
+impl TileLoader {
+    fn new(directory: PathBuf, catalog: Catalog) -> Self {
+        let queue = Arc::new((Mutex::new(DecodeQueue::default()), Condvar::new()));
+        // Keep decoded CPU memory bounded even if the renderer stops polling.
+        let (sender, ready) = mpsc::sync_channel(2);
+        let worker_queue = queue.clone();
+        std::thread::spawn(move || loop {
+            let (lock, wake) = &*worker_queue;
+            let id = {
+                let mut q = lock.lock().unwrap();
+                while q.wanted.is_empty() && !q.stop {
+                    q = wake.wait(q).unwrap();
+                }
+                if q.stop {
+                    break;
+                }
+                let id = q.wanted.pop_front().unwrap();
+                q.active.insert(id);
+                id
+            };
+            if sender
+                .send((id, read_tile(&directory, &catalog, id)))
+                .is_err()
+            {
+                break;
+            }
+        });
+        Self { queue, ready }
+    }
+    fn request(&self, ids: impl Iterator<Item = usize>) {
+        let (lock, wake) = &*self.queue;
+        let mut q = lock.lock().unwrap();
+        q.wanted = ids.filter(|id| !q.active.contains(id)).collect();
+        wake.notify_one();
+    }
+    fn poll(&self) -> Option<DecodedTile> {
+        let result = self.ready.try_recv().ok()?;
+        self.queue.0.lock().unwrap().active.remove(&result.0);
+        Some(result)
+    }
+}
+impl Drop for TileLoader {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.queue;
+        lock.lock().unwrap().stop = true;
+        wake.notify_one();
+    }
+}
+
 pub fn source_available() -> bool {
     crate::city_assets::CITY_ASSET
         .read()
@@ -159,7 +245,7 @@ pub fn attribution_label() -> &'static str {
     })
 }
 pub struct Aerial {
-    directory: PathBuf,
+    loader: TileLoader,
     catalog: Catalog,
     texture: u32,
     slots: Vec<Option<usize>>,
@@ -234,8 +320,9 @@ impl Aerial {
                 gl::TexParameterf(gl::TEXTURE_2D_ARRAY, 0x84FE, maximum.min(16.0));
             }
         }
+        let loader = TileLoader::new(directory, catalog.clone());
         Some(Self {
-            directory,
+            loader,
             catalog,
             texture,
             slots: vec![None; capacity],
@@ -255,14 +342,19 @@ impl Aerial {
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
             gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
         }
-        for id in wanted {
-            if self.slots.contains(&Some(id)) || self.failed.contains(&id) {
+        // Upload at most two completed tiles per frame; disk I/O and decoding
+        // run entirely on the worker. Obsolete requests are replaced each frame.
+        for _ in 0..2 {
+            let Some((id, result)) = self.loader.poll() else {
+                break;
+            };
+            if !wanted.contains(&id) || self.slots.contains(&Some(id)) {
                 continue;
             }
             let Some(slot) = self.slots.iter().position(Option::is_none) else {
                 break;
             };
-            match read_tile(&self.directory, &self.catalog, id) {
+            match result {
                 Ok(bytes) => {
                     let size = (self.catalog.size + 2 * self.catalog.gutter) as i32;
                     unsafe {
@@ -289,6 +381,12 @@ impl Aerial {
                 }
             }
         }
+        self.loader.request(
+            wanted
+                .iter()
+                .copied()
+                .filter(|id| !self.slots.contains(&Some(*id)) && !self.failed.contains(id)),
+        );
         unsafe {
             if changed {
                 gl::GenerateMipmap(gl::TEXTURE_2D_ARRAY);
@@ -379,6 +477,35 @@ mod tests {
             }
         }
         assert!(slots * layer_bytes(catalog.size + 2 * catalog.gutter) <= GPU_BUDGET);
+    }
+    #[test]
+    fn jpeg_worker_decodes_validates_dimensions_and_reports_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = encode_jpeg(&vec![127; 66 * 66 * 3], 66, 66).unwrap();
+        std::fs::write(dir.path().join("a.jpg"), &bytes).unwrap();
+        let catalog = Catalog::parse(&format!(
+            "AERIAL 1\nsize 64 1\ntile 0 0 10 10 a.jpg {:08x}\ntile 10 0 20 10 missing.jpg 00000000\n",
+            crate::street_surface::crc32_bytes(&bytes)
+        )).unwrap();
+        let loader = TileLoader::new(dir.path().to_path_buf(), catalog.clone());
+        loader.request([0, 1].into_iter());
+        let (id, result) = loader
+            .ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(id, 0);
+        assert!(result.unwrap().iter().all(|v| v.abs_diff(127) <= 2));
+        let (id, result) = loader
+            .ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(id, 1);
+        assert!(result.is_err());
+        let mut wrong_size = catalog.clone();
+        wrong_size.gutter = 2;
+        assert!(read_tile(dir.path(), &wrong_size, 0).is_err());
+        std::fs::write(dir.path().join("a.jpg"), &bytes[..30]).unwrap();
+        assert!(read_tile(dir.path(), &catalog, 0).is_err());
     }
     #[test]
     fn tile_payload_rejects_corruption_and_truncation() {
