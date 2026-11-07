@@ -9,7 +9,7 @@ After 148 initial commits, the result is pretty decent, but one-line asks don't 
 I had to switch to longer negotiations to get improvements.
 Also, I had to start looking into the code because generated technical decisions became idiotic as the slop level skyrocketed.
 
-<img src="screenshot.20261104.jpg">
+<img src="screenshot.20261107.jpg">
 
 In-game screenshot at [Engomi, Nicosia](https://www.google.com/maps/search/?api=1&query=35.1670537,33.3169556)
 
