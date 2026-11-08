@@ -1,4 +1,10 @@
-use super::*;
+use crate::{
+    location::{
+        add, cross, dist, dot, empty, length, line, mul, path_length, polygon, project, sub,
+        substring, unit, Result,
+    },
+    world::{LocationMap, Road, P},
+};
 use geo::{
     algorithm::{
         buffer::{BufferStyle, LineCap, LineJoin},
@@ -7,6 +13,10 @@ use geo::{
     },
     Area, BooleanOps, BoundingRect, Buffer, Intersects, Orient, Point, TriangulateEarcut,
 };
+use geo::{MultiPolygon, Polygon};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 use std::{
     fmt::Write as _,
     io::{BufWriter, Write},
@@ -91,7 +101,7 @@ fn ribbon(path: &[P], road: &Road, adjacency: &[Vec<usize>], extra: f64) -> Mult
     }
     union(&parts)
 }
-fn paths(map: &Map, adjacency: &[Vec<usize>]) -> Vec<Vec<P>> {
+fn paths(map: &LocationMap, adjacency: &[Vec<usize>]) -> Vec<Vec<P>> {
     let end = |node: usize, other: usize| {
         let p = map.nodes[node];
         if adjacency[node].len() != 2 {
@@ -240,7 +250,11 @@ pub fn index(paths: &[Vec<P>]) -> rstar::RTree<Segment> {
             .collect(),
     )
 }
-pub fn build(map: &Map, city: &str, streets_path: &Path, report_path: &Path) -> Result<Surfaces> {
+pub fn build_surfaces(
+    map: &LocationMap,
+    checksum: u32,
+    path_streets_txt: &Path,
+) -> Result<Surfaces> {
     let mut adjacency = vec![vec![]; map.nodes.len()];
     for (i, r) in map.roads.iter().enumerate() {
         for n in r.ends {
@@ -491,14 +505,9 @@ pub fn build(map: &Map, city: &str, streets_path: &Path, report_path: &Path) -> 
         }
     }
     groups.push((4, union(&marks).intersection(&inner).difference(&junctions)));
-    let path = streets_path;
+    let path = path_streets_txt;
     let mut file = BufWriter::new(fs::File::create(&path)?);
-    writeln!(
-        file,
-        "STREETS 1 {} {:08x}",
-        map.roads.len(),
-        crate::street_surface::crc32(city)
-    )?;
+    writeln!(file, "STREETS 1 {} {:08x}", map.roads.len(), checksum)?;
     if let Some(n) = patch_nodes
         .iter()
         .min_by(|a, b| length(map.nodes[**a]).total_cmp(&length(map.nodes[**b])))
@@ -523,7 +532,6 @@ pub fn build(map: &Map, city: &str, streets_path: &Path, report_path: &Path) -> 
         *counts.entry(style).or_insert(0) += n;
     }
     let tree = index(&paths);
-    let mut curbs = 0;
     for poly in &asphalt.0 {
         for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
             for pair in ring.0.windows(2) {
@@ -540,17 +548,11 @@ pub fn build(map: &Map, city: &str, streets_path: &Path, report_path: &Path) -> 
                     "c {kind} {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}",
                     a[0], a[1], b[0], b[1], -tangent[1], tangent[0]
                 )?;
-                curbs += 1;
             }
         }
     }
     file.flush()?;
-    fs::write(
-        report_path,
-        serde_json::to_string_pretty(
-            &serde_json::json!({"compiler":"native-rust-v1","road_area_m2":asphalt.unsigned_area(),"junction_fillets":patches.len(),"curb_segments":curbs,"surface_triangles":counts,"max_centreline_rounding_metres":0.6}),
-        )? + "\n",
-    )?;
+
     let text_crc = crc_file(&path)?;
     // Index the small input pieces, rather than a city-wide connected polygon.
     // A probe intersects their union exactly when it intersects any one piece.

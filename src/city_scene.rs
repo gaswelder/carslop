@@ -87,15 +87,14 @@ fn terrain_mesh(
                 v[1] -= 0.02;
             }
             if let Some(boundary) = boundary {
-                let cell =
-                    crate::location_compiler::polygon(&p.map(|v| [v[0] as f64, v[2] as f64]));
+                let cell = crate::location::polygon(&p.map(|v| [v[0] as f64, v[2] as f64]));
                 if !boundary.intersects(&cell) {
                     continue;
                 }
                 if !boundary.contains(&cell) {
                     // Preserve the height field's diagonal and its two planar faces.
                     for indices in [[0, 1, 2], [0, 2, 3]] {
-                        let face = crate::location_compiler::polygon(
+                        let face = crate::location::polygon(
                             &indices.map(|i| [p[i][0] as f64, p[i][2] as f64]),
                         );
                         for polygon in boundary.intersection(&face) {
@@ -668,9 +667,8 @@ mod tests {
             [[-8., -8.], [8., 8.]],
             |p| p[0] * p[1] * 0.1,
         ));
-        let shell =
-            crate::location_compiler::polygon(&[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]);
-        let hole = crate::location_compiler::polygon(&[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]);
+        let shell = crate::location::polygon(&[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]);
+        let hole = crate::location::polygon(&[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]);
         let boundary = shell.difference(&hole);
         let mut builder = Builder::default();
         terrain_mesh(
@@ -680,7 +678,7 @@ mod tests {
         );
         let mut area = 0.;
         for vertices in builder.vertices.as_chunks::<3>().0 {
-            let triangle = crate::location_compiler::polygon(
+            let triangle = crate::location::polygon(
                 &vertices.map(|v| [v.position[0] as f64, v.position[2] as f64]),
             );
             area += triangle.unsigned_area();

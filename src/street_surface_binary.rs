@@ -114,7 +114,7 @@ pub(super) fn load(directory: &Path, city_checksum: u32, roads: usize) -> io::Re
     let fingerprint = r.bytes::<64>()?;
     if checksums.city != city_checksum
         || fingerprint.as_slice()
-            != crate::location_compiler::sha(&directory.join("streets.txt"))?.as_bytes()
+            != crate::location::sha(&directory.join("streets.txt"))?.as_bytes()
     {
         return Err(invalid("stale collision cache"));
     }
@@ -281,7 +281,7 @@ pub(crate) fn write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::location_compiler::bake_collision as bake;
+    use crate::build_collision::build_collisions as bake;
     fn fixture(root: &Path) -> String {
         let source = "CITY 2\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0\n";
         std::fs::write(root.join("city.txt"), source).unwrap();

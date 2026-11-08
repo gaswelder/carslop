@@ -1,5 +1,5 @@
 //! Map-space exclusion of proposed tree centres, using the actual road mesh.
-use crate::location_compiler::{invalid, Result};
+use crate::location::{invalid, Result};
 use geo::{Coord, Intersects, LineString, Point, Polygon};
 use rstar::{RTree, RTreeObject, AABB};
 use std::{

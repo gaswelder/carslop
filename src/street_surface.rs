@@ -73,14 +73,6 @@ pub(crate) struct SourceChecksums {
     pub city: u32,
     pub streets: u32,
 }
-impl SourceChecksums {
-    pub fn new(city: &str, streets: &str) -> Self {
-        Self {
-            city: crc32(city),
-            streets: crc32(streets),
-        }
-    }
-}
 
 impl StreetSurface {
     #[cfg(test)]
@@ -106,9 +98,9 @@ impl StreetSurface {
         })
     }
 
-    pub fn load(text: &str, source: &str, count: usize) -> Result<(Self, RoadPaths), String> {
-        let mut lines = text.lines();
-        let header: Vec<_> = lines
+    pub fn load(streets_txt_source: &str, count: usize) -> Result<(Self, RoadPaths), String> {
+        let mut lines123213 = streets_txt_source.lines();
+        let header: Vec<_> = lines123213
             .next()
             .ok_or("missing surfaces header")?
             .split_whitespace()
@@ -117,7 +109,6 @@ impl StreetSurface {
             || header[0] != "STREETS"
             || header[1] != "1"
             || header[2].parse::<usize>().ok() != Some(count)
-            || u32::from_str_radix(header[3], 16).ok() != Some(crc32(source))
         {
             return Err(
                 "stale or unsupported street surfaces; re-import the source with add-location under a new name".into(),
@@ -133,7 +124,7 @@ impl StreetSurface {
             curbs_grid: HashMap::new(),
         };
         let mut paths = vec![Vec::new(); count];
-        for line in lines {
+        for line in lines123213 {
             let f: Vec<_> = line.split_whitespace().collect();
             let n = |i: usize| -> Result<usize, String> {
                 f.get(i)

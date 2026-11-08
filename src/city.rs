@@ -3,6 +3,7 @@ use crate::track::{RoadSample, CAR_RADIUS};
 use std::collections::HashMap;
 
 const CELL: f32 = 32.0;
+
 #[derive(Debug)]
 pub struct Street {
     pub ends: [usize; 2],
@@ -14,6 +15,7 @@ pub struct Street {
     pub path: Vec<[f32; 3]>,
     path_distances: Vec<f32>,
 }
+
 #[derive(Debug)]
 pub struct Building {
     pub id: u64,
@@ -21,6 +23,7 @@ pub struct Building {
     pub base_y: f32,
     pub polygon: Vec<[f32; 2]>,
 }
+
 #[derive(Debug)]
 pub struct City {
     pub(crate) source_checksum: u32,
@@ -39,6 +42,7 @@ pub struct City {
     road_grid: HashMap<(i32, i32), Vec<usize>>,
     building_grid: HashMap<(i32, i32), Vec<usize>>,
 }
+
 fn cell(p: [f32; 2]) -> (i32, i32) {
     ((p[0] / CELL).floor() as i32, (p[1] / CELL).floor() as i32)
 }
@@ -103,6 +107,7 @@ struct OsmLabels {
     streets: HashMap<i64, String>,
     buildings: HashMap<u64, String>,
 }
+
 #[cfg(test)]
 fn read_street_names(source: impl std::io::BufRead) -> Result<HashMap<i64, String>, String> {
     read_osm_labels(source).map(|labels| labels.streets)

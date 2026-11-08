@@ -1,5 +1,8 @@
 //! OSM PBF source extraction for the location compiler.
-use super::{invalid, BoundingBox, Result};
+use crate::{
+    location::{invalid, Result},
+    world::BoundingBox,
+};
 use quick_xml::{
     events::{BytesEnd, BytesStart, Event},
     Writer,
@@ -119,7 +122,7 @@ fn scan(path: &Path, mut f: impl FnMut(osmpbf::Element<'_>) -> Result<()>) -> Re
     })?;
     result
 }
-pub fn extract_osmpbf(source: &Path, output: &Path, bounds: BoundingBox) -> Result<()> {
+pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -> Result<()> {
     println!("Extracting OSM data...");
     if !bounds.is_valid() {
         return Err(invalid("invalid SOUTH WEST NORTH EAST bounds"));
@@ -266,114 +269,4 @@ pub fn extract_osmpbf(source: &Path, output: &Path, bounds: BoundingBox) -> Resu
         Ok(())
     })();
     result
-}
-
-#[cfg(test)]
-mod pbf_tests {
-    use super::*;
-    fn var(mut n: u64) -> Vec<u8> {
-        let mut b = vec![];
-        while n >= 128 {
-            b.push(n as u8 | 128);
-            n >>= 7;
-        }
-        b.push(n as u8);
-        b
-    }
-    fn uint(field: u64, n: u64) -> Vec<u8> {
-        [var(field << 3), var(n)].concat()
-    }
-    fn bytes(field: u64, b: &[u8]) -> Vec<u8> {
-        [var(field << 3 | 2), var(b.len() as u64), b.to_vec()].concat()
-    }
-    fn zig(n: i64) -> u64 {
-        ((n << 1) ^ (n >> 63)) as u64
-    }
-    fn fixture(path: &Path) {
-        let mut table = vec![];
-        for s in ["", "type", "multipolygon", "outer", "name", "A & B"] {
-            table.extend(bytes(1, s.as_bytes()));
-        }
-        let mut group = vec![];
-        for (id, lat, lon) in [
-            (1, 0, 0),
-            (2, 20_000_000, 20_000_000),
-            (3, 30_000_000, 30_000_000),
-            (4, 40_000_000, 40_000_000),
-        ] {
-            let node = [
-                uint(1, zig(id)),
-                bytes(2, &var(4)),
-                bytes(3, &var(5)),
-                bytes(4, &uint(1, 7)),
-                uint(8, zig(lat)),
-                uint(9, zig(lon)),
-            ]
-            .concat();
-            group.extend(bytes(1, &node));
-        }
-        for (id, refs) in [(10, vec![1, 2]), (11, vec![3, 4])] {
-            let mut last = 0;
-            let mut packed = vec![];
-            for n in refs {
-                packed.extend(var(zig(n - last)));
-                last = n;
-            }
-            group.extend(bytes(
-                3,
-                &[uint(1, id), bytes(8, &packed), bytes(4, &uint(1, 3))].concat(),
-            ));
-        }
-        let relation = [
-            uint(1, 20),
-            bytes(2, &var(1)),
-            bytes(3, &var(2)),
-            bytes(8, &[var(3), var(3)].concat()),
-            bytes(9, &[var(zig(10)), var(zig(1))].concat()),
-            bytes(10, &[1, 1]),
-        ]
-        .concat();
-        group.extend(bytes(4, &relation));
-        let block = [bytes(1, &table), bytes(2, &group)].concat();
-        let blob = bytes(1, &block);
-        let header = [bytes(1, b"OSMData"), uint(3, blob.len() as u64)].concat();
-        let data = [(header.len() as u32).to_be_bytes().to_vec(), header, blob].concat();
-        fs::write(path, data).unwrap();
-    }
-    #[test]
-    fn extraction_completes_outside_ways_and_multipolygons() {
-        let dir = tempfile::tempdir().unwrap();
-        let pbf = dir.path().join("source.pbf");
-        let output = dir.path().join("region.osm");
-        fixture(&pbf);
-        extract_osmpbf(
-            &pbf,
-            &output,
-            BoundingBox {
-                south: -0.1,
-                west: -0.1,
-                north: 0.1,
-                east: 0.1,
-            },
-        )
-        .unwrap();
-        let source = crate::location_compiler::osm::read(&output).unwrap();
-        assert_eq!(
-            source.nodes.keys().copied().collect::<Vec<_>>(),
-            vec![1, 2, 3, 4]
-        );
-        assert_eq!(
-            source.ways.keys().copied().collect::<Vec<_>>(),
-            vec![10, 11]
-        );
-        assert_eq!(source.relations[0].id, 20);
-        assert_eq!(source.nodes[&1].tag("name"), "A & B");
-        let xml = fs::read_to_string(&output).unwrap();
-        assert!(xml.contains("version=\"7\""));
-        assert!(xml.contains("A &amp; B"));
-        let report: serde_json::Value =
-            serde_json::from_slice(&fs::read(output.with_extension("json")).unwrap()).unwrap();
-        assert_eq!(report["nodes"], 4);
-        assert_eq!(report["multipolygons"], 1);
-    }
 }

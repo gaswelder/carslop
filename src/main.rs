@@ -1,24 +1,41 @@
+mod add_limassol;
 mod aerial;
 mod audio;
+mod boundary;
+mod build_collision;
+mod build_furniture;
+mod build_landscape;
+mod build_scene;
+mod build_surfaces;
+mod build_terrain;
 mod camera;
 mod cars;
 mod chunks;
 mod city;
 mod city_assets;
+mod create_track;
+mod download;
 mod elevation;
 mod engine_sample;
 mod feedback;
 mod gl;
+mod hgt;
 mod hud;
+mod imagery;
 mod imagery_trees;
 mod landscape;
 mod loading;
-mod location_compiler;
+mod location;
+#[cfg(test)]
+mod location_tests;
+mod osm;
 mod particles;
 mod prefetch;
 mod scene;
 mod scene_archive;
 mod shadows;
+mod sources;
+mod src_files;
 mod street_surface;
 #[cfg(test)]
 mod test_support;
@@ -27,9 +44,10 @@ mod traffic;
 mod tree_obstacles;
 mod tree_preview;
 mod vehicle;
+mod world;
 
 use cars::CarModel;
-use location_compiler::invalid;
+use location::invalid;
 use log::{info, warn};
 use sdl3::{
     event::{Event, WindowEvent},
@@ -868,7 +886,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| invalid("expected UTF-8 command"))?;
         match command.as_str() {
             "add-limassol" => {
-                location_compiler::add_limassol()?;
+                add_limassol::add_limassol()?;
                 return Ok(());
             }
             "create-track" => {
@@ -878,7 +896,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if args.next().is_some() {
                     return Err(invalid("create-track requires exactly one JSON path"));
                 }
-                let destination = location_compiler::create_track(&PathBuf::from(source))?;
+                let destination = create_track::create_track(&PathBuf::from(source))?;
                 println!("Created {}", destination.display());
                 return Ok(());
             }

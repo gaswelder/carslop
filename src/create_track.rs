@@ -1,5 +1,9 @@
 //! Compile authored points into the same assets used by imported cities.
-use super::*;
+use crate::build_surfaces;
+use crate::location::{invalid, sha, Result};
+use crate::world::{Building, LocationMap, Road};
+use std::fs;
+use std::path::Path;
 use std::{
     fmt::Write as _,
     io::{BufWriter, Write},
@@ -45,7 +49,7 @@ pub fn create_track(source: &Path) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<()> {
+pub fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<()> {
     println!("Sampling authored road...");
     let count = (track.length().ceil() as usize).max(4);
     let samples: Vec<_> = (0..count)
@@ -53,7 +57,7 @@ fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<
         .collect();
     let scenery = crate::scene::authored_scenery(track);
     let bounds = track.terrain_bounds();
-    let map = Map {
+    let map = LocationMap {
         boundary: None,
         // Authored locations have local coordinates, with no geographic origin.
         origin: [0.0; 2],
@@ -159,17 +163,24 @@ fn compile(source: &Path, track: &crate::track::Track, output: &Path) -> Result<
         &output.join("decorations.pack"),
         crate::scene::authored_decorations(track),
     )?;
-    crate::location_compiler::bake_collision(
-        &output.join("city.txt"),
+    let path_city_txt = &output.join("city.txt");
+    let path_streets_txt = &output.join("streets.txt");
+    let city_txt_source = std::fs::read_to_string(&path_city_txt)?;
+    let streets_txt_source = std::fs::read_to_string(&path_streets_txt)?;
+    crate::build_collision::build_collisions(
         &output.join("streets.txt"),
         &output.join("streets.bin"),
+        &crate::city::City::parse(&city_txt_source).map_err(invalid)?,
+        city_checksum,
+        streets_txt_source,
+        streets_checksum,
     )?;
     // Validate using the regular runtime loader before publishing the directory.
     let loaded = crate::city::City::load(&crate::city_assets::CityAsset::new(output.to_path_buf()))
         .map_err(invalid)?;
-    crate::location_compiler::bake_scene(
+    crate::build_scene::build_scene(
         &loaded,
-        &output.join("manifest.json"),
+        None,
         &output.join("decorations.pack"),
         &output.join("scene.pack"),
         output,
@@ -259,7 +270,7 @@ fn write_streets(
         }
     }
     file.flush()?;
-    surfaces::crc_file(&path)
+    build_surfaces::crc_file(&path)
 }
 
 fn write_elevation(track: &crate::track::Track, checksum: u32, output: &Path) -> Result<()> {
@@ -341,100 +352,4 @@ fn write_landscape(
     }
     file.flush()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn points_compile_to_loadable_city_assets_and_rebake_without_the_json() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("course.json");
-        fs::write(&source, r#"{"version":2,"name":"Coast & Curves","scenery":"coastal","points":[[0,2,0,4],[100,4,0,12],[100,8,100,6],[0,3,100,8]]}"#).unwrap();
-        let track = crate::track::register_file(&source).unwrap().0.track();
-        let output = temp.path().join("compiled");
-        fs::create_dir(&output).unwrap();
-        compile(&source, &track, &output).unwrap();
-        let assets = crate::city_assets::CityAsset::new(output.clone());
-        let city = crate::city::City::load(&assets).unwrap();
-        assert!(city.streets.len() > 400);
-        assert!(city.buildings.is_empty());
-        assert!(!city.landscape.trees.is_empty());
-        assert!(city.google_maps_url([0.0; 3]).is_none());
-        assert_eq!(city.street_name(city.spawn().point), "COAST & CURVES");
-        assert_eq!(city.streets.last().unwrap().ends[1], 0);
-        for sample in [
-            track.at_distance(0.0),
-            track.at_distance(track.length() * 0.4),
-        ] {
-            let projected = city.project(sample.point);
-            assert!((projected.width - sample.width).abs() < 0.1);
-            assert!(
-                (city.height([sample.point[0], sample.point[2]])
-                    - track.ground_height([sample.point[0], sample.point[2]]))
-                .abs()
-                    < 0.0001
-            );
-            let position = sample.lane_position(40.0);
-            let mut moved = position;
-            city.constrain(&mut moved, &mut [0.0; 2]);
-            assert_eq!([moved[0], moved[2]], [position[0], position[2]]);
-        }
-        let before = sha(&output.join("scene.pack")).unwrap();
-        fs::remove_file(output.join("source.track.json")).unwrap();
-        crate::location_compiler::bake_collision(
-            &output.join("city.txt"),
-            &output.join("streets.txt"),
-            &output.join("streets.bin"),
-        )
-        .unwrap();
-        crate::location_compiler::bake_scene(
-            &city,
-            &output.join("manifest.json"),
-            &output.join("decorations.pack"),
-            &output.join("scene.pack"),
-            &output,
-        )
-        .unwrap();
-        assert_eq!(sha(&output.join("scene.pack")).unwrap(), before);
-        let archive = crate::scene_archive::Archive::open(&output.join("scene.pack")).unwrap();
-        assert!(!archive.entries.is_empty());
-        assert!(assets.get_manifest().unwrap().get("scenery").is_none());
-
-        // Inputs, output, and spool files can all live outside the location directory.
-        let manifest_path = temp.path().join("metadata.json");
-        let decorations_path = temp.path().join("props.pack");
-        let output_path = temp.path().join("render.pack");
-        let spool_directory = temp.path().join("spool");
-        fs::rename(output.join("manifest.json"), &manifest_path).unwrap();
-        fs::rename(output.join("decorations.pack"), &decorations_path).unwrap();
-        fs::create_dir(&spool_directory).unwrap();
-        crate::location_compiler::bake_scene(
-            &city,
-            &manifest_path,
-            &decorations_path,
-            &output_path,
-            &spool_directory,
-        )
-        .unwrap();
-        assert_eq!(sha(&output_path).unwrap(), before);
-        assert_eq!(fs::read_dir(&spool_directory).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn standard_scenery_and_two_metre_roads_use_the_normal_city_loader() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("narrow.json");
-        fs::write(&source, r#"{"version":2,"name":"Narrow","points":[[0,0,0,2],[30,0,0,2],[30,0,30,2],[0,0,30,2]]}"#).unwrap();
-        let track = crate::track::register_file(&source).unwrap().0.track();
-        let output = temp.path().join("compiled");
-        fs::create_dir(&output).unwrap();
-        compile(&source, &track, &output).unwrap();
-        let city = crate::city::City::load(&crate::city_assets::CityAsset::new(output)).unwrap();
-        assert!(city.streets.iter().all(|s| s.width == 2.0));
-        assert!(city.spawn().point.iter().all(|x| x.is_finite()));
-        assert!(!city.landscape.trees.is_empty());
-        assert!(!city.buildings.is_empty());
-    }
 }
