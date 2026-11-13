@@ -626,7 +626,7 @@ fn bytes(field: u64, b: &[u8]) -> Vec<u8> {
 fn zig(n: i64) -> u64 {
     ((n << 1) ^ (n >> 63)) as u64
 }
-fn pbf_fixture(path: &Path) {
+fn pbf_fixture(path: &Path, incomplete_relation: bool) {
     let mut table = vec![];
     for s in ["", "type", "multipolygon", "outer", "name", "A & B"] {
         table.extend(bytes(1, s.as_bytes()));
@@ -671,6 +671,20 @@ fn pbf_fixture(path: &Path) {
     ]
     .concat();
     group.extend(bytes(4, &relation));
+    if incomplete_relation {
+        // A cross-border relation references one local way, an absent way,
+        // and an absent node. The complete relation above must still survive.
+        let relation = [
+            uint(1, 21),
+            bytes(2, &var(1)),
+            bytes(3, &var(2)),
+            bytes(8, &[var(3), var(3), var(0)].concat()),
+            bytes(9, &[var(zig(10)), var(zig(2)), var(zig(9987))].concat()),
+            bytes(10, &[1, 1, 0]),
+        ]
+        .concat();
+        group.extend(bytes(4, &relation));
+    }
     let block = [bytes(1, &table), bytes(2, &group)].concat();
     let blob = bytes(1, &block);
     let header = [bytes(1, b"OSMData"), uint(3, blob.len() as u64)].concat();
@@ -679,10 +693,19 @@ fn pbf_fixture(path: &Path) {
 }
 #[test]
 fn extraction_completes_outside_ways_and_multipolygons() {
+    check_extraction(false);
+}
+
+#[test]
+fn extraction_skips_incomplete_regional_multipolygons() {
+    check_extraction(true);
+}
+
+fn check_extraction(incomplete_relation: bool) {
     let dir = tempfile::tempdir().unwrap();
     let pbf = dir.path().join("source.pbf");
     let output = dir.path().join("region.osm");
-    pbf_fixture(&pbf);
+    pbf_fixture(&pbf, incomplete_relation);
     extract_osm_boundary(
         &pbf,
         &output,
@@ -703,6 +726,7 @@ fn extraction_completes_outside_ways_and_multipolygons() {
         source.ways.keys().copied().collect::<Vec<_>>(),
         vec![10, 11]
     );
+    assert_eq!(source.relations.len(), 1);
     assert_eq!(source.relations[0].id, 20);
     assert_eq!(source.nodes[&1].tag("name"), "A & B");
     let xml = fs::read_to_string(&output).unwrap();
@@ -712,6 +736,10 @@ fn extraction_completes_outside_ways_and_multipolygons() {
         serde_json::from_slice(&fs::read(output.with_extension("json")).unwrap()).unwrap();
     assert_eq!(report["nodes"], 4);
     assert_eq!(report["multipolygons"], 1);
+    assert_eq!(
+        report["skipped_multipolygons"],
+        usize::from(incomplete_relation)
+    );
 }
 
 fn controls(oneway: bool, enabled: bool) -> Vec<crate::traffic::Furniture> {

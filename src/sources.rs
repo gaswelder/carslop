@@ -122,6 +122,7 @@ fn scan(path: &Path, mut f: impl FnMut(osmpbf::Element<'_>) -> Result<()>) -> Re
     })?;
     result
 }
+
 pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -> Result<()> {
     println!("Extracting OSM data...");
     if !bounds.is_valid() {
@@ -201,9 +202,26 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
         }
         Ok(())
     })?;
-    if members.iter().any(|id| !ways.contains_key(id)) {
-        return Err(invalid("missing multipolygon way member"));
-    }
+    // Regional extracts can contain cross-border relations without all of their
+    // ways. Do not emit partial polygons, or let one prevent importing the roads
+    // and complete polygons that are available in this extract.
+    let mut skipped_multipolygons = 0;
+    relations.retain(|id, relation| {
+        let missing: Vec<_> = relation
+            .members
+            .iter()
+            .filter(|(kind, member)| kind == "way" && !ways.contains_key(member))
+            .map(|(_, member)| *member)
+            .collect();
+        if missing.is_empty() {
+            return true;
+        }
+        eprintln!(
+            "Skipping multipolygon relation {id}: regional extract is missing way members {missing:?}"
+        );
+        skipped_multipolygons += 1;
+        false
+    });
     let mut needed = inside;
     for w in ways.values() {
         needed.extend(&w.refs);
@@ -258,7 +276,7 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
         fs::write(
             output.with_extension("json"),
             serde_json::to_vec_pretty(
-                &serde_json::json!({"bbox":bounds.to_array(),"source":source.file_name().map(|s|s.to_string_lossy()),"source_timestamp":timestamp,"nodes":count,"ways":ways.len(),"multipolygons":relations.len()}),
+                &serde_json::json!({"bbox":bounds.to_array(),"source":source.file_name().map(|s|s.to_string_lossy()),"source_timestamp":timestamp,"nodes":count,"ways":ways.len(),"multipolygons":relations.len(),"skipped_multipolygons":skipped_multipolygons}),
             )?,
         )?;
         println!(
