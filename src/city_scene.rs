@@ -729,7 +729,11 @@ mod tests {
         let panels: Vec<_> = builder
             .vertices
             .iter()
-            .filter(|v| v.color == [0.035, 0.09, 0.10])
+            .filter(|v| {
+                STOREFRONT_PALETTES
+                    .iter()
+                    .any(|(background, _)| v.color == *background)
+            })
             .collect();
         assert_eq!(panels.len(), 18, "each business needs its own panel");
         let bounds: Vec<_> = panels
@@ -816,6 +820,42 @@ mod tests {
     }
 
     #[test]
+    fn storefront_styles_vary_and_reproduce_the_same_geometry() {
+        let label: Vec<_> = "COFFEE SHOP".chars().collect();
+        let render = |id, name| {
+            let mut builder = Builder::default();
+            storefront_sign(
+                &mut builder,
+                &label,
+                [XZ { x: 0.0, z: 0.0 }, XZ { x: 12.0, z: 0.0 }],
+                0.0,
+                6.0,
+                storefront_seed(id, name),
+            );
+            builder.vertices
+        };
+        let first = render(100, "Coffee Shop");
+        let variants: Vec<_> = (100..116).map(|id| render(id, "Coffee Shop")).collect();
+        assert_eq!(first, render(100, "Coffee Shop"));
+        assert_ne!(first, render(100, "Next door"));
+        let backgrounds: std::collections::HashSet<_> = variants
+            .iter()
+            .map(|vertices| vertices[0].color.map(f32::to_bits))
+            .collect();
+        assert!(
+            backgrounds.len() >= 4,
+            "neighbours should have distinct palettes"
+        );
+        for vertices in variants {
+            assert!(vertices.iter().all(|v| {
+                v.position.iter().all(|n| n.is_finite())
+                    && (0.0..=12.0).contains(&v.position[0])
+                    && (0.0..=6.0).contains(&v.position[1])
+            }));
+        }
+    }
+
+    #[test]
     fn storefront_glyphs_read_left_to_right_on_each_outward_wall_face() {
         let label = ['F', 'J'];
         let expected: std::collections::HashSet<_> = label
@@ -840,7 +880,7 @@ mod tests {
             [XZ { x: 0.0, z: 10.0 }, XZ { x: 0.0, z: 0.0 }],
         ] {
             let mut b = Builder::default();
-            storefront_sign(&mut b, &label, [a, c], 0.0, 8.0);
+            storefront_sign(&mut b, &label, [a, c], 0.0, 8.0, 0);
             let normal = crate::geometry::XZ {
                 x: (c.z - a.z) / 10.0,
                 z: -(c.x - a.x) / 10.0,
@@ -937,10 +977,31 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
                 [start, end],
                 building.base_y + (i / columns) as f32 * height,
                 height,
+                storefront_seed(building.id, name),
             );
         }
     }
 }
+
+// Hash the tenant name as well as the building ID so neighbours sharing a wall
+// differ, and adding another tenant does not change the existing tenants' styles.
+fn storefront_seed(building: u64, name: &str) -> u64 {
+    name.bytes().fold(visual_seed(building, 40), |seed, byte| {
+        (seed ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+// Paired colors preserve contrast for both dark and light signboards.
+const STOREFRONT_PALETTES: [([f32; 3], [f32; 3]); 8] = [
+    ([0.035, 0.09, 0.10], [0.96, 0.93, 0.80]),
+    ([0.32, 0.035, 0.025], [1.0, 0.94, 0.84]),
+    ([0.025, 0.07, 0.24], [0.92, 0.96, 1.0]),
+    ([0.035, 0.19, 0.085], [0.97, 0.94, 0.79]),
+    ([0.075, 0.065, 0.055], [0.93, 0.66, 0.25]),
+    ([0.88, 0.82, 0.66], [0.12, 0.07, 0.045]),
+    ([0.90, 0.91, 0.88], [0.055, 0.12, 0.19]),
+    ([0.70, 0.37, 0.055], [0.065, 0.045, 0.025]),
+];
 
 // X runs toward the viewer's right on the outward face of the wall.
 fn storefront_sign(
@@ -949,17 +1010,28 @@ fn storefront_sign(
     [a, c]: [crate::geometry::XZ<f32>; 2],
     base_y: f32,
     height: f32,
+    seed: u64,
 ) {
+    let (background, lettering) =
+        STOREFRONT_PALETTES[visual_seed(seed, 41) as usize % STOREFRONT_PALETTES.len()];
     let length = (c.x - a.x).hypot(c.z - a.z);
     let normal = crate::geometry::XZ {
         x: (c.z - a.z) / length,
         z: -(c.x - a.x) / length,
     };
     let (lines, pixel) = storefront_layout(label, length, height);
+    let pixel = pixel * (0.78 + variation(seed, 42) * 0.22);
     let width = lines.iter().map(Vec::len).max().unwrap_or(0) as f32 * 6.0 * pixel;
-    let left = (length - width) * 0.5;
+    let alignment = [0.0, 0.5, 1.0][visual_seed(seed, 43) as usize % 3];
+    let panel_width = if visual_seed(seed, 44) % 2 == 0 {
+        width + 2.0 * pixel
+    } else {
+        length - 0.3
+    };
+    let panel_left = (length - panel_width) * 0.5;
     let panel_height = lines.len() as f32 * 9.0 * pixel;
-    let top = base_y + (panel_height + 1.0).min(height - (height * 0.1).min(0.3));
+    let top = base_y
+        + (panel_height + 0.8 + variation(seed, 45) * 0.9).min(height - (height * 0.1).min(0.3));
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
         let point = |x: f32, y: f32| crate::geometry::XYZ {
             x: c.x + (a.x - c.x) * x / length + normal.x * depth,
@@ -980,22 +1052,23 @@ fn storefront_sign(
         );
     };
     panel(
-        left - pixel,
-        width + left + pixel,
+        panel_left,
+        panel_left + panel_width,
         top - panel_height,
         top,
         0.14,
-        [0.035, 0.09, 0.10],
+        background,
     );
     for (line, chars) in lines.iter().enumerate() {
-        let line_left = (length - chars.len() as f32 * 6.0 * pixel) * 0.5;
+        let line_width = chars.len() as f32 * 6.0 * pixel;
+        let line_left = panel_left + pixel + (panel_width - 2.0 * pixel - line_width) * alignment;
         for (column, ch) in chars.iter().copied().enumerate() {
             for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
                 for bit in 0..5 {
                     if bits & (1 << (4 - bit)) != 0 {
                         let x = line_left + (column * 6 + bit) as f32 * pixel;
                         let y = top - (1 + line * 9 + row) as f32 * pixel;
-                        panel(x, x + pixel, y - pixel, y, 0.15, [0.96, 0.93, 0.80]);
+                        panel(x, x + pixel, y - pixel, y, 0.15, lettering);
                     }
                 }
             }
