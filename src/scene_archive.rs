@@ -1,5 +1,6 @@
 //! Seekable offline render geometry. Only the index remains in CPU memory;
 //! individual layers are decoded, uploaded, and immediately released.
+use crate::city_assets;
 use crate::geometry::XYZ;
 use crate::{chunks::Chunk, scene::Vertex};
 use std::{
@@ -119,7 +120,7 @@ impl Archive {
     pub fn fork(&self) -> std::io::Result<Self> {
         Self::open(&self.path)
     }
-    pub fn open_for(assets: &crate::city_assets::CityAsset) -> std::io::Result<Self> {
+    pub fn open_for(assets: &city_assets::CityAsset) -> std::io::Result<Self> {
         Self::open(&assets.directory().join("scene.pack"))
     }
     pub fn read_layer(&mut self, index: usize, layer: usize) -> std::io::Result<Vec<Vertex>> {
@@ -304,6 +305,8 @@ pub fn write(path: &Path, layers: [Vec<Chunk>; 3]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunks;
+    use crate::test_support;
     use std::path::PathBuf;
     struct TestFile(PathBuf);
     impl TestFile {
@@ -325,7 +328,7 @@ mod tests {
     fn spooled_archive_preserves_geometry_across_flushes_and_sparse_layers() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("scene.pack");
-        let mut builder = crate::chunks::ChunkBuilder::spooled(directory.path()).unwrap();
+        let mut builder = chunks::ChunkBuilder::spooled(directory.path()).unwrap();
         for i in 0..90_000 {
             let mut tri: [Vertex; 3] = triangle().try_into().unwrap();
             for v in &mut tri {
@@ -339,7 +342,7 @@ mod tests {
             Spool::new(directory.path()).unwrap(),
             Spool::new(directory.path()).unwrap(),
         ];
-        for chunk in crate::test_support::partition(triangle()) {
+        for chunk in test_support::partition(triangle()) {
             layers[2].append(chunk).unwrap();
         }
         write_spooled(&path, &mut layers).unwrap();
@@ -350,12 +353,12 @@ mod tests {
             assert_eq!(
                 archive.entries[cell].bounds,
                 [
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 255.75 + offset,
                         y: 4.125,
                         z: -1234.5
                     },
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 257.0 + offset,
                         y: 7.0,
                         z: -1234.5
@@ -420,7 +423,7 @@ mod tests {
     fn fixture(path: &Path) {
         write(
             path,
-            std::array::from_fn(|_| crate::test_support::partition(triangle())),
+            std::array::from_fn(|_| test_support::partition(triangle())),
         )
         .unwrap();
     }

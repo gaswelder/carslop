@@ -1,4 +1,5 @@
 //! A single triangulated height surface for terrain, pavement and ground contact.
+use crate::elevation;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 pub use crate::world::HeightField;
 pub const SEA_LEVEL: f32 = -3.35;
@@ -188,7 +189,7 @@ impl HeightField {
                     (1, z + self.step, -1.0),
                 ] {
                     polygon =
-                        crate::elevation::clip(&polygon, |p| (p.component(axis) - value) * sign);
+                        elevation::clip(&polygon, |p| (p.component(axis) - value) * sign);
                     if polygon.len() < 3 {
                         break;
                     }
@@ -197,7 +198,7 @@ impl HeightField {
                     continue;
                 }
                 for side in [-1.0, 1.0] {
-                    let part = crate::elevation::clip(&polygon, |p| ((p.x - x) - (p.z - z)) * side);
+                    let part = elevation::clip(&polygon, |p| ((p.x - x) - (p.z - z)) * side);
                     for i in 1..part.len().saturating_sub(1) {
                         let tri = [part[0], part[i], part[i + 1]];
                         emit(tri.map(|p| p.at_height(self.height(p))));
@@ -215,7 +216,7 @@ mod tests {
         HeightField {
             columns: 3,
             rows: 3,
-            origin: crate::geometry::XZ { x: 0.0, z: 0.0 },
+            origin: XZ { x: 0.0, z: 0.0 },
             step: 10.0,
             values: vec![0.0, 2.0, 4.0, 1.0, 6.0, 5.0, 2.0, 4.0, 8.0],
         }
@@ -223,11 +224,11 @@ mod tests {
     #[test]
     fn sampling_and_draping_use_the_same_planes_across_cells() {
         let grid = grid();
-        assert_eq!(grid.height(crate::geometry::XZ { x: 10.0, z: 10.0 }), 6.0);
+        assert_eq!(grid.height(XZ { x: 10.0, z: 10.0 }), 6.0);
         let points = [
-            crate::geometry::XZ { x: 1.0, z: 1.0 },
-            crate::geometry::XZ { x: 19.0, z: 3.0 },
-            crate::geometry::XZ { x: 3.0, z: 19.0 },
+            XZ { x: 1.0, z: 1.0 },
+            XZ { x: 19.0, z: 3.0 },
+            XZ { x: 3.0, z: 19.0 },
         ];
         let mut area = 0.0;
         grid.drape(points, |tri| {
@@ -235,12 +236,12 @@ mod tests {
             let b = tri[1];
             let c = tri[2];
             area += ((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)).abs() * 0.5;
-            let center: crate::geometry::XYZ = crate::geometry::XYZ::from_fn(|i| {
+            let center: XYZ = XYZ::from_fn(|i| {
                 (a.component(i) + b.component(i) + c.component(i)) / 3.0
             });
             assert!(
                 (center.y
-                    - grid.height(crate::geometry::XZ {
+                    - grid.height(XZ {
                         x: center.x,
                         z: center.z
                     }))
@@ -250,15 +251,15 @@ mod tests {
         });
         assert!((area - 160.0).abs() < 0.001);
         let points = grid.segment(
-            crate::geometry::XZ { x: 1.0, z: 2.0 },
-            crate::geometry::XZ { x: 19.0, z: 14.0 },
+            XZ { x: 1.0, z: 2.0 },
+            XZ { x: 19.0, z: 14.0 },
         );
         assert!(points.len() > 3);
         for pair in points.windows(2) {
-            let p: crate::geometry::XYZ = crate::geometry::XYZ::from_fn(|i| {
+            let p: XYZ = XYZ::from_fn(|i| {
                 (pair[0].component(i) + pair[1].component(i)) * 0.5
             });
-            assert!((p.y - grid.height(crate::geometry::XZ { x: p.x, z: p.z })).abs() < 0.0001);
+            assert!((p.y - grid.height(XZ { x: p.x, z: p.z })).abs() < 0.0001);
         }
     }
 }

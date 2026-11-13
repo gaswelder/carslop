@@ -1,5 +1,6 @@
 //! Vehicle placement and collision response against location geometry.
 use crate::geometry::{XYZ, XZ};
+use crate::track;
 use crate::world::{Location, RoadSample};
 
 /// Vehicle origin height above the road's reference elevation, in metres.
@@ -37,10 +38,10 @@ impl Location {
     }
 
     fn clear_for_car(&self, p: XYZ) -> bool {
-        if self.has_compiled_roads() && self.road_clearance(p) > -crate::track::CAR_RADIUS - 0.15 {
+        if self.has_compiled_roads() && self.road_clearance(p) > -track::CAR_RADIUS - 0.15 {
             return false;
         }
-        self.building_clearance(XZ { x: p.x, z: p.z }) > crate::track::CAR_RADIUS + 0.15
+        self.building_clearance(XZ { x: p.x, z: p.z }) > track::CAR_RADIUS + 0.15
     }
     pub fn recovery(&self, p: XYZ) -> RoadSample {
         // Service roads may lead into garages. Never recover inside a footprint.
@@ -86,7 +87,7 @@ impl Location {
                 if self.building_clearance(XZ {
                     x: sample.point.x,
                     z: sample.point.z,
-                }) > crate::track::CAR_RADIUS + 0.15
+                }) > track::CAR_RADIUS + 0.15
                 {
                     if self.road_lines()[i].direction == -1 {
                         sample.tangent = sample.tangent.map(|v| -v);
@@ -104,7 +105,7 @@ impl Location {
                 .candidates(*position)
                 .map(|i| {
                     let (d, s) = self.projected(i, *position);
-                    (d - (s.width * 0.5 - crate::track::CAR_RADIUS), d, s)
+                    (d - (s.width * 0.5 - track::CAR_RADIUS), d, s)
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .unwrap();
@@ -130,7 +131,7 @@ impl Location {
             };
             let (q, outward, distance) = b.nearest(p);
             let inside = b.contains(p);
-            if inside || distance < crate::track::CAR_RADIUS {
+            if inside || distance < track::CAR_RADIUS {
                 let n = if inside || distance < 0.0001 {
                     outward
                 } else {
@@ -139,8 +140,8 @@ impl Location {
                         z: (p.z - q.z) / distance,
                     }
                 };
-                position.x = q.x + n.x * (crate::track::CAR_RADIUS + 0.01);
-                position.z = q.z + n.z * (crate::track::CAR_RADIUS + 0.01);
+                position.x = q.x + n.x * (track::CAR_RADIUS + 0.01);
+                position.z = q.z + n.z * (track::CAR_RADIUS + 0.01);
                 impact = impact.max(deflect(velocity, XZ { x: -n.x, z: -n.z }));
             }
         }
@@ -155,8 +156,8 @@ impl Location {
         {
             let value = position.component(world_axis);
             *position.component_mut(world_axis) = value.clamp(
-                min + crate::track::CAR_RADIUS,
-                max - crate::track::CAR_RADIUS,
+                min + track::CAR_RADIUS,
+                max - track::CAR_RADIUS,
             );
             if position.component(world_axis) != value {
                 let mut normal = XZ { x: 0.0, z: 0.0 };

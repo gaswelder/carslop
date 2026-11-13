@@ -1,25 +1,29 @@
 //! Mapped roadside controls. Pole locations and timings are renderer estimates.
+#[cfg(test)]
+use crate::city_assets;
 pub use crate::world::{Furniture, FurnitureKind};
 pub const CYCLE_SECONDS: f32 = 50.0;
 #[cfg(test)]
 fn load(text: &str) -> Result<Vec<Furniture>, String> {
     let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
     std::fs::write(folder.path().join("furniture.txt"), text).map_err(|e| e.to_string())?;
-    crate::city_assets::CityAsset::new(folder.path().to_path_buf()).get_furniture()
+    city_assets::CityAsset::new(folder.path().to_path_buf()).get_furniture()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry;
+    use crate::test_support;
 
     #[test]
     fn mapped_furniture_is_typed_finite_and_outside_the_driving_surface() {
-        let city_track = crate::test_support::nicosia_world();
+        let city_track = test_support::nicosia_world();
         let city = &city_track;
         assert!(!city.furniture.is_empty());
         for f in &city.furniture {
             assert!(
-                !city.contains_road(crate::geometry::XZ {
+                !city.contains_road(geometry::XZ {
                     x: f.coords.x,
                     z: f.coords.z
                 }),
@@ -28,7 +32,7 @@ mod tests {
                 f.coords
             );
             assert!(
-                city.building_clearance(crate::geometry::XZ {
+                city.building_clearance(geometry::XZ {
                     x: f.coords.x,
                     z: f.coords.z
                 }) >= 0.0

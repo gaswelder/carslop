@@ -1,10 +1,10 @@
-use std::{fs, path::PathBuf};
-
+use crate::asset_codecs;
 use crate::geometry::XZ;
 use crate::{
     error::{invalid, Result},
     source_location::SourceLocation,
 };
+use std::{fs, path::PathBuf};
 
 /// Tree centre read from a `t` record in landscape.txt for placement checks.
 pub struct LandscapeItem {
@@ -13,10 +13,10 @@ pub struct LandscapeItem {
 
 pub fn read_landscape_file(path: PathBuf) -> Result<Vec<LandscapeItem>> {
     let mut items = Vec::new();
-    crate::asset_codecs::landscape::read::<f64>(
+    asset_codecs::landscape::read::<f64>(
         std::io::BufReader::new(fs::File::open(path)?),
         |record| {
-            if let crate::asset_codecs::landscape::Record::Tree(tree) = record {
+            if let asset_codecs::landscape::Record::Tree(tree) = record {
                 items.push(LandscapeItem {
                     coords: tree.coords,
                 });
@@ -38,10 +38,10 @@ pub fn write_city_txt(
 ) -> Result<WriteCityResult> {
     use std::io::{BufWriter, Write};
     let mut file = BufWriter::new(fs::File::create(path_city_txt)?);
-    crate::asset_codecs::city::write(
+    asset_codecs::city::write(
         &mut file,
         location_map,
-        crate::asset_codecs::city::Precision::Imported,
+        asset_codecs::city::Precision::Imported,
     )?;
     file.flush()?;
     let city =

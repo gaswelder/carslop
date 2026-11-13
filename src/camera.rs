@@ -1,6 +1,6 @@
 //! Render-only chase-camera tuning. Never writes vehicle state.
-
 use crate::geometry::{XYZ, XZ};
+use crate::gl;
 use crate::{phys_car::Vehicle, track};
 use std::{
     f32::consts::{PI, TAU},
@@ -166,7 +166,7 @@ impl ChaseCamera {
 // A rigid mount above the rear of the bonnet. Both the eye and sightline
 // use the rendered body basis, including suspension pitch, roll and curb heave.
 fn bonnet_pose(car: &Vehicle) -> Pose {
-    let body = crate::gl::vehicle_body_matrix(car);
+    let body = gl::vehicle_body_matrix(car);
     let eye = XYZ::from_fn(|i| body[12 + i] + body[4 + i] * 0.65 + body[8 + i] * 0.95);
     Pose {
         eye: (eye),
@@ -233,20 +233,21 @@ impl track::Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     fn car() -> Vehicle {
         let road = track::LocationId::Compact
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        crate::test_support::vehicle(
+        test_support::vehicle(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
         )
     }
 
-    fn assert_close(a: crate::geometry::XYZ, b: crate::geometry::XYZ, tolerance: f32) {
+    fn assert_close(a: XYZ, b: XYZ, tolerance: f32) {
         for i in 0..3 {
             assert!(
                 (a.component(i) - b.component(i)).abs() < tolerance,
@@ -259,12 +260,12 @@ mod tests {
     fn changing_routes_snaps_camera_and_preserves_selected_view() {
         let mut camera = ChaseCamera::new(&car());
         camera.toggle_view();
-        let track = crate::test_support::track();
+        let track = test_support::track();
         let road = track.at_distance(850.0);
         let mut scenic = Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
             track.clone(),
         );
         scenic.speed = 30.0;
@@ -291,7 +292,7 @@ mod tests {
         moved.position.x += 4.0;
         moved.heading += 0.3;
         moved.speed = 18.0;
-        moved.velocity = crate::geometry::XZ {
+        moved.velocity = XZ {
             x: moved.heading.sin() * 18.0,
             z: moved.heading.cos() * 18.0,
         };
@@ -356,7 +357,7 @@ mod tests {
                 assert!(
                     pose.eye.y
                         >= track::LocationId::Compact.try_track().unwrap().height(
-                            crate::geometry::XZ {
+                            XZ {
                                 x: pose.eye.x,
                                 z: pose.eye.z
                             }

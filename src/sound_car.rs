@@ -1,5 +1,8 @@
 use crate::asset_car;
+use crate::camera;
+use crate::engine_sample;
 use crate::geometry::{XYZ, XZ};
+use crate::phys_car;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
 
@@ -25,7 +28,7 @@ struct Voice<'a> {
 
 #[derive(Default)]
 struct Synth {
-    recorded: crate::engine_sample::RecordedEngine,
+    recorded: engine_sample::RecordedEngine,
     turbo_target: f32,
     turbo_spool: f32,
     turbo_air_low: f32,
@@ -224,7 +227,7 @@ impl Default for SpatialAudio {
 }
 
 impl SpatialAudio {
-    fn placement(source: XYZ, listener: crate::camera::Pose) -> (f32, f32, f32) {
+    fn placement(source: XYZ, listener: camera::Pose) -> (f32, f32, f32) {
         let offset: XYZ = XYZ::from_fn(|i| source.component(i) - listener.eye.component(i));
         let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
         // Gentle falloff keeps driving cues present; distance also changes
@@ -309,8 +312,8 @@ impl EngineAudio {
 
     pub fn update(
         &mut self,
-        car: &crate::phys_car::Vehicle,
-        listener: crate::camera::Pose,
+        car: &phys_car::Vehicle,
+        listener: camera::Pose,
         throttle: bool,
         active: bool,
         impact: f32,
@@ -363,12 +366,14 @@ fn output_sample(driving: f32) -> f32 {
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
-    rpm.max(crate::phys_car::IDLE_RPM) / 30.0
+    rpm.max(phys_car::IDLE_RPM) / 30.0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera;
+    use crate::test_support;
 
     #[test]
     fn engine_voice_stays_present_with_headroom_for_the_driving_mix() {
@@ -381,7 +386,7 @@ mod tests {
                     frequency: 150.0,
                     load,
                     scrub: 0.0,
-                    tuning: crate::test_support::audio_voice(),
+                    tuning: test_support::audio_voice(),
                     enabled: true,
                 });
                 if i > 12000 {
@@ -436,20 +441,20 @@ mod tests {
 
     #[test]
     fn stereo_follows_listener_orientation_and_changes_smoothly() {
-        let listener = crate::camera::Pose {
-            eye: crate::geometry::XYZ {
+        let listener = camera::Pose {
+            eye: XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
             },
-            target: crate::geometry::XYZ {
+            target: XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 1.0,
             },
         };
         let right = SpatialAudio::placement(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 5.0,
                 y: 0.0,
                 z: 5.0,
@@ -457,7 +462,7 @@ mod tests {
             listener,
         );
         let left = SpatialAudio::placement(
-            crate::geometry::XYZ {
+            XYZ {
                 x: -5.0,
                 y: 0.0,
                 z: 5.0,
@@ -466,13 +471,13 @@ mod tests {
         );
         assert!(right.1 > 0.0 && left.1 < 0.0);
         let reversed = SpatialAudio::placement(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 5.0,
                 y: 0.0,
                 z: 5.0,
             },
-            crate::camera::Pose {
-                target: crate::geometry::XYZ {
+            camera::Pose {
+                target: XYZ {
                     x: 0.0,
                     y: 0.0,
                     z: -1.0,
@@ -506,7 +511,7 @@ mod tests {
             frequency: 30.0,
             load: 0.0,
             scrub: 0.0,
-            tuning: crate::test_support::audio_voice(),
+            tuning: test_support::audio_voice(),
             enabled: true,
         };
         for _ in 0..48000 {
@@ -526,7 +531,7 @@ mod tests {
             frequency: 180.0,
             load: 1.0,
             scrub: 1.0,
-            tuning: crate::test_support::audio_voice(),
+            tuning: test_support::audio_voice(),
             enabled: true,
         };
         let mut driving_energy = 0.0;

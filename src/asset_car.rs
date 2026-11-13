@@ -1,5 +1,6 @@
 use crate::geometry::XYZ;
 use crate::phys_car;
+use crate::scene;
 use std::fs;
 
 pub const WATTS_PER_HP: f32 = 745.6999;
@@ -13,7 +14,7 @@ pub struct CarSpec {
     pub redline_rpm: f32,
     pub gearbox: Gearbox,
     //
-    pub design: std::sync::Arc<crate::scene::car_glb::Design>,
+    pub design: std::sync::Arc<scene::car_glb::Design>,
     pub top_speed: f32,
     pub brake_force: f32,
     pub tire_friction_coefficient: f32,
@@ -361,9 +362,9 @@ fn model_rolling_radius(radii: [f32; 4], drive_bias: f32) -> Result<f32, String>
 
 fn load_model(
     path: &std::path::Path,
-) -> Result<std::sync::Arc<crate::scene::car_glb::Design>, String> {
+) -> Result<std::sync::Arc<scene::car_glb::Design>, String> {
     let model = path.with_file_name("model.glb");
-    crate::scene::car_glb::load(&model)
+    scene::car_glb::load(&model)
         .map(std::sync::Arc::new)
         .map_err(|e| e.to_string())
 }
@@ -376,48 +377,48 @@ mod tests {
     fn wheelbase_comes_from_axle_midpoints() {
         // Different left/right Z positions exercise axle averaging.
         let mounts = [
-            crate::geometry::XYZ {
+            XYZ {
                 x: -0.8,
                 y: 0.1,
                 z: -1.4,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.8,
                 y: 0.2,
                 z: -1.2,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: -0.9,
                 y: 0.3,
                 z: 1.1,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.9,
                 y: 0.4,
                 z: 1.3,
             },
         ];
         assert!((model_wheelbase(&mounts).unwrap() - 2.5).abs() < 0.00001);
-        let translated = mounts.map(|p| crate::geometry::XYZ { z: p.z + 10.0, ..p });
+        let translated = mounts.map(|p| XYZ { z: p.z + 10.0, ..p });
         assert!((model_wheelbase(&translated).unwrap() - 2.5).abs() < 0.00001);
         for z in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             let invalid = [
-                crate::geometry::XYZ {
+                XYZ {
                     x: -1.0,
                     y: 0.0,
                     z: 0.0,
                 },
-                crate::geometry::XYZ {
+                XYZ {
                     x: 1.0,
                     y: 0.0,
                     z: 0.0,
                 },
-                crate::geometry::XYZ {
+                XYZ {
                     x: -1.0,
                     y: 0.0,
                     z: z,
                 },
-                crate::geometry::XYZ {
+                XYZ {
                     x: 1.0,
                     y: 0.0,
                     z: z,
@@ -430,29 +431,29 @@ mod tests {
     #[test]
     fn track_width_comes_from_both_axles() {
         let mounts = [
-            crate::geometry::XYZ {
+            XYZ {
                 x: -0.7,
                 y: 0.0,
                 z: -1.0,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.7,
                 y: 0.0,
                 z: -1.0,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: -0.9,
                 y: 0.0,
                 z: 1.0,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.9,
                 y: 0.0,
                 z: 1.0,
             },
         ];
         assert!((model_track_width(&mounts).unwrap() - 1.6).abs() < 0.00001);
-        let translated = mounts.map(|p| crate::geometry::XYZ { x: p.x + 10.0, ..p });
+        let translated = mounts.map(|p| XYZ { x: p.x + 10.0, ..p });
         assert!((model_track_width(&translated).unwrap() - 1.6).abs() < 0.00001);
         for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             for wheel in [1, 3] {
@@ -463,7 +464,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "test_support.rs"]
-pub mod test_support;

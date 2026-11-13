@@ -45,7 +45,7 @@ mod sources;
 mod src_files;
 mod street_surface;
 #[cfg(test)]
-use world::test_support;
+mod test_support;
 mod phys_car;
 mod track;
 mod traffic;

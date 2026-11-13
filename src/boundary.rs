@@ -1,3 +1,4 @@
+use crate::build_landscape;
 use crate::error::{invalid, Result};
 use crate::geometry::empty;
 use crate::osm::{OSMBoundary, OSMMap};
@@ -52,7 +53,7 @@ pub fn resolve_boundary(source: &OSMMap, relation: i64) -> Result<OSMBoundary> {
         parts[usize::from(role == "inner")].push(way.nodes.clone());
     }
     let make = |parts| -> Result<Vec<Polygon<f64>>> {
-        crate::build_landscape::rings(parts)
+        build_landscape::rings(parts)
             .ok_or_else(|| invalid("boundary ways do not form closed rings"))?
             .into_iter()
             .map(|ring| {

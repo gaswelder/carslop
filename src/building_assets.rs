@@ -222,12 +222,12 @@ mod tests {
         catalog.window.place(
             &mut b,
             [
-                crate::geometry::XZ { x: 10., z: 20. },
-                crate::geometry::XZ { x: 10., z: 30. },
+                XZ { x: 10., z: 20. },
+                XZ { x: 10., z: 30. },
             ],
             5.,
             7.,
-            crate::geometry::XYZ {
+            XYZ {
                 x: 2.,
                 y: 3.,
                 z: 100.,
@@ -258,12 +258,12 @@ mod tests {
         catalog.entrance.place(
             &mut b,
             [
-                crate::geometry::XZ { x: 0., z: 0. },
-                crate::geometry::XZ { x: 10., z: 0. },
+                XZ { x: 0., z: 0. },
+                XZ { x: 10., z: 0. },
             ],
             5.,
             0.,
-            crate::geometry::XYZ {
+            XYZ {
                 x: 100.,
                 y: 100.,
                 z: 100.,

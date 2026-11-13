@@ -1,3 +1,4 @@
+use crate::geometry;
 use crate::geometry::XZ;
 use crate::geometry::{
     add, cross, dist, dot, empty, length, line, mul, path_length, polygon, sub, substring, unit,
@@ -286,7 +287,7 @@ impl rstar::RTreeObject for RoadLineIndexItem {
 
 impl rstar::PointDistance for RoadLineIndexItem {
     fn distance_2(&self, p: &XZ) -> f64 {
-        crate::geometry::project(&[self.start_coords, self.end_coords], *p)
+        geometry::project(&[self.start_coords, self.end_coords], *p)
             .0
             .powi(2)
     }
@@ -687,7 +688,10 @@ mod geometry_tests {
     use super::*;
     use crate::build_surfaces;
     use crate::geometry::{project, BoundingBoxXZ, LatLon};
+    use crate::src_files;
+    use crate::street_surface;
     use crate::test_support::Temp;
+    use crate::world;
     use geo::{Contains, Point};
     fn map(
         nodes: &[XZ],
@@ -719,7 +723,7 @@ mod geometry_tests {
             buildings: buildings
                 .iter()
                 .enumerate()
-                .map(|(i, p)| crate::world::Building {
+                .map(|(i, p)| world::Building {
                     id: i as u64 + 1,
                     height_meters: 6.0,
                     base_y: 0.0,
@@ -735,13 +739,13 @@ mod geometry_tests {
     ) -> (
         Temp,
         build_surfaces::Surfaces,
-        crate::street_surface::StreetSurface,
+        street_surface::StreetSurface,
     ) {
         let temp = Temp::new();
-        crate::src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
+        src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
         let s =
             build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt")).unwrap();
-        let loaded = crate::street_surface::StreetSurface::load(
+        let loaded = street_surface::StreetSurface::load(
             &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
             map.road_lines.len(),
         )
@@ -782,7 +786,7 @@ mod geometry_tests {
             if t.usage.is_road() {
                 area += poly.unsigned_area();
             }
-            if matches!(t.usage, crate::world::TriangleUsage::Pavement(_)) {
+            if matches!(t.usage, world::TriangleUsage::Pavement(_)) {
                 assert!(poly.intersection(&s.asphalt).unsigned_area() < 0.0001);
             }
         }

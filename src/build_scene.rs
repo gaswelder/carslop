@@ -1,4 +1,7 @@
 //! Compile render geometry from prepared location assets.
+use crate::chunks;
+use crate::scene;
+use crate::world;
 use crate::{
     osm::OSMBoundary,
     scene_archive::{write_spooled, Archive},
@@ -6,7 +9,7 @@ use crate::{
 use std::path::Path;
 
 pub fn build_scene(
-    city: &crate::world::CompiledLocation,
+    city: &world::CompiledLocation,
     boundary: Option<&OSMBoundary>,
     decorations_path: &Path,
     output_path: &Path,
@@ -46,7 +49,7 @@ pub fn build_scene(
         //
         // create spool?
         //
-        let mut spool = crate::scene::city_layer_spooled(
+        let mut spool = scene::city_layer_spooled(
             city,
             layer,
             temporary_directory,
@@ -64,7 +67,7 @@ pub fn build_scene(
                 //
                 // make a builder
                 //
-                let mut builder = crate::chunks::ChunkBuilder::default();
+                let mut builder = chunks::ChunkBuilder::default();
 
                 //
                 // push triangles into builder

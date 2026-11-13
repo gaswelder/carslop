@@ -1,12 +1,20 @@
 use crate::add_location_compile::create_location_map;
+use crate::asset_codecs;
+use crate::build_collision;
 use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
 use crate::error::Result;
 use crate::geometry::{cross, polygon, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
+use crate::hgt;
 use crate::osm::{OSMBoundary, OSMElement, OSMMap};
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::sources::extract_osm_boundary;
+use crate::src_files;
+use crate::street_surface;
+use crate::test_support;
+use crate::traffic;
+use crate::world;
 use crate::{build_surfaces, build_terrain, osm};
 use geo::{Area, Contains, MultiPolygon, Point, Polygon};
 use serde_json::json;
@@ -52,7 +60,7 @@ fn compile(options: TestOptions<'_>) -> Result<()> {
     let map = create_location_map(&source, &boundary)?;
     let output = options.output;
     fs::create_dir_all(output.join("elevation"))?;
-    let city = crate::src_files::write_city_txt(&map, &output.join("city.txt"))?.city;
+    let city = src_files::write_city_txt(&map, &output.join("city.txt"))?.city;
     let surfaces = build_surfaces::write_streets_txt(&map, &output.join("streets.txt"))?.surfaces;
     build_landscape(&source, &map, &surfaces, &output.join("landscape.txt"))?;
     build_furniture(&source, &map, &surfaces, &output.join("furniture.txt"))?;
@@ -69,7 +77,7 @@ fn compile(options: TestOptions<'_>) -> Result<()> {
             &json!({"name": options.name, "boundary": boundary.to_geojson()}),
         )? + "\n",
     )?;
-    crate::build_collision::build_collisions(
+    build_collision::build_collisions(
         &output.join("streets.bin"),
         &city,
         fs::read_to_string(output.join("streets.txt"))?,
@@ -166,7 +174,7 @@ fn mapped_multipolygon_holes_stay_empty() {
     })
     .unwrap();
     let landscape =
-        crate::test_support::landscape(&fs::read_to_string(output.join("landscape.txt")).unwrap())
+        test_support::landscape(&fs::read_to_string(output.join("landscape.txt")).unwrap())
             .unwrap();
     let area: f64 = landscape
         .ground_triangles()
@@ -211,7 +219,7 @@ fn mapped_multipolygon_holes_stay_empty() {
         landscape
             .ground_triangles()
             .iter()
-            .all(|t| t.material == crate::world::Material::Park),
+            .all(|t| t.material == world::Material::Park),
         "relation members must not create their own ground cover"
     );
 }
@@ -276,7 +284,7 @@ fn map(
         buildings: buildings
             .iter()
             .enumerate()
-            .map(|(i, p)| crate::world::Building {
+            .map(|(i, p)| world::Building {
                 id: i as u64 + 1,
                 height_meters: 6.0,
                 base_y: 0.0,
@@ -292,12 +300,12 @@ fn surfaces(
 ) -> (
     Temp,
     build_surfaces::Surfaces,
-    crate::street_surface::StreetSurface,
+    street_surface::StreetSurface,
 ) {
     let temp = Temp::new();
-    crate::src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
+    src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
     let s = build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt")).unwrap();
-    let loaded = crate::street_surface::StreetSurface::load(
+    let loaded = street_surface::StreetSurface::load(
         &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
         map.road_lines.len(),
     )
@@ -310,7 +318,7 @@ fn point(p: XZ) -> Point<f64> {
 }
 
 fn element(id: i64, tags: &[(&str, &str)]) -> OSMElement {
-    crate::test_support::osm_element(id, tags)
+    test_support::osm_element(id, tags)
 }
 
 fn source() -> OSMMap {
@@ -337,7 +345,7 @@ fn way(s: &mut OSMMap, id: i64, nodes: &[i64], tags: &[(&str, &str)]) {
 
 #[test]
 fn mapped_controls_keep_direction_speed_and_left_curb_semantics() {
-    use crate::traffic::FurnitureKind::*;
+    use traffic::FurnitureKind::*;
     let f = controls(false, true);
     assert_eq!(f.iter().filter(|f| f.kind == Signal).count(), 2);
     assert_eq!(f.iter().filter(|f| f.kind == Stop).count(), 1);
@@ -407,7 +415,7 @@ fn landscape_priorities_crop_and_tree_conflicts_are_preserved() {
     build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
     println!("  Placing road controls...");
     build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
-    let l = crate::test_support::landscape(
+    let l = test_support::landscape(
         &std::fs::read_to_string(temp.directory.join("landscape.txt")).unwrap(),
     )
     .unwrap();
@@ -425,7 +433,7 @@ fn landscape_priorities_crop_and_tree_conflicts_are_preserved() {
             .collect();
         assert!(points.iter().all(|p| p.x >= -100.001 && p.x <= 100.001));
         let poly = polygon(&points);
-        if t.material == crate::world::Material::Sports {
+        if t.material == world::Material::Sports {
             sports += poly.unsigned_area();
         } else {
             assert!(!poly.contains(&point(XZ { x: 40., z: 40. })));
@@ -475,7 +483,7 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
 
 #[test]
 fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
-    let temp = crate::test_support::Temp::new();
+    let temp = Temp::new();
     for (x, offset) in [(6, 0), (7, 8)] {
         let values: Vec<u8> = (0..9)
             .flat_map(|_| (0..9).flat_map(|c| (100_i16 + offset + c).to_be_bytes()))
@@ -498,14 +506,14 @@ fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
         ..SourceLocation::<f64>::empty()
     };
     let source = temp.directory.join("N50E006.hgt");
-    let (dem, sources) = crate::hgt::covering(&source, &map).unwrap();
+    let (dem, sources) = hgt::covering(&source, &map).unwrap();
     assert_eq!(sources.len(), 2);
     for longitude in [6.95, 7.0, 7.05] {
         let expected = 100.0 + (longitude - 6.0) * 8.0;
         assert!((dem.sample(LatLon::new(50.5, longitude)).unwrap() - expected).abs() < 1e-9);
     }
     fs::remove_file(temp.directory.join("N50E007.hgt")).unwrap();
-    assert!(crate::hgt::covering(&source, &map).is_err());
+    assert!(hgt::covering(&source, &map).is_err());
 }
 
 fn var(mut n: u64) -> Vec<u8> {
@@ -617,7 +625,7 @@ fn check_extraction(incomplete_relation: bool) {
         },
     )
     .unwrap();
-    let source = crate::osm::read(&output).unwrap();
+    let source = osm::read(&output).unwrap();
     assert_eq!(
         source.nodes.keys().copied().collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
@@ -642,7 +650,7 @@ fn check_extraction(incomplete_relation: bool) {
     );
 }
 
-fn controls(oneway: bool, enabled: bool) -> Vec<crate::traffic::Furniture> {
+fn controls(oneway: bool, enabled: bool) -> Vec<traffic::Furniture> {
     let mut s = source();
     for (id, z) in [(1, -40.), (5, -15.), (2, 0.), (4, 15.), (3, 40.)] {
         let tags = if enabled {
@@ -679,7 +687,7 @@ fn controls(oneway: bool, enabled: bool) -> Vec<crate::traffic::Furniture> {
     build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
     println!("  Placing road controls...");
     build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
-    crate::asset_codecs::furniture::parse(
+    asset_codecs::furniture::parse(
         &std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap(),
     )
     .unwrap()

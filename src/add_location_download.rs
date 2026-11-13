@@ -345,6 +345,9 @@ mod tile_tests {
 #[cfg(test)]
 mod stage_tests {
     use super::*;
+    use crate::city_assets;
+    use crate::location;
+    use crate::world;
     use crate::{
         add_location_compile::compile_location, add_location_trees, boundary::resolve_boundary,
         imagery, osm,
@@ -467,11 +470,11 @@ mod stage_tests {
 
         let output = tempfile::tempdir().unwrap();
         location.write(output.path()).unwrap();
-        let reread = crate::location::Location::read(output.path()).unwrap();
+        let reread = location::Location::read(output.path()).unwrap();
         assert_eq!(location.trees, reread.trees);
         assert_eq!(location.labels, reread.labels);
         assert_eq!(location.roads, reread.roads);
-        crate::world::Location::load(&crate::city_assets::CityAsset::new(output.path().into()))
+        world::Location::load(&city_assets::CityAsset::new(output.path().into()))
             .unwrap();
         drop(location);
         assert!(output.path().join("scene.pack").is_file());

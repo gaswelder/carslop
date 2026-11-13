@@ -1,5 +1,7 @@
 //! Footprints and their padded collision/camera grid cannot be edited independently.
 use super::*;
+use crate::track;
+use crate::world;
 #[derive(Debug)]
 pub(super) struct Buildings {
     items: Vec<Building>,
@@ -9,11 +11,11 @@ impl Buildings {
     pub(super) fn new(items: Vec<Building>) -> Self {
         let mut grid = HashMap::new();
         for (i, b) in items.iter().enumerate() {
-            crate::world::spatial::insert(
+            world::spatial::insert(
                 &mut grid,
-                crate::world::spatial::bounds(
+                world::spatial::bounds(
                     b.ground_outline.iter().copied(),
-                    crate::track::CAR_RADIUS + 1.0,
+                    track::CAR_RADIUS + 1.0,
                 ),
                 i,
             );
@@ -43,7 +45,7 @@ impl Location {
     pub fn nearby_buildings(&self, p: XZ<f32>) -> impl Iterator<Item = &Building> {
         self.buildings
             .grid
-            .get(&crate::world::spatial::cell(p))
+            .get(&world::spatial::cell(p))
             .into_iter()
             .flatten()
             .map(|&i| &self.buildings.items[i])
@@ -52,7 +54,7 @@ impl Location {
     pub fn building_clearance(&self, p: XZ<f32>) -> f32 {
         self.buildings
             .grid
-            .get(&crate::world::spatial::cell(p))
+            .get(&world::spatial::cell(p))
             .map_or(f32::INFINITY, |ids| {
                 ids.iter()
                     .map(|i| {
@@ -67,6 +69,7 @@ impl Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     fn building(id: u64, x: f32, z: f32) -> Building {
         Building {
@@ -88,7 +91,7 @@ mod tests {
 
     #[test]
     fn footprint_owner_preserves_clearance_candidates_and_terrain_fitting() {
-        let mut world = crate::test_support::empty_world();
+        let mut world = test_support::empty_world();
         world.buildings = Buildings::new(vec![
             building(1, -36., -36.),
             building(2, 28., 28.),

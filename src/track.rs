@@ -1,5 +1,8 @@
 //! Immutable authored routes. No global mutable "active track".
+use crate::authoring;
+use crate::city_assets;
 use crate::geometry::XYZ;
+use crate::scene_archive;
 pub use crate::world::{Location, LocationId, RoadSample};
 
 // Authoring and test sampling enumerate streets in storage order. This is
@@ -33,7 +36,7 @@ pub const TERRAIN_PADDING: f32 = 100.0;
 struct RuntimeTrack {
     path: std::path::PathBuf,
     name: &'static str,
-    circuit: crate::authoring::Circuit,
+    circuit: authoring::Circuit,
     #[cfg(test)]
     track: OnceLock<Result<std::sync::Arc<Location>, String>>,
 }
@@ -71,10 +74,10 @@ pub fn register_file(path: &std::path::Path) -> Result<(LocationId, &'static str
     };
     let points: Vec<[f32; 4]> =
         serde_json::from_value(v["points"].clone()).map_err(|e| e.to_string())?;
-    let circuit = crate::authoring::Circuit {
+    let circuit = authoring::Circuit {
         control_points: points
             .into_iter()
-            .map(|[x, y, z, width]| crate::authoring::ControlPoint {
+            .map(|[x, y, z, width]| authoring::ControlPoint {
                 position: XYZ { x, y, z },
                 width,
             })
@@ -177,7 +180,7 @@ impl LocationId {
         static COMPACT: OnceLock<Arc<Location>> = OnceLock::new();
         Ok(match self {
             Self::File(index) => {
-                let definition = crate::track::runtime_tracks()
+                let definition = runtime_tracks()
                     .read()
                     .unwrap()
                     .get(*index)
@@ -196,14 +199,14 @@ impl LocationId {
             }
 
             Self::Compact => {
-                let build = || Arc::new(Location::build(self.clone(), &crate::track::ROAD_POINTS));
+                let build = || Arc::new(Location::build(self.clone(), &ROAD_POINTS));
                 #[cfg(test)]
                 let world = COMPACT.get_or_init(build).clone();
                 #[cfg(not(test))]
                 let world = build();
                 world
             }
-            Self::Asset(path) => Arc::new(Location::load(&crate::city_assets::CityAsset::new(
+            Self::Asset(path) => Arc::new(Location::load(&city_assets::CityAsset::new(
                 path.clone(),
             ))?),
         })
@@ -214,6 +217,8 @@ impl LocationId {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support;
+
     fn variable_width_track() -> std::sync::Arc<super::Location> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
@@ -293,7 +298,7 @@ mod tests {
 
     #[test]
     fn spatial_projection_matches_full_search_and_route_caches_are_isolated() {
-        let scenic = crate::test_support::scenic_id().try_track().unwrap();
+        let scenic = test_support::scenic_id().try_track().unwrap();
         for i in 0..400 {
             let s = scenic.at_distance(scenic.sampling_length() * i as f32 / 400.0);
             for offset in [-45.0, -3.0, 0.0, 3.0, 45.0] {
@@ -350,7 +355,7 @@ impl LocationCache {
     pub fn prepare_for_render(&self, id: &LocationId) -> Result<std::sync::Arc<Location>, String> {
         let world = self.prepare(id)?;
         if let Some(assets) = world.assets() {
-            crate::scene_archive::Archive::open_for(assets).map_err(|e| {
+            scene_archive::Archive::open_for(assets).map_err(|e| {
                 format!("cannot prepare scene {}: {e}", assets.directory().display())
             })?;
         }

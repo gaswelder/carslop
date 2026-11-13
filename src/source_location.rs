@@ -1,7 +1,11 @@
 //! Compiler geometry and parsed CITY records, without runtime layers or indexes.
 //! Importers and generators keep f64 geometry. CITY parsing deliberately retains
 //! the existing f32 quantization; writers retain their existing decimal precision.
+use crate::asset_codecs;
+use crate::city;
+use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
+use crate::location;
 use crate::world::Building;
 use geo::{Intersects, MultiPolygon, Point};
 
@@ -77,24 +81,24 @@ impl SourceLocation<f64> {
 
 impl SourceLocation<f32> {
     pub fn parse(text: &str) -> Result<Self, String> {
-        crate::asset_codecs::city::parse(text)
+        asset_codecs::city::parse(text)
     }
 }
 
 /// Compatibility for old asset folders; build inputs never enter stored Location.
 pub fn read_legacy_labels(
     directory: &std::path::Path,
-) -> Result<crate::location::Labels, String> {
+) -> Result<location::Labels, String> {
     let labels = match std::fs::File::open(directory.join("source.osm")) {
-        Ok(file) => match crate::city::read_osm_labels(std::io::BufReader::new(file)) {
+        Ok(file) => match city::read_osm_labels(std::io::BufReader::new(file)) {
             Ok(labels) => labels,
             Err(e) => {
                 log::warn!("Cannot load legacy labels: {e}");
-                return Ok(crate::location::Labels::default());
+                return Ok(location::Labels::default());
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(crate::location::Labels::default())
+            return Ok(location::Labels::default())
         }
         Err(e) => return Err(format!("source.osm labels: {e}")),
     };
@@ -102,7 +106,7 @@ pub fn read_legacy_labels(
     let mut buildings: Vec<_> = labels.buildings.into_iter().collect();
     streets.sort();
     buildings.sort();
-    Ok(crate::location::Labels {
+    Ok(location::Labels {
         streets,
         buildings,
         storefronts: labels.storefronts,
@@ -110,10 +114,10 @@ pub fn read_legacy_labels(
 }
 
 /// Build-stage adapter: reduce source tags to playable labels on every rebuild.
-pub fn write_labels(directory: &std::path::Path) -> crate::error::Result<()> {
+pub fn write_labels(directory: &std::path::Path) -> error::Result<()> {
     std::fs::write(
         directory.join("labels.json"),
-        serde_json::to_vec(&read_legacy_labels(directory).map_err(crate::error::invalid)?)?,
+        serde_json::to_vec(&read_legacy_labels(directory).map_err(error::invalid)?)?,
     )?;
     Ok(())
 }

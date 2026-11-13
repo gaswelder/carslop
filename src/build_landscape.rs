@@ -1,10 +1,14 @@
 //! Compile mapped ground cover and trees into landscape assets.
+use crate::asset_codecs;
+use crate::build_surfaces;
 use crate::build_surfaces::{union, Surfaces};
 use crate::error::{invalid, Result};
 use crate::geometry::XZ;
 use crate::geometry::{empty, polygon};
+use crate::osm;
 use crate::osm::{OSMElement, OSMMap};
 use crate::source_location::SourceLocation;
+use crate::world;
 use geo::MultiPolygon;
 use geo::{algorithm::orient::Direction, BooleanOps, Buffer, Orient, Point};
 use std::fs;
@@ -171,22 +175,22 @@ pub fn build_landscape(
         };
         groups[kind].push(polygon(&points).intersection(&crop));
     }
-    let mut file = crate::asset_codecs::landscape::Writer::new(
+    let mut file = asset_codecs::landscape::Writer::new(
         BufWriter::new(fs::File::create(landscape_path)?),
-        crate::asset_codecs::landscape::Precision::Imported,
+        asset_codecs::landscape::Precision::Imported,
     )?;
     let mut covered = empty();
     for kind in [8, 7, 3, 4, 5, 2, 0, 1, 6] {
         let geometry = union(&groups[kind]).difference(&covered);
         covered = covered.union(&geometry);
-        let material = crate::world::Material::from_ground_id(kind).map_err(invalid)?;
-        crate::build_surfaces::triangulate(&geometry, |points| {
+        let material = world::Material::from_ground_id(kind).map_err(invalid)?;
+        build_surfaces::triangulate(&geometry, |points| {
             file.ground(material, points)?;
             Ok(())
         })?;
     }
     println!("  Filtering mapped trees...");
-    let obstacles = crate::build_surfaces::PolygonIndex::new(&s.obstacles);
+    let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
     let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
     for node in source.nodes.values().filter(|n| n.tag("natural") == "tree") {
         let p = map.metres(node.coord.unwrap());
@@ -196,11 +200,11 @@ pub fn build_landscape(
         if conflicts(&Point::new(p.x, p.z).buffer(0.35)) {
             continue;
         }
-        let height = crate::osm::number(node.tag("height"))
+        let height = osm::number(node.tag("height"))
             .filter(|n| *n > 0.0)
             .unwrap_or(4.8 + node.id.rem_euclid(7) as f64 * 0.3)
             .clamp(2.5, 18.0);
-        let radius = crate::osm::number(node.tag("diameter_crown"))
+        let radius = osm::number(node.tag("diameter_crown"))
             .filter(|n| *n > 0.0)
             .map(|n| n / 2.0)
             .unwrap_or(height * 0.32)

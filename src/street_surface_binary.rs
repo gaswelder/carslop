@@ -1,7 +1,9 @@
 use crate::geometry::{XYZ, XZ};
-use std::{collections::HashMap, fs::File, io, path::Path};
-
+use crate::location;
+use crate::street_surface;
 use crate::street_surface::{cross, Curb, RoadPaths, StreetSurface, Triangle};
+use crate::world;
+use std::{collections::HashMap, fs::File, io, path::Path};
 
 const MAGIC: &[u8; 8] = b"NFSCOL01";
 type Grid = HashMap<(i32, i32), Vec<usize>>;
@@ -85,7 +87,7 @@ fn load(directory: &Path, roads: usize) -> io::Result<Loaded> {
     let (data, triangles_grid, curbs_grid, _junction) = decode(directory, roads, true)?;
     Ok((
         StreetSurface {
-            pavement_height_meters: crate::street_surface::DEFAULT_PAVEMENT_HEIGHT,
+            pavement_height_meters: street_surface::DEFAULT_PAVEMENT_HEIGHT,
             road_triangles: data.triangles,
             curbs: data.curbs,
             triangles_grid,
@@ -103,11 +105,11 @@ fn load(directory: &Path, roads: usize) -> io::Result<Loaded> {
 pub fn load_geometry(
     directory: &Path,
     roads: usize,
-) -> io::Result<crate::location::Streets> {
+) -> io::Result<location::Streets> {
     decode(directory, roads, false).map(|(data, _, _, _)| data)
 }
 
-type Decoded = (crate::location::Streets, Grid, Grid, u32);
+type Decoded = (location::Streets, Grid, Grid, u32);
 fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Decoded> {
     let file = std::fs::File::open(&directory.join("streets.bin"))?;
     let body_len = file
@@ -168,7 +170,7 @@ fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Deco
         let style = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
         let p = floats::<6>(&bytes[4..])?;
         let style =
-            crate::world::CurbStyle::try_from(style).map_err(|_| invalid("invalid cached curb"))?;
+            world::CurbStyle::try_from(style).map_err(|_| invalid("invalid cached curb"))?;
         curbs.push(Curb {
             style,
             ends: [XZ { x: p[0], z: p[1] }, XZ { x: p[2], z: p[3] }],
@@ -184,7 +186,7 @@ fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Deco
         return Err(invalid("trailing collision cache bytes"));
     }
     Ok((
-        crate::location::Streets {
+        location::Streets {
             triangles,
             curbs,
             paths: paths
@@ -223,10 +225,14 @@ fn grid(out: &mut impl io::Write, cells: &Grid) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn bake(city: &Path, streets: &Path, output: &Path) -> crate::error::Result<()> {
+    use crate::build_collision;
+    use crate::error;
+    use crate::source_location;
+    use crate::test_support;
+    fn bake(city: &Path, streets: &Path, output: &Path) -> error::Result<()> {
         let city =
-            crate::source_location::SourceLocation::<f32>::parse(&std::fs::read_to_string(city)?)?;
-        crate::build_collision::build_collisions(output, &city, std::fs::read_to_string(streets)?)
+            source_location::SourceLocation::<f32>::parse(&std::fs::read_to_string(city)?)?;
+        build_collision::build_collisions(output, &city, std::fs::read_to_string(streets)?)
     }
     fn fixture(root: &Path) -> String {
         let source = "CITY 2\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
@@ -258,7 +264,7 @@ mod tests {
         let actual = actual.into_test_location();
         for x in -2..24 {
             for z in -2..24 {
-                let p = crate::geometry::XZ {
+                let p = XZ {
                     x: x as f32,
                     z: z as f32,
                 };
@@ -268,14 +274,14 @@ mod tests {
                 assert_eq!(
                     expected.crossed_curb(
                         p,
-                        crate::geometry::XZ {
+                        XZ {
                             x: p.x,
                             z: p.z + 2.0
                         }
                     ),
                     actual.crossed_curb(
                         p,
-                        crate::geometry::XZ {
+                        XZ {
                             x: p.x,
                             z: p.z + 2.0
                         }
@@ -312,7 +318,7 @@ mod tests {
         let (_, updated_paths) = load(root, 1).unwrap();
         assert_eq!(
             updated_paths[0][1],
-            crate::geometry::XYZ {
+            XYZ {
                 x: 10.0,
                 y: 0.0,
                 z: 2.0
@@ -365,12 +371,12 @@ mod tests {
     #[test]
     #[ignore = "requires a location with baked collision data"]
     fn full_collision_cache_matches_source() {
-        let world = crate::test_support::nicosia_world();
+        let world = test_support::nicosia_world();
         let assets = world.assets().unwrap();
         let root = assets.directory();
         let source = std::fs::read_to_string(root.join("city.txt")).unwrap();
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
-        let city = crate::source_location::SourceLocation::<f32>::parse(&source).unwrap();
+        let city = source_location::SourceLocation::<f32>::parse(&source).unwrap();
         let (expected, expected_paths) =
             StreetSurface::load(&streets, city.road_lines.len()).unwrap();
         let (actual, actual_paths) = load(root, city.road_lines.len()).unwrap();
@@ -436,14 +442,14 @@ pub fn write_binary_street_surface(
 
 /// Encode plain stored geometry. The legacy file includes acceleration grids;
 /// derive them here rather than making them part of the persisted data model.
-pub fn write_geometry(path: &Path, data: &crate::location::Streets) -> io::Result<()> {
+pub fn write_geometry(path: &Path, data: &location::Streets) -> io::Result<()> {
     let mut triangles_grid = Grid::new();
     let mut curbs_grid = Grid::new();
     for (i, t) in data.triangles.iter().enumerate() {
-        crate::street_surface::index(&mut triangles_grid, &t.points, i, 0.001);
+        street_surface::index(&mut triangles_grid, &t.points, i, 0.001);
     }
     for (i, c) in data.curbs.iter().enumerate() {
-        crate::street_surface::index(&mut curbs_grid, &c.ends, i, 32.0);
+        street_surface::index(&mut curbs_grid, &c.ends, i, 32.0);
     }
     let mut out = io::BufWriter::new(File::create(path)?);
     io::Write::write_all(&mut out, MAGIC)?;

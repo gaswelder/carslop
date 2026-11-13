@@ -139,6 +139,8 @@ impl GroundCover {
 #[cfg(test)]
 mod index_tests {
     use super::*;
+    use crate::geometry;
+    use crate::world;
     use geo::{Intersects, Point};
 
     #[test]
@@ -146,7 +148,7 @@ mod index_tests {
         let triangles = vec![
             Triangle {
                 material: Material::Park,
-                usage: crate::world::TriangleUsage::Ground,
+                usage: world::TriangleUsage::Ground,
                 points: [
                     XZ { x: -64., z: -64. },
                     XZ { x: 64., z: -64. },
@@ -155,7 +157,7 @@ mod index_tests {
             },
             Triangle {
                 material: Material::Paving,
-                usage: crate::world::TriangleUsage::Ground,
+                usage: world::TriangleUsage::Ground,
                 points: [
                     XZ { x: 64., z: -64. },
                     XZ { x: 64., z: 64. },
@@ -174,7 +176,7 @@ mod index_tests {
                     .triangles()
                     .iter()
                     .find(|t| {
-                        crate::geometry::polygon(&t.points.map(|p| p.map(f64::from)))
+                        geometry::polygon(&t.points.map(|p| p.map(f64::from)))
                             .intersects(&Point::new(p.x as f64, p.z as f64))
                     })
                     .map(|t| t.material);

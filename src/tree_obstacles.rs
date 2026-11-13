@@ -1,6 +1,8 @@
 //! Map-space exclusion of proposed tree centres, using the actual road mesh.
 use crate::error::{invalid, Result};
 use crate::geometry::XZ;
+use crate::imagery;
+use crate::source_location;
 use geo::{Coord, Intersects, LineString, Point, Polygon};
 use rstar::{RTree, RTreeObject, AABB};
 use std::{
@@ -22,7 +24,7 @@ pub struct Obstacles {
     index: RTree<Obstacle>,
 }
 fn local(origin: [f64; 2], lon: f64, lat: f64) -> XZ {
-    crate::imagery::local(origin, [lon, lat])
+    imagery::local(origin, [lon, lat])
 }
 fn obstacle(points: Vec<XZ>, reason: &'static str, region: &AABB<XZ>) -> Option<Obstacle> {
     let lo = XZ::from_fn(|i| {
@@ -61,7 +63,7 @@ impl Obstacles {
         lonlat_bounds: [f64; 4],
     ) -> Result<Self> {
         let text = std::fs::read_to_string(city_path)?;
-        let city = crate::source_location::SourceLocation::<f32>::parse(&text).map_err(invalid)?;
+        let city = source_location::SourceLocation::<f32>::parse(&text).map_err(invalid)?;
         let origin_line = text
             .lines()
             .find(|l| l.starts_with("origin "))
@@ -190,7 +192,7 @@ mod tests {
             [33.319, 35.161, 33.321, 35.163],
         )
         .unwrap();
-        let check = |x: f64, z: f64| o.rejection_at(crate::geometry::XZ { x, z });
+        let check = |x: f64, z: f64| o.rejection_at(XZ { x, z });
         assert_eq!(check(0., 0.), Some("road"));
         assert_eq!(check(15., 15.), Some("building"));
         assert_eq!(
@@ -207,11 +209,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            empty.rejection_at(crate::geometry::XZ { x: 0., z: 0. }),
+            empty.rejection_at(XZ { x: 0., z: 0. }),
             None
         );
         assert_eq!(
-            empty.rejection_at(crate::geometry::XZ { x: 15., z: 15. }),
+            empty.rejection_at(XZ { x: 15., z: 15. }),
             Some("building")
         );
         fs::write(temp.path().join("streets.txt"), "STREETS 1 2\n").unwrap();

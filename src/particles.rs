@@ -200,16 +200,17 @@ impl TireParticles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     fn car(offset: f32) -> Vehicle {
         let road = track::LocationId::Compact
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        let mut car = crate::test_support::vehicle(
+        let mut car = test_support::vehicle(
             road.vehicle_position(offset),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
         car.speed = 10.0;

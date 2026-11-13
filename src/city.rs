@@ -1,15 +1,17 @@
 //! Offline OSM street network. Geometry, collision, recovery and minimap share it.
+use crate::geometry;
 #[cfg(test)]
-use crate::geometry::{BoundingBoxXZ, XZ};
+use crate::geometry::BoundingBoxXZ;
+use crate::geometry::XZ;
+use crate::osm;
 #[cfg(test)]
 use crate::track::CAR_RADIUS;
 #[cfg(test)]
 use crate::vehicle_location::deflect;
-pub use crate::world::Building;
-use std::collections::HashMap;
-
 #[cfg(test)]
 use crate::world::spatial::*;
+pub use crate::world::Building;
+use std::collections::HashMap;
 
 /// Source labels and businesses associated with their containing building.
 pub struct OsmLabels {
@@ -19,13 +21,13 @@ pub struct OsmLabels {
 }
 
 pub fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
-    let map = crate::osm::read_xml(source).map_err(|e| e.to_string())?;
+    let map = osm::read_xml(source).map_err(|e| e.to_string())?;
     Ok(osm_labels(&map))
 }
 
-fn osm_labels(map: &crate::osm::OSMMap) -> OsmLabels {
+fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
     use geo::{Area, BoundingRect, Intersects};
-    let name = |e: &crate::osm::OSMElement| {
+    let name = |e: &osm::OSMElement| {
         [e.tag("name:en"), e.tag("name")]
             .into_iter()
             .map(str::trim)
@@ -65,11 +67,11 @@ fn osm_labels(map: &crate::osm::OSMMap) -> OsmLabels {
                 map.nodes
                     .get(id)?
                     .coord
-                    .map(|p| crate::geometry::XZ { x: p.lon, z: p.lat })
+                    .map(|p| XZ { x: p.lon, z: p.lat })
             })
             .collect();
         if let Some(points) = points {
-            let polygon = crate::geometry::polygon(&points);
+            let polygon = geometry::polygon(&points);
             if let Some(bounds) = polygon.bounding_rect() {
                 footprints.push((way.id as u64, polygon, bounds));
             }
@@ -142,6 +144,11 @@ fn osm_labels(map: &crate::osm::OSMMap) -> OsmLabels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry;
+    use crate::location;
+    use crate::source_location;
+    use crate::test_support;
+    use crate::world;
 
     #[test]
     fn business_nodes_share_buildings_without_losing_names_or_label_precedence() {
@@ -164,17 +171,17 @@ mod tests {
             labels.storefronts,
             vec![(10, "Orchestra".into()), (10, "Pahit & Ice".into())]
         );
-        let stored = crate::location::Labels {
+        let stored = location::Labels {
             streets: labels.streets.into_iter().collect(),
             buildings: labels.buildings.into_iter().collect(),
             storefronts: labels.storefronts,
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         assert_eq!(
-            serde_json::from_slice::<crate::location::Labels>(&bytes).unwrap(),
+            serde_json::from_slice::<location::Labels>(&bytes).unwrap(),
             stored
         );
-        let legacy: crate::location::Labels =
+        let legacy: location::Labels =
             serde_json::from_str(r#"{"streets":[],"buildings":[]}"#).unwrap();
         assert!(legacy.storefronts.is_empty());
     }
@@ -182,7 +189,7 @@ mod tests {
     #[test]
     #[ignore = "requires the downloaded Engomi OSM extract; exports labels to /tmp/carslop-engomi-labels.json"]
     fn downloaded_engomi_businesses_have_storefronts() {
-        let labels = crate::source_location::read_legacy_labels(std::path::Path::new(
+        let labels = source_location::read_legacy_labels(std::path::Path::new(
             "src-locations/relation-17716182",
         ))
         .unwrap();
@@ -220,11 +227,11 @@ mod tests {
     #[test]
     fn repeated_light_barrier_contacts_preserve_sliding_speed() {
         // Exercise a rotated wall so the response cannot depend on world axes.
-        let normal = crate::geometry::XZ { x: 0.6, z: 0.8 };
-        let tangent = crate::geometry::XZ { x: -0.8, z: 0.6 };
+        let normal = XZ { x: 0.6, z: 0.8 };
+        let tangent = XZ { x: -0.8, z: 0.6 };
         let mut speed = 20.0;
         for _ in 0..120 {
-            let mut velocity = crate::geometry::XZ::from_fn(|i| {
+            let mut velocity = XZ::from_fn(|i| {
                 tangent.component(i) * speed + normal.component(i) * 0.01
             });
             let impact = deflect(&mut velocity, normal);
@@ -237,16 +244,16 @@ mod tests {
 
     #[test]
     fn barrier_response_rebounds_head_on_and_leaves_departing_cars_alone() {
-        let mut velocity = crate::geometry::XZ { x: 10.0, z: 0.0 };
+        let mut velocity = XZ { x: 10.0, z: 0.0 };
         assert_eq!(
-            deflect(&mut velocity, crate::geometry::XZ { x: 1.0, z: 0.0 }),
+            deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }),
             10.0
         );
         assert!((velocity.x + 0.8).abs() < 0.00001);
         assert_eq!(velocity.z, 0.0);
         let departing = velocity;
         assert_eq!(
-            deflect(&mut velocity, crate::geometry::XZ { x: 1.0, z: 0.0 }),
+            deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }),
             0.0
         );
         assert_eq!(velocity, departing);
@@ -256,59 +263,59 @@ mod tests {
 
     #[test]
     fn branches_are_open_and_dead_ends_do_not_join_other_streets() {
-        let city = crate::test_support::parse_world(CROSS).unwrap();
+        let city = test_support::parse_world(CROSS).unwrap();
         for i in 0..4 {
             for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 let s = city.sample(i, t);
                 let mut p = s.vehicle_position(0.0);
                 let before = p;
-                city.constrain(&mut p, &mut crate::geometry::XZ::default());
+                city.constrain(&mut p, &mut XZ::default());
                 assert_eq!(p, before);
             }
         }
         assert!(
-            city.road_clearance(crate::geometry::XYZ {
+            city.road_clearance(geometry::XYZ {
                 x: 25.0,
                 y: 0.0,
                 z: 25.0
             }) > 10.0
         );
-        let mut p = crate::geometry::XYZ {
+        let mut p = geometry::XYZ {
             x: 0.0,
             y: 0.48,
             z: 45.0,
         };
-        city.constrain(&mut p, &mut crate::geometry::XZ { x: 0.0, z: 10.0 });
+        city.constrain(&mut p, &mut XZ { x: 0.0, z: 10.0 });
         assert!(p.z <= 42.61);
     }
     #[test]
     fn building_contacts_and_camera_respect_actual_footprints() {
-        let collision = crate::test_support::parse_world(
+        let collision = test_support::parse_world(
             &CROSS.replace("8 8 18 8 18 18 8 18", "8 -4 18 -4 18 4 8 4"),
         )
         .unwrap();
-        let mut position = crate::geometry::XYZ {
+        let mut position = geometry::XYZ {
             x: 10.0,
             y: 0.48,
             z: 0.0,
         };
-        let mut velocity = crate::geometry::XZ { x: 10.0, z: 0.0 };
+        let mut velocity = XZ { x: 10.0, z: 0.0 };
         assert!(collision.constrain(&mut position, &mut velocity) > 0.0);
-        assert!(!collision.buildings()[0].contains(crate::geometry::XZ {
+        assert!(!collision.buildings()[0].contains(XZ {
             x: position.x,
             z: position.z
         }));
-        let city = crate::test_support::parse_world(CROSS).unwrap();
+        let city = test_support::parse_world(CROSS).unwrap();
         let b = &city.buildings()[0];
-        assert!(b.contains(crate::geometry::XZ { x: 10.0, z: 10.0 }));
-        assert!(!b.contains(crate::geometry::XZ { x: 7.0, z: 10.0 }));
+        assert!(b.contains(XZ { x: 10.0, z: 10.0 }));
+        assert!(!b.contains(XZ { x: 7.0, z: 10.0 }));
         let eye = city.camera_eye(
-            crate::geometry::XYZ {
+            geometry::XYZ {
                 x: 0.0,
                 y: 1.0,
                 z: 10.0,
             },
-            crate::geometry::XYZ {
+            geometry::XYZ {
                 x: 25.0,
                 y: 4.0,
                 z: 10.0,
@@ -317,18 +324,18 @@ mod tests {
         assert!(eye.x < 7.6);
         assert_eq!(
             city.camera_eye(
-                crate::geometry::XYZ {
+                geometry::XYZ {
                     x: 0.0,
                     y: 12.0,
                     z: 10.0
                 },
-                crate::geometry::XYZ {
+                geometry::XYZ {
                     x: 25.0,
                     y: 14.0,
                     z: 10.0
                 }
             ),
-            crate::geometry::XYZ {
+            geometry::XYZ {
                 x: 25.0,
                 y: 14.0,
                 z: 10.0
@@ -337,7 +344,7 @@ mod tests {
     }
     #[test]
     fn engomi_ground_contact_props_and_foundations_share_elevation() {
-        let city_track = crate::test_support::nicosia_world();
+        let city_track = test_support::nicosia_world();
         let city = &city_track;
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
@@ -348,7 +355,7 @@ mod tests {
                 max = max.max(sample.point.y);
                 assert!(
                     (sample.point.y
-                        - city.height(crate::geometry::XZ {
+                        - city.height(XZ {
                             x: sample.point.x,
                             z: sample.point.z
                         }))
@@ -356,9 +363,9 @@ mod tests {
                         < 0.001
                 );
                 let mut p = sample.vehicle_position(0.7);
-                city.constrain(&mut p, &mut crate::geometry::XZ::default());
+                city.constrain(&mut p, &mut XZ::default());
                 assert!(
-                    (p.y - city.drive_height(crate::geometry::XZ { x: p.x, z: p.z }) - 0.48).abs()
+                    (p.y - city.drive_height(XZ { x: p.x, z: p.z }) - 0.48).abs()
                         < 0.001
                 );
             }
@@ -367,7 +374,7 @@ mod tests {
         for prop in &city.furniture {
             assert!(
                 (prop.coords.y
-                    - city.height(crate::geometry::XZ {
+                    - city.height(XZ {
                         x: prop.coords.x,
                         z: prop.coords.z
                     }))
@@ -388,18 +395,18 @@ mod tests {
     }
     #[test]
     fn sidewalks_and_parking_are_drivable_at_rendered_height_and_crop_stays_solid() {
-        let city_track = crate::test_support::nicosia_world();
+        let city_track = test_support::nicosia_world();
         let city = &city_track;
         let mut checked = 0;
         for triangle in city.road_triangles() {
             if !matches!(
                 triangle.usage,
-                crate::world::TriangleUsage::Pavement(crate::world::CurbStyle::MajorRoad)
-                    | crate::world::TriangleUsage::Pavement(crate::world::CurbStyle::Road)
+                world::TriangleUsage::Pavement(world::CurbStyle::MajorRoad)
+                    | world::TriangleUsage::Pavement(world::CurbStyle::Road)
             ) {
                 continue;
             }
-            let q = crate::geometry::XZ {
+            let q = XZ {
                 x: triangle.points.iter().map(|p| p.x).sum::<f32>() / 3.0,
                 z: triangle.points.iter().map(|p| p.z).sum::<f32>() / 3.0,
             };
@@ -414,12 +421,12 @@ mod tests {
             {
                 continue;
             }
-            let mut p = crate::geometry::XYZ {
+            let mut p = geometry::XYZ {
                 x: q.x,
                 y: 0.0,
                 z: q.z,
             };
-            let mut velocity = crate::geometry::XZ { x: 0.0, z: 0.0 };
+            let mut velocity = XZ { x: 0.0, z: 0.0 };
             assert_eq!(city.constrain(&mut p, &mut velocity), 0.0);
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(
@@ -438,10 +445,10 @@ mod tests {
         assert_eq!(checked, 20);
         let mut parking = 0;
         for triangle in city.ground_triangles() {
-            if triangle.material != crate::world::Material::Asphalt {
+            if triangle.material != world::Material::Asphalt {
                 continue;
             }
-            let q = crate::geometry::XZ {
+            let q = XZ {
                 x: triangle.points.iter().map(|p| p.x).sum::<f32>() / 3.0,
                 z: triangle.points.iter().map(|p| p.z).sum::<f32>() / 3.0,
             };
@@ -449,12 +456,12 @@ mod tests {
             if city.paving_height(q).is_some() || city.building_clearance(q) < CAR_RADIUS + 0.1 {
                 continue;
             }
-            let mut p = crate::geometry::XYZ {
+            let mut p = geometry::XYZ {
                 x: q.x,
                 y: 0.0,
                 z: q.z,
             };
-            city.constrain(&mut p, &mut crate::geometry::XZ::default());
+            city.constrain(&mut p, &mut XZ::default());
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(city.paved(q));
             parking += 1;
@@ -463,19 +470,19 @@ mod tests {
             }
         }
         assert_eq!(parking, 20);
-        let mut p = crate::geometry::XYZ {
+        let mut p = geometry::XYZ {
             x: city.bounding_box().max.x + 10.0,
             y: 0.0,
             z: 0.0,
         };
-        let mut velocity = crate::geometry::XZ { x: 10.0, z: 0.0 };
+        let mut velocity = XZ { x: 10.0, z: 0.0 };
         assert!(city.constrain(&mut p, &mut velocity) > 0.0);
         assert!(p.x <= city.bounding_box().max.x - CAR_RADIUS && velocity.x <= 0.0);
     }
 
     #[test]
     fn urban_map_covers_centres_on_both_sides_and_queries_only_nearby_streets() {
-        let city_track = crate::test_support::nicosia_world();
+        let city_track = test_support::nicosia_world();
         let city = &city_track;
         assert!(city.road_lines().len() > 100_000 && city.buildings().len() > 70_000);
         for (name, lat, lon) in [
@@ -486,7 +493,7 @@ mod tests {
             ("Gonyeli", 35.2164170, 33.3058171),
             ("Taskinkoy", 35.2070072, 33.3457502),
         ] {
-            let p = crate::geometry::XYZ {
+            let p = geometry::XYZ {
                 x: ((lon - 33.32_f64).to_radians() * 6_371_000.0 * 35.162_f64.to_radians().cos())
                     as f32,
                 y: 0.0,
@@ -505,7 +512,7 @@ mod tests {
             },
             max: XZ { x: 200.0, z: 130.0 },
         };
-        let intersects = |a: crate::geometry::XYZ, b: crate::geometry::XYZ| {
+        let intersects = |a: geometry::XYZ, b: geometry::XYZ| {
             a.x.min(b.x) <= bounds.max.x
                 && a.x.max(b.x) >= bounds.min.x
                 && a.z.min(b.z) <= bounds.max.z
@@ -528,7 +535,7 @@ mod tests {
 
     #[test]
     fn expanding_grid_projection_matches_brute_force_outside_road_cells() {
-        let city = crate::test_support::parse_world(CROSS).unwrap();
+        let city = test_support::parse_world(CROSS).unwrap();
         for p in [
             [125.0, 0.0, 175.0],
             [-200.0, 0.0, -300.0],

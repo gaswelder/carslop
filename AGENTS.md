@@ -6,6 +6,8 @@ distinct meanings.
 Avoid import aliases. When a member name is ambiguous, import only its namespace
 and qualify references through that namespace instead of importing individual members.
 
+Declare imports with `use` instead of writing inline `crate::` paths.
+
 Do not combine a namespace and its members in `{self, ...}` imports. Import only
 the namespace and use `::` references for its members.
 

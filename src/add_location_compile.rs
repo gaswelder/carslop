@@ -1,5 +1,12 @@
+use crate::asset_codecs;
+use crate::city_assets;
 use crate::geometry::{add, cross, dist, dot, length, line, mul, polygon, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
+use crate::location;
+use crate::scene_archive;
+use crate::source_location;
+use crate::tree_obstacles;
+use crate::world;
 use crate::{
     add_location_download, add_location_trees,
     boundary::resolve_boundary,
@@ -67,7 +74,7 @@ impl ImportPaths {
 }
 
 /// Compile entirely from local sources, retaining large render payloads on disk.
-pub fn compile_location(download_dir: &Path) -> Result<crate::location::Location> {
+pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
     println!("Compiling location from downloaded data...");
     let workspace = tempfile::Builder::new()
         .prefix("carslop-compile-")
@@ -100,8 +107,8 @@ pub fn compile_location(download_dir: &Path) -> Result<crate::location::Location
     let prepared = prepare(&paths)?;
     bake(&paths, &prepared, Some(&acquired.boundary))?;
     drop(prepared);
-    crate::scene_archive::Archive::open(&paths.scene)?;
-    crate::location::Location::from_compilation(workspace).map_err(invalid)
+    scene_archive::Archive::open(&paths.scene)?;
+    location::Location::from_compilation(workspace).map_err(invalid)
 }
 
 struct ConvertedMap {
@@ -211,7 +218,7 @@ fn generate_assets(
         serde_json::to_string_pretty(&manifest)? + "\n",
     )?;
 
-    crate::source_location::write_labels(paths.manifest.parent().unwrap())?;
+    source_location::write_labels(paths.manifest.parent().unwrap())?;
 
     // Read it back again...
     let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
@@ -293,7 +300,7 @@ fn compile_imagery(
         return Err(invalid("source returned no usable imagery"));
     }
 
-    let obstacles = crate::tree_obstacles::Obstacles::read_paths(
+    let obstacles = tree_obstacles::Obstacles::read_paths(
         &paths.city,
         &paths.streets,
         [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat],
@@ -308,9 +315,9 @@ fn compile_imagery(
 
     // Start output
     let tree_file = fs::File::create(&paths.trees)?;
-    let mut tree_output = crate::asset_codecs::landscape::Writer::new(
+    let mut tree_output = asset_codecs::landscape::Writer::new(
         std::io::BufWriter::new(tree_file),
-        crate::asset_codecs::landscape::Precision::Imported,
+        asset_codecs::landscape::Precision::Imported,
     )?;
 
     let mut count = 0;
@@ -344,7 +351,7 @@ fn compile_imagery(
 
         let id = (1_u64 << 63) | count;
 
-        tree_output.tree(&crate::world::Tree {
+        tree_output.tree(&world::Tree {
             id,
             coords: p,
             height_meters: height.clamp(3.5, 14.),
@@ -371,14 +378,14 @@ fn compile_imagery(
     Ok(())
 }
 
-fn prepare(paths: &ImportPaths) -> Result<crate::world::CompiledLocation> {
-    crate::world::CompiledLocation::load(&crate::city_assets::CityAsset::new(paths.output.clone()))
+fn prepare(paths: &ImportPaths) -> Result<world::CompiledLocation> {
+    world::CompiledLocation::load(&city_assets::CityAsset::new(paths.output.clone()))
         .map_err(|e| invalid(format!("preparing staged import: {e}")))
 }
 
 fn bake(
     paths: &ImportPaths,
-    city: &crate::world::CompiledLocation,
+    city: &world::CompiledLocation,
     boundary: Option<&osm::OSMBoundary>,
 ) -> Result<()> {
     build_scene(

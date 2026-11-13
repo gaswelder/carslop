@@ -23,7 +23,7 @@ pub struct Hgt {
 }
 
 impl Hgt {
-    fn read(path: &Path) -> crate::error::Result<Self> {
+    fn read(path: &Path) -> Result<Self> {
         let name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -74,7 +74,7 @@ impl Hgt {
                 .collect(),
         })
     }
-    pub fn sample(&self, p: LatLon) -> crate::error::Result<f64> {
+    pub fn sample(&self, p: LatLon) -> Result<f64> {
         let row = (self.south + (self.rows - 1) as f64 / (self.size - 1) as f64 - p.lat)
             * (self.size - 1) as f64;
         let col = (p.lon - self.west) * (self.size - 1) as f64;
@@ -83,7 +83,7 @@ impl Hgt {
         if r < 1 || c < 1 || r + 2 >= self.rows as isize || c + 2 >= self.cols as isize {
             return Err(invalid("crop plus 80 m padding exceeds the HGT tile/filter coverage; use a smaller crop or a tile covering the requested area"));
         }
-        let filtered = |r: isize, c: isize| -> crate::error::Result<f64> {
+        let filtered = |r: isize, c: isize| -> Result<f64> {
             let mut sum = 0_i32;
             for (dy, wy) in [1, 2, 1].iter().enumerate() {
                 for (dx, wx) in [1, 2, 1].iter().enumerate() {
@@ -186,9 +186,10 @@ pub fn covering(
 #[cfg(test)]
 mod raster_tests {
     use super::*;
+    use crate::test_support;
     #[test]
     fn hgt_endian_orientation_interpolation_and_voids() {
-        let temp = crate::test_support::Temp::new();
+        let temp = test_support::Temp::new();
         let path = temp.directory.join("N35E033.hgt");
         let mut samples: Vec<i16> = (0..9)
             .flat_map(|r| (0..9).map(move |c| 100 + r * 2 + c))

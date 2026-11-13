@@ -1,4 +1,6 @@
+use crate::city_assets;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
+use crate::phys_car;
 #[cfg(test)]
 use crate::track::LocationId;
 use crate::{asset_car, track::Location};
@@ -25,7 +27,7 @@ pub enum MenuAction {
     Start,
 }
 pub struct MainMenu<'a> {
-    pub locations: &'a [crate::city_assets::MenuLocation],
+    pub locations: &'a [city_assets::MenuLocation],
     pub selected: usize,
     pub car: usize,
     pub cars: &'a [std::sync::Arc<asset_car::CarSpec>],
@@ -527,7 +529,7 @@ impl Hud {
         let spec = &menu.cars[menu.car];
         let power = format!(
             "{:.0} HP",
-            spec.engine_power_watts / crate::asset_car::WATTS_PER_HP
+            spec.engine_power_watts / asset_car::WATTS_PER_HP
         );
         for (x, y, label, value) in [
             (-0.84, 0.66, "ENGINE POWER", power),
@@ -1028,7 +1030,7 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
     c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
     c.label("GEAR", [166.0, 129.0], 0.95, muted);
     c.label(
-        &if gauges.gear == crate::phys_car::NEUTRAL_GEAR {
+        &if gauges.gear == phys_car::NEUTRAL_GEAR {
             "N".into()
         } else if gauges.gear == 0 {
             "R".into()
@@ -1288,13 +1290,14 @@ impl Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn map_zoom_is_remembered_per_location_after_reopening_and_reloading() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("zoom.json");
         let track = LocationId::Compact.try_track().unwrap();
-        let other = crate::test_support::scenic_id().try_track().unwrap();
+        let other = test_support::scenic_id().try_track().unwrap();
         let viewport = [1280.0, 720.0];
         let player = track.spawn().point;
         let mut memory = MapZoomMemory::open(Some(path.clone()));
@@ -1374,7 +1377,7 @@ mod tests {
         for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
             let mut fit = MapFit::new(
                 &track,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
@@ -1382,19 +1385,19 @@ mod tests {
                 [1280.0, 720.0],
             );
             fit.heading = Some(heading);
-            let center = fit.point(crate::geometry::XYZ {
+            let center = fit.point(XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
             });
-            let forward = fit.point(crate::geometry::XYZ {
+            let forward = fit.point(XYZ {
                 x: heading.sin() * 30.0,
                 y: 0.0,
                 z: heading.cos() * 30.0,
             });
             assert!((forward[0] - center[0]).abs() < 0.00001);
             assert!(forward[1] > center[1]);
-            let camera_right = fit.point(crate::geometry::XYZ {
+            let camera_right = fit.point(XYZ {
                 x: -heading.cos() * 30.0,
                 y: 0.0,
                 z: heading.sin() * 30.0,
@@ -1423,11 +1426,11 @@ mod tests {
 
     #[test]
     fn full_map_zoom_matches_minimap_and_can_fit_every_road() {
-        for id in crate::test_support::location_ids() {
+        for id in test_support::location_ids() {
             let track = id.try_track().unwrap();
             for player in [
                 track.spawn().point,
-                crate::geometry::XYZ {
+                XYZ {
                     x: track.bounding_box().max.x + 100.0,
                     y: 0.0,
                     z: track.bounding_box().max.z + 100.0,
@@ -1469,12 +1472,12 @@ mod tests {
                         }
                     }
                     let center = fit.point(player);
-                    let east = fit.point(crate::geometry::XYZ {
+                    let east = fit.point(XYZ {
                         x: player.x + 100.0,
                         y: 0.0,
                         z: player.z,
                     });
-                    let south = fit.point(crate::geometry::XYZ {
+                    let south = fit.point(XYZ {
                         x: player.x,
                         y: 0.0,
                         z: player.z + 100.0,
@@ -1484,7 +1487,7 @@ mod tests {
                     assert!((width - height).abs() < 0.001);
                     assert_eq!(
                         south[1] < center[1],
-                        id == crate::test_support::nicosia_id()
+                        id == test_support::nicosia_id()
                     );
                 }
             }
@@ -1493,7 +1496,7 @@ mod tests {
 
     #[test]
     fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = crate::test_support::scenic_id().try_track().unwrap();
+        let track = test_support::scenic_id().try_track().unwrap();
         let player = track.spawn().point;
         for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
             for steps in [-100.0, 0.0, 100.0] {

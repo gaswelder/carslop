@@ -1,9 +1,20 @@
 //! OpenGL scene/HUD programs, mesh upload, and chase-camera math.
-
+use crate::aerial;
+use crate::asset_car;
+use crate::camera;
+use crate::chunks;
+use crate::feedback;
 use crate::geometry::{XYZ, XZ};
-use std::ffi::CString;
-
+use crate::particles;
+use crate::phys_car;
+use crate::prefetch;
+use crate::scene;
+use crate::scene_archive;
+use crate::shadows;
+use crate::track;
+use crate::world;
 use sdl3::video::Window;
+use std::ffi::CString;
 
 pub const VS_SRC: &str = "#version 330 core
 layout (location = 0) in vec3 position;
@@ -476,7 +487,7 @@ struct CityBuffer {
     count: i32,
 }
 impl CityBuffer {
-    fn upload(vertices: &[crate::scene::Vertex]) -> Self {
+    fn upload(vertices: &[scene::Vertex]) -> Self {
         unsafe {
             let mut vao = 0;
             let mut vbo = 0;
@@ -513,7 +524,7 @@ struct CityGpu {
     coarse: bool,
 }
 struct CityChunk {
-    entry: crate::scene_archive::Entry,
+    entry: scene_archive::Entry,
     gpu: Option<CityGpu>,
 }
 fn coarse_lod(previous: Option<bool>, distance_squared: f32) -> bool {
@@ -532,9 +543,9 @@ pub struct Mesh {
     vbo: u32,
     ground_vertex_count: i32,
     city_chunks: std::cell::RefCell<Vec<CityChunk>>,
-    archive: std::cell::RefCell<Option<crate::scene_archive::Archive>>,
-    prefetch: Option<crate::prefetch::Prefetch>,
-    aerial: std::cell::RefCell<Option<crate::aerial::Aerial>>,
+    archive: std::cell::RefCell<Option<scene_archive::Archive>>,
+    prefetch: Option<prefetch::Prefetch>,
+    aerial: std::cell::RefCell<Option<aerial::Aerial>>,
     visible_chunks: std::cell::Cell<usize>,
     car_ranges: Vec<std::ops::Range<i32>>,
     wheel_range: Vec<[std::ops::Range<i32>; 4]>,
@@ -552,12 +563,12 @@ impl Drop for Mesh {
 
 impl Mesh {
     pub fn new(
-        track: &crate::track::Location,
-        cars: &[std::sync::Arc<crate::asset_car::CarSpec>],
+        track: &track::Location,
+        cars: &[std::sync::Arc<asset_car::CarSpec>],
     ) -> Result<Self, String> {
         let archive = if track.has_compiled_roads() {
             Some(
-                crate::scene_archive::Archive::open_for(
+                scene_archive::Archive::open_for(
                     track
                         .assets()
                         .ok_or("compiled world has no asset directory")?,
@@ -569,7 +580,7 @@ impl Mesh {
         };
         let prefetch = archive
             .as_ref()
-            .map(|a| a.fork().map(crate::prefetch::Prefetch::new))
+            .map(|a| a.fork().map(prefetch::Prefetch::new))
             .transpose()
             .map_err(|e| e.to_string())?;
         let city_chunks = archive
@@ -591,15 +602,15 @@ impl Mesh {
             gl::GenBuffers(1, &mut vbo);
             gl::BindVertexArray(vao);
             gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            let crate::scene::Geometry {
+            let scene::Geometry {
                 vertices: verts,
                 world_count: ground_vertex_count,
                 car_ranges,
                 wheel_range,
-            } = crate::scene::build(track, cars);
+            } = scene::build(track, cars);
             gl::BufferData(
                 GL_ARRAY_BUFFER,
-                (verts.len() * std::mem::size_of::<crate::scene::Vertex>()) as isize,
+                (verts.len() * std::mem::size_of::<scene::Vertex>()) as isize,
                 verts.as_ptr() as *const std::ffi::c_void,
                 GL_STATIC_DRAW,
             );
@@ -625,7 +636,7 @@ impl Mesh {
             archive: std::cell::RefCell::new(archive),
             prefetch,
             aerial: std::cell::RefCell::new(if track.has_compiled_roads() {
-                track.assets().and_then(crate::aerial::Aerial::open)
+                track.assets().and_then(aerial::Aerial::open)
             } else {
                 None
             }),
@@ -641,7 +652,7 @@ impl Mesh {
         camera: &Camera,
         model: &[f32; 16],
         tint: [f32; 3],
-        car: &crate::phys_car::Vehicle,
+        car: &phys_car::Vehicle,
         car_index: usize,
     ) {
         unsafe {
@@ -684,11 +695,11 @@ impl Mesh {
         let chunks = self.city_chunks.borrow();
         let mut wanted = Vec::new();
         for (index, chunk) in chunks.iter().enumerate() {
-            let distance = crate::chunks::distance_squared(chunk.entry.bounds, camera.eye);
+            let distance = chunks::distance_squared(chunk.entry.bounds, camera.eye);
             if distance > (VIEW_DISTANCE + 128.0).powi(2) {
                 continue;
             }
-            let visible = crate::chunks::visible(chunk.entry.bounds, camera.view_projection);
+            let visible = chunks::visible(chunk.entry.bounds, camera.view_projection);
             let coarse = coarse_lod(chunk.gpu.as_ref().map(|g| g.coarse), distance);
             let rank = if visible { 0 } else { 2 };
             if let Some(gpu) = &chunk.gpu {
@@ -713,10 +724,10 @@ impl Mesh {
     }
     fn city_layer(
         &self,
-        archive: &mut crate::scene_archive::Archive,
+        archive: &mut scene_archive::Archive,
         index: usize,
         layer: usize,
-    ) -> Vec<crate::scene::Vertex> {
+    ) -> Vec<scene::Vertex> {
         if let Some(result) = self.prefetch.as_ref().and_then(|p| p.take((index, layer))) {
             return result.expect("prefetch city geometry");
         }
@@ -728,7 +739,7 @@ impl Mesh {
         &self,
         program: u32,
         camera: &Camera,
-        contacts: &[crate::shadows::ContactShadow],
+        contacts: &[shadows::ContactShadow],
     ) {
         self.plan_prefetch(camera);
         unsafe {
@@ -768,18 +779,18 @@ impl Mesh {
             let mut visible = 0;
             let mut archive = self.archive.borrow_mut();
             for (index, chunk) in self.city_chunks.borrow_mut().iter_mut().enumerate() {
-                if crate::chunks::distance_squared(chunk.entry.bounds, camera.eye)
-                    > (VIEW_DISTANCE + crate::chunks::SIZE).powi(2)
+                if chunks::distance_squared(chunk.entry.bounds, camera.eye)
+                    > (VIEW_DISTANCE + chunks::SIZE).powi(2)
                 {
                     chunk.gpu = None;
                     continue;
                 }
-                if !crate::chunks::visible(chunk.entry.bounds, camera.view_projection) {
+                if !chunks::visible(chunk.entry.bounds, camera.view_projection) {
                     continue;
                 }
                 let coarse = coarse_lod(
                     chunk.gpu.as_ref().map(|g| g.coarse),
-                    crate::chunks::distance_squared(chunk.entry.bounds, camera.eye),
+                    chunks::distance_squared(chunk.entry.bounds, camera.eye),
                 );
                 let archive = archive.as_mut().expect("city archive");
                 if chunk.gpu.is_none() {
@@ -814,8 +825,8 @@ impl Mesh {
     }
 }
 
-unsafe fn set_contacts(program: u32, contacts: &[crate::shadows::ContactShadow]) {
-    use crate::shadows::{MAX_CONTACTS, STRENGTH};
+unsafe fn set_contacts(program: u32, contacts: &[shadows::ContactShadow]) {
+    use shadows::{MAX_CONTACTS, STRENGTH};
     let count = contacts.len().min(MAX_CONTACTS);
     let mut origins = [[0.0; 3]; MAX_CONTACTS];
     let mut axes = [[0.0; 4]; MAX_CONTACTS];
@@ -845,7 +856,7 @@ unsafe fn set_contacts(program: u32, contacts: &[crate::shadows::ContactShadow])
 
 unsafe fn scene_attributes() {
     // With a VBO bound, the final argument is a byte offset, not a Rust pointer.
-    let stride = std::mem::size_of::<crate::scene::Vertex>() as i32;
+    let stride = std::mem::size_of::<scene::Vertex>() as i32;
     for (attribute, size, offset) in [(0, 3, 0), (1, 3, 3), (2, 3, 6), (3, 2, 9)] {
         gl::EnableVertexAttribArray(attribute);
         gl::VertexAttribPointer(
@@ -878,7 +889,7 @@ impl SkidRenderer {
         }
     }
 
-    pub fn draw(&self, program: u32, camera: &Camera, marks: &crate::feedback::SkidMarks) {
+    pub fn draw(&self, program: u32, camera: &Camera, marks: &feedback::SkidMarks) {
         let vertices = marks.vertices();
         if vertices.is_empty() {
             return;
@@ -938,7 +949,7 @@ impl ParticleRenderer {
             gl::GenBuffers(1, &mut vbo);
             gl::BindVertexArray(vao);
             gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            let stride = std::mem::size_of::<crate::particles::Vertex>() as i32;
+            let stride = std::mem::size_of::<particles::Vertex>() as i32;
             for (attribute, size, offset) in [(0, 3, 0), (1, 2, 3), (2, 3, 5), (3, 1, 8)] {
                 gl::EnableVertexAttribArray(attribute);
                 gl::VertexAttribPointer(
@@ -955,7 +966,7 @@ impl ParticleRenderer {
         }
     }
 
-    pub fn draw(&self, camera: &Camera, particles: &crate::particles::TireParticles) -> usize {
+    pub fn draw(&self, camera: &Camera, particles: &particles::TireParticles) -> usize {
         let vertices = particles.vertices(camera.particle_view);
         if vertices.is_empty() {
             return 0;
@@ -1112,7 +1123,7 @@ pub struct Camera {
     view_projection: [f32; 16],
     relative_view_projection: [f32; 16],
     eye: XYZ,
-    particle_view: crate::particles::View,
+    particle_view: particles::View,
 }
 impl Camera {
     fn clip_from_model(&self, model: &[f32; 16]) -> [f32; 16] {
@@ -1145,14 +1156,14 @@ pub fn set_signal_time(program: u32, seconds: f32) {
     }
 }
 
-pub fn chase_camera(aspect: f32, pose: crate::camera::Pose) -> Camera {
+pub fn chase_camera(aspect: f32, pose: camera::Pose) -> Camera {
     camera_at(aspect, pose.eye, pose.target, 0.0)
 }
 
 pub fn bonnet_camera(
     aspect: f32,
-    pose: crate::camera::Pose,
-    car: &crate::phys_car::Vehicle,
+    pose: camera::Pose,
+    car: &phys_car::Vehicle,
 ) -> Camera {
     let body = vehicle_body_matrix(car);
     camera_at_up(
@@ -1172,7 +1183,7 @@ pub fn garage_camera(
     aspect: f32,
     position: XYZ,
     angle: f32,
-    city: Option<&crate::world::Location>,
+    city: Option<&world::Location>,
 ) -> Camera {
     let angle = angle + 0.8;
     let eye = XYZ {
@@ -1254,7 +1265,7 @@ fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_ax
         view_projection: multiply(projection, view),
         relative_view_projection: multiply(projection, rotation),
         eye,
-        particle_view: crate::particles::View {
+        particle_view: particles::View {
             eye,
             right,
             up,
@@ -1264,7 +1275,7 @@ fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_ax
 }
 
 /// Body transform shared by rendering and the bonnet camera mount.
-pub fn vehicle_body_matrix(vehicle: &crate::phys_car::Vehicle) -> [f32; 16] {
+pub fn vehicle_body_matrix(vehicle: &phys_car::Vehicle) -> [f32; 16] {
     let mut body_position = vehicle.position;
     body_position.y += vehicle.curb_bump;
     body_model_matrix(
@@ -1323,7 +1334,7 @@ fn body_model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32, roll: 
 
 #[cfg(test)]
 fn vehicle_wheel_matrix(
-    car: &crate::phys_car::Vehicle,
+    car: &phys_car::Vehicle,
     body: [f32; 16],
     index: usize,
 ) -> [f32; 16] {
@@ -1331,7 +1342,7 @@ fn vehicle_wheel_matrix(
 }
 
 fn vehicle_wheel_local_matrix(
-    car: &crate::phys_car::Vehicle,
+    car: &phys_car::Vehicle,
     body: [f32; 16],
     index: usize,
 ) -> [f32; 16] {
@@ -1476,19 +1487,23 @@ pub fn enable_depth_test() {
 
 #[cfg(test)]
 mod tests {
+    use crate::camera;
+    use crate::phys_car;
+    use crate::test_support;
+
     #[test]
     fn camera_relative_projection_preserves_fine_car_details_at_city_coordinates() {
         let mut reference = None;
         for origin in [[0.0, 100.0, 0.0], [12000.0, 100.0, 9000.0]] {
             let camera = super::chase_camera(
                 16.0 / 9.0,
-                crate::camera::Pose {
-                    eye: crate::geometry::XYZ {
+                camera::Pose {
+                    eye: XYZ {
                         x: origin[0] + 4.0,
                         y: origin[1] + 2.0,
                         z: origin[2] - 6.0,
                     },
-                    target: crate::geometry::XYZ {
+                    target: XYZ {
                         x: origin[0],
                         y: origin[1] + 0.25,
                         z: origin[2],
@@ -1498,7 +1513,7 @@ mod tests {
             let clip = camera.clip_from_model(&super::model_matrix((origin).into(), 0.7, 0.0));
             let a = transform(
                 clip,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.5,
                     y: 0.3,
                     z: 1.0,
@@ -1506,7 +1521,7 @@ mod tests {
             );
             let b = transform(
                 clip,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.5001,
                     y: 0.3,
                     z: 1.0,
@@ -1526,17 +1541,17 @@ mod tests {
 
     use super::*;
 
-    fn transform(m: [f32; 16], p: crate::geometry::XYZ) -> crate::geometry::XYZ {
-        crate::geometry::XYZ::from_fn(|i| m[i] * p.x + m[4 + i] * p.y + m[8 + i] * p.z + m[12 + i])
+    fn transform(m: [f32; 16], p: XYZ) -> XYZ {
+        XYZ::from_fn(|i| m[i] * p.x + m[4 + i] * p.y + m[8 + i] * p.z + m[12 + i])
     }
 
     #[test]
     fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
-        let track = crate::test_support::track();
-        let model = crate::test_support::car();
+        let track = test_support::track();
+        let model = test_support::car();
 
         let road = track.spawn();
-        let mut car = crate::phys_car::Vehicle::on_track(
+        let mut car = phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
             model.clone(),
@@ -1545,7 +1560,7 @@ mod tests {
         for speed in [-6.0, 0.0, 30.0, 45.0] {
             car.speed = speed;
             car.velocity = road.tangent.map(|n| n * speed);
-            let chase = crate::camera::ChaseCamera::new(&car);
+            let chase = camera::ChaseCamera::new(&car);
             let camera = chase_camera(1280.0 / 720.0, chase.pose());
             let matrix = multiply(
                 camera.view_projection,
@@ -1554,7 +1569,7 @@ mod tests {
             for x in [-1.4, 1.4] {
                 for y in [-0.42, 1.25] {
                     for z in [-2.2, 2.2] {
-                        let p = crate::geometry::XYZ { x: x, y: y, z: z };
+                        let p = XYZ { x: x, y: y, z: z };
                         let clip = transform(matrix, p);
                         let w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
                         assert!(w > 0.0);
@@ -1571,10 +1586,10 @@ mod tests {
 
     #[test]
     fn wheels_turn_about_their_axles_not_the_vehicle_origin() {
-        let car = crate::test_support::car();
+        let car = test_support::car();
         for center in car.design.mounts {
             let body = model_matrix(
-                crate::geometry::XYZ {
+                XYZ {
                     x: 12.0,
                     y: 3.0,
                     z: -7.0,
@@ -1587,7 +1602,7 @@ mod tests {
                 let matrix = wheel_matrix(body, center, steer, spin);
                 let origin = transform(
                     matrix,
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 0.0,
                         y: 0.0,
                         z: 0.0,
@@ -1598,7 +1613,7 @@ mod tests {
                 }
                 let rim = transform(
                     matrix,
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 0.0,
                         y: 0.4_f32,
                         z: 0.0,
@@ -1615,18 +1630,18 @@ mod tests {
 
     #[test]
     fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
-        let track = crate::test_support::track();
+        let track = test_support::track();
         let road = track.spawn();
-        let mut car = crate::phys_car::Vehicle::on_track(
+        let mut car = phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
             track,
         );
-        let mut chase = crate::camera::ChaseCamera::new(&car);
+        let mut chase = camera::ChaseCamera::new(&car);
         chase.toggle_view();
         chase.toggle_view();
-        let point = crate::geometry::XYZ {
+        let point = XYZ {
             x: 0.3,
             y: 0.25,
             z: 1.6,
@@ -1653,14 +1668,14 @@ mod tests {
 
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
-        let track = std::sync::Arc::new(crate::test_support::bumpy_track(
-            &crate::test_support::track(),
+        let track = std::sync::Arc::new(test_support::bumpy_track(
+            &test_support::track(),
         ));
         let road = track.at_distance(54.0);
-        let mut car = crate::phys_car::Vehicle::on_track(
+        let mut car = phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
             track,
         );
         car.suspension_pitch = 0.0;
@@ -1670,13 +1685,13 @@ mod tests {
             let matrix = vehicle_wheel_matrix(&car, body, i);
             let center = transform(
                 matrix,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
                 },
             );
-            let ground = car.track.drive_height(crate::geometry::XZ {
+            let ground = car.track.drive_height(XZ {
                 x: center.x,
                 z: center.z,
             });
@@ -1694,7 +1709,7 @@ mod tests {
                 let nominal = transform(displaced, mount);
                 let wheel = transform(
                     vehicle_wheel_matrix(&car, displaced, i),
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 0.0,
                         y: 0.0,
                         z: 0.0,
@@ -1712,7 +1727,7 @@ mod tests {
 
     #[test]
     fn body_matrix_adds_roll_without_moving_the_car_or_scaling_axes() {
-        let origin = crate::geometry::XYZ {
+        let origin = XYZ {
             x: 12.0,
             y: 3.0,
             z: -7.0,
@@ -1722,7 +1737,7 @@ mod tests {
         assert_eq!(
             transform(
                 rolled,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0
@@ -1745,12 +1760,15 @@ mod tests {
 
 #[cfg(test)]
 mod renderer_tests {
+    use crate::geometry;
+    use crate::test_support;
+
     fn assert_particle_pixel_readback(app: &App) {
         let car = &app.session.vehicle;
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
-                eye: crate::geometry::XYZ {
+                eye: geometry::XYZ {
                     x: car.position.x + 4.0,
                     y: car.position.y + 6.0,
                     z: car.position.z + 5.0,
@@ -1879,17 +1897,17 @@ mod renderer_tests {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             let mut car =
-                crate::test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+                test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
-                    eye: crate::geometry::XYZ {
+                    eye: geometry::XYZ {
                         x: p.x,
                         y: p.y + 1.2,
                         z: p.z - 5.0,
                     },
-                    target: crate::geometry::XYZ {
+                    target: geometry::XYZ {
                         x: p.x,
                         y: p.y + 0.25,
                         z: p.z,
@@ -1947,7 +1965,7 @@ mod renderer_tests {
     #[ignore = "requires SDL/OpenGL; compares car detail near and far from the map origin"]
     fn car_details_stay_stable_far_from_the_map_origin() {
         let app = App::with_location(false);
-        let track = std::sync::Arc::new(crate::test_support::flat_track(
+        let track = std::sync::Arc::new(test_support::flat_track(
             &LocationId::Compact.try_track().unwrap(),
         ));
         let mut frames = Vec::new();
@@ -1959,12 +1977,12 @@ mod renderer_tests {
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
-                    eye: crate::geometry::XYZ {
+                    eye: geometry::XYZ {
                         x: position[0] + 4.0,
                         y: position[1] + 2.0,
                         z: position[2] - 6.0,
                     },
-                    target: crate::geometry::XYZ {
+                    target: geometry::XYZ {
                         x: position[0],
                         y: position[1] + 0.25,
                         z: position[2],
@@ -2004,17 +2022,17 @@ mod renderer_tests {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             let mut car =
-                crate::test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+                test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
-                    eye: crate::geometry::XYZ {
+                    eye: geometry::XYZ {
                         x: p.x,
                         y: p.y + 1.2,
                         z: p.z - 5.0,
                     },
-                    target: crate::geometry::XYZ {
+                    target: geometry::XYZ {
                         x: p.x,
                         y: p.y + 0.25,
                         z: p.z,
@@ -2090,7 +2108,7 @@ mod renderer_tests {
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
-                eye: crate::geometry::XYZ {
+                eye: geometry::XYZ {
                     x: car.position.x + 4.0,
                     y: car.position.y + 9.0,
                     z: car.position.z + 5.0,
@@ -2170,7 +2188,7 @@ mod renderer_tests {
         // Scenic fixtures are sampled from the route, never compact world coordinates.
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             app.selected_car = car_index;
-            app.session = Session::on_track(model.clone(), crate::test_support::scenic_id());
+            app.session = Session::on_track(model.clone(), test_support::scenic_id());
             app.ensure_mesh();
             for distance in [50.0, 50.6] {
                 let road = app.session.track().at_distance(distance);
@@ -2182,7 +2200,7 @@ mod renderer_tests {
             }
             assert!(!app.session.skids.vertices().is_empty());
             let v = &mut app.session.vehicle;
-            v.velocity = crate::geometry::XZ {
+            v.velocity = geometry::XZ {
                 x: v.heading.sin() * 8.0,
                 z: v.heading.cos() * 8.0,
             };
@@ -2243,10 +2261,10 @@ mod renderer_tests {
 
     #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
-        for id in crate::test_support::location_ids() {
-            let mut s = Session::on_track(crate::test_support::car(), id.clone());
+        for id in test_support::location_ids() {
+            let mut s = Session::on_track(test_support::car(), id.clone());
             s.state = GameState::Menu;
-            for model in crate::test_support::cars() {
+            for model in test_support::cars() {
                 s.select_car(model.clone());
                 assert!(std::sync::Arc::ptr_eq(&s.vehicle.spec, &model));
                 assert_eq!(s.track().id, id);
@@ -2267,8 +2285,8 @@ mod renderer_tests {
 
     #[test]
     fn free_recovery_uses_selected_route() {
-        for id in crate::test_support::location_ids() {
-            let mut s = Session::on_track(crate::test_support::car(), id.clone());
+        for id in test_support::location_ids() {
+            let mut s = Session::on_track(test_support::car(), id.clone());
             let road = s.track().at_distance(s.track().sampling_length() * 0.5);
             s.vehicle.reset(road.vehicle_position(1.0), road.heading());
             assert!(s.recover());
@@ -2282,8 +2300,8 @@ mod renderer_tests {
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
         let mut s = Session::on_track(
-            crate::test_support::car(),
-            crate::test_support::nicosia_id(),
+            test_support::car(),
+            test_support::nicosia_id(),
         );
         let start = s.vehicle.position;
         for _ in 0..40 {
@@ -2304,7 +2322,7 @@ mod renderer_tests {
         assert_eq!(s.vehicle.position, frozen);
         s.state = GameState::Driving;
         assert!(s.recover());
-        assert_eq!(s.track().id, crate::test_support::nicosia_id());
+        assert_eq!(s.track().id, test_support::nicosia_id());
         assert!(s.track().road_clearance(s.vehicle.position) < 0.0);
     }
 
@@ -2334,7 +2352,7 @@ mod renderer_tests {
         let city_choice = app
             .locations
             .iter()
-            .position(|entry| entry.track == crate::test_support::nicosia_id())
+            .position(|entry| entry.track == test_support::nicosia_id())
             .unwrap();
         app.menu_action(hud::MenuAction::Choice(city_choice));
         app.key_down(Keycode::F7);
@@ -2342,9 +2360,9 @@ mod renderer_tests {
             app.menu_focus = 0;
             app.key_down(Keycode::Down);
             app.render(Duration::ZERO);
-            assert_ne!(app.session.track().id, crate::test_support::nicosia_id());
+            assert_ne!(app.session.track().id, test_support::nicosia_id());
         }
-        assert!(!app.meshes.contains_key(&crate::test_support::nicosia_id()));
+        assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
         let scenic_choice = app
             .locations
             .iter()
@@ -2371,8 +2389,8 @@ mod renderer_tests {
                 selected.track.asset_path().unwrap().canonicalize().unwrap(),
                 path
             );
-            assert_ne!(app.session.track().id, crate::test_support::nicosia_id());
-            assert!(!app.meshes.contains_key(&crate::test_support::nicosia_id()));
+            assert_ne!(app.session.track().id, test_support::nicosia_id());
+            assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
             app.render(Duration::ZERO);
             assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         }
@@ -2390,7 +2408,7 @@ mod renderer_tests {
         let mut cache = track::LocationCache::default();
         let first = cache.prepare_for_render(&first_id).unwrap();
         cache.install(first.clone());
-        let mut session = Session::on_world(crate::test_support::car(), first.clone());
+        let mut session = Session::on_world(test_support::car(), first.clone());
         let second = cache.prepare_for_render(&second_id).unwrap();
         cache.install(second);
         session.restart();
@@ -2400,7 +2418,7 @@ mod renderer_tests {
             first.spawn().vehicle_position(0.0)
         );
         session.state = GameState::Menu;
-        session.select_car(crate::test_support::car());
+        session.select_car(test_support::car());
         assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
         let position = session.vehicle.position;
         std::fs::remove_file(second_assets.directory().join("scene.pack")).unwrap();

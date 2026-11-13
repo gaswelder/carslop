@@ -1,4 +1,8 @@
 //! A responsive startup screen; map work stays off the OpenGL thread.
+use crate::city_assets;
+use crate::gl::swap_window;
+use crate::track;
+use crate::world;
 use crate::{hud, track::LocationId};
 use sdl3::{
     event::{Event, WindowEvent},
@@ -11,11 +15,11 @@ use std::time::{Duration, Instant};
 /// A close request is requeued for the application's normal shutdown path.
 pub fn prepare(
     id: LocationId,
-    cache: crate::track::LocationCache,
+    cache: track::LocationCache,
     window: &mut Window,
     events: &mut sdl3::EventPump,
     sdl: &sdl3::Sdl,
-) -> Option<std::sync::Arc<crate::world::Location>> {
+) -> Option<std::sync::Arc<world::Location>> {
     if id.asset_path().is_none() {
         return cache
             .prepare_for_render(&id)
@@ -24,11 +28,11 @@ pub fn prepare(
     }
     let started = Instant::now();
     let title = window.title().to_owned();
-    let name = crate::city_assets::CityAsset::new(id.asset_path().unwrap().to_path_buf())
+    let name = city_assets::CityAsset::new(id.asset_path().unwrap().to_path_buf())
         .name()
         .to_owned();
     draw(window, &name, "READING MAP AND BUILDING COLLISIONS", 0.0);
-    crate::gl::swap_window(window);
+    swap_window(window);
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
         .spawn(move || cache.prepare_for_render(&id))
@@ -63,7 +67,7 @@ pub fn prepare(
             "READING MAP AND BUILDING COLLISIONS",
             elapsed,
         );
-        crate::gl::swap_window(window);
+        swap_window(window);
         std::thread::sleep(Duration::from_millis(16));
     }
     let result = worker

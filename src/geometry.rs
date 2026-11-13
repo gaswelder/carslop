@@ -1,3 +1,4 @@
+use crate::world;
 use geo::{Coord, LineString, MultiPolygon, Polygon};
 
 /// Local point or vector in metres.
@@ -221,7 +222,7 @@ impl rstar::Point for XZ {
     }
 }
 
-impl crate::world::Location {
+impl world::Location {
     /// Convert local metres (east +X, south +Z) to geographic coordinates.
     pub fn geographic_position(&self, position: XYZ) -> Option<LatLon> {
         let LatLon { lat, lon } = self.origin?;
@@ -239,13 +240,15 @@ impl crate::world::Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_location;
+    use crate::test_support;
 
     #[test]
     fn geographic_positions_round_trip_through_local_metres() {
         let origin = LatLon::new(35.1654321, 33.3256789);
-        let mut compiled = crate::source_location::SourceLocation::<f64>::empty();
+        let mut compiled = source_location::SourceLocation::<f64>::empty();
         compiled.origin = Some(origin);
-        let mut runtime = crate::test_support::empty_world();
+        let mut runtime = test_support::empty_world();
         runtime.origin = Some(origin);
         for target in [origin, LatLon::new(35.17, 33.34), LatLon::new(35.15, 33.31)] {
             let local = compiled.metres(target);

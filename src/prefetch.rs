@@ -177,6 +177,8 @@ impl Drop for Prefetch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene_archive;
+    use crate::test_support;
     #[test]
     fn background_reads_are_bounded_consumable_and_cancelled_when_no_longer_wanted() {
         let path = std::env::temp_dir().join(format!(
@@ -195,9 +197,9 @@ mod tests {
                 material: [-1., 0.],
             })
             .to_vec();
-        crate::scene_archive::write(
+        scene_archive::write(
             &path,
-            std::array::from_fn(|_| crate::test_support::partition(tri.clone())),
+            std::array::from_fn(|_| test_support::partition(tri.clone())),
         )
         .unwrap();
         let p = Prefetch::with_budget(

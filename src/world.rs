@@ -1,4 +1,7 @@
+use crate::city_assets;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
+use crate::landscape;
+use crate::track;
 
 mod buildings;
 mod preparation;
@@ -13,7 +16,7 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct Location {
     pub id: LocationId,
-    assets: Option<crate::city_assets::CityAsset>,
+    assets: Option<city_assets::CityAsset>,
     pub display_name: String,
 
     /// Defines the location's size, in meters.
@@ -25,7 +28,7 @@ pub struct Location {
     elevation: Option<HeightField>,
 
     roads: RoadNetwork,
-    ground: crate::landscape::GroundCover,
+    ground: landscape::GroundCover,
     buildings: Buildings,
 
     /// Traffic lights and road signs and stuff like that.
@@ -238,7 +241,7 @@ impl Building {
         for i in 0..self.ground_outline.len() {
             let a = self.ground_outline[i];
             let b = self.ground_outline[(i + 1) % self.ground_outline.len()];
-            let q = crate::world::spatial::nearest_edge(p, a, b);
+            let q = spatial::nearest_edge(p, a, b);
             let distance = (p.x - q.x).hypot(p.z - q.z);
             if distance < best.2 {
                 let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
@@ -268,7 +271,7 @@ impl Location {
             furniture: Vec::new(),
             bounding_box: BoundingBoxXZ::default(),
             elevation: None,
-            ground: crate::landscape::GroundCover::new(Vec::new(), Vec::new()),
+            ground: landscape::GroundCover::new(Vec::new(), Vec::new()),
             street_names: HashMap::new(),
             building_names: HashMap::new(),
             storefront_names: HashMap::new(),
@@ -349,12 +352,12 @@ impl Location {
             let bounds = self.bounding_box;
             BoundingBoxXZ {
                 min: XZ {
-                    x: bounds.min.x - crate::track::TERRAIN_PADDING,
-                    z: bounds.min.z - crate::track::TERRAIN_PADDING,
+                    x: bounds.min.x - track::TERRAIN_PADDING,
+                    z: bounds.min.z - track::TERRAIN_PADDING,
                 },
                 max: XZ {
-                    x: bounds.max.x + crate::track::TERRAIN_PADDING,
-                    z: bounds.max.z + crate::track::TERRAIN_PADDING,
+                    x: bounds.max.x + track::TERRAIN_PADDING,
+                    z: bounds.max.z + track::TERRAIN_PADDING,
                 },
             }
         }
@@ -421,7 +424,7 @@ pub enum LocationId {
 }
 
 impl Location {
-    pub fn assets(&self) -> Option<&crate::city_assets::CityAsset> {
+    pub fn assets(&self) -> Option<&city_assets::CityAsset> {
         self.assets.as_ref()
     }
 }

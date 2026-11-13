@@ -1,6 +1,7 @@
 //! Original procedural signal heads and sign faces, placed from mapped controls.
 use super::{Builder, Surface};
 use crate::geometry::{XYZ, XZ};
+use crate::hud;
 use crate::traffic::{Furniture, FurnitureKind};
 use std::f32::consts::{PI, TAU};
 
@@ -62,7 +63,7 @@ fn disc(
 fn lettering(b: &mut Builder, f: &Furniture, label: &str, y: f32, size: f32, surface: Surface) {
     let width = (label.len() * 6 - 1) as f32 * size;
     for (i, ch) in label.chars().enumerate() {
-        for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
+        for (row, bits) in hud::glyph(ch).iter().enumerate() {
             for column in 0..5 {
                 if bits & (1 << (4 - column)) != 0 {
                     let x = -width * 0.5 + (i * 6 + column) as f32 * size;

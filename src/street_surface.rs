@@ -1,5 +1,8 @@
 //! Offline union geometry shared by road rendering and collision.
 use crate::geometry::{XYZ, XZ};
+use crate::location;
+#[cfg(test)]
+use crate::test_support;
 pub use crate::world::{Curb, Triangle};
 use crate::world::{CurbStyle, Location, Material, TriangleUsage};
 use std::collections::HashMap;
@@ -63,7 +66,7 @@ pub struct StreetSurface {
 
 impl StreetSurface {
     pub fn from_geometry(
-        data: crate::location::Streets,
+        data: location::Streets,
         height: f32,
     ) -> Result<(Self, RoadPaths), String> {
         let mut result = Self {
@@ -121,7 +124,7 @@ impl StreetSurface {
             return Err("unsupported street surfaces header or road count".into());
         }
         let mut result = Self {
-            pavement_height_meters: crate::street_surface::DEFAULT_PAVEMENT_HEIGHT,
+            pavement_height_meters: DEFAULT_PAVEMENT_HEIGHT,
             road_triangles: Vec::new(),
             curbs: Vec::new(),
             #[cfg(test)]
@@ -190,7 +193,7 @@ impl StreetSurface {
                         return Err("invalid surface triangle".into());
                     }
                     let points = [p(2)?, p(4)?, p(6)?];
-                    if crate::street_surface::cross(points[0], points[1], points[2]) > 0.00001 {
+                    if cross(points[0], points[1], points[2]) > 0.00001 {
                         result
                             .road_triangles
                             .push(Triangle::from_street_id(id, points)?);
@@ -217,10 +220,10 @@ impl StreetSurface {
             return Err("incomplete street surfaces".into());
         }
         for (i, t) in result.road_triangles.iter().enumerate() {
-            crate::street_surface::index(&mut result.triangles_grid, &t.points, i, 0.001);
+            index(&mut result.triangles_grid, &t.points, i, 0.001);
         }
         for (i, c) in result.curbs.iter().enumerate() {
-            crate::street_surface::index(&mut result.curbs_grid, &c.ends, i, 32.0);
+            index(&mut result.curbs_grid, &c.ends, i, 32.0);
         }
         Ok((result, paths))
     }
@@ -229,8 +232,8 @@ impl StreetSurface {
 impl StreetSurface {
     #[cfg(test)]
     fn into_test_location(self) -> Location {
-        let mut location = crate::test_support::empty_world();
-        crate::test_support::install_surfaces(&mut location, self);
+        let mut location = test_support::empty_world();
+        test_support::install_surfaces(&mut location, self);
         location
     }
 }
@@ -348,7 +351,7 @@ impl Location {
 impl StreetSurface {
     fn triangle_at(&self, p: XZ<f32>, road_only: bool) -> Option<&Triangle> {
         self.triangles_grid
-            .get(&crate::street_surface::cell(p))
+            .get(&cell(p))
             .and_then(|ids| {
                 ids.iter()
                     .map(|&i| &self.road_triangles[i])
@@ -376,7 +379,7 @@ impl StreetSurface {
                         (0..3).all(|i| {
                             let a = t[i];
                             let b = t[(i + 1) % 3];
-                            crate::street_surface::cross(a, b, p)
+                            cross(a, b, p)
                                 >= -0.002 * (b.x - a.x).hypot(b.z - a.z)
                         })
                     })
@@ -407,7 +410,7 @@ impl StreetSurface {
         .unwrap()
     }
     fn nearest_curb(&self, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
-        if let Some(ids) = self.curbs_grid.get(&crate::street_surface::cell(p)) {
+        if let Some(ids) = self.curbs_grid.get(&cell(p)) {
             let best = self.nearest_curb_in(p, ids.iter().copied());
             if best.2 <= 32.0 {
                 return best;
@@ -420,6 +423,8 @@ impl StreetSurface {
 #[cfg(test)]
 mod index_tests {
     use super::*;
+    use crate::geometry;
+    use crate::world;
     use geo::{Intersects, Point};
 
     #[test]
@@ -443,7 +448,7 @@ mod index_tests {
                         .iter()
                         .find(|t| {
                             (!road_only || t.usage.is_road())
-                                && crate::geometry::polygon(&t.points.map(|p| p.map(f64::from)))
+                                && geometry::polygon(&t.points.map(|p| p.map(f64::from)))
                                     .intersects(&Point::new(p.x as f64, p.z as f64))
                         })
                         .map(|t| t.usage);
@@ -457,7 +462,7 @@ mod index_tests {
                     .curbs()
                     .iter()
                     .map(|c| {
-                        let q = crate::world::spatial::nearest_edge(p, c.ends[0], c.ends[1]);
+                        let q = world::spatial::nearest_edge(p, c.ends[0], c.ends[1]);
                         (q, c.inward, (q.x - p.x).hypot(q.z - p.z))
                     })
                     .min_by(|a, b| a.2.total_cmp(&b.2))

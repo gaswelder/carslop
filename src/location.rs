@@ -1,6 +1,13 @@
 //! The persisted, playable location. No spatial indexes, terrain fitting, OSM
 //! objects, compiler provenance, or derived query bounds live in these records.
+use crate::aerial;
+use crate::asset_codecs;
+use crate::city_assets;
+use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XZ};
+use crate::source_location;
+use crate::street_surface;
+use crate::world;
 use crate::world::{Curb, FurnitureKind, HeightField, Tree, Triangle};
 use std::{
     fs,
@@ -116,10 +123,10 @@ impl Location {
     }
 
     fn read_inner(directory: &Path) -> Result<Self, String> {
-        let assets = crate::city_assets::CityAsset::new(directory.to_path_buf());
+        let assets = city_assets::CityAsset::new(directory.to_path_buf());
         let source = assets.get_city().map_err(|e| format!("city.txt: {e}"))?;
         let streets =
-            crate::street_surface::binary::load_geometry(directory, source.road_lines.len())
+            street_surface::binary::load_geometry(directory, source.road_lines.len())
                 .map_err(|e| format!("streets.bin: {e}"))?;
         let manifest = assets
             .get_manifest()
@@ -130,7 +137,7 @@ impl Location {
                 .filter(|h| (0.08..=0.25).contains(h))
                 .ok_or("manifest.json: pavement_height_metres must be between 0.08 and 0.25")?
                 as f32,
-            None => crate::street_surface::DEFAULT_PAVEMENT_HEIGHT,
+            None => street_surface::DEFAULT_PAVEMENT_HEIGHT,
         };
         let (ground, trees) = assets.get_landscape_data()?;
         let mut media = Media::default();
@@ -140,7 +147,7 @@ impl Location {
         // Keep only the catalog, tiles, and attribution used by the renderer.
         // Service requests and download/build metadata are not location data.
         if directory.join("aerial/tiles.txt").is_file() {
-            let catalog = crate::aerial::tile_filenames(
+            let catalog = aerial::tile_filenames(
                 &fs::read_to_string(directory.join("aerial/tiles.txt"))
                     .map_err(|e| e.to_string())?,
             )?;
@@ -219,7 +226,7 @@ impl Location {
 
     fn write_inner(&self, directory: &Path) -> Result<(), String> {
         fs::create_dir_all(directory.join("elevation")).map_err(|e| e.to_string())?;
-        let write = || -> crate::error::Result<()> {
+        let write = || -> error::Result<()> {
             let mut city = BufWriter::new(fs::File::create(directory.join("city.txt"))?);
             writeln!(city, "CITY 2")?;
             if let Some(p) = self.origin {
@@ -281,13 +288,13 @@ impl Location {
                 writeln!(elevation)?;
             }
             elevation.flush()?;
-            let mut landscape = crate::asset_codecs::landscape::Writer::new(
+            let mut landscape = asset_codecs::landscape::Writer::new(
                 BufWriter::new(fs::File::create(directory.join("landscape.txt"))?),
-                crate::asset_codecs::landscape::Precision::Authored,
+                asset_codecs::landscape::Precision::Authored,
             )?;
             for t in &self.ground {
-                if t.usage != crate::world::TriangleUsage::Ground {
-                    return Err(crate::error::invalid(
+                if t.usage != world::TriangleUsage::Ground {
+                    return Err(error::invalid(
                         "ground layer contains street geometry",
                     ));
                 }
@@ -313,7 +320,7 @@ impl Location {
                 )?;
             }
             furniture.flush()?;
-            crate::street_surface::binary::write_geometry(
+            street_surface::binary::write_geometry(
                 &directory.join("streets.bin"),
                 &self.streets,
             )?;
@@ -330,7 +337,7 @@ impl Location {
         // Remove only files referenced by the previous renderer catalog.
         let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
             .ok()
-            .and_then(|text| crate::aerial::tile_filenames(&text).ok())
+            .and_then(|text| aerial::tile_filenames(&text).ok())
             .unwrap_or_default();
         let previous_files = previous_tiles
             .into_iter()
@@ -363,7 +370,7 @@ fn read_labels(directory: &Path) -> Result<Labels, String> {
     match fs::read(directory.join("labels.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("labels.json: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            crate::source_location::read_legacy_labels(directory)
+            source_location::read_legacy_labels(directory)
         }
         Err(e) => Err(format!("labels.json: {e}")),
     }
@@ -372,6 +379,9 @@ fn read_labels(directory: &Path) -> Result<Labels, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::city_assets;
+    use crate::test_support;
+    use crate::world;
 
     fn assert_data_equal(a: &Location, b: &Location) {
         assert_eq!(a.name, b.name);
@@ -394,7 +404,7 @@ mod tests {
         for populated in [false, true] {
             let input = tempfile::tempdir().unwrap();
             let output = tempfile::tempdir().unwrap();
-            crate::test_support::stored_location(input.path(), populated);
+            test_support::stored_location(input.path(), populated);
             fs::write(input.path().join("source.osm"), r#"<osm><way id="1"><tag k="name" v="Road &amp; Square"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
             fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
             let mut location = Location::read(input.path()).unwrap();
@@ -418,7 +428,7 @@ mod tests {
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
             assert_eq!(manifest.as_object().unwrap().len(), 2);
-            let world = crate::world::Location::load(&crate::city_assets::CityAsset::new(
+            let world = world::Location::load(&city_assets::CityAsset::new(
                 output.path().to_path_buf(),
             ))
             .unwrap();
@@ -441,7 +451,7 @@ mod tests {
     fn render_payloads_round_trip_and_overwrite_removes_stale_optional_layers() {
         let input = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
-        crate::test_support::stored_location(input.path(), true);
+        test_support::stored_location(input.path(), true);
         fs::write(input.path().join("scene.pack"), b"opaque compiled scene").unwrap();
         fs::create_dir(input.path().join("aerial")).unwrap();
         fs::write(

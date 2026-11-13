@@ -1,6 +1,14 @@
 //! Controlled construction of compiled and authored runtime worlds.
 use super::*;
 use crate::authoring::Circuit;
+use crate::city_assets;
+use crate::elevation;
+use crate::landscape;
+use crate::location;
+use crate::scene;
+use crate::street_surface;
+use crate::track;
+use crate::world;
 
 /// A world with compiled street surfaces and all required bake layers installed.
 /// Read-only access prevents a caller from removing layers before scene baking.
@@ -20,7 +28,7 @@ impl CompiledLocation {
 }
 
 impl Location {
-    pub fn load(assets: &crate::city_assets::CityAsset) -> Result<Self, String> {
+    pub fn load(assets: &city_assets::CityAsset) -> Result<Self, String> {
         CompiledLocation::load(assets).map(CompiledLocation::into_location)
     }
 }
@@ -29,7 +37,7 @@ impl CompiledLocation {
     /// Parse and prepare every required generated layer before exposing a bake input.
     /// Landscape and furniture may be header-only. Labels, imagery trees, and
     /// decorations are optional; this constructor does not consult global selection.
-    pub fn load(assets: &crate::city_assets::CityAsset) -> Result<Self, String> {
+    pub fn load(assets: &city_assets::CityAsset) -> Result<Self, String> {
         assets
             .resolved()
             .map_err(|e| e.to_string())
@@ -48,8 +56,8 @@ impl Location {
     /// Install parsed (already quantized) CITY geometry into a runtime draft.
     /// Only controlled preparation in this module can publish that draft.
 
-    fn load_assets(assets: &crate::city_assets::CityAsset) -> Result<Self, String> {
-        let stored = crate::location::Location::read(assets.directory())?;
+    fn load_assets(assets: &city_assets::CityAsset) -> Result<Self, String> {
+        let stored = location::Location::read(assets.directory())?;
         let mut city = Self::empty();
         city.display_name = stored.name.replace(['_', '-'], " ").to_ascii_uppercase();
         city.origin = stored.origin;
@@ -60,7 +68,7 @@ impl Location {
             city.storefront_names.entry(id).or_default().push(name);
         }
         let field = stored.elevation;
-        let (surfaces, paths) = crate::street_surface::StreetSurface::from_geometry(
+        let (surfaces, paths) = street_surface::StreetSurface::from_geometry(
             stored.streets,
             stored.pavement_height_meters,
         )?;
@@ -92,7 +100,7 @@ impl Location {
                 phase: f.phase,
             })
             .collect();
-        city.ground = crate::landscape::GroundCover::new(stored.ground, stored.trees);
+        city.ground = landscape::GroundCover::new(stored.ground, stored.trees);
         city.elevation = Some(field);
         city.id = LocationId::Asset(assets.directory().to_path_buf());
         city.assets = Some(assets.clone());
@@ -114,21 +122,21 @@ impl Location {
                 z: position.z,
             });
             let beyond =
-                (road.offset.abs() - road.width * 0.5 - crate::track::OFFROAD_MARGIN).max(0.0);
-            let t = (beyond / (crate::track::TERRAIN_PADDING - crate::track::OFFROAD_MARGIN))
+                (road.offset.abs() - road.width * 0.5 - track::OFFROAD_MARGIN).max(0.0);
+            let t = (beyond / (track::TERRAIN_PADDING - track::OFFROAD_MARGIN))
                 .clamp(0.0, 1.0);
             let blend = t * t * (3.0 - 2.0 * t);
             let outer = if circuit.coastal {
-                crate::elevation::SEA_LEVEL - 0.4
+                elevation::SEA_LEVEL - 0.4
             } else {
                 road.point.y - 2.0
             };
             road.point.y + (outer - road.point.y) * blend
         }));
-        let scenery = crate::scene::authored_scenery(&location, circuit.coastal);
+        let scenery = scene::authored_scenery(&location, circuit.coastal);
         location.buildings = Buildings::new(scenery.buildings);
-        let ground = crate::scene::bake_authored_landscape(&location, circuit.coastal);
-        location.ground = crate::landscape::GroundCover::new(ground, scenery.trees);
+        let ground = scene::bake_authored_landscape(&location, circuit.coastal);
+        location.ground = landscape::GroundCover::new(ground, scenery.trees);
         Ok(location)
     }
     /// Sample an authored closed spline into the ordinary indexed street representation.
@@ -170,7 +178,7 @@ impl Location {
             }
         }
         let mut city = Self::empty();
-        city.bounding_box = crate::world::spatial::bounds(points.iter().map(|p| p.xz()), 0.0);
+        city.bounding_box = world::spatial::bounds(points.iter().map(|p| p.xz()), 0.0);
         city.roads = RoadNetwork::authored(points, widths)?;
         Ok(city)
     }

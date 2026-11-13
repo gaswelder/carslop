@@ -1,5 +1,6 @@
 //! CITY 2: f64 compiler input, deliberately f32 parsed geometry.
 use super::Number;
+use crate::error;
 use crate::error::invalid;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::source_location::{SourceLocation, SourceRoad};
@@ -18,7 +19,7 @@ pub fn write(
     writer: &mut impl Write,
     map: &SourceLocation<f64>,
     precision: Precision,
-) -> crate::error::Result<()> {
+) -> error::Result<()> {
     let (coords, sizes) = match precision {
         Precision::Imported => (Some(3), Some(2)),
         Precision::Authored => (None, None),

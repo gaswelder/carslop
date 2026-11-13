@@ -1,5 +1,12 @@
+use crate::aerial;
+use crate::asset_codecs;
+use crate::elevation;
 use crate::geometry::XZ;
+use crate::landscape;
 use crate::source_location::SourceLocation;
+use crate::track;
+use crate::traffic;
+use crate::world;
 use crate::world::HeightField;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +22,7 @@ pub struct CityAsset {
 impl CityAsset {
     pub fn new(directory: PathBuf) -> Self {
         let name = Self::load_name(&directory);
-        let aerial_attribution = crate::aerial::attribution_label(&directory);
+        let aerial_attribution = aerial::attribution_label(&directory);
         Self {
             directory,
             name,
@@ -65,18 +72,18 @@ impl CityAsset {
     }
 
     // Returns the city's furniture - signs and traffic lights.
-    pub fn get_furniture(&self) -> Result<Vec<crate::traffic::Furniture>, String> {
-        crate::asset_codecs::furniture::parse(&self.read_text("furniture.txt")?)
+    pub fn get_furniture(&self) -> Result<Vec<traffic::Furniture>, String> {
+        asset_codecs::furniture::parse(&self.read_text("furniture.txt")?)
     }
 
-    pub fn get_heightfield(&self) -> Result<crate::elevation::HeightField, String> {
-        crate::elevation::HeightField::load(&self.read_text("elevation/heightfield.txt")?)
+    pub fn get_heightfield(&self) -> Result<elevation::HeightField, String> {
+        elevation::HeightField::load(&self.read_text("elevation/heightfield.txt")?)
     }
 
     pub fn get_landscape_data(
         &self,
-    ) -> Result<(Vec<crate::world::Triangle>, Vec<crate::world::Tree>), String> {
-        use crate::landscape::Triangle;
+    ) -> Result<(Vec<world::Triangle>, Vec<world::Tree>), String> {
+        use landscape::Triangle;
         let mut ground_triangles = Vec::new();
         let mut trees = Vec::new();
         for (file, imagery) in [("landscape.txt", false), ("imagery-trees.txt", true)] {
@@ -87,16 +94,16 @@ impl CityAsset {
             };
             let mut file_ground = Vec::new();
             let mut file_trees = Vec::new();
-            crate::asset_codecs::landscape::read::<f32>(input, |record| {
+            asset_codecs::landscape::read::<f32>(input, |record| {
                 match record {
-                    crate::asset_codecs::landscape::Record::Ground { material, points } => {
+                    asset_codecs::landscape::Record::Ground { material, points } => {
                         file_ground.push(Triangle {
                             material,
-                            usage: crate::world::TriangleUsage::Ground,
+                            usage: world::TriangleUsage::Ground,
                             points,
                         })
                     }
-                    crate::asset_codecs::landscape::Record::Tree(tree) => file_trees.push(tree),
+                    asset_codecs::landscape::Record::Tree(tree) => file_trees.push(tree),
                 }
                 Ok(())
             })?;
@@ -104,7 +111,7 @@ impl CityAsset {
                 if !file_ground.is_empty() {
                     return Err("imagery supplement must contain only trees".into());
                 }
-                crate::landscape::append_imagery_trees(&mut trees, file_trees)?;
+                landscape::append_imagery_trees(&mut trees, file_trees)?;
             } else {
                 ground_triangles = file_ground;
                 trees = file_trees;
@@ -122,7 +129,7 @@ impl CityAsset {
 #[derive(Clone, Debug)]
 pub struct MenuLocation {
     pub name: String,
-    pub track: crate::track::LocationId,
+    pub track: track::LocationId,
     pub assets: Option<CityAsset>,
 }
 /// Discover canonical identities and small metadata without decoding world geometry.
@@ -306,7 +313,7 @@ impl MenuLocation {
         let assets = assets.resolved()?;
         Ok(Self {
             name: assets.name().into(),
-            track: crate::world::LocationId::Asset(assets.directory().to_path_buf()),
+            track: world::LocationId::Asset(assets.directory().to_path_buf()),
             assets: Some(assets),
         })
     }

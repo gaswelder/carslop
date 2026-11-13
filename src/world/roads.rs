@@ -1,8 +1,11 @@
 //! Road geometry and the grid derived from its prepared paths are one owner.
 use super::*;
+use crate::location;
 #[cfg(test)]
 use crate::source_location::{SourceLocation, SourceRoad};
+use crate::street_surface;
 use crate::street_surface::{RoadPaths, StreetSurface};
+use crate::world;
 
 #[derive(Debug)]
 pub(super) struct RoadNetwork {
@@ -14,7 +17,7 @@ pub(super) struct RoadNetwork {
 #[derive(Debug)]
 enum RoadGeometry {
     Centreline,
-    Compiled(crate::street_surface::StreetSurface),
+    Compiled(StreetSurface),
 }
 
 impl RoadNetwork {
@@ -26,7 +29,7 @@ impl RoadNetwork {
             geometry: RoadGeometry::Centreline,
         }
     }
-    pub(super) fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<crate::location::Road>) -> Self {
+    pub(super) fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<location::Road>) -> Self {
         Self::from_roads(
             nodes.into_iter().map(|p| p.at_height(0.0)).collect(),
             roads
@@ -74,9 +77,9 @@ impl RoadNetwork {
                 path_distances: vec![0.0, length],
             });
             distance += length;
-            crate::world::spatial::insert(
+            world::spatial::insert(
                 &mut grid,
-                crate::world::spatial::bounds(
+                world::spatial::bounds(
                     lines[i].ends.iter().map(|&node| nodes[node].xz()),
                     32.0,
                 ),
@@ -111,9 +114,9 @@ impl RoadNetwork {
                 ..Road::new([i, j], widths[i])
             });
             distance += length;
-            crate::world::spatial::insert(
+            world::spatial::insert(
                 &mut grid,
-                crate::world::spatial::bounds([a, b].into_iter().map(|p| p.xz()), 32.0),
+                world::spatial::bounds([a, b].into_iter().map(|p| p.xz()), 32.0),
                 i,
             );
         }
@@ -150,9 +153,9 @@ impl RoadNetwork {
             }
             street.distance = distance;
             distance += street.length;
-            crate::world::spatial::insert(
+            world::spatial::insert(
                 &mut grid,
-                crate::world::spatial::bounds(street.path.iter().map(|p| p.xz()), 32.0),
+                world::spatial::bounds(street.path.iter().map(|p| p.xz()), 32.0),
                 i,
             );
         }
@@ -228,11 +231,11 @@ impl Location {
         }
     }
     fn street_ids_in(&self, bounds: BoundingBoxXZ<f32>) -> Vec<usize> {
-        let a = crate::world::spatial::cell(XZ {
+        let a = world::spatial::cell(XZ {
             x: bounds.min.x,
             z: bounds.min.z,
         });
-        let b = crate::world::spatial::cell(XZ {
+        let b = world::spatial::cell(XZ {
             x: bounds.max.x,
             z: bounds.max.z,
         });
@@ -258,14 +261,14 @@ impl Location {
         if let Some(ids) = self
             .roads
             .grid
-            .get(&crate::world::spatial::cell(XZ { x: p.x, z: p.z }))
+            .get(&world::spatial::cell(XZ { x: p.x, z: p.z }))
         {
             return Box::new(ids.iter().copied());
         }
         for radius in [
             1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
         ] {
-            let d = radius * crate::world::spatial::CELL;
+            let d = radius * world::spatial::CELL;
             let ids = self.street_ids_in(BoundingBoxXZ {
                 min: XZ {
                     x: p.x - d,
@@ -297,7 +300,7 @@ impl Location {
                     x: pair[1].x,
                     z: pair[1].z,
                 };
-                let q = crate::world::spatial::nearest_edge(point, a, b);
+                let q = world::spatial::nearest_edge(point, a, b);
                 let along = (q.x - a.x).hypot(q.z - a.z);
                 let mut s = self.sample_distance(index, r.path_distances[i] + along);
                 let delta = XZ {
@@ -315,14 +318,14 @@ impl Location {
     }
     /// Nearest road index and its local geometric frame.
     pub fn nearest_road(&self, p: XYZ) -> (usize, RoadSample) {
-        let origin = crate::world::spatial::cell(XZ { x: p.x, z: p.z });
+        let origin = world::spatial::cell(XZ { x: p.x, z: p.z });
         let mut seen = std::collections::HashSet::new();
         let mut best: Option<(f32, usize, RoadSample)> = None;
         let limit = ([self.bounding_box.min, self.bounding_box.max]
             .iter()
             .flat_map(|b| [(b.x - p.x).abs(), (b.z - p.z).abs()])
             .fold(0.0_f32, f32::max)
-            / crate::world::spatial::CELL)
+            / world::spatial::CELL)
             .ceil() as i32
             + 2;
         for radius in 0..=limit {
@@ -347,7 +350,7 @@ impl Location {
             }
             // Indexed path bounds carry a 32 m margin, so unvisited cells
             // cannot hide a closer road once this distance is reached.
-            if best.is_some_and(|b| b.0 <= (radius + 1) as f32 * crate::world::spatial::CELL) {
+            if best.is_some_and(|b| b.0 <= (radius + 1) as f32 * world::spatial::CELL) {
                 let (_, index, road) = best.unwrap();
                 return (index, road);
             }
@@ -364,7 +367,7 @@ impl Location {
     }
 }
 impl Location {
-    pub fn compiled_surfaces(&self) -> Option<&crate::street_surface::StreetSurface> {
+    pub fn compiled_surfaces(&self) -> Option<&StreetSurface> {
         match &self.roads.geometry {
             RoadGeometry::Compiled(surfaces) => Some(surfaces),
             RoadGeometry::Centreline => None,
@@ -378,7 +381,7 @@ impl Location {
     }
     pub fn pavement_height_meters(&self) -> f32 {
         self.compiled_surfaces()
-            .map_or(crate::street_surface::DEFAULT_PAVEMENT_HEIGHT, |s| {
+            .map_or(street_surface::DEFAULT_PAVEMENT_HEIGHT, |s| {
                 s.pavement_height_meters()
             })
     }
@@ -387,11 +390,12 @@ impl Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn prepared_road_grids_match_full_projection_for_centrelines_and_compiled_paths() {
         for compiled in [false, true] {
-            let mut world = crate::test_support::parse_world(concat!(
+            let mut world = test_support::parse_world(concat!(
                 "CITY 2\nbounds -100 -100 100 100\n",
                 "n -90 0\nn 90 0\nn -90 70\nn 90 70\n",
                 "r 0 1 8 0 1\nr 2 3 6.5 0 2\n",

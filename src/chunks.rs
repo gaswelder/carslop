@@ -1,5 +1,6 @@
 use crate::geometry::XYZ;
 use crate::scene::Vertex;
+use crate::scene_archive;
 
 pub const SIZE: f32 = 256.0;
 
@@ -12,7 +13,7 @@ pub struct Chunk {
 #[derive(Default)]
 pub struct ChunkBuilder {
     bins: std::collections::BTreeMap<(i32, i32), Chunk>,
-    spool: Option<crate::scene_archive::Spool>,
+    spool: Option<scene_archive::Spool>,
     pending: usize,
     failure: Option<std::io::Error>,
 }
@@ -20,7 +21,7 @@ pub struct ChunkBuilder {
 impl ChunkBuilder {
     pub fn spooled(directory: &std::path::Path) -> std::io::Result<Self> {
         Ok(Self {
-            spool: Some(crate::scene_archive::Spool::new(directory)?),
+            spool: Some(scene_archive::Spool::new(directory)?),
             ..Self::default()
         })
     }
@@ -33,7 +34,7 @@ impl ChunkBuilder {
         }
         Ok(())
     }
-    pub fn finish_spooled(mut self) -> std::io::Result<crate::scene_archive::Spool> {
+    pub fn finish_spooled(mut self) -> std::io::Result<scene_archive::Spool> {
         if let Some(error) = self.failure.take() {
             return Err(error);
         }
@@ -159,12 +160,12 @@ mod tests {
         ];
         assert!(visible(
             [
-                crate::geometry::XYZ {
+                XYZ {
                     x: -2.,
                     y: -2.,
                     z: -2.
                 },
-                crate::geometry::XYZ {
+                XYZ {
                     x: 2.,
                     y: 2.,
                     z: 2.
@@ -174,12 +175,12 @@ mod tests {
         ));
         assert!(!visible(
             [
-                crate::geometry::XYZ {
+                XYZ {
                     x: 2.,
                     y: 0.,
                     z: 0.
                 },
-                crate::geometry::XYZ {
+                XYZ {
                     x: 3.,
                     y: 1.,
                     z: 1.
@@ -190,18 +191,18 @@ mod tests {
         assert_eq!(
             distance_squared(
                 [
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 0.,
                         y: 0.,
                         z: 0.
                     },
-                    crate::geometry::XYZ {
+                    XYZ {
                         x: 10.,
                         y: 10.,
                         z: 10.
                     }
                 ],
-                crate::geometry::XYZ {
+                XYZ {
                     x: 15.,
                     y: 100.,
                     z: 5.

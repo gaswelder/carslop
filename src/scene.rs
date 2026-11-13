@@ -1,4 +1,10 @@
+use crate::chunks;
+use crate::city;
+use crate::elevation;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
+use crate::landscape;
+use crate::scene_archive;
+use crate::world;
 use crate::{asset_car, track, world::Material};
 use std::f32::consts::TAU;
 use std::ops::Range;
@@ -50,7 +56,7 @@ impl Surface {
 #[derive(Default)]
 struct Builder {
     vertices: Vec<Vertex>,
-    chunks: Option<crate::chunks::ChunkBuilder>,
+    chunks: Option<chunks::ChunkBuilder>,
 }
 
 impl Builder {
@@ -101,42 +107,42 @@ impl Builder {
 
     fn cuboid(&mut self, min: XYZ, max: XYZ, surface: Surface) {
         let p = [
-            crate::geometry::XYZ {
+            XYZ {
                 x: min.x,
                 y: min.y,
                 z: min.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: max.x,
                 y: min.y,
                 z: min.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: max.x,
                 y: max.y,
                 z: min.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: min.x,
                 y: max.y,
                 z: min.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: min.x,
                 y: min.y,
                 z: max.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: max.x,
                 y: min.y,
                 z: max.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: max.x,
                 y: max.y,
                 z: max.z,
             },
-            crate::geometry::XYZ {
+            XYZ {
                 x: min.x,
                 y: max.y,
                 z: max.z,
@@ -177,13 +183,13 @@ pub fn build(track: &track::Location, cars: &[std::sync::Arc<asset_car::CarSpec>
 }
 
 pub fn city_layer_spooled(
-    city: &crate::world::Location,
+    city: &world::Location,
     layer: usize,
     temporary_directory: &std::path::Path,
     boundary: Option<&geo::MultiPolygon<f64>>,
-) -> std::io::Result<crate::scene_archive::Spool> {
+) -> std::io::Result<scene_archive::Spool> {
     let mut b = Builder {
-        chunks: Some(crate::chunks::ChunkBuilder::spooled(temporary_directory)?),
+        chunks: Some(chunks::ChunkBuilder::spooled(temporary_directory)?),
         ..Builder::default()
     };
     if layer == 0 {
@@ -249,7 +255,7 @@ fn terrain(b: &mut Builder, track: &track::Location) {
 }
 
 fn water(b: &mut Builder, track: &track::Location) {
-    let sea = crate::elevation::SEA_LEVEL;
+    let sea = elevation::SEA_LEVEL;
     let BoundingBoxXZ { min, max } = track.terrain_bounds();
     b.quad(
         [
@@ -286,10 +292,10 @@ fn perimeter_fence(b: &mut Builder, track: &track::Location) {
     let field = track.elevation().expect("authored track terrain");
     // Fence only the outer terrain perimeter, leaving both verges open.
     let corners = [
-        crate::geometry::XZ { x: min.x, z: min.z },
-        crate::geometry::XZ { x: max.x, z: min.z },
-        crate::geometry::XZ { x: max.x, z: max.z },
-        crate::geometry::XZ { x: min.x, z: max.z },
+        XZ { x: min.x, z: min.z },
+        XZ { x: max.x, z: min.z },
+        XZ { x: max.x, z: max.z },
+        XZ { x: min.x, z: max.z },
     ];
     let metal = Surface {
         color: [0.52, 0.57, 0.56],
@@ -371,7 +377,7 @@ fn road_quad(
 }
 
 fn road(b: &mut Builder, track: &track::Location) {
-    bake_road(b, track, crate::track::coastal_preset(&track.id));
+    bake_road(b, track, track::coastal_preset(&track.id));
 }
 
 fn bake_road(b: &mut Builder, track: &track::Location, coastal: bool) {
@@ -383,7 +389,7 @@ fn bake_road(b: &mut Builder, track: &track::Location, coastal: bool) {
         let half_c = c.width * 0.5;
         let point = |s: track::RoadSample, offset: f32, height: f32| {
             let n = s.normal();
-            crate::geometry::XYZ {
+            XYZ {
                 x: s.point.x + n.x * offset,
                 y: s.point.y + height,
                 z: s.point.z + n.z * offset,
@@ -513,7 +519,7 @@ fn bake_road(b: &mut Builder, track: &track::Location, coastal: bool) {
             let point = |x: f32, z: f32| {
                 let across = -half + (col as f32 + x) * start.width / 12.0;
                 let along = (row as f32 + z) * 0.45 - 0.45;
-                crate::geometry::XYZ {
+                XYZ {
                     x: start.point.x + n.x * across + start.tangent.x * along,
                     y: start.point.y + 0.09,
                     z: start.point.z + n.z * across + start.tangent.z * along,
@@ -610,32 +616,32 @@ fn house(b: &mut Builder, track: &track::Location, x: f32, z: f32) {
         wall,
     );
     let p = [
-        crate::geometry::XYZ {
+        XYZ {
             x: x - 2.3,
             y: y + 3.7,
             z: z - 2.3,
         },
-        crate::geometry::XYZ {
+        XYZ {
             x: x + 2.3,
             y: y + 3.7,
             z: z - 2.3,
         },
-        crate::geometry::XYZ {
+        XYZ {
             x: x,
             y: y + 5.1,
             z: z - 2.3,
         },
-        crate::geometry::XYZ {
+        XYZ {
             x: x - 2.3,
             y: y + 3.7,
             z: z + 2.3,
         },
-        crate::geometry::XYZ {
+        XYZ {
             x: x + 2.3,
             y: y + 3.7,
             z: z + 2.3,
         },
-        crate::geometry::XYZ {
+        XYZ {
             x: x,
             y: y + 5.1,
             z: z + 2.3,
@@ -682,15 +688,15 @@ fn house(b: &mut Builder, track: &track::Location, x: f32, z: f32) {
 }
 
 pub struct AuthoredScenery {
-    pub trees: Vec<crate::landscape::Tree>,
-    pub buildings: Vec<crate::city::Building>,
+    pub trees: Vec<landscape::Tree>,
+    pub buildings: Vec<city::Building>,
 }
 
 pub fn authored_scenery(track: &track::Location, coastal: bool) -> AuthoredScenery {
     let mut trees = Vec::new();
     let mut buildings = Vec::new();
     let mut add_tree = |p: XYZ, scale: f32| {
-        trees.push(crate::landscape::Tree {
+        trees.push(landscape::Tree {
             id: trees.len() as u64 + 1,
             coords: XZ { x: p.x, z: p.z },
             height_meters: 4.3 * scale,
@@ -720,7 +726,7 @@ pub fn authored_scenery(track: &track::Location, coastal: bool) -> AuthoredScene
         for [x, z] in [[-9.0, -7.0], [-4.0, 4.0], [8.0, 9.0], [11.0, -7.0]] {
             let sample = track.project(XYZ { x, y: 0.0, z });
             if (x - sample.point.x).hypot(z - sample.point.z) > sample.width * 0.5 + 3.5 {
-                buildings.push(crate::city::Building {
+                buildings.push(city::Building {
                     id: buildings.len() as u64 + 1,
                     height_meters: 5.0,
                     base_y: 0.0,
@@ -762,7 +768,7 @@ fn scenery(b: &mut Builder, track: &track::Location) {
             building.ground_outline[0].z + 2.0,
         );
     }
-    decorations(b, track, crate::track::coastal_preset(&track.id));
+    decorations(b, track, track::coastal_preset(&track.id));
 }
 
 fn rocks(b: &mut Builder) {
@@ -798,7 +804,7 @@ fn rocks(b: &mut Builder) {
 pub fn bake_authored_landscape(
     track: &track::Location,
     coastal: bool,
-) -> Vec<crate::world::Triangle> {
+) -> Vec<world::Triangle> {
     let field = track.elevation().expect("authored track terrain");
     let mut ground = Vec::new();
     for row in 0..field.rows - 1 {
@@ -817,9 +823,9 @@ pub fn bake_authored_landscape(
                 Material::Grass
             };
             for indices in [[0, 1, 2], [0, 2, 3]] {
-                ground.push(crate::world::Triangle {
+                ground.push(world::Triangle {
                     material,
-                    usage: crate::world::TriangleUsage::Ground,
+                    usage: world::TriangleUsage::Ground,
                     points: indices.map(|i| XZ {
                         x: points[i].x,
                         z: points[i].z,
@@ -842,10 +848,10 @@ fn decorations(b: &mut Builder, track: &track::Location, coastal: bool) {
 pub fn authored_decorations(
     track: &track::Location,
     coastal: bool,
-) -> [Vec<crate::chunks::Chunk>; 3] {
+) -> [Vec<chunks::Chunk>; 3] {
     let mut builder = Builder::default();
     decorations(&mut builder, track, coastal);
-    let mut chunks = crate::chunks::ChunkBuilder::default();
+    let mut chunks = chunks::ChunkBuilder::default();
     for triangle in builder.vertices.as_chunks::<3>().0 {
         chunks.push(*triangle);
     }
@@ -886,10 +892,13 @@ impl track::Location {
 
 #[cfg(test)]
 mod tests {
+    use crate::chunks;
+    use crate::test_support;
+
 
     #[test]
     fn rendered_road_edges_follow_the_local_width() {
-        let track = crate::test_support::variable_width_track();
+        let track = test_support::variable_width_track();
         let mut builder = super::Builder::default();
         super::road(&mut builder, &track);
         let mut widths = [f32::INFINITY, f32::NEG_INFINITY];
@@ -903,7 +912,7 @@ mod tests {
             assert!(sample.offset.abs() - sample.width * 0.5 < 0.03);
             assert!(
                 (vertex.position[1]
-                    - track.height(crate::geometry::XZ {
+                    - track.height(XZ {
                         x: vertex.position[0],
                         z: vertex.position[2]
                     })
@@ -925,18 +934,18 @@ mod tests {
     fn chunked_builder_preserves_triangle_geometry() {
         let mut regular = super::Builder::default();
         let mut streamed = super::Builder {
-            chunks: Some(crate::chunks::ChunkBuilder::default()),
+            chunks: Some(chunks::ChunkBuilder::default()),
             ..super::Builder::default()
         };
         for x in [-300., 0., 300.] {
             let points = [
-                crate::geometry::XYZ { x: x, y: 0., z: 0. },
-                crate::geometry::XYZ {
+                XYZ { x: x, y: 0., z: 0. },
+                XYZ {
                     x: x + 2.,
                     y: 0.,
                     z: 0.,
                 },
-                crate::geometry::XYZ { x: x, y: 0., z: 2. },
+                XYZ { x: x, y: 0., z: 2. },
             ];
             let surface = super::Surface::matte([0.2, 0.4, 0.2]);
             regular.triangle(points, surface);
@@ -944,7 +953,7 @@ mod tests {
         }
         assert!(streamed.vertices.is_empty());
         let got = streamed.chunks.unwrap().finish();
-        let expected = crate::test_support::partition(regular.vertices);
+        let expected = test_support::partition(regular.vertices);
         assert_eq!(got.len(), expected.len());
         for (a, b) in got.iter().zip(&expected) {
             assert_eq!(a.cell, b.cell);
@@ -956,8 +965,8 @@ mod tests {
 
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
-        let route = crate::test_support::scenic_id().try_track().unwrap();
-        let geometry = build(&route, &crate::test_support::cars());
+        let route = test_support::scenic_id().try_track().unwrap();
+        let geometry = build(&route, &test_support::cars());
         assert!(
             geometry.world_count > 100_000 && geometry.world_count < 1_800_000,
             "scenic geometry budget exceeded: {} world / {} total vertices",
@@ -975,7 +984,7 @@ mod tests {
                 assert!(v.normal[1] > 0.9);
                 assert!(
                     (v.position[1]
-                        - route.height(crate::geometry::XZ {
+                        - route.height(XZ {
                             x: v.position[0],
                             z: v.position[2]
                         })

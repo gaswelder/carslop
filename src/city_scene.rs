@@ -3,7 +3,12 @@ use super::{
     Builder, Surface,
 };
 use crate::city::Building;
+use crate::elevation;
+use crate::geometry;
 use crate::geometry::{XYZ, XZ};
+use crate::hud;
+use crate::landscape;
+use crate::world;
 use crate::world::Location;
 
 fn cross(a: XZ<f32>, b: XZ<f32>, c: XZ<f32>) -> f64 {
@@ -68,7 +73,7 @@ pub(super) fn buildings(b: &mut Builder, city: &Location, detailed: bool) -> std
 }
 fn terrain_mesh(
     b: &mut Builder,
-    field: &crate::elevation::HeightField,
+    field: &elevation::HeightField,
     boundary: Option<&geo::MultiPolygon<f64>>,
 ) {
     use geo::{BooleanOps, Contains, Intersects, TriangulateEarcut};
@@ -84,7 +89,7 @@ fn terrain_mesh(
                 v.y -= 0.02;
             }
             if let Some(boundary) = boundary {
-                let cell = crate::geometry::polygon(&p.map(|v| XZ {
+                let cell = geometry::polygon(&p.map(|v| XZ {
                     x: v.x as f64,
                     z: v.z as f64,
                 }));
@@ -94,7 +99,7 @@ fn terrain_mesh(
                 if !boundary.contains(&cell) {
                     // Preserve the height field's diagonal and its two planar faces.
                     for indices in [[0, 1, 2], [0, 2, 3]] {
-                        let face = crate::geometry::polygon(&indices.map(|i| XZ {
+                        let face = geometry::polygon(&indices.map(|i| XZ {
                             x: p[i].x as f64,
                             z: p[i].z as f64,
                         }));
@@ -171,7 +176,7 @@ pub(super) fn ground_mesh(
     }
     for curb in city.curbs() {
         let [a, c] = curb.ends;
-        let top = if curb.style == crate::world::CurbStyle::ServiceRoad {
+        let top = if curb.style == world::CurbStyle::ServiceRoad {
             0.08
         } else {
             pavement
@@ -391,7 +396,7 @@ fn building_mesh(
                      top: f32,
                      depth: f32,
                      surface: Surface| {
-            let p = |along: f32, y: f32| crate::geometry::XYZ {
+            let p = |along: f32, y: f32| XYZ {
                 x: a.x + (c.x - a.x) * along / length + normal.x * depth,
                 y: y,
                 z: a.z + (c.z - a.z) * along / length + normal.z * depth,
@@ -574,7 +579,7 @@ fn canopy_quad(
     }
 }
 
-fn mapped_tree(b: &mut Builder, city: &Location, tree: &crate::landscape::Tree) {
+fn mapped_tree(b: &mut Builder, city: &Location, tree: &landscape::Tree) {
     let XZ { x, z } = tree.coords;
     let y = city.height(XZ { x, z });
     let h = tree.height_meters;
@@ -595,7 +600,7 @@ fn mapped_tree(b: &mut Builder, city: &Location, tree: &crate::landscape::Tree) 
         let c = rotation + (i + 1) as f32 * std::f32::consts::TAU / 6.0;
         let p = |angle: f32, top: bool| {
             let scale = if top { 0.55 } else { 1.0 };
-            crate::geometry::XYZ {
+            XYZ {
                 x: x + angle.cos() * trunk_radius * scale + if top { lean.x } else { 0.0 },
                 y: y + if top { h * 0.65 } else { -0.05 },
                 z: z + angle.sin() * trunk_radius * scale + if top { lean.z } else { 0.0 },
@@ -676,7 +681,7 @@ fn mapped_tree(b: &mut Builder, city: &Location, tree: &crate::landscape::Tree) 
                     x: angle.cos() * radius,
                     z: angle.sin() * radius * oval,
                 };
-                crate::geometry::XYZ {
+                XYZ {
                     x: x + local.x * rotation_cos - local.z * rotation_sin + lean.x * drift,
                     y: y + h * ring.0,
                     z: z + local.x * rotation_sin + local.z * rotation_cos + lean.z * drift,
@@ -691,7 +696,7 @@ fn mapped_tree(b: &mut Builder, city: &Location, tree: &crate::landscape::Tree) 
     }
 }
 
-impl crate::world::TriangleUsage {
+impl world::TriangleUsage {
     fn render_height(self, pavement_height: f32) -> f32 {
         match self {
             Self::Marking => 0.07,
@@ -703,12 +708,17 @@ impl crate::world::TriangleUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elevation;
+    use crate::geometry;
+    use crate::hud;
+    use crate::location;
+    use crate::test_support;
 
     #[test]
     fn shared_building_storefronts_load_and_render_separate_panels() {
         let directory = tempfile::tempdir().unwrap();
-        let asset = crate::test_support::stored_location(directory.path(), true);
-        let labels = crate::location::Labels {
+        let asset = test_support::stored_location(directory.path(), true);
+        let labels = location::Labels {
             streets: Vec::new(),
             buildings: vec![(1, "Centre".into())],
             storefronts: vec![(1, "Centre".into()), (1, "Shop".into()), (1, "Cafe".into())],
@@ -718,7 +728,7 @@ mod tests {
             serde_json::to_vec(&labels).unwrap(),
         )
         .unwrap();
-        let city = crate::world::Location::load(&asset).unwrap();
+        let city = Location::load(&asset).unwrap();
         assert_eq!(city.storefront_names(1).len(), 3);
         let mut builder = Builder::default();
         storefront_signs(&mut builder, &city);
@@ -759,7 +769,7 @@ mod tests {
     }
 
     fn small_city() -> Location {
-        crate::test_support::parse_world(
+        test_support::parse_world(
             "CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
         )
         .unwrap()
@@ -769,30 +779,30 @@ mod tests {
     fn administrative_terrain_preserves_holes_area_and_height_planes() {
         use geo::{Area, BooleanOps, MultiPolygon};
         let mut city = small_city();
-        crate::test_support::set_elevation(
+        test_support::set_elevation(
             &mut city,
-            Some(crate::elevation::HeightField::generate(
-                crate::geometry::BoundingBoxXZ {
-                    min: crate::geometry::XZ { x: -8., z: -8. },
-                    max: crate::geometry::XZ { x: 8., z: 8. },
+            Some(elevation::HeightField::generate(
+                geometry::BoundingBoxXZ {
+                    min: XZ { x: -8., z: -8. },
+                    max: XZ { x: 8., z: 8. },
                 },
                 |p| p.x * p.z * 0.1,
             )),
         );
-        let shell = crate::geometry::polygon(
+        let shell = geometry::polygon(
             &[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]
-                .map(|[x, z]| crate::geometry::XZ { x, z }),
+                .map(|[x, z]| XZ { x, z }),
         );
-        let hole = crate::geometry::polygon(
+        let hole = geometry::polygon(
             &[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]
-                .map(|[x, z]| crate::geometry::XZ { x, z }),
+                .map(|[x, z]| XZ { x, z }),
         );
         let boundary = shell.difference(&hole);
         let mut builder = Builder::default();
         terrain_mesh(&mut builder, city.elevation().unwrap(), Some(&boundary));
         let mut area = 0.;
         for vertices in builder.vertices.as_chunks::<3>().0 {
-            let triangle = crate::geometry::polygon(&vertices.map(|v| crate::geometry::XZ {
+            let triangle = geometry::polygon(&vertices.map(|v| XZ {
                 x: v.position[0] as f64,
                 z: v.position[2] as f64,
             }));
@@ -806,7 +816,7 @@ mod tests {
             for v in vertices {
                 assert!(
                     (v.position[1]
-                        - city.elevation().unwrap().height(crate::geometry::XZ {
+                        - city.elevation().unwrap().height(XZ {
                             x: v.position[0],
                             z: v.position[2]
                         })
@@ -862,7 +872,7 @@ mod tests {
             .iter()
             .enumerate()
             .flat_map(|(column, ch)| {
-                crate::hud::glyph(*ch)
+                hud::glyph(*ch)
                     .into_iter()
                     .enumerate()
                     .flat_map(move |(row, bits)| {
@@ -881,12 +891,12 @@ mod tests {
         ] {
             let mut b = Builder::default();
             storefront_sign(&mut b, &label, [a, c], 0.0, 8.0, 0);
-            let normal = crate::geometry::XZ {
+            let normal = XZ {
                 x: (c.z - a.z) / 10.0,
                 z: -(c.x - a.x) / 10.0,
             };
             // Camera right = cross(-outward_normal, world_up).
-            let right = crate::geometry::XZ {
+            let right = XZ {
                 x: normal.z,
                 z: -normal.x,
             };
@@ -944,7 +954,7 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
                 if length < 2.0 {
                     return None;
                 }
-                let midpoint = crate::geometry::XYZ {
+                let midpoint = XYZ {
                     x: (a.x + c.x) * 0.5,
                     y: building.base_y,
                     z: (a.z + c.z) * 0.5,
@@ -964,7 +974,7 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
         let height = building.height_meters / rows as f32;
         for (i, name) in names.iter().enumerate() {
             let label: Vec<_> = name.to_uppercase().chars().take(80).collect();
-            let point = |t: f32| crate::geometry::XZ {
+            let point = |t: f32| XZ {
                 x: a.x + (c.x - a.x) * t,
                 z: a.z + (c.z - a.z) * t,
             };
@@ -1007,7 +1017,7 @@ const STOREFRONT_PALETTES: [([f32; 3], [f32; 3]); 8] = [
 fn storefront_sign(
     b: &mut Builder,
     label: &[char],
-    [a, c]: [crate::geometry::XZ<f32>; 2],
+    [a, c]: [XZ<f32>; 2],
     base_y: f32,
     height: f32,
     seed: u64,
@@ -1015,7 +1025,7 @@ fn storefront_sign(
     let (background, lettering) =
         STOREFRONT_PALETTES[visual_seed(seed, 41) as usize % STOREFRONT_PALETTES.len()];
     let length = (c.x - a.x).hypot(c.z - a.z);
-    let normal = crate::geometry::XZ {
+    let normal = XZ {
         x: (c.z - a.z) / length,
         z: -(c.x - a.x) / length,
     };
@@ -1033,7 +1043,7 @@ fn storefront_sign(
     let top = base_y
         + (panel_height + 0.8 + variation(seed, 45) * 0.9).min(height - (height * 0.1).min(0.3));
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
-        let point = |x: f32, y: f32| crate::geometry::XYZ {
+        let point = |x: f32, y: f32| XYZ {
             x: c.x + (a.x - c.x) * x / length + normal.x * depth,
             y: y,
             z: c.z + (a.z - c.z) * x / length + normal.z * depth,
@@ -1063,7 +1073,7 @@ fn storefront_sign(
         let line_width = chars.len() as f32 * 6.0 * pixel;
         let line_left = panel_left + pixel + (panel_width - 2.0 * pixel - line_width) * alignment;
         for (column, ch) in chars.iter().copied().enumerate() {
-            for (row, bits) in crate::hud::glyph(ch).iter().enumerate() {
+            for (row, bits) in hud::glyph(ch).iter().enumerate() {
                 for bit in 0..5 {
                     if bits & (1 << (4 - bit)) != 0 {
                         let x = line_left + (column * 6 + bit) as f32 * pixel;

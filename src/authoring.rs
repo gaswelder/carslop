@@ -1,4 +1,5 @@
 use crate::geometry::XYZ;
+use crate::track;
 use crate::world::{Location, LocationId};
 
 /// Authoring input for a closed circuit, discarded from runtime geometry after sampling.
@@ -69,7 +70,7 @@ impl Location {
                 .iter()
                 .map(|p| ControlPoint {
                     position: *p,
-                    width: crate::track::ROAD_WIDTH,
+                    width: track::ROAD_WIDTH,
                 })
                 .collect::<Vec<_>>(),
             false,

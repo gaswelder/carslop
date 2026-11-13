@@ -1,4 +1,5 @@
 //! Optional disk-backed aerial tiles, projected onto existing surface geometry.
+use crate::city_assets;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use std::{
     collections::{HashSet, VecDeque},
@@ -246,7 +247,7 @@ pub struct Aerial {
     failed: HashSet<usize>,
 }
 impl Aerial {
-    pub fn open(assets: &crate::city_assets::CityAsset) -> Option<Self> {
+    pub fn open(assets: &city_assets::CityAsset) -> Option<Self> {
         let directory = assets.directory().join("aerial");
         let path = directory.join("tiles.txt");
         if !path.is_file() {
@@ -426,12 +427,13 @@ impl Drop for Aerial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
     #[test]
     fn two_imagery_workers_and_attributions_stay_with_their_asset_directories() {
         let root = tempfile::tempdir().unwrap();
         let first =
-            crate::test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
-        let second = crate::test_support::generated_location(
+            test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
+        let second = test_support::generated_location(
             &root.path().join("second"),
             13.0,
             "arcgisonline.com",
@@ -466,7 +468,7 @@ mod tests {
         assert_eq!(
             wanted(
                 &c,
-                crate::geometry::XYZ {
+                XYZ {
                     x: 150.0,
                     y: 0.0,
                     z: 50.0
@@ -478,7 +480,7 @@ mod tests {
         assert!(capacity(&c) * layer_bytes(c.size + 2 * c.gutter) <= GPU_BUDGET);
         assert!(wanted(
             &c,
-            crate::geometry::XYZ {
+            XYZ {
                 x: 2000.0,
                 y: 0.0,
                 z: 0.0
@@ -514,7 +516,7 @@ mod tests {
             for z in [0., 62., 124., 248.] {
                 let all = wanted(
                     &catalog,
-                    crate::geometry::XYZ { x: x, y: 0., z: z },
+                    XYZ { x: x, y: 0., z: z },
                     usize::MAX,
                 );
                 assert!(

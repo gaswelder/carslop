@@ -207,6 +207,7 @@ impl Importer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
     use serde_json::{json, Value};
 
     fn fixture() -> (Value, Vec<u8>) {
@@ -259,7 +260,7 @@ mod tests {
 
     #[test]
     fn frontal_area_counts_projected_silhouette_once_including_wheels() {
-        let mut design = (*crate::test_support::car_spec().design).clone();
+        let mut design = (*test_support::car_spec().design).clone();
         // Two triangles make a 2 x 1 rectangle in the front view.
         let vertex = |x, y, z| Vertex {
             position: [x, y, z],
@@ -289,7 +290,7 @@ mod tests {
             .collect();
         design.body.extend(duplicate);
         assert!((design.frontal_area_m2() - 2.0).abs() < 0.00001);
-        design.mounts[0] = crate::geometry::XYZ {
+        design.mounts[0] = XYZ {
             x: 2.0,
             y: 0.0,
             z: 0.0,
@@ -322,7 +323,7 @@ mod tests {
         let design = decode(&pack(&doc, &bin)).unwrap();
         assert_eq!(
             design.mounts[0],
-            crate::geometry::XYZ {
+            XYZ {
                 x: 5.,
                 y: 6.,
                 z: 3.
@@ -330,7 +331,7 @@ mod tests {
         );
         assert_eq!(
             design.mounts[3],
-            crate::geometry::XYZ {
+            XYZ {
                 x: -1.,
                 y: 6.,
                 z: 3.

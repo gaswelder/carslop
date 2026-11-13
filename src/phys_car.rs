@@ -1,4 +1,5 @@
 use crate::geometry::{XYZ, XZ};
+use crate::vehicle_location;
 use crate::{asset_car, phys_powertrain, track};
 use std::time::Duration;
 
@@ -633,7 +634,7 @@ impl Vehicle {
         self.track.drive_height(XZ {
             x: self.position.x,
             z: self.position.z,
-        }) + crate::vehicle_location::VEHICLE_ORIGIN_HEIGHT
+        }) + vehicle_location::VEHICLE_ORIGIN_HEIGHT
     }
 
     fn engine_inertia(&self) -> f32 {
@@ -879,13 +880,13 @@ impl Vehicle {
                 *self.position.component_mut(coordinate) = clamped;
                 let mut normal = XZ { x: 0.0, z: 0.0 };
                 *normal.component_mut(axis) = excess.signum();
-                impact = impact.max(crate::vehicle_location::deflect(&mut self.velocity, normal));
+                impact = impact.max(vehicle_location::deflect(&mut self.velocity, normal));
             }
         }
         self.position.y = self.track.drive_height(XZ {
             x: self.position.x,
             z: self.position.z,
-        }) + crate::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+        }) + vehicle_location::VEHICLE_ORIGIN_HEIGHT;
         impact
     }
 
@@ -994,10 +995,11 @@ fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn aerodynamic_drag_uses_coefficient_area_and_mass() {
-        let mut spec = crate::test_support::car_spec().clone();
+        let mut spec = test_support::car_spec().clone();
         spec.drag_coefficient = 0.3;
         spec.frontal_area_m2 = 2.0;
         spec.weight_kg = 1000.0;
@@ -1018,7 +1020,7 @@ mod tests {
 
     #[test]
     fn calculated_top_speed_balances_power_and_road_load() {
-        let mut spec = crate::test_support::car_spec().clone();
+        let mut spec = test_support::car_spec().clone();
         spec.turbo = None;
         spec.engine_max_torque_nm = 10_000.0;
         spec.gearbox.final_drive = 1.0;
@@ -1036,7 +1038,7 @@ mod tests {
     }
 
     fn hill_car(uphill: bool) -> Vehicle {
-        let route = crate::test_support::scenic_id().try_track().unwrap();
+        let route = test_support::scenic_id().try_track().unwrap();
         let road = (0..200)
             .map(|i| route.at_distance(i as f32 * 10.0))
             .max_by(|a, b| {
@@ -1048,7 +1050,7 @@ mod tests {
         Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading() + if uphill { 0.0 } else { std::f32::consts::PI },
-            crate::test_support::car(),
+            test_support::car(),
             route,
         )
     }
@@ -1056,32 +1058,32 @@ mod tests {
     #[test]
     fn manual_shifts_hold_gears_and_pass_through_neutral() {
         let mut car = Vehicle::new(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
             },
             0.0,
-            crate::test_support::car(),
+            test_support::car(),
         );
         car.manual = true;
-        car.velocity = crate::geometry::XZ { x: 0.0, z: 40.0 };
+        car.velocity = XZ { x: 0.0, z: 40.0 };
         car.refresh_speed();
         assert_eq!(car.gear, 1);
         car.shift(true);
         car.refresh_speed();
         assert_eq!(car.gear, 2);
-        car.velocity = crate::geometry::XZ { x: 0.0, z: 0.0 };
+        car.velocity = XZ { x: 0.0, z: 0.0 };
         car.refresh_speed();
         assert_eq!(car.gear, 2);
         car.shift(false);
         car.shift(false);
         assert_eq!(car.gear_label(), "N");
         assert!(car.drivetrain_step(1.0, 1.0 / 240.0, 0.0).is_none());
-        car.velocity = crate::geometry::XZ { x: 2.0, z: 0.0 };
+        car.velocity = XZ { x: 2.0, z: 0.0 };
         car.shift(false);
         assert_eq!(car.gear_label(), "R");
-        assert_eq!(car.velocity, crate::geometry::XZ { x: 2.0, z: 0.0 });
+        assert_eq!(car.velocity, XZ { x: 2.0, z: 0.0 });
         car.shift(true);
         assert_eq!(car.gear_label(), "N");
         car.shift(true);
@@ -1091,7 +1093,7 @@ mod tests {
         }
         assert_eq!(car.gear, car.spec.gearbox.gears());
         car.reset(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
@@ -1104,9 +1106,9 @@ mod tests {
 
     #[test]
     fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             for initial_speed in [12.0, -4.0] {
-                let mut car = level_route_car(crate::test_support::scenic_id(), model.clone());
+                let mut car = level_route_car(test_support::scenic_id(), model.clone());
                 car.manual = true;
                 if initial_speed < 0.0 {
                     car.shift(false);
@@ -1149,10 +1151,10 @@ mod tests {
 
     #[test]
     fn tires_regain_direction_after_lifting_out_of_a_slide() {
-        for model in crate::test_support::cars() {
-            let mut car = level_route_car(crate::test_support::scenic_id(), model.clone());
+        for model in test_support::cars() {
+            let mut car = level_route_car(test_support::scenic_id(), model.clone());
             let h = car.heading;
-            car.velocity = crate::geometry::XZ {
+            car.velocity = XZ {
                 x: h.sin() * 15.0 + h.cos() * 6.0,
                 z: h.cos() * 15.0 - h.sin() * 6.0,
             };
@@ -1176,12 +1178,12 @@ mod tests {
 
     #[test]
     fn revving_in_neutral_then_engaging_a_gear_spins_the_driven_wheels() {
-        for (model, reverse) in crate::test_support::cars()
+        for (model, reverse) in test_support::cars()
             .iter()
             .cloned()
             .flat_map(|m| [(m.clone(), false), (m, true)])
         {
-            let mut car = level_route_car(crate::test_support::scenic_id(), model.clone());
+            let mut car = level_route_car(test_support::scenic_id(), model.clone());
             car.manual = true;
             car.shift(false);
             assert_eq!(car.gear, NEUTRAL_GEAR);
@@ -1230,9 +1232,9 @@ mod tests {
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
             let mut car =
-                level_route_car(crate::test_support::scenic_id(), crate::test_support::car());
+                level_route_car(test_support::scenic_id(), test_support::car());
             let h = car.heading;
-            car.velocity = crate::geometry::XZ {
+            car.velocity = XZ {
                 x: h.sin() * 10.0 + h.cos() * 2.0,
                 z: h.cos() * 10.0 - h.sin() * 2.0,
             };
@@ -1245,7 +1247,7 @@ mod tests {
             );
             dot(
                 car.velocity,
-                crate::geometry::XZ {
+                XZ {
                     x: h.cos(),
                     z: -h.sin(),
                 },
@@ -1255,8 +1257,8 @@ mod tests {
             run(1.0) > run(0.0),
             "drive torque must reduce available cornering force"
         );
-        let mut car = level_route_car(crate::test_support::scenic_id(), crate::test_support::car());
-        car.velocity = crate::geometry::XZ {
+        let mut car = level_route_car(test_support::scenic_id(), test_support::car());
+        car.velocity = XZ {
             x: car.heading.sin() * 20.0,
             z: car.heading.cos() * 20.0,
         };
@@ -1271,14 +1273,14 @@ mod tests {
     #[test]
     fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
         let run = |hz: u32| {
-            let track = std::sync::Arc::new(crate::test_support::bumpy_track(
-                &crate::test_support::scenic_id().try_track().unwrap(),
+            let track = std::sync::Arc::new(test_support::bumpy_track(
+                &test_support::scenic_id().try_track().unwrap(),
             ));
             let road = track.at_distance(50.0);
             let mut car = Vehicle::on_track(
                 road.vehicle_position(0.0),
                 road.heading(),
-                crate::test_support::car(),
+                test_support::car(),
                 track,
             );
             car.velocity = road.tangent.map(|v| v * 8.0);
@@ -1313,7 +1315,7 @@ mod tests {
 
     #[test]
     fn chassis_can_unload_land_and_settle() {
-        let mut car = level_route_car(crate::test_support::scenic_id(), crate::test_support::car());
+        let mut car = level_route_car(test_support::scenic_id(), test_support::car());
         let ground = car.ride_height();
         car.suspension_initialized = true;
         car.position.y = ground + 0.5;
@@ -1342,7 +1344,7 @@ mod tests {
                         car.heading += std::f32::consts::PI;
                     }
                     let sign = if reverse { -1.0 } else { 1.0 };
-                    car.velocity = crate::geometry::XZ {
+                    car.velocity = XZ {
                         x: car.heading.sin() * 8.0 * sign,
                         z: car.heading.cos() * 8.0 * sign,
                     };
@@ -1403,7 +1405,7 @@ mod tests {
         Vehicle::new(
             start.vehicle_position(0.0),
             start.heading(),
-            crate::test_support::car(),
+            test_support::car(),
         )
     }
 
@@ -1418,7 +1420,7 @@ mod tests {
         id: track::LocationId,
         model: std::sync::Arc<asset_car::CarSpec>,
     ) -> Vehicle {
-        let track = std::sync::Arc::new(crate::test_support::flat_track(&id.try_track().unwrap()));
+        let track = std::sync::Arc::new(test_support::flat_track(&id.try_track().unwrap()));
         let road = track.at_distance(50.0);
         Vehicle::on_track(road.vehicle_position(0.0), road.heading(), model, track)
     }
@@ -1431,7 +1433,7 @@ mod tests {
         let previous = car.position;
         car.update(Duration::from_secs_f64(1.0 / 240.0), controls);
         dot(
-            crate::geometry::XZ {
+            XZ {
                 x: car.position.x - previous.x,
                 z: car.position.z - previous.z,
             },
@@ -1453,12 +1455,12 @@ mod tests {
             car.position = road.vehicle_position(0.0);
             let lateral = dot(
                 car.velocity,
-                crate::geometry::XZ {
+                XZ {
                     x: car.heading.cos(),
                     z: -car.heading.sin(),
                 },
             );
-            car.velocity = crate::geometry::XZ {
+            car.velocity = XZ {
                 x: car.heading.sin() * speed + car.heading.cos() * lateral,
                 z: car.heading.cos() * speed - car.heading.sin() * lateral,
             };
@@ -1476,9 +1478,9 @@ mod tests {
 
     #[test]
     fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             for speed in [-5.0, -3.0, -1.0, 1.0, 3.0, 5.0] {
-                let mut car = level_route_car(crate::test_support::scenic_id(), model.clone());
+                let mut car = level_route_car(test_support::scenic_id(), model.clone());
                 for steering in [-1.0, 1.0] {
                     steering_run(&mut car, speed, steering, 5.0, 240.0);
                     let angle = car.steering_angle().abs();
@@ -1502,7 +1504,7 @@ mod tests {
 
     #[test]
     fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut car = level_route_car(track::LocationId::Compact, model.clone());
             for speed_kmh in [0.0, 40.0, 80.0, 120.0, 200.0] {
                 car.speed = speed_kmh / 3.6;
@@ -1525,14 +1527,14 @@ mod tests {
 
     #[test]
     fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
             let mut car = level_route_car(track::LocationId::Compact, model.clone());
             let heading = car.heading;
             steering_run(&mut car, speed, 1.0, 0.1, 120.0);
             let tap_yaw = car.yaw_rate.abs();
             steering_run(&mut car, speed, 0.0, 0.4, 120.0);
-            let tap = crate::test_support::angle(car.heading - heading).abs();
+            let tap = test_support::angle(car.heading - heading).abs();
             assert!(tap > 0.0, "a steering tap must turn the car");
             assert_eq!(car.steering, 0.0);
             assert!(
@@ -1541,7 +1543,7 @@ mod tests {
             );
             let mut held = level_route_car(track::LocationId::Compact, model.clone());
             steering_run(&mut held, speed, 1.0, 1.0, 120.0);
-            let turn = crate::test_support::angle(held.heading - heading).abs();
+            let turn = test_support::angle(held.heading - heading).abs();
             assert!(
                 turn > tap * 3.0,
                 "holding must produce a stronger turn than tapping"
@@ -1551,8 +1553,8 @@ mod tests {
 
     #[test]
     fn tire_torque_turns_and_countersteering_reverses_rotation() {
-        for model in crate::test_support::cars() {
-            let mut car = route_car(crate::test_support::scenic_id(), model.clone());
+        for model in test_support::cars() {
+            let mut car = route_car(test_support::scenic_id(), model.clone());
             steering_run(&mut car, 15.0, 0.25, 0.6, 240.0);
             assert!(car.yaw_rate < 0.0);
             assert!(car.yaw_rate.is_finite() && car.yaw_rate.abs() < 2.0);
@@ -1572,7 +1574,7 @@ mod tests {
 
     #[test]
     fn steering_response_is_consistent_across_frame_rates() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         let mut reference = level_route_car(track::LocationId::Compact, model.clone());
         let start = reference.heading;
         for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
@@ -1583,7 +1585,7 @@ mod tests {
             for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
                 steering_run(&mut car, 25.0, input, seconds, hz);
             }
-            let error = crate::test_support::angle(car.heading - reference.heading)
+            let error = test_support::angle(car.heading - reference.heading)
                 .abs()
                 .to_degrees();
             assert!(
@@ -1596,13 +1598,13 @@ mod tests {
     #[test]
     fn released_steering_centres_faster_with_forward_speed() {
         let mut car = Vehicle::new(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
             },
             0.0,
-            crate::test_support::car(),
+            test_support::car(),
         );
         for direction in [-1.0, 1.0] {
             let mut previous = 1.0;
@@ -1636,8 +1638,8 @@ mod tests {
 
     #[test]
     fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
-        for model in crate::test_support::cars() {
-            let mut car = route_car(crate::test_support::scenic_id(), model.clone());
+        for model in test_support::cars() {
+            let mut car = route_car(test_support::scenic_id(), model.clone());
             let road = car.track.at_distance(50.0);
             let g = &model.gearbox;
             for gear in 1..g.gears() {
@@ -1666,7 +1668,7 @@ mod tests {
                 assert!(car.gear <= gear);
                 assert!(car.coupled_engine_rpm() < car.spec.redline_rpm);
             }
-            car.velocity = crate::geometry::XZ { x: 0.0, z: 0.0 };
+            car.velocity = XZ { x: 0.0, z: 0.0 };
             car.refresh_speed();
             assert_eq!(car.gear, 1);
             assert_eq!(car.coupled_engine_rpm(), IDLE_RPM);
@@ -1675,21 +1677,21 @@ mod tests {
 
     #[test]
     fn city_curb_is_crossable_with_a_single_small_speed_loss_and_settling_bump() {
-        let track = crate::test_support::nicosia_world();
+        let track = test_support::nicosia_world();
         let city = &track;
         let (q, normal) = city
             .curbs()
             .iter()
             .find_map(|curb| {
-                let q = crate::geometry::XZ {
+                let q = XZ {
                     x: (curb.ends[0].x + curb.ends[1].x) * 0.5,
                     z: (curb.ends[0].z + curb.ends[1].z) * 0.5,
                 };
-                let inside = crate::geometry::XZ {
+                let inside = XZ {
                     x: q.x + curb.inward.x * 0.08,
                     z: q.z + curb.inward.z * 0.08,
                 };
-                let outside = crate::geometry::XZ {
+                let outside = XZ {
                     x: q.x - curb.inward.x * 0.2,
                     z: q.z - curb.inward.z * 0.2,
                 };
@@ -1700,13 +1702,13 @@ mod tests {
                     return None;
                 }
                 for distance in [0.08, -0.2, -1.0, -2.0, -3.0] {
-                    let mut p = crate::geometry::XYZ {
+                    let mut p = XYZ {
                         x: q.x + curb.inward.x * distance,
                         y: 0.0,
                         z: q.z + curb.inward.z * distance,
                     };
                     let before = p;
-                    city.constrain(&mut p, &mut crate::geometry::XZ::default());
+                    city.constrain(&mut p, &mut XZ::default());
                     if (p.x - before.x).hypot(p.z - before.z) > 0.001 {
                         return None;
                     }
@@ -1714,17 +1716,17 @@ mod tests {
                 Some((q, curb.inward))
             })
             .expect("missing clear curb crossing fixture");
-        let position = crate::geometry::XYZ {
+        let position = XYZ {
             x: q.x + normal.x * 0.08,
             y: 0.0,
             z: q.z + normal.z * 0.08,
         };
         let heading = (-normal.x).atan2(-normal.z);
         let mut car =
-            Vehicle::on_track(position, heading, crate::test_support::car(), track.clone());
+            Vehicle::on_track(position, heading, test_support::car(), track.clone());
         car.velocity = normal.map(|n| -n * 8.0);
         car.update(Duration::from_millis(24), Controls::default());
-        assert!(!city.contains_road(crate::geometry::XZ {
+        assert!(!city.contains_road(XZ {
             x: car.position.x,
             z: car.position.z
         }));
@@ -1751,9 +1753,9 @@ mod tests {
 
     #[test]
     fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut compact = level_route_car(track::LocationId::Compact, model.clone());
-            let mut scenic = level_route_car(crate::test_support::scenic_id(), model.clone());
+            let mut scenic = level_route_car(test_support::scenic_id(), model.clone());
             assert!(compact.toggle_direction() && scenic.toggle_direction());
             // Projection rounding can change the phase of repeated limiter
             // cycles. Keep the tight comparison until the limiter first cuts,
@@ -1811,7 +1813,7 @@ mod tests {
 
     #[test]
     fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
-        let track = crate::test_support::scenic_id().try_track().unwrap();
+        let track = test_support::scenic_id().try_track().unwrap();
         let road = track.at_distance(50.0);
         for side in [-1.0, 1.0] {
             let position = road.vehicle_position(side * (road.width * 0.5 + 8.0));
@@ -1819,7 +1821,7 @@ mod tests {
             let mut car = Vehicle::on_track(
                 position,
                 inward.x.atan2(inward.z),
-                crate::test_support::car(),
+                test_support::car(),
                 track.clone(),
             );
             car.manual = true;
@@ -1840,7 +1842,7 @@ mod tests {
 
     #[test]
     fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
-        let mut car = route_car(crate::test_support::scenic_id(), crate::test_support::car());
+        let mut car = route_car(test_support::scenic_id(), test_support::car());
         let model = car.spec.clone();
         car.toggle_direction();
         treadmill_tick(
@@ -1856,12 +1858,12 @@ mod tests {
         car.reset(road.vehicle_position(0.0), road.heading());
         assert!(std::sync::Arc::ptr_eq(
             &car.track,
-            &crate::test_support::scenic_id().try_track().unwrap()
+            &test_support::scenic_id().try_track().unwrap()
         ));
         assert!(std::sync::Arc::ptr_eq(&car.spec, &model));
         assert_eq!(car.position, road.vehicle_position(0.0));
         assert_eq!(car.heading, road.heading());
-        assert_eq!(car.velocity, crate::geometry::XZ { x: 0.0, z: 0.0 });
+        assert_eq!(car.velocity, XZ { x: 0.0, z: 0.0 });
         assert_eq!(car.direction, Direction::Drive);
         assert_eq!(car.gear, 1);
         assert_eq!(car.speed, 0.0);
@@ -1880,22 +1882,22 @@ mod tests {
         let track = track::LocationId::Compact.try_track().unwrap();
         let bounds = track.terrain_bounds();
         let mut car = Vehicle::on_track(
-            crate::geometry::XYZ {
+            XYZ {
                 x: bounds.min.x - 1.0,
                 y: 0.0,
                 z: (bounds.min.z + bounds.max.z) * 0.5,
             },
             0.0,
-            crate::test_support::car(),
+            test_support::car(),
             track.clone(),
         );
-        car.velocity = crate::geometry::XZ { x: -4.0, z: 8.0 };
+        car.velocity = XZ { x: -4.0, z: 8.0 };
         assert!(car.resolve_road() > 0.0);
         assert_eq!(car.position.x, bounds.min.x + track::CAR_RADIUS);
         assert!(car.velocity.z > 6.0);
         assert!(
             (car.position.y
-                - track.drive_height(crate::geometry::XZ {
+                - track.drive_height(XZ {
                     x: car.position.x,
                     z: car.position.z
                 })
@@ -1911,7 +1913,7 @@ mod tests {
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        let mut heavy_spec = crate::test_support::car_spec().clone();
+        let mut heavy_spec = test_support::car_spec().clone();
         heavy_spec.weight_kg = 1800.0;
         let mut heavy = Vehicle::new(
             sample.vehicle_position(0.8),
@@ -1921,7 +1923,7 @@ mod tests {
         let mut light = Vehicle::new(
             sample.vehicle_position(-0.8),
             sample.heading(),
-            crate::test_support::car(),
+            test_support::car(),
         );
         let n = sample.normal();
         heavy.velocity = n.map(|x| -x * 3.0);
@@ -1947,7 +1949,7 @@ mod tests {
         for i in 0..2 {
             assert!((before[i] - after[i]).abs() < 0.01);
         }
-        let moved = |a: crate::geometry::XYZ, b: crate::geometry::XYZ| (a.x - b.x).hypot(a.z - b.z);
+        let moved = |a: XYZ, b: XYZ| (a.x - b.x).hypot(a.z - b.z);
         assert!(moved(light_before, light.position) > moved(heavy_before, heavy.position));
     }
 
@@ -1956,7 +1958,7 @@ mod tests {
         for handbrake in [false, true] {
             for initial_speed in [0.0, 8.0, -8.0] {
                 let mut v = car();
-                let forward = crate::geometry::XZ {
+                let forward = XZ {
                     x: v.heading.sin(),
                     z: v.heading.cos(),
                 };
@@ -2019,7 +2021,7 @@ mod tests {
 
     #[test]
     fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut car = level_route_car(track::LocationId::Compact, model.clone());
             car.manual = true;
             let speed = model.gearbox.speed_at_rpm(1800.0, 1);
@@ -2054,7 +2056,7 @@ mod tests {
 
     #[test]
     fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         let mut car = level_route_car(track::LocationId::Compact, model.clone());
         car.manual = true;
         car.gear = 2;
@@ -2109,7 +2111,7 @@ mod tests {
     #[test]
     fn drivetrain_acceleration_and_rpm_are_consistent_across_frame_rates() {
         let run = |hz: u32| {
-            let mut car = level_route_car(track::LocationId::Compact, crate::test_support::car());
+            let mut car = level_route_car(track::LocationId::Compact, test_support::car());
             for _ in 0..hz * 4 {
                 car.position = car.track.at_distance(50.0).vehicle_position(0.0);
                 car.update(
@@ -2142,7 +2144,7 @@ mod tests {
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut car = Vehicle::new(road.vehicle_position(0.0), road.heading(), model.clone());
             car.manual = true;
             car.shift(false);
@@ -2196,11 +2198,11 @@ mod tests {
             ..Controls::default()
         };
         let custom_models = [5800.0, 7400.0].map(|redline_rpm| {
-            let mut spec = crate::test_support::car_spec().clone();
+            let mut spec = test_support::car_spec().clone();
             spec.redline_rpm = redline_rpm;
             std::sync::Arc::new(spec)
         });
-        for model in crate::test_support::cars().into_iter().chain(custom_models) {
+        for model in test_support::cars().into_iter().chain(custom_models) {
             for gear in [NEUTRAL_GEAR, 1, 0] {
                 let mut car =
                     Vehicle::new(road.vehicle_position(0.0), road.heading(), model.clone());
@@ -2237,7 +2239,7 @@ mod tests {
 
     #[test]
     fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         for gear in [0, 1] {
             let mut car = level_route_car(track::LocationId::Compact, model.clone());
             car.manual = true;
@@ -2288,7 +2290,7 @@ mod tests {
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut car = Vehicle::new(road.vehicle_position(0.0), road.heading(), model.clone());
             car.manual = true;
             car.gear = NEUTRAL_GEAR;
@@ -2327,13 +2329,13 @@ mod tests {
         let mut results = Vec::new();
         for hz in [30, 60, 144, 240] {
             let mut car = Vehicle::new(
-                crate::geometry::XYZ {
+                XYZ {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
                 },
                 0.0,
-                crate::test_support::car(),
+                test_support::car(),
             );
             car.gear = NEUTRAL_GEAR;
             for _ in 0..hz / 2 {
@@ -2364,7 +2366,7 @@ mod tests {
         let mut car = Vehicle::new(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::test_support::car(),
+            test_support::car(),
         );
         assert_eq!(car.engine_rpm, IDLE_RPM);
         assert_eq!(car.engine_load, 0.0);
@@ -2444,7 +2446,7 @@ mod tests {
             .try_track()
             .unwrap()
             .at_distance(50.0);
-        for model in crate::test_support::cars() {
+        for model in test_support::cars() {
             let mut v = Vehicle::new(road.vehicle_position(0.0), road.heading(), model.clone());
             assert!(v.toggle_direction());
             assert_eq!(v.gear_label(), "R");
@@ -2497,16 +2499,17 @@ mod tests {
 #[cfg(test)]
 mod turbo_tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn boost_lags_adds_force_and_dumps_on_lift_shift_and_reset() {
-        let model = crate::test_support::cars()
+        let model = test_support::cars()
             .iter()
             .cloned()
             .find(|m| m.turbo.is_some())
             .unwrap();
         let mut car = Vehicle::new(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
@@ -2533,7 +2536,7 @@ mod turbo_tests {
         car.update_turbo(0.1, 1.0);
         assert!(car.turbo_boost < 0.05);
         car.reset(
-            crate::geometry::XYZ {
+            XYZ {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,

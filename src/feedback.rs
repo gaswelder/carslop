@@ -116,7 +116,7 @@ impl SkidMarks {
                 x: -dz / length * 0.09,
                 z: dx / length * 0.09,
             };
-            let offset = |p: XYZ, side: f32| crate::geometry::XYZ {
+            let offset = |p: XYZ, side: f32| XYZ {
                 x: p.x + n.x * side,
                 y: p.y,
                 z: p.z + n.z * side,
@@ -148,6 +148,7 @@ impl SkidMarks {
 mod tests {
     use super::*;
     use crate::asset_car;
+    use crate::test_support;
 
     fn sliding(model: std::sync::Arc<asset_car::CarSpec>, distance: f32) -> Vehicle {
         let road = track::LocationId::Compact
@@ -155,14 +156,14 @@ mod tests {
             .unwrap()
             .at_distance(distance);
         let mut car =
-            crate::test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
+            test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
         car.tire_scrub = 0.9;
         car
     }
 
     #[test]
     fn trails_never_bridge_recovery_or_grip_changes() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         let mut marks = SkidMarks::default();
         marks.record(0, &sliding(model.clone(), 50.0));
         marks.record(0, &sliding(model.clone(), 100.0));
@@ -179,7 +180,7 @@ mod tests {
 
     #[test]
     fn trail_storage_is_bounded_and_stationary_cars_leave_nothing() {
-        let model = crate::test_support::car();
+        let model = test_support::car();
         let mut marks = SkidMarks::default();
         for _ in 0..100 {
             marks.record(0, &sliding(model.clone(), 50.0));
