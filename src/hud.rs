@@ -1,20 +1,9 @@
-use crate::{
-    cars::CarModel,
-    track::{Track, TrackId},
-};
+use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
+#[cfg(test)]
+use crate::track::LocationId;
+use crate::{cars::CarModel, track::Location};
 use std::ffi::CString;
 
-#[cfg(test)]
-pub fn locations() -> [TrackId; 2] {
-    [TrackId::scenic(), TrackId::Engomi]
-}
-#[cfg(test)]
-pub fn available_locations(city_enabled: bool) -> Vec<TrackId> {
-    locations()
-        .into_iter()
-        .take(if city_enabled { 2 } else { 1 })
-        .collect()
-}
 const CHOICES_PER_PAGE: usize = 3;
 fn choice_box(index: usize, left: f32) -> [f32; 4] {
     let top = -0.02 - index as f32 * 0.17;
@@ -27,10 +16,8 @@ fn car_box(index: usize) -> [f32; 4] {
     choice_box(index, 0.06)
 }
 const START_BOX: [f32; 4] = [-0.92, -0.77, 0.78, -0.62];
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
-    #[cfg(test)]
-    Location(TrackId),
     Choice(usize),
     Page(i32),
     CarPage(i32),
@@ -54,7 +41,7 @@ fn page_hit_test(x: f32, y: f32, left: f32) -> Option<i32> {
     }
     None
 }
-pub fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
+fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
     if let Some(direction) = page_hit_test(x, y, -0.92) {
         return Some(MenuAction::Page(direction));
     }
@@ -97,30 +84,9 @@ pub fn selection_menu_hit_test(
     }
     location_menu_hit_test(x, y, selected, count)
 }
-#[cfg(test)]
-pub fn menu_hit_test(x: f32, y: f32) -> Option<MenuAction> {
-    let inside = |r: [f32; 4]| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    for (i, id) in locations().into_iter().enumerate() {
-        let r = location_box(i);
-        if inside(r) {
-            return Some(MenuAction::Location(id));
-        }
-    }
-    for i in 0..crate::cars::ALL.len().min(CHOICES_PER_PAGE) {
-        let r = car_box(i);
-        if inside(r) {
-            return Some(MenuAction::Car(crate::cars::ALL[i]));
-        }
-    }
-    if inside(START_BOX) {
-        return Some(MenuAction::Start);
-    }
-    None
-}
-
 pub struct Map<'a> {
-    pub track: &'a Track,
-    pub player: [f32; 3],
+    pub track: &'a Location,
+    pub player: XYZ,
 }
 
 #[derive(Clone, Copy)]
@@ -165,6 +131,7 @@ pub fn pause_hit_test(x: f32, y: f32) -> Option<PauseAction> {
 }
 pub struct PauseMenu<'a> {
     pub city: bool,
+    pub aerial_attribution: Option<&'a str>,
     pub view: &'a str,
     pub audio: &'a str,
 }
@@ -174,38 +141,44 @@ const FULL_MAP_CONTENT: [[f32; 2]; 2] = [[-0.94, -0.72], [0.94, 0.75]];
 const MAP_WIDTH_METRES: f32 = 500.0;
 
 struct MapFit {
-    center: [f32; 2],
+    center: XZ<f32>,
     scale: [f32; 2],
     north_up: bool,
     heading: Option<f32>,
     content: [[f32; 2]; 2],
 }
 impl MapFit {
-    fn new(track: &Track, player: [f32; 3], viewport: [f32; 2]) -> Self {
+    fn new(track: &Location, player: XYZ, viewport: [f32; 2]) -> Self {
         let x_scale = (MAP_CONTENT[1][0] - MAP_CONTENT[0][0]) / MAP_WIDTH_METRES;
         Self {
-            center: [player[0], player[2]],
+            center: player.xz(),
             scale: [x_scale, x_scale * viewport[0] / viewport[1]],
-            north_up: track.city().is_some(),
+            north_up: track.has_compiled_roads(),
             heading: None,
             content: MAP_CONTENT,
         }
     }
-    fn world_bounds(&self) -> [[f32; 2]; 2] {
+    fn world_bounds(&self) -> BoundingBoxXZ<f32> {
         let mut x = (self.content[1][0] - self.content[0][0]) * 0.5 / self.scale[0];
         let mut z = (self.content[1][1] - self.content[0][1]) * 0.5 / self.scale[1];
         if let Some(heading) = self.heading {
             let (sin, cos) = heading.sin_cos();
             (x, z) = (x * cos.abs() + z * sin.abs(), x * sin.abs() + z * cos.abs());
         }
-        [
-            [self.center[0] - x, self.center[1] - z],
-            [self.center[0] + x, self.center[1] + z],
-        ]
+        BoundingBoxXZ {
+            min: XZ {
+                x: self.center.x - x,
+                z: self.center.z - z,
+            },
+            max: XZ {
+                x: self.center.x + x,
+                z: self.center.z + z,
+            },
+        }
     }
-    fn point(&self, p: [f32; 3]) -> [f32; 2] {
-        let dx = p[0] - self.center[0];
-        let dz = p[2] - self.center[1];
+    fn point(&self, p: XYZ) -> [f32; 2] {
+        let dx = p.x - self.center.x;
+        let dz = p.z - self.center.z;
         let [x, y] = if let Some(heading) = self.heading {
             let (sin, cos) = heading.sin_cos();
             [dz * sin - dx * cos, dx * sin + dz * cos]
@@ -226,22 +199,22 @@ struct FullMapView {
     max_scale: f32,
 }
 impl FullMapView {
-    fn new(track: &Track, player: [f32; 3], viewport: [f32; 2]) -> Self {
+    fn new(track: &Location, player: XYZ, viewport: [f32; 2]) -> Self {
         // Keep the minimap's metres per pixel, expanding the visible area.
         let mut fit = MapFit::new(track, player, viewport);
         fit.content = FULL_MAP_CONTENT;
-        let mut bounds = track.bounds;
+        let mut bounds = track.bounding_box();
         for p in track.map_segments().flat_map(|(a, b)| [a, b]) {
-            for (axis, coordinate) in [p[0], p[2]].into_iter().enumerate() {
-                bounds[0][axis] = bounds[0][axis].min(coordinate);
-                bounds[1][axis] = bounds[1][axis].max(coordinate);
-            }
+            bounds.min.x = bounds.min.x.min(p.x);
+            bounds.min.z = bounds.min.z.min(p.z);
+            bounds.max.x = bounds.max.x.max(p.x);
+            bounds.max.z = bounds.max.z.max(p.z);
         }
         // Zooming out can reveal the entire network while keeping the car centered.
         let size: [f32; 2] = std::array::from_fn(|i| {
-            2.0 * (bounds[0][i] - fit.center[i])
+            2.0 * ([bounds.min.x, bounds.min.z][i] - fit.center.component(i))
                 .abs()
-                .max((bounds[1][i] - fit.center[i]).abs())
+                .max(([bounds.max.x, bounds.max.z][i] - fit.center.component(i)).abs())
                 .max(1.0)
         });
         let available: [f32; 2] =
@@ -349,17 +322,24 @@ impl MapZoomMemory {
         values.retain(|_, value| value.is_finite() && (0.000001..=16.0).contains(value));
         Self { values, path }
     }
-    fn key(track: &Track) -> String {
-        format!("{}:{:?}", track.name, track.bounds)
+    fn key(track: &Location) -> String {
+        format!(
+            "{}:{:?}",
+            track.display_name,
+            [
+                [track.bounding_box().min.x, track.bounding_box().min.z],
+                [track.bounding_box().max.x, track.bounding_box().max.z]
+            ]
+        )
     }
-    fn restore(&self, track: &Track, view: &mut FullMapView) {
+    fn restore(&self, track: &Location, view: &mut FullMapView) {
         if let Some(factor) = self.values.get(&Self::key(track)) {
             let scale = (view.max_scale / 16.0 * factor).clamp(view.min_scale, view.max_scale);
             view.fit.scale[1] *= scale / view.fit.scale[0];
             view.fit.scale[0] = scale;
         }
     }
-    fn remember(&mut self, track: &Track, view: &FullMapView) {
+    fn remember(&mut self, track: &Location, view: &FullMapView) {
         self.values.insert(
             Self::key(track),
             view.fit.scale[0] / (view.max_scale / 16.0),
@@ -448,7 +428,7 @@ impl Hud {
             [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
         );
         fit.heading = Some(heading);
-        let width = if map.track.city().is_some() {
+        let width = if map.track.has_compiled_roads() {
             0.0025
         } else {
             0.006
@@ -466,11 +446,7 @@ impl Hud {
             [0.15, 0.85, 0.95],
         );
 
-        let street = map
-            .track
-            .city()
-            .map_or(map.track.name.as_str(), |city| city.street_name(map.player));
-        append_street_name(&mut v, street);
+        append_street_name(&mut v, map.track.street_name(map.player));
         if let Some(pause) = pause {
             append_pause(&mut v, pause);
         }
@@ -496,11 +472,6 @@ impl Hud {
         }
     }
 
-    #[cfg(test)]
-    pub fn full_map_scale(&self) -> f32 {
-        self.full_map_view.as_ref().unwrap().fit.scale[0]
-    }
-
     pub fn map_copy_status(
         &mut self,
         map: Map<'_>,
@@ -518,12 +489,7 @@ impl Hud {
         let view = self.full_map_view.as_ref().expect("full map is open");
         let mut vertices = Vec::new();
         let hint = view.copy_status.unwrap_or_else(|| {
-            if map
-                .track
-                .city()
-                .and_then(|city| city.google_maps_url(map.player))
-                .is_some()
-            {
+            if map.track.google_maps_url(map.player).is_some() {
                 "C COPY GOOGLE MAPS URL"
             } else {
                 "NO GOOGLE MAPS LOCATION"
@@ -632,7 +598,7 @@ impl Hud {
         }
         menu_button(&mut v, START_BOX, true, menu.focus == 2);
         text(&mut v, "START DRIVING", [-0.27, -0.66], 0.005, cyan);
-        if menu.locations[menu.selected].track == TrackId::Engomi {
+        if menu.locations[menu.selected].track.asset_path().is_some() {
             text(
                 &mut v,
                 "OPENSTREETMAP CONTRIBUTORS / ODBL",
@@ -647,14 +613,12 @@ impl Hud {
                 0.0025,
                 muted,
             );
-            if crate::aerial::source_available() {
-                text(
-                    &mut v,
-                    crate::aerial::attribution_label(),
-                    [-0.92, -0.91],
-                    0.0024,
-                    muted,
-                );
+            if let Some(label) = menu.locations[menu.selected]
+                .assets
+                .as_ref()
+                .and_then(|a| a.aerial_attribution())
+            {
+                text(&mut v, label, [-0.92, -0.91], 0.0024, muted);
             }
         }
         text(
@@ -726,8 +690,9 @@ fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32;
         [0.025, 0.05, 0.075],
     );
     text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
-    let name_size = 0.004_f32.min(0.94 / (map.track.name.chars().count().max(1) as f32 * 6.0));
-    text(v, &map.track.name, [-0.60, 0.90], name_size, white);
+    let name_size =
+        0.004_f32.min(0.94 / (map.track.display_name.chars().count().max(1) as f32 * 6.0));
+    text(v, &map.track.display_name, [-0.60, 0.90], name_size, white);
     text(v, "M / ESC BACK", [0.49, 0.90], 0.004, white);
 
     let pixel = |p: [f32; 2]| {
@@ -1102,14 +1067,8 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
             0.0025,
             [0.55, 0.66, 0.70],
         );
-        if crate::aerial::source_available() {
-            text(
-                v,
-                crate::aerial::attribution_label(),
-                [-0.68, -0.47],
-                0.0022,
-                [0.55, 0.66, 0.70],
-            );
+        if let Some(label) = pause.aerial_attribution {
+            text(v, label, [-0.68, -0.47], 0.0022, [0.55, 0.66, 0.70]);
         }
     }
 }
@@ -1207,7 +1166,7 @@ fn text(v: &mut Vec<f32>, value: &str, origin: [f32; 2], size: f32, color: [f32;
     }
 }
 
-pub(crate) fn glyph(ch: char) -> [u8; 7] {
+pub fn glyph(ch: char) -> [u8; 7] {
     let ch = match ch {
         'Α' | 'Ά' | 'Á' | 'À' | 'Â' | 'Ä' => 'A',
         'Β' => 'B',
@@ -1288,6 +1247,45 @@ pub(crate) fn glyph(ch: char) -> [u8; 7] {
     }
 }
 
+impl Location {
+    fn map_segments(&self) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
+        Box::new(
+            self.road_lines()
+                .iter()
+                .flat_map(|street| street.path.windows(2).map(|p| (p[0], p[1]))),
+        )
+    }
+    fn map_segments_near(
+        &self,
+        bounds: BoundingBoxXZ<f32>,
+    ) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
+        Box::new(self.road_segments_in(bounds).into_iter())
+    }
+
+    pub fn google_maps_url(&self, position: XYZ) -> Option<String> {
+        let p = self.geographic_position(position)?;
+        Some(format!(
+            "https://www.google.com/maps/search/?api=1&query={:.7},{:.7}",
+            p.lat, p.lon
+        ))
+    }
+
+    /// Label the closest road only while the car is on or beside its surface.
+    fn street_name(&self, p: XYZ) -> &str {
+        let (index, road) = self.nearest_road(p);
+        if (p.x - road.point.x).hypot(p.z - road.point.z) > road.width * 0.5 + 5.0 {
+            return "";
+        }
+        self.road_name(index).unwrap_or_else(|| {
+            if self.road_lines()[index].osm_way_id.is_none() {
+                self.display_name.as_str()
+            } else {
+                "UNNAMED ROAD"
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,8 +1294,8 @@ mod tests {
     fn map_zoom_is_remembered_per_location_after_reopening_and_reloading() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("zoom.json");
-        let track = TrackId::Compact.track();
-        let other = TrackId::scenic().track();
+        let track = LocationId::Compact.try_track().unwrap();
+        let other = crate::test_support::scenic_id().try_track().unwrap();
         let viewport = [1280.0, 720.0];
         let player = track.spawn().point;
         let mut memory = MapZoomMemory::open(Some(path.clone()));
@@ -1394,28 +1392,6 @@ mod tests {
     }
 
     #[test]
-    fn main_menu_click_targets_cover_all_locations_cars_and_start() {
-        for (y, id) in [(-0.07, TrackId::scenic()), (-0.195, TrackId::Engomi)] {
-            assert_eq!(menu_hit_test(-0.5, y), Some(MenuAction::Location(id)));
-        }
-        for (index, car) in crate::cars::ALL
-            .into_iter()
-            .take(CHOICES_PER_PAGE)
-            .enumerate()
-        {
-            let r = car_box(index);
-            assert_eq!(
-                menu_hit_test((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5),
-                Some(MenuAction::Car(car))
-            );
-        }
-        assert_eq!(menu_hit_test(-0.5, -0.36), None);
-        assert_eq!(menu_hit_test(-0.5, -0.69), Some(MenuAction::Start));
-        assert_eq!(menu_hit_test(0.5, 0.2), None);
-        assert_eq!(menu_hit_test(-0.5, -0.8), None);
-    }
-
-    #[test]
     fn pause_buttons_match_their_visible_actions() {
         for (x, y, action) in [
             (-0.36, 0.13, PauseAction::Resume),
@@ -1432,15 +1408,35 @@ mod tests {
 
     #[test]
     fn minimap_heading_keeps_forward_up_and_queries_rotated_corners() {
-        let track = TrackId::Compact.track();
+        let track = LocationId::Compact.try_track().unwrap();
         for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
-            let mut fit = MapFit::new(&track, [0.0; 3], [1280.0, 720.0]);
+            let mut fit = MapFit::new(
+                &track,
+                crate::geometry::XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                [1280.0, 720.0],
+            );
             fit.heading = Some(heading);
-            let center = fit.point([0.0; 3]);
-            let forward = fit.point([heading.sin() * 30.0, 0.0, heading.cos() * 30.0]);
+            let center = fit.point(crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            });
+            let forward = fit.point(crate::geometry::XYZ {
+                x: heading.sin() * 30.0,
+                y: 0.0,
+                z: heading.cos() * 30.0,
+            });
             assert!((forward[0] - center[0]).abs() < 0.00001);
             assert!(forward[1] > center[1]);
-            let camera_right = fit.point([-heading.cos() * 30.0, 0.0, heading.sin() * 30.0]);
+            let camera_right = fit.point(crate::geometry::XYZ {
+                x: -heading.cos() * 30.0,
+                y: 0.0,
+                z: heading.sin() * 30.0,
+            });
             assert!(camera_right[0] > center[0]);
             assert!((camera_right[1] - center[1]).abs() < 0.00001);
             let bounds = fit.world_bounds();
@@ -1454,7 +1450,8 @@ mod tests {
                     ];
                     for i in 0..2 {
                         assert!(
-                            world[i] >= bounds[0][i] - 0.001 && world[i] <= bounds[1][i] + 0.001
+                            world[i] >= [bounds.min.x, bounds.min.z][i] - 0.001
+                                && world[i] <= [bounds.max.x, bounds.max.z][i] + 0.001
                         );
                     }
                 }
@@ -1464,8 +1461,8 @@ mod tests {
 
     #[test]
     fn vicinity_map_follows_player_and_preserves_pixel_aspect() {
-        for id in crate::track::all() {
-            let track = id.track();
+        for id in crate::test_support::location_ids() {
+            let track = id.try_track().unwrap();
             for player in [track.spawn().point, track.at_distance(600.0).point] {
                 for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
                     let fit = MapFit::new(&track, player, viewport);
@@ -1473,13 +1470,31 @@ mod tests {
                     assert!(
                         (center[0] - 0.78).abs() < 0.00001 && (center[1] - 0.685).abs() < 0.00001
                     );
-                    let east = fit.point([player[0] + 100.0, 0.0, player[2]]);
-                    let south = fit.point([player[0], 0.0, player[2] + 100.0]);
+                    let east = fit.point(crate::geometry::XYZ {
+                        x: player.x + 100.0,
+                        y: 0.0,
+                        z: player.z,
+                    });
+                    let south = fit.point(crate::geometry::XYZ {
+                        x: player.x,
+                        y: 0.0,
+                        z: player.z + 100.0,
+                    });
                     let width = (east[0] - center[0]) * viewport[0] * 0.5;
                     let height = (south[1] - center[1]).abs() * viewport[1] * 0.5;
                     assert!((width - height).abs() < 0.001);
-                    assert_eq!(south[1] < center[1], id == TrackId::Engomi);
-                    assert!(fit.point([player[0] + 1000.0, 0.0, player[2]])[0] > MAP_CONTENT[1][0]);
+                    assert_eq!(
+                        south[1] < center[1],
+                        id == crate::test_support::nicosia_id()
+                    );
+                    assert!(
+                        fit.point(crate::geometry::XYZ {
+                            x: player.x + 1000.0,
+                            y: 0.0,
+                            z: player.z
+                        })[0]
+                            > MAP_CONTENT[1][0]
+                    );
                 }
             }
         }
@@ -1504,11 +1519,15 @@ mod tests {
 
     #[test]
     fn full_map_zoom_matches_minimap_and_can_fit_every_road() {
-        for id in crate::track::all() {
-            let track = id.track();
+        for id in crate::test_support::location_ids() {
+            let track = id.try_track().unwrap();
             for player in [
                 track.spawn().point,
-                [track.bounds[1][0] + 100.0, 0.0, track.bounds[1][1] + 100.0],
+                crate::geometry::XYZ {
+                    x: track.bounding_box().max.x + 100.0,
+                    y: 0.0,
+                    z: track.bounding_box().max.z + 100.0,
+                },
             ] {
                 for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
                     let mini = MapFit::new(&track, player, viewport);
@@ -1546,12 +1565,23 @@ mod tests {
                         }
                     }
                     let center = fit.point(player);
-                    let east = fit.point([player[0] + 100.0, 0.0, player[2]]);
-                    let south = fit.point([player[0], 0.0, player[2] + 100.0]);
+                    let east = fit.point(crate::geometry::XYZ {
+                        x: player.x + 100.0,
+                        y: 0.0,
+                        z: player.z,
+                    });
+                    let south = fit.point(crate::geometry::XYZ {
+                        x: player.x,
+                        y: 0.0,
+                        z: player.z + 100.0,
+                    });
                     let width = (east[0] - center[0]) * viewport[0];
                     let height = (south[1] - center[1]).abs() * viewport[1];
                     assert!((width - height).abs() < 0.001);
-                    assert_eq!(south[1] < center[1], id == TrackId::Engomi);
+                    assert_eq!(
+                        south[1] < center[1],
+                        id == crate::test_support::nicosia_id()
+                    );
                 }
             }
         }
@@ -1559,7 +1589,7 @@ mod tests {
 
     #[test]
     fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = TrackId::scenic().track();
+        let track = crate::test_support::scenic_id().try_track().unwrap();
         let player = track.spawn().point;
         for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
             for steps in [-100.0, 0.0, 100.0] {

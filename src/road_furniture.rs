@@ -1,26 +1,30 @@
 //! Original procedural signal heads and sign faces, placed from mapped controls.
 use super::{Builder, Surface};
+use crate::geometry::{XYZ, XZ};
 use crate::traffic::{Furniture, FurnitureKind};
 use std::f32::consts::{PI, TAU};
 
-fn point(f: &Furniture, x: f32, y: f32, depth: f32) -> [f32; 3] {
-    let right = [-f.travel[1], f.travel[0]];
-    [
-        f.position[0] + right[0] * x - f.travel[0] * depth,
-        f.position[1] + y,
-        f.position[2] + right[1] * x - f.travel[1] * depth,
-    ]
+fn point(f: &Furniture, x: f32, y: f32, depth: f32) -> XYZ {
+    let right = XZ {
+        x: -f.travel.z,
+        z: f.travel.x,
+    };
+    XYZ {
+        x: f.coords.x + right.x * x - f.travel.x * depth,
+        y: f.coords.y + y,
+        z: f.coords.z + right.z * x - f.travel.z * depth,
+    }
 }
-fn box_mesh(b: &mut Builder, f: &Furniture, min: [f32; 3], max: [f32; 3], surface: Surface) {
+fn box_mesh(b: &mut Builder, f: &Furniture, min: XYZ, max: XYZ, surface: Surface) {
     let p = [
-        point(f, min[0], min[1], min[2]),
-        point(f, max[0], min[1], min[2]),
-        point(f, max[0], max[1], min[2]),
-        point(f, min[0], max[1], min[2]),
-        point(f, min[0], min[1], max[2]),
-        point(f, max[0], min[1], max[2]),
-        point(f, max[0], max[1], max[2]),
-        point(f, min[0], max[1], max[2]),
+        point(f, min.x, min.y, min.z),
+        point(f, max.x, min.y, min.z),
+        point(f, max.x, max.y, min.z),
+        point(f, min.x, max.y, min.z),
+        point(f, min.x, min.y, max.z),
+        point(f, max.x, min.y, max.z),
+        point(f, max.x, max.y, max.z),
+        point(f, min.x, max.y, max.z),
     ];
     for [a, c, d, e] in [
         [3, 2, 1, 0],
@@ -106,11 +110,53 @@ pub(super) fn build(b: &mut Builder, f: &Furniture) {
             metal,
         );
     }
-    box_mesh(b, f, [-0.09, 0.0, -0.13], [0.09, 0.16, 0.06], metal);
+    box_mesh(
+        b,
+        f,
+        XYZ {
+            x: -0.09,
+            y: 0.0,
+            z: -0.13,
+        },
+        XYZ {
+            x: 0.09,
+            y: 0.16,
+            z: 0.06,
+        },
+        metal,
+    );
     match f.kind {
         FurnitureKind::Signal => {
-            box_mesh(b, f, [-0.23, 2.28, -0.11], [0.23, 3.36, 0.10], metal);
-            box_mesh(b, f, [-0.19, 2.32, 0.10], [0.19, 3.32, 0.14], dark);
+            box_mesh(
+                b,
+                f,
+                XYZ {
+                    x: -0.23,
+                    y: 2.28,
+                    z: -0.11,
+                },
+                XYZ {
+                    x: 0.23,
+                    y: 3.36,
+                    z: 0.10,
+                },
+                metal,
+            );
+            box_mesh(
+                b,
+                f,
+                XYZ {
+                    x: -0.19,
+                    y: 2.32,
+                    z: 0.10,
+                },
+                XYZ {
+                    x: 0.19,
+                    y: 3.32,
+                    z: 0.14,
+                },
+                dark,
+            );
             for (lamp, (height, color)) in [
                 (3.12, [1.0, 0.025, 0.008]),
                 (2.82, [1.0, 0.55, 0.015]),
@@ -136,8 +182,16 @@ pub(super) fn build(b: &mut Builder, f: &Furniture) {
                 box_mesh(
                     b,
                     f,
-                    [-0.14, height + 0.11, 0.14],
-                    [0.14, height + 0.14, 0.28],
+                    XYZ {
+                        x: -0.14,
+                        y: height + 0.11,
+                        z: 0.14,
+                    },
+                    XYZ {
+                        x: 0.14,
+                        y: height + 0.14,
+                        z: 0.28,
+                    },
                     dark,
                 );
             }
@@ -179,8 +233,12 @@ mod tests {
             let feature = Furniture {
                 _source_id: 1,
                 kind,
-                position: [0.0; 3],
-                travel: [0.0, 1.0],
+                coords: crate::geometry::XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                travel: crate::geometry::XZ { x: 0.0, z: 1.0 },
                 value: 30,
                 phase: 0,
             };

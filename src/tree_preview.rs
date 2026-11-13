@@ -2,19 +2,19 @@
 use image::RgbImage;
 
 #[derive(Debug)]
-pub(crate) struct Candidate {
-    pub(crate) x: usize,
-    pub(crate) y: usize,
-    pub(crate) radius: f64,
+pub struct Candidate {
+    pub x: usize,
+    pub y: usize,
+    pub radius: f64,
 }
 #[derive(Clone, Copy)]
-pub(crate) struct Geo {
-    pub(crate) extent: [f64; 4],
-    pub(crate) width: usize,
-    pub(crate) height: usize,
+pub struct Geo {
+    pub extent: [f64; 4],
+    pub width: usize,
+    pub height: usize,
 }
 impl Geo {
-    pub(crate) fn lonlat(self, x: f64, y: f64) -> [f64; 2] {
+    pub fn lonlat(self, x: f64, y: f64) -> [f64; 2] {
         let [west, south, east, north] = self.extent;
         let mx = west + (east - west) * x / self.width as f64;
         let my = north - (north - south) * y / self.height as f64;
@@ -23,7 +23,7 @@ impl Geo {
             (2. * (my / 6378137.).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees(),
         ]
     }
-    pub(crate) fn metres_per_pixel(self) -> [f64; 2] {
+    pub fn metres_per_pixel(self) -> [f64; 2] {
         let lat = self.lonlat(self.width as f64 / 2., self.height as f64 / 2.)[1].to_radians();
         [
             (self.extent[2] - self.extent[0]) * lat.cos() / self.width as f64,
@@ -31,7 +31,7 @@ impl Geo {
         ]
     }
 }
-pub(crate) fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
+pub fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
     let (w, h) = (im.width() as usize, im.height() as usize);
     if w < 5 || h < 5 {
         return vec![];

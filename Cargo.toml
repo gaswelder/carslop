@@ -11,15 +11,14 @@ log = "0.4"
 geo = "0.33.1"
 quick-xml = "0.42.0"
 regex = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 flate2 = "1.1.10"
-sha2 = "0.11.1"
 rstar = "0.12.2"
 osmpbf = { version = "0.3", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tempfile = "3.27.0"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
-crc32fast = "1.5.3"
 ureq = { version = "3", features = ["json"] }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras"] }
 glam = "0.30"

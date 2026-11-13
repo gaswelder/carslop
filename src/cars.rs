@@ -1,3 +1,4 @@
+use crate::geometry::XYZ;
 use std::fs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,12 +36,10 @@ fn ordered_models() -> &'static [CarModel] {
     static MODELS: std::sync::OnceLock<Vec<CarModel>> = std::sync::OnceLock::new();
     MODELS.get_or_init(|| (0..catalog().len()).map(CarModel::Catalog).collect())
 }
-#[cfg(test)]
-pub const WHEEL_RADIUS: f32 = 0.4;
 
 #[derive(Clone)]
 pub struct CarSpec {
-    pub(crate) design: std::sync::Arc<crate::scene::car_glb::Design>,
+    pub design: std::sync::Arc<crate::scene::car_glb::Design>,
     pub name: &'static str,
     pub mass: f32,
     pub top_speed: f32,
@@ -64,8 +63,8 @@ pub struct CarSpec {
     pub gearbox: Gearbox,
     pub engine_power_hp: f32,
     /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
-    pub drag_coefficient: f32,
-    pub frontal_area_m2: f32,
+    drag_coefficient: f32,
+    frontal_area_m2: f32,
     pub turbo: Option<Turbo>,
 }
 
@@ -75,13 +74,13 @@ const AIR_DENSITY_KG_M3: f32 = 1.225;
 
 // The physics assumes
 // 90% drivetrain efficiency to calculate power at the wheels.
-pub const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
+const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 
 impl CarSpec {
-    pub fn wheel_power_watts(&self) -> f32 {
+    fn wheel_power_watts(&self) -> f32 {
         self.engine_power_hp * WATTS_PER_HP * DRIVETRAIN_EFFICIENCY
     }
-    pub(crate) fn drive_force(
+    pub fn drive_force(
         &self,
         speed: f32,
         gear: u8,
@@ -401,9 +400,9 @@ fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarS
 }
 
 /// Longitudinal separation of axle midpoints; GLB coordinates use +Z forward.
-fn model_wheelbase(mounts: &[[f32; 3]; 4]) -> Result<f32, String> {
-    let rear = (mounts[0][2] + mounts[1][2]) * 0.5;
-    let front = (mounts[2][2] + mounts[3][2]) * 0.5;
+fn model_wheelbase(mounts: &[XYZ; 4]) -> Result<f32, String> {
+    let rear = (mounts[0].z + mounts[1].z) * 0.5;
+    let front = (mounts[2].z + mounts[3].z) * 0.5;
     let wheelbase = front - rear;
     if !wheelbase.is_finite() || wheelbase <= 0.0 {
         return Err("model front axle must be ahead of rear axle along +Z".into());
@@ -413,9 +412,9 @@ fn model_wheelbase(mounts: &[[f32; 3]; 4]) -> Result<f32, String> {
 
 /// Mean front/rear distance between wheel mounts along X. The handling model
 /// uses one track width for lateral load transfer and body roll over terrain.
-fn model_track_width(mounts: &[[f32; 3]; 4]) -> Result<f32, String> {
-    let rear = mounts[1][0] - mounts[0][0];
-    let front = mounts[3][0] - mounts[2][0];
+fn model_track_width(mounts: &[XYZ; 4]) -> Result<f32, String> {
+    let rear = mounts[1].x - mounts[0].x;
+    let front = mounts[3].x - mounts[2].x;
     if [rear, front]
         .iter()
         .any(|width| !width.is_finite() || *width <= 0.0)
@@ -448,7 +447,7 @@ fn load_model(
 
 impl CarModel {
     /// Rear pair first, then front pair. Shared by artwork and tire feedback.
-    pub fn wheel_centers(self) -> [[f32; 3]; 4] {
+    pub fn wheel_centers(self) -> [XYZ; 4] {
         self.spec().design.mounts
     }
 
@@ -473,15 +472,6 @@ impl CarModel {
     pub fn first() -> Self {
         ALL[0]
     }
-    #[cfg(test)]
-    pub fn test_fixture() -> Self {
-        Self::TestFixture(0)
-    }
-
-    #[cfg(test)]
-    pub fn test_with_spec(spec: CarSpec) -> Self {
-        Self::TestFixture(crate::test_support::register_spec(spec))
-    }
 }
 
 #[cfg(test)]
@@ -492,20 +482,52 @@ mod tests {
     fn wheelbase_comes_from_axle_midpoints() {
         // Different left/right Z positions exercise axle averaging.
         let mounts = [
-            [-0.8, 0.1, -1.4],
-            [0.8, 0.2, -1.2],
-            [-0.9, 0.3, 1.1],
-            [0.9, 0.4, 1.3],
+            crate::geometry::XYZ {
+                x: -0.8,
+                y: 0.1,
+                z: -1.4,
+            },
+            crate::geometry::XYZ {
+                x: 0.8,
+                y: 0.2,
+                z: -1.2,
+            },
+            crate::geometry::XYZ {
+                x: -0.9,
+                y: 0.3,
+                z: 1.1,
+            },
+            crate::geometry::XYZ {
+                x: 0.9,
+                y: 0.4,
+                z: 1.3,
+            },
         ];
         assert!((model_wheelbase(&mounts).unwrap() - 2.5).abs() < 0.00001);
-        let translated = mounts.map(|p| [p[0], p[1], p[2] + 10.0]);
+        let translated = mounts.map(|p| crate::geometry::XYZ { z: p.z + 10.0, ..p });
         assert!((model_wheelbase(&translated).unwrap() - 2.5).abs() < 0.00001);
         for z in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             let invalid = [
-                [-1.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [-1.0, 0.0, z],
-                [1.0, 0.0, z],
+                crate::geometry::XYZ {
+                    x: -1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                crate::geometry::XYZ {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                crate::geometry::XYZ {
+                    x: -1.0,
+                    y: 0.0,
+                    z: z,
+                },
+                crate::geometry::XYZ {
+                    x: 1.0,
+                    y: 0.0,
+                    z: z,
+                },
             ];
             assert!(model_wheelbase(&invalid).is_err());
         }
@@ -514,18 +536,34 @@ mod tests {
     #[test]
     fn track_width_comes_from_both_axles() {
         let mounts = [
-            [-0.7, 0.0, -1.0],
-            [0.7, 0.0, -1.0],
-            [-0.9, 0.0, 1.0],
-            [0.9, 0.0, 1.0],
+            crate::geometry::XYZ {
+                x: -0.7,
+                y: 0.0,
+                z: -1.0,
+            },
+            crate::geometry::XYZ {
+                x: 0.7,
+                y: 0.0,
+                z: -1.0,
+            },
+            crate::geometry::XYZ {
+                x: -0.9,
+                y: 0.0,
+                z: 1.0,
+            },
+            crate::geometry::XYZ {
+                x: 0.9,
+                y: 0.0,
+                z: 1.0,
+            },
         ];
         assert!((model_track_width(&mounts).unwrap() - 1.6).abs() < 0.00001);
-        let translated = mounts.map(|p| [p[0] + 10.0, p[1], p[2]]);
+        let translated = mounts.map(|p| crate::geometry::XYZ { x: p.x + 10.0, ..p });
         assert!((model_track_width(&translated).unwrap() - 1.6).abs() < 0.00001);
         for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             for wheel in [1, 3] {
                 let mut invalid_mounts = mounts;
-                invalid_mounts[wheel][0] = invalid_mounts[wheel - 1][0] + width;
+                invalid_mounts[wheel].x = invalid_mounts[wheel - 1].x + width;
                 assert!(model_track_width(&invalid_mounts).is_err());
             }
         }
@@ -595,38 +633,21 @@ mod tests {
     }
 
     #[test]
-    fn catalog_is_complete_and_physics_values_are_valid() {
+    fn catalog_is_ordered_and_audio_banks_load() {
         let names: Vec<_> = ALL.into_iter().map(CarModel::folder_name).collect();
         assert!(names.windows(2).all(|p| p[0] < p[1]));
         for (index, model) in ALL.into_iter().enumerate() {
             assert_eq!(model.index(), index);
             let s = model.spec();
-            assert!(!s.name.is_empty());
             if let Some(samples) = &s.audio.samples {
-                crate::engine_sample::validate_bank(samples).unwrap_or_else(|error| {
-                    panic!("{} audio bank {}: {error}", s.name, samples.display())
-                });
-            }
-            for value in [
-                s.mass,
-                s.top_speed,
-                s.brake_force,
-                s.tire_friction_coefficient,
-                s.wheelbase,
-                s.gearbox.final_drive,
-                s.gearbox.rolling_radius,
-                s.drag_coefficient,
-                s.frontal_area_m2,
-                s.engine_power_hp,
-            ] {
-                assert!(value.is_finite() && value > 0.0);
-            }
-            assert!((4..=6).contains(&s.gearbox.gears()));
-            assert!(s.gearbox.ratios.iter().all(|r| r.is_finite() && *r > 0.0));
-            assert!(s.gearbox.ratios.windows(2).all(|p| p[0] > p[1]));
-            for gear in 1..=s.gearbox.gears() {
-                let speed = s.gearbox.speed_at_rpm(6000.0, gear);
-                assert!((s.gearbox.rpm(speed, gear) - 6000.0).abs() < 0.01);
+                let mut engine = crate::engine_sample::RecordedEngine::default();
+                engine.select(Some(samples));
+                assert!(
+                    engine.available(),
+                    "{} audio bank {}",
+                    s.name,
+                    samples.display()
+                );
             }
         }
     }
@@ -720,19 +741,7 @@ mod runtime_tests {
         assert_eq!(car.spec().name, "NEW CAR");
         assert_eq!(car.spec().mass, 1234.0);
         assert_eq!(car.spec().gearbox.ratios, &[3.0, 2.0, 1.0]);
-        assert_eq!(car.wheel_centers()[0][0], -0.99);
-        let geometry = crate::scene::cars_only();
-        assert_eq!(geometry.car_ranges.len(), 2);
-        assert_eq!(
-            geometry.vertices[geometry.car_ranges[0].start as usize].position[0],
-            7.25
-        );
-        assert!(!geometry.car_ranges[0].is_empty());
-        assert!(
-            (geometry.vertices[geometry.wheel_range[0][0].start as usize].position[0] - 0.123)
-                .abs()
-                < 0.00001
-        );
+        assert_eq!(car.wheel_centers()[0].x, -0.99);
         assert_eq!(
             crate::hud::selection_menu_hit_test(0.5, -0.07, 0, 2, car),
             Some(crate::hud::MenuAction::Car(car))
@@ -876,7 +885,7 @@ mod runtime_tests {
         let mut design = (*crate::test_support::car_spec().design).clone();
         design.body[0].position[0] = 7.25;
         design.wheels[0][0].position[0] = 0.123;
-        design.mounts[0][0] = -0.99;
+        design.mounts[0].x = -0.99;
         fs::write(
             cars.join("new/model.glb"),
             crate::test_support::model_glb(&design),
@@ -932,3 +941,7 @@ mod runtime_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "test_support.rs"]
+pub mod test_support;

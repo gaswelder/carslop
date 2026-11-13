@@ -1,13 +1,13 @@
 //! Compile render geometry from prepared location assets.
 use crate::{
+    osm::OSMBoundary,
     scene_archive::{write_spooled, Archive},
-    world::Boundary,
 };
 use std::path::Path;
 
-pub(crate) fn build_scene(
-    city: &crate::city::City,
-    boundary: Option<&Boundary>,
+pub fn build_scene(
+    city: &crate::world::CompiledLocation,
+    boundary: Option<&OSMBoundary>,
     decorations_path: &Path,
     output_path: &Path,
     temporary_directory: &Path,
@@ -17,7 +17,7 @@ pub(crate) fn build_scene(
     //
     let boundary_polygon = if let Some(boundary) = boundary {
         let origin = city
-            .geographic_origin()
+            .origin
             .ok_or_else(|| std::io::Error::other("boundary needs a geographic origin"))?;
         Some(boundary.local(origin))
     } else {

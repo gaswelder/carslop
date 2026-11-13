@@ -1,55 +1,94 @@
-//! Offline mapped ground cover and vegetation. Tree sizes are estimates where absent.
-#[derive(Debug)]
-pub struct GroundTriangle {
-    pub style: usize,
-    pub points: [[f32; 2]; 3],
-}
-#[derive(Debug)]
-pub struct Tree {
-    pub id: u64,
-    pub point: [f32; 2],
-    pub height: f32,
-    pub radius: f32,
-}
-#[derive(Debug, Default)]
-pub struct Landscape {
-    pub ground: Vec<GroundTriangle>,
-    pub trees: Vec<Tree>,
-    grid: std::collections::HashMap<(i32, i32), Vec<usize>>,
-}
-impl Landscape {
-    #[cfg(test)]
-    pub fn load(text: &str, city: &str, streets: &str) -> Result<Self, String> {
-        Self::load_with_checksums(
-            text,
-            crate::street_surface::SourceChecksums::new(city, streets),
-        )
+//! Mapped ground cover and vegetation.
+use crate::geometry::XZ;
+use crate::world::Material;
+pub use crate::world::{Tree, Triangle};
+
+pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(), String> {
+    let mut ids: std::collections::HashSet<_> = trees.iter().map(|t| t.id).collect();
+    if extra
+        .iter()
+        .any(|t| t.id < (1_u64 << 63) || !ids.insert(t.id))
+    {
+        return Err("invalid or duplicate imagery tree id".into());
     }
-    #[cfg(test)]
-    fn load_with_checksums(
-        text: &str,
-        checksums: crate::street_surface::SourceChecksums,
-    ) -> Result<Self, String> {
-        let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
-        std::fs::write(folder.path().join("landscape.txt"), text).map_err(|e| e.to_string())?;
-        crate::city_assets::CityAsset::new(folder.path().to_path_buf()).get_landscape(checksums)
+    trees.extend(extra);
+    Ok(())
+}
+
+impl Material {
+    /// Decode the material IDs used by landscape.txt.
+    pub fn from_ground_id(id: usize) -> Result<Self, &'static str> {
+        match id {
+            0 => Ok(Self::Grass),
+            1 => Ok(Self::Park),
+            2 => Ok(Self::Scrub),
+            3 => Ok(Self::Asphalt),
+            4 => Ok(Self::Paving),
+            5 => Ok(Self::Concrete),
+            6 => Ok(Self::BareGround),
+            7 => Ok(Self::Sports),
+            8 => Ok(Self::Water),
+            _ => Err("unknown ground material"),
+        }
     }
 
-    pub(crate) fn index_ground(&mut self) {
+    pub fn ground_id(self) -> Result<usize, &'static str> {
+        match self {
+            Self::Grass => Ok(0),
+            Self::Park => Ok(1),
+            Self::Scrub => Ok(2),
+            Self::Asphalt => Ok(3),
+            Self::Paving => Ok(4),
+            Self::Concrete => Ok(5),
+            Self::BareGround => Ok(6),
+            Self::Sports => Ok(7),
+            Self::Water => Ok(8),
+            Self::Paint => Err("landscape format does not support paint"),
+        }
+    }
+}
+
+/// Prepared cover and its ground-query grid, constructed together.
+#[derive(Debug)]
+pub struct GroundCover {
+    triangles: Vec<Triangle>,
+    trees: Vec<Tree>,
+    grid: std::collections::HashMap<(i32, i32), Vec<usize>>,
+}
+impl GroundCover {
+    pub fn new(triangles: Vec<Triangle>, trees: Vec<Tree>) -> Self {
+        let mut cover = Self {
+            triangles,
+            trees,
+            grid: Default::default(),
+        };
+        cover.index_ground();
+        cover
+    }
+    pub fn triangles(&self) -> &[Triangle] {
+        &self.triangles
+    }
+    pub fn trees(&self) -> &[Tree] {
+        &self.trees
+    }
+}
+impl GroundCover {
+    fn index_ground(&mut self) {
         self.grid.clear();
-        for (i, t) in self.ground.iter().enumerate() {
+        for (i, t) in self.triangles.iter().enumerate() {
+            let points = t.points;
             let low: [i32; 2] = std::array::from_fn(|axis| {
-                (t.points
+                (points
                     .iter()
-                    .map(|p| p[axis])
+                    .map(|p| p.component(axis))
                     .fold(f32::INFINITY, f32::min)
                     / 32.0)
                     .floor() as i32
             });
             let high: [i32; 2] = std::array::from_fn(|axis| {
-                (t.points
+                (points
                     .iter()
-                    .map(|p| p[axis])
+                    .map(|p| p.component(axis))
                     .fold(f32::NEG_INFINITY, f32::max)
                     / 32.0)
                     .floor() as i32
@@ -61,47 +100,24 @@ impl Landscape {
             }
         }
     }
-    #[cfg(test)]
-    fn append_imagery_with_checksums(
-        &mut self,
-        text: &str,
-        checksums: crate::street_surface::SourceChecksums,
-    ) -> Result<(), String> {
-        let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let header = format!(
-            "LANDSCAPE 1 {:08x} {:08x}\n",
-            checksums.city, checksums.streets
-        );
-        std::fs::write(folder.path().join("landscape.txt"), header).map_err(|e| e.to_string())?;
-        std::fs::write(folder.path().join("imagery-trees.txt"), text).map_err(|e| e.to_string())?;
-        let extra = crate::city_assets::CityAsset::new(folder.path().to_path_buf())
-            .get_landscape(checksums)?;
-        self.append_imagery_trees(extra.trees)
-    }
-
-    pub(crate) fn append_imagery_trees(&mut self, trees: Vec<Tree>) -> Result<(), String> {
-        let mut ids: std::collections::HashSet<_> = self.trees.iter().map(|t| t.id).collect();
-        if trees
-            .iter()
-            .any(|t| t.id < (1_u64 << 63) || !ids.insert(t.id))
-        {
-            return Err("invalid or duplicate imagery tree id".into());
-        }
-        self.trees.extend(trees);
-        Ok(())
-    }
-    pub fn style(&self, p: [f32; 2]) -> Option<usize> {
+    pub fn material(&self, p: XZ<f32>) -> Option<Material> {
         self.grid
-            .get(&((p[0] / 32.0).floor() as i32, (p[1] / 32.0).floor() as i32))?
+            .get(&((p.x / 32.0).floor() as i32, (p.z / 32.0).floor() as i32))?
             .iter()
-            .map(|i| &self.ground[*i])
+            .map(|i| &self.triangles[*i])
             .find(|t| {
+                let points = t.points;
                 if (0..2).any(|a| {
-                    p[a] < t.points.iter().map(|q| q[a]).fold(f32::INFINITY, f32::min) - 0.001
-                        || p[a]
-                            > t.points
+                    p.component(a)
+                        < points
+                            .iter()
+                            .map(|q| q.component(a))
+                            .fold(f32::INFINITY, f32::min)
+                            - 0.001
+                        || p.component(a)
+                            > points
                                 .iter()
-                                .map(|q| q[a])
+                                .map(|q| q.component(a))
                                 .fold(f32::NEG_INFINITY, f32::max)
                                 + 0.001
                 }) {
@@ -110,53 +126,77 @@ impl Landscape {
                 let edges: [f32; 3] = std::array::from_fn(|i| {
                     let a = t.points[i];
                     let b = t.points[(i + 1) % 3];
-                    (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+                    (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
                 });
                 edges.iter().all(|v| *v >= -0.00001) || edges.iter().all(|v| *v <= 0.00001)
             })
-            .map(|t| t.style)
+            .map(|t| t.material)
     }
 }
+
+// Terrain elevation.
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn shared_checksums_accept_matching_assets_and_reject_stale_sources() {
-        use crate::street_surface::SourceChecksums;
-        let checksums = SourceChecksums::new("city", "streets");
-        let text = format!(
-            "LANDSCAPE 1 {:08x} {:08x}\nt 1 0 0 5 1\n",
-            checksums.city, checksums.streets
-        );
-        let mut landscape = Landscape::load_with_checksums(&text, checksums).unwrap();
-        assert_eq!(landscape.trees.len(), 1);
-        let supplement = text.replace("t 1 ", "t 9223372036854775808 ");
-        landscape
-            .append_imagery_with_checksums(&supplement, checksums)
-            .unwrap();
-        assert_eq!(landscape.trees.len(), 2);
-        for stale in [
-            SourceChecksums::new("changed city", "streets"),
-            SourceChecksums::new("city", "changed streets"),
-        ] {
-            assert!(Landscape::load_with_checksums(&text, stale).is_err());
-            assert!(landscape
-                .append_imagery_with_checksums(&supplement, stale)
-                .is_err());
-        }
-        assert_eq!(landscape.trees.len(), 2);
-    }
 
     #[test]
-    fn landscape_rejects_stale_packages_and_nonfinite_geometry() {
-        assert!(Landscape::load("LANDSCAPE 1 0 0", "city", "streets").is_err());
-        let header = format!(
-            "LANDSCAPE 1 {:08x} {:08x}\n",
-            crate::street_surface::crc32("city"),
-            crate::street_surface::crc32("streets")
-        );
+    fn landscape_rejects_nonfinite_geometry() {
         for record in ["a 0 NaN 0 1 0 0 1", "a 9 0 0 1 0 0 1", "t 1 0 0 -2 1"] {
-            assert!(Landscape::load(&(header.clone() + record), "city", "streets").is_err());
+            assert!(crate::test_support::landscape(&format!("LANDSCAPE 1\n{record}\n")).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    use geo::{Intersects, Point};
+
+    #[test]
+    fn ground_owner_matches_full_triangle_queries_across_negative_and_positive_cells() {
+        let triangles = vec![
+            Triangle {
+                material: Material::Park,
+                usage: crate::world::TriangleUsage::Ground,
+                points: [
+                    XZ { x: -64., z: -64. },
+                    XZ { x: 64., z: -64. },
+                    XZ { x: -64., z: 64. },
+                ],
+            },
+            Triangle {
+                material: Material::Paving,
+                usage: crate::world::TriangleUsage::Ground,
+                points: [
+                    XZ { x: 64., z: -64. },
+                    XZ { x: 64., z: 64. },
+                    XZ { x: -64., z: 64. },
+                ],
+            },
+        ];
+        let cover = GroundCover::new(triangles, vec![]);
+        for x in (-80..=80).step_by(3) {
+            for z in (-80..=80).step_by(5) {
+                let p = XZ {
+                    x: x as f32 + 0.13,
+                    z: z as f32 + 0.37,
+                };
+                let expected = cover
+                    .triangles()
+                    .iter()
+                    .find(|t| {
+                        crate::geometry::polygon(&t.points.map(|p| p.map(f64::from)))
+                            .intersects(&Point::new(p.x as f64, p.z as f64))
+                    })
+                    .map(|t| t.material);
+                assert_eq!(cover.material(p), expected, "{p:?}");
+            }
+        }
+        let empty = GroundCover::new(vec![], vec![]);
+        assert_eq!(empty.material(XZ { x: 0., z: 0. }), None);
+        assert_eq!(
+            cover.material(XZ { x: 0.1, z: 0.1 }),
+            Some(Material::Paving)
+        );
     }
 }

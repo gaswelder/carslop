@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     thread::JoinHandle,
 };
-pub type Key = (usize, usize);
+type Key = (usize, usize);
 const DEFAULT_BUDGET: usize = 32 * 1024 * 1024;
 #[derive(Default)]
 struct State {
@@ -146,20 +146,9 @@ impl Prefetch {
         signal.notify_all();
         result
     }
+
     #[cfg(test)]
-    pub fn wait_for_ground(&self) -> Option<Key> {
-        let state = self.shared.0.lock().unwrap();
-        let (state, _) = self
-            .shared
-            .1
-            .wait_timeout_while(state, std::time::Duration::from_secs(3), |s| {
-                !s.ready.keys().any(|k| k.1 == 0)
-            })
-            .unwrap();
-        state.ready.keys().find(|k| k.1 == 0).copied()
-    }
-    #[cfg(test)]
-    pub fn stats(&self) -> (usize, usize, usize, usize, usize) {
+    fn stats(&self) -> (usize, usize, usize, usize, usize) {
         let state = self.shared.0.lock().unwrap();
         (
             state.hits,
@@ -208,7 +197,7 @@ mod tests {
             .to_vec();
         crate::scene_archive::write(
             &path,
-            std::array::from_fn(|_| crate::chunks::partition(tri.clone())),
+            std::array::from_fn(|_| crate::test_support::partition(tri.clone())),
         )
         .unwrap();
         let p = Prefetch::with_budget(

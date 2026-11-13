@@ -1,7 +1,7 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::{LazyLock, RwLock},
-};
+use crate::geometry::XZ;
+use crate::source_location::SourceLocation;
+use crate::world::HeightField;
+use std::path::{Path, PathBuf};
 
 pub const LOCATIONS_DIRECTORY: &str = "data/locations";
 
@@ -9,21 +9,25 @@ pub const LOCATIONS_DIRECTORY: &str = "data/locations";
 pub struct CityAsset {
     directory: PathBuf,
     name: String,
-}
-
-pub static CITY_ASSET: LazyLock<RwLock<CityAsset>> =
-    LazyLock::new(|| RwLock::new(CityAsset::new(PathBuf::from("data/locations/nicosia"))));
-
-pub struct StreetAssets {
-    pub surfaces: crate::street_surface::StreetSurface,
-    pub paths: Vec<Vec<[f32; 3]>>,
-    pub checksums: crate::street_surface::SourceChecksums,
+    aerial_attribution: Option<&'static str>,
 }
 
 impl CityAsset {
     pub fn new(directory: PathBuf) -> Self {
         let name = Self::load_name(&directory);
-        Self { directory, name }
+        let aerial_attribution = crate::aerial::attribution_label(&directory);
+        Self {
+            directory,
+            name,
+            aerial_attribution,
+        }
+    }
+
+    pub fn resolved(&self) -> std::io::Result<Self> {
+        Ok(Self::new(self.directory.canonicalize()?))
+    }
+    pub fn aerial_attribution(&self) -> Option<&'static str> {
+        self.aerial_attribution
     }
 
     pub fn directory(&self) -> &Path {
@@ -56,199 +60,57 @@ impl CityAsset {
     }
 
     /// Load the road graph and building footprints; other getters supply its layers.
-    pub fn get_city(&self) -> Result<crate::city::City, String> {
-        crate::city::City::parse(&self.read_text("city.txt")?)
-    }
-
-    pub fn get_streets(&self, city: &crate::city::City) -> Result<StreetAssets, String> {
-        let (surfaces, paths, checksums) =
-            crate::street_surface::StreetSurface::load_city_with_checksum(
-                self.directory(),
-                city.source_checksum,
-                city.streets.len(),
-            )?;
-        Ok(StreetAssets {
-            surfaces,
-            paths,
-            checksums,
-        })
+    pub fn get_city(&self) -> Result<SourceLocation<f32>, String> {
+        SourceLocation::<f32>::parse(&self.read_text("city.txt")?)
     }
 
     // Returns the city's furniture - signs and traffic lights.
-    pub fn get_furniture(
-        &self,
-        checksums: crate::street_surface::SourceChecksums,
-    ) -> Result<Vec<crate::traffic::Furniture>, String> {
-        // The format is:
-        // header:
-        // FURNITURE 3 CITY_CRC32 STREETS_CRC32
-        // lines:
-        // SOURCE_ID KIND X Z DX DZ VALUE PHASE
-        // KIND is signal, stop, yield, or speed_limit.
-        use crate::traffic::{Furniture, FurnitureKind};
-        let text = self.read_text("furniture.txt")?;
-        let mut lines = text.lines();
-        let header: Vec<_> = lines
-            .next()
-            .ok_or("missing furniture header")?
-            .split_whitespace()
-            .collect();
-        if header.len() != 4
-            || header[0] != "FURNITURE"
-            || header[1] != "3"
-            || u32::from_str_radix(header[2], 16).ok() != Some(checksums.city)
-            || u32::from_str_radix(header[3], 16).ok() != Some(checksums.streets)
-        {
-            return Err(
-                "stale furniture package; re-import the source with add-location under a new name"
-                    .into(),
-            );
-        }
-        let mut result = Vec::new();
-        for line in lines {
-            let f: Vec<_> = line.split_whitespace().collect();
-            if f.len() != 8 {
-                return Err("invalid road furniture record".into());
-            }
-            let n = |i: usize| -> Result<u64, String> {
-                f[i].parse().map_err(|_| "invalid furniture index".into())
-            };
-            let v = |i: usize| -> Result<f32, String> {
-                let value: f32 = f[i].parse().map_err(|_| "invalid furniture coordinate")?;
-                if value.is_finite() {
-                    Ok(value)
-                } else {
-                    Err("nonfinite furniture coordinate".into())
-                }
-            };
-            let kind = match f[1] {
-                "signal" => FurnitureKind::Signal,
-                "stop" => FurnitureKind::Stop,
-                "yield" => FurnitureKind::Yield,
-                "speed_limit" => FurnitureKind::Speed,
-                _ => return Err("unknown furniture kind".into()),
-            };
-            let travel = [v(4)?, v(5)?];
-            let length = travel[0].hypot(travel[1]);
-            let value = n(6)?;
-            let phase = n(7)?;
-            if (length - 1.0).abs() > 0.001
-                || phase >= 50
-                || value > 150
-                || (kind == FurnitureKind::Speed && value < 5)
-            {
-                return Err("invalid furniture direction, phase or value".into());
-            }
-            result.push(Furniture {
-                _source_id: n(0)?,
-                kind,
-                position: [v(2)?, 0.0, v(3)?],
-                travel,
-                value: value as u16,
-                phase: phase as u8,
-            });
-        }
-        Ok(result)
+    pub fn get_furniture(&self) -> Result<Vec<crate::traffic::Furniture>, String> {
+        crate::asset_codecs::furniture::parse(&self.read_text("furniture.txt")?)
     }
 
-    pub fn get_heightfield(
-        &self,
-        city: &crate::city::City,
-    ) -> Result<crate::elevation::HeightField, String> {
-        crate::elevation::HeightField::load_with_checksum(
-            &self.read_text("elevation/heightfield.txt")?,
-            city.source_checksum,
-        )
+    pub fn get_heightfield(&self) -> Result<crate::elevation::HeightField, String> {
+        crate::elevation::HeightField::load(&self.read_text("elevation/heightfield.txt")?)
     }
 
-    pub fn get_landscape(
+    pub fn get_landscape_data(
         &self,
-        checksums: crate::street_surface::SourceChecksums,
-    ) -> Result<crate::landscape::Landscape, String> {
-        use crate::landscape::{GroundTriangle, Landscape, Tree};
-        let mut landscape = Landscape::default();
+    ) -> Result<(Vec<crate::world::Triangle>, Vec<crate::world::Tree>), String> {
+        use crate::landscape::Triangle;
+        let mut ground_triangles = Vec::new();
+        let mut trees = Vec::new();
         for (file, imagery) in [("landscape.txt", false), ("imagery-trees.txt", true)] {
-            let text = if imagery {
-                match std::fs::read_to_string(self.directory.join(file)) {
-                    Ok(text) => text,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(format!("cannot read imagery trees: {e}")),
-                }
-            } else {
-                self.read_text(file)?
+            let input = match std::fs::File::open(self.directory.join(file)) {
+                Ok(input) => std::io::BufReader::new(input),
+                Err(e) if imagery && e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("cannot read city asset {file}: {e}")),
             };
-            let mut lines = text.lines();
-            let expected = format!(
-                "LANDSCAPE 1 {:08x} {:08x}",
-                checksums.city, checksums.streets
-            );
-            if lines.next() != Some(expected.as_str()) {
-                return Err(
-                    "stale landscape package; re-import the source with add-location under a new name"
-                        .into(),
-                );
-            }
-            let mut result = Landscape::default();
-            for line in lines {
-                let f: Vec<_> = line.split_whitespace().collect();
-                let value = |i: usize| -> Result<f32, String> {
-                    let v: f32 = f
-                        .get(i)
-                        .ok_or("missing landscape coordinate")?
-                        .parse()
-                        .map_err(|_| "invalid landscape number")?;
-                    if v.is_finite() && v.abs() < 100_000.0 {
-                        Ok(v)
-                    } else {
-                        Err("invalid landscape coordinate".into())
+            let mut file_ground = Vec::new();
+            let mut file_trees = Vec::new();
+            crate::asset_codecs::landscape::read::<f32>(input, |record| {
+                match record {
+                    crate::asset_codecs::landscape::Record::Ground { material, points } => {
+                        file_ground.push(Triangle {
+                            material,
+                            usage: crate::world::TriangleUsage::Ground,
+                            points,
+                        })
                     }
-                };
-                match f.first().copied() {
-                    Some("a") if f.len() == 8 => {
-                        let style: usize = f[1].parse().map_err(|_| "invalid landscape style")?;
-                        if style > 8 {
-                            return Err("unknown ground style".into());
-                        }
-                        result.ground.push(GroundTriangle {
-                            style,
-                            points: [
-                                [value(2)?, value(3)?],
-                                [value(4)?, value(5)?],
-                                [value(6)?, value(7)?],
-                            ],
-                        });
-                    }
-                    Some("t") if f.len() == 6 => {
-                        let height = value(4)?;
-                        let radius = value(5)?;
-                        if !(2.5..=18.0).contains(&height) || !(0.7..=4.5).contains(&radius) {
-                            return Err("invalid tree size".into());
-                        }
-                        result.trees.push(Tree {
-                            id: f[1].parse().map_err(|_| "invalid tree id")?,
-                            point: [value(2)?, value(3)?],
-                            height,
-                            radius,
-                        });
-                    }
-                    _ => return Err("invalid landscape record".into()),
+                    crate::asset_codecs::landscape::Record::Tree(tree) => file_trees.push(tree),
                 }
-            }
+                Ok(())
+            })?;
             if imagery {
-                if !result.ground.is_empty() {
+                if !file_ground.is_empty() {
                     return Err("imagery supplement must contain only trees".into());
                 }
-                landscape.append_imagery_trees(result.trees)?;
+                crate::landscape::append_imagery_trees(&mut trees, file_trees)?;
             } else {
-                landscape = result;
+                ground_triangles = file_ground;
+                trees = file_trees;
             }
         }
-        landscape.index_ground();
-        Ok(landscape)
-    }
-
-    pub fn get_source_osm(&self) -> std::io::Result<std::fs::File> {
-        std::fs::File::open(self.directory.join("source.osm"))
+        Ok((ground_triangles, trees))
     }
 
     fn read_text(&self, name: &str) -> Result<String, String> {
@@ -257,21 +119,14 @@ impl CityAsset {
     }
 }
 
-/// Construct a location before replacing the current global value.
-pub fn select(path: PathBuf) -> std::io::Result<()> {
-    let assets = CityAsset::new(path.canonicalize()?);
-    *CITY_ASSET.write().unwrap() = assets;
-    Ok(())
-}
-
 #[derive(Clone, Debug)]
 pub struct MenuLocation {
     pub name: String,
-    pub track: crate::track::TrackId,
-    pub path: Option<PathBuf>,
+    pub track: crate::track::LocationId,
+    pub assets: Option<CityAsset>,
 }
-/// Discover names and paths without reading map assets or building tracks.
-pub fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
+/// Discover canonical identities and small metadata without decoding world geometry.
+fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
     let mut locations = Vec::new();
     if !root.exists() {
         return Ok(locations);
@@ -291,11 +146,7 @@ pub fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
         if name.starts_with('.') {
             continue;
         }
-        locations.push(MenuLocation {
-            name: name.replace(['_', '-'], " ").to_ascii_uppercase(),
-            track: crate::track::TrackId::Engomi,
-            path: Some(path),
-        });
+        locations.push(MenuLocation::from_assets(CityAsset::new(path))?);
     }
     Ok(locations)
 }
@@ -308,6 +159,72 @@ pub fn menu_locations() -> Vec<MenuLocation> {
         }
     }
 }
+
+impl HeightField {
+    fn load(text: &str) -> Result<Self, String> {
+        let mut lines = text.lines();
+        let header: Vec<_> = lines
+            .next()
+            .ok_or("missing elevation header")?
+            .split_whitespace()
+            .collect();
+        if header.len() < 2 || header[0] != "ELEVATION" || header[1] != "1" {
+            return Err("unsupported elevation header".into());
+        }
+        let fields: Vec<_> = lines
+            .next()
+            .ok_or("missing grid")?
+            .split_whitespace()
+            .collect();
+        if fields.len() != 7 || fields[0] != "grid" {
+            return Err("invalid elevation grid".into());
+        }
+        let number = |i: usize| -> Result<f32, String> {
+            let v: f32 = fields[i].parse().map_err(|_| "invalid grid number")?;
+            if v.is_finite() {
+                Ok(v)
+            } else {
+                Err("nonfinite grid number".into())
+            }
+        };
+        let columns = fields[1].parse::<usize>().map_err(|_| "invalid columns")?;
+        let rows = fields[2].parse::<usize>().map_err(|_| "invalid rows")?;
+        let origin = XZ {
+            x: number(3)?,
+            z: number(4)?,
+        };
+        let step = number(5)?;
+        number(6)?;
+        if !(2..=4096).contains(&columns)
+            || !(2..=4096).contains(&rows)
+            || !(1.0..=100.0).contains(&step)
+        {
+            return Err("invalid grid dimensions".into());
+        }
+        let values = lines
+            .flat_map(str::split_whitespace)
+            .map(|s| {
+                let v: f32 = s.parse().map_err(|_| "invalid elevation value")?;
+                if v.is_finite() && v.abs() < 10000.0 {
+                    Ok(v)
+                } else {
+                    Err("invalid elevation range")
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if values.len() != columns * rows {
+            return Err("incomplete elevation grid".into());
+        }
+        Ok(Self {
+            columns,
+            rows,
+            origin: (origin),
+            step,
+            values,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,12 +255,21 @@ mod tests {
         assert_eq!(other.name(), "SECOND CITY");
         assert_eq!(assets.directory(), first);
         assert_eq!(other.directory(), second);
-        assert_eq!(assets.get_city().unwrap().streets[0].width, 6.0);
-        assert_eq!(other.get_city().unwrap().streets[0].width, 8.0);
+        assert_eq!(
+            assets.get_city().unwrap().road_lines[0].road_width_start_meters,
+            6.0
+        );
+        assert_eq!(
+            other.get_city().unwrap().road_lines[0].road_width_start_meters,
+            8.0
+        );
         let replacement = CityAsset::new(second);
         assert_eq!(replacement.name(), "SECOND CITY");
         assert_eq!(assets.name(), "FIRST CITY");
-        assert_eq!(assets.get_city().unwrap().streets[0].width, 6.0);
+        assert_eq!(
+            assets.get_city().unwrap().road_lines[0].road_width_start_meters,
+            6.0
+        );
     }
 
     #[test]
@@ -369,7 +295,7 @@ mod tests {
         let locations = discover(root.path()).unwrap();
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].name, "ALPHA CITY");
-        assert_eq!(locations[0].path.as_deref(), Some(folder.as_path()));
+        assert_eq!(locations[0].track.asset_path(), Some(folder.as_path()));
         // Discovery never loads authoring sources at runtime.
         std::fs::write(root.path().join("alpha_city.track.json"), b"invalid source").unwrap();
         assert_eq!(discover(root.path()).unwrap().len(), 1);
@@ -380,7 +306,42 @@ mod tests {
         .unwrap();
         let locations = discover(root.path()).unwrap();
         assert_eq!(locations.len(), 1);
-        assert_eq!(locations[0].path.as_deref(), Some(folder.as_path()));
+        assert_eq!(locations[0].track.asset_path(), Some(folder.as_path()));
         assert!(discover(&root.path().join("missing")).unwrap().is_empty());
+    }
+}
+
+impl MenuLocation {
+    pub fn from_assets(assets: CityAsset) -> std::io::Result<Self> {
+        let assets = assets.resolved()?;
+        Ok(Self {
+            name: assets.name().into(),
+            track: crate::world::LocationId::Asset(assets.directory().to_path_buf()),
+            assets: Some(assets),
+        })
+    }
+}
+
+#[cfg(test)]
+mod heightfields_accept_plain_and_legacy_headers_tests {
+    use super::*;
+    #[test]
+    fn heightfields_accept_plain_and_legacy_headers() {
+        for header in ["ELEVATION 1", "ELEVATION 1 deadbeef"] {
+            let field =
+                HeightField::load(&format!("{header}\ngrid 2 2 0 0 20 0\n1 2 3 4\n")).unwrap();
+            assert_eq!(field.height(crate::geometry::XZ { x: 0.0, z: 0.0 }), 1.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod malformed_heightfields_are_rejected_tests {
+    use super::*;
+    #[test]
+    fn malformed_heightfields_are_rejected() {
+        assert!(HeightField::load("ELEVATION 1 00000000").is_err());
+        let header = format!("ELEVATION 1 {:08x}\ngrid 2 2 0 0 20 180\nNaN 0 0 0\n", 0);
+        assert!(HeightField::load(&header).is_err());
     }
 }

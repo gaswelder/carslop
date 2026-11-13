@@ -1,12 +1,14 @@
 //! Compile mapped ground cover and trees into landscape assets.
 use crate::build_surfaces::{union, Surfaces};
-use crate::location::{empty, polygon, Result};
+use crate::error::{invalid, Result};
+use crate::geometry::XZ;
+use crate::geometry::{empty, polygon};
 use crate::osm::{OSMElement, OSMMap};
-use crate::world::LocationMap;
+use crate::source_location::SourceLocation;
 use geo::MultiPolygon;
 use geo::{algorithm::orient::Direction, BooleanOps, Buffer, Orient, Point};
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
 use std::path::Path;
 
 fn style(e: &OSMElement) -> Option<usize> {
@@ -72,9 +74,8 @@ pub fn rings(mut parts: Vec<Vec<i64>>) -> Option<Vec<Vec<i64>>> {
 }
 pub fn build_landscape(
     source: &OSMMap,
-    map: &LocationMap,
+    map: &SourceLocation<f64>,
     s: &Surfaces,
-    city_crc: u32,
     landscape_path: &Path,
 ) -> Result<()> {
     let coord = |id: &i64| source.nodes.get(id).map(|e| map.metres(e.coord.unwrap()));
@@ -82,10 +83,22 @@ pub fn build_landscape(
     let mut consumed = std::collections::BTreeSet::new();
     let crop = map.boundary.clone().unwrap_or_else(|| {
         MultiPolygon(vec![polygon(&[
-            [map.bounds[0], map.bounds[1]],
-            [map.bounds[2], map.bounds[1]],
-            [map.bounds[2], map.bounds[3]],
-            [map.bounds[0], map.bounds[3]],
+            XZ {
+                x: map.bounding_box.min.x,
+                z: map.bounding_box.min.z,
+            },
+            XZ {
+                x: map.bounding_box.max.x,
+                z: map.bounding_box.min.z,
+            },
+            XZ {
+                x: map.bounding_box.max.x,
+                z: map.bounding_box.max.z,
+            },
+            XZ {
+                x: map.bounding_box.min.x,
+                z: map.bounding_box.max.z,
+            },
         ])])
     });
     for relation in &source.relations {
@@ -158,13 +171,19 @@ pub fn build_landscape(
         };
         groups[kind].push(polygon(&points).intersection(&crop));
     }
-    let mut file = BufWriter::new(fs::File::create(landscape_path)?);
-    writeln!(file, "LANDSCAPE 1 {city_crc:08x} {:08x}", s.text_crc)?;
+    let mut file = crate::asset_codecs::landscape::Writer::new(
+        BufWriter::new(fs::File::create(landscape_path)?),
+        crate::asset_codecs::landscape::Precision::Imported,
+    )?;
     let mut covered = empty();
     for kind in [8, 7, 3, 4, 5, 2, 0, 1, 6] {
         let geometry = union(&groups[kind]).difference(&covered);
         covered = covered.union(&geometry);
-        crate::build_surfaces::triangles(&mut file, &format!("a {kind}"), &geometry)?;
+        let material = crate::world::Material::from_ground_id(kind).map_err(invalid)?;
+        crate::build_surfaces::triangulate(&geometry, |points| {
+            file.ground(material, points)?;
+            Ok(())
+        })?;
     }
     println!("  Filtering mapped trees...");
     let obstacles = crate::build_surfaces::PolygonIndex::new(&s.obstacles);
@@ -174,7 +193,7 @@ pub fn build_landscape(
         if !map.contains(p) {
             continue;
         }
-        if conflicts(&Point::new(p[0], p[1]).buffer(0.35)) {
+        if conflicts(&Point::new(p.x, p.z).buffer(0.35)) {
             continue;
         }
         let height = crate::osm::number(node.tag("height"))
@@ -186,11 +205,7 @@ pub fn build_landscape(
             .map(|n| n / 2.0)
             .unwrap_or(height * 0.32)
             .clamp(0.7, 4.5);
-        writeln!(
-            file,
-            "t {} {:.3} {:.3} {:.3} {:.3}",
-            node.id, p[0], p[1], height, radius
-        )?;
+        file.tree_fields(node.id, p, height, radius)?;
     }
     file.flush()?;
     Ok(())

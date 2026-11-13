@@ -1,5 +1,5 @@
 //! A responsive startup screen; map work stays off the OpenGL thread.
-use crate::{hud, track::TrackId};
+use crate::{hud, track::LocationId};
 use sdl3::{
     event::{Event, WindowEvent},
     keyboard::Keycode,
@@ -7,39 +7,31 @@ use sdl3::{
 };
 use std::time::{Duration, Instant};
 
-/// Warm the shared city map and validate its archive before creating a session.
+/// Prepare an explicitly identified candidate and validate its archive.
 /// A close request is requeued for the application's normal shutdown path.
 pub fn prepare(
-    id: TrackId,
+    id: LocationId,
+    cache: crate::track::LocationCache,
     window: &mut Window,
     events: &mut sdl3::EventPump,
     sdl: &sdl3::Sdl,
-) -> bool {
-    if id != TrackId::Engomi {
-        return match id.try_track() {
-            Ok(_) => true,
-            Err(error) => {
-                log::warn!("Cannot load track: {error}");
-                false
-            }
-        };
+) -> Option<std::sync::Arc<crate::world::Location>> {
+    if id.asset_path().is_none() {
+        return cache
+            .prepare_for_render(&id)
+            .map_err(|error| log::warn!("Cannot load track: {error}"))
+            .ok();
     }
     let started = Instant::now();
     let title = window.title().to_owned();
-    let name = crate::city_assets::CITY_ASSET
-        .read()
-        .unwrap()
+    let name = crate::city_assets::CityAsset::new(id.asset_path().unwrap().to_path_buf())
         .name()
         .to_owned();
     draw(window, &name, "READING MAP AND BUILDING COLLISIONS", 0.0);
     crate::gl::swap_window(window);
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
-        .spawn(|| {
-            TrackId::Engomi.try_track()?;
-            crate::scene_archive::Archive::open_default().map_err(|e| e.to_string())?;
-            Ok::<_, String>(())
-        })
+        .spawn(move || cache.prepare_for_render(&id))
         .expect("failed to start location loader");
     while !worker.is_finished() {
         while let Some(event) = events.poll_event() {
@@ -60,7 +52,7 @@ pub fn prepare(
                     .and_then(|events| events.push_event(Event::Quit { timestamp: 0 }));
                 let _ = worker.join();
                 let _ = window.set_title(&title);
-                return false;
+                return None;
             }
         }
         let elapsed = started.elapsed().as_secs_f32();
@@ -77,7 +69,7 @@ pub fn prepare(
     let result = worker
         .join()
         .unwrap_or_else(|_| Err("location loader panicked".into()));
-    if let Err(error) = result {
+    if let Err(error) = &result {
         log::warn!("Cannot load location: {error}");
         let _ = sdl3::messagebox::show_simple_message_box(
             sdl3::messagebox::MessageBoxFlag::ERROR,
@@ -86,10 +78,10 @@ pub fn prepare(
             Some(&*window),
         );
         let _ = window.set_title(&title);
-        return false;
+        return None;
     }
     let _ = window.set_title(&title);
-    true
+    result.ok()
 }
 
 /// Scissored clears need no shaders or geometry and reuse the HUD's bitmap font.

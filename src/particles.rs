@@ -1,11 +1,12 @@
 //! Small deterministic tire puffs, advanced only by the fixed simulation clock.
 
+use crate::geometry::{XYZ, XZ};
 #[cfg(test)]
 use crate::track;
 use crate::vehicle::Vehicle;
 use std::time::Duration;
 
-pub const MAX_PARTICLES: usize = 160;
+const MAX_PARTICLES: usize = 160;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -17,8 +18,8 @@ enum Kind {
 struct Puff {
     owner: usize,
     kind: Kind,
-    position: [f32; 3],
-    velocity: [f32; 3],
+    position: XYZ,
+    velocity: XYZ,
     age: f32,
     lifetime: f32,
     radius: f32,
@@ -28,7 +29,7 @@ struct Puff {
 #[derive(Clone, Copy, Default)]
 struct Emitter {
     credit: [f32; 2],
-    previous: Option<[f32; 3]>,
+    previous: Option<XYZ>,
 }
 
 pub struct TireParticles {
@@ -51,17 +52,17 @@ impl Default for TireParticles {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vertex {
     pub position: [f32; 3],
-    pub uv: [f32; 2],
+    uv: [f32; 2],
     pub color: [f32; 3],
-    pub alpha: f32,
+    alpha: f32,
 }
 
 #[derive(Clone, Copy)]
 pub struct View {
-    pub eye: [f32; 3],
-    pub right: [f32; 3],
-    pub up: [f32; 3],
-    pub forward: [f32; 3],
+    pub eye: XYZ,
+    pub right: XYZ,
+    pub up: XYZ,
+    pub forward: XYZ,
 }
 
 impl TireParticles {
@@ -70,7 +71,7 @@ impl TireParticles {
         for p in &mut self.puffs {
             p.age += dt;
             for i in 0..3 {
-                p.position[i] += p.velocity[i] * dt;
+                *p.position.component_mut(i) += p.velocity.component(i) * dt;
             }
         }
         self.puffs.retain(|p| p.age < p.lifetime);
@@ -83,11 +84,11 @@ impl TireParticles {
 
     pub fn record(&mut self, owner: usize, car: &Vehicle, dt: Duration) {
         let dt = dt.as_secs_f32().min(0.1);
-        let motion = car.velocity[0].hypot(car.velocity[1]);
+        let motion = car.velocity.x.hypot(car.velocity.z);
         let emitter = &mut self.emitters[owner];
         let jumped = emitter
             .previous
-            .is_some_and(|p| (p[0] - car.position[0]).hypot(p[2] - car.position[2]) > 4.0);
+            .is_some_and(|p| (p.x - car.position.x).hypot(p.z - car.position.z) > 4.0);
         emitter.previous = Some(car.position);
         if jumped || (motion < 3.0 && car.wheel_spin < 0.15) {
             emitter.credit = [0.0; 2];
@@ -96,11 +97,12 @@ impl TireParticles {
         let centers = car.model.wheel_centers();
         let (s, c) = car.heading.sin_cos();
         for (wheel, center) in centers[..2].iter().enumerate() {
-            let x = car.position[0] + center[0] * c + center[2] * s;
-            let z = car.position[2] - center[0] * s + center[2] * c;
-            let road = car.track.project([x, 0.0, z]);
-            let dusty = if let Some(city) = car.track.city() {
-                !city.paved([x, z])
+            let x = car.position.x + center.x * c + center.z * s;
+            let z = car.position.z - center.x * s + center.z * c;
+            let road = car.track.project(XYZ { x, y: 0.0, z });
+            let dusty = if car.track.has_compiled_roads() {
+                let city = &car.track;
+                !city.paved(XZ { x, z })
             } else {
                 road.offset.abs() > road.width * 0.5 - 0.6
             };
@@ -129,12 +131,16 @@ impl TireParticles {
                 self.puffs.push(Puff {
                     owner,
                     kind,
-                    position: [x, car.track.drive_height([x, z]) + 0.18, z],
-                    velocity: [
-                        car.velocity[0] * 0.08 - s * 0.35 + jitter * 0.2,
-                        if smoke { 0.48 } else { 0.30 },
-                        car.velocity[1] * 0.08 - c * 0.35 - jitter * 0.2,
-                    ],
+                    position: XYZ {
+                        x,
+                        y: car.track.drive_height(XZ { x, z }) + 0.18,
+                        z,
+                    },
+                    velocity: XYZ {
+                        x: car.velocity.x * 0.08 - s * 0.35 + jitter * 0.2,
+                        y: if smoke { 0.48 } else { 0.30 },
+                        z: car.velocity.z * 0.08 - c * 0.35 - jitter * 0.2,
+                    },
                     age: 0.0,
                     lifetime: if smoke { 1.1 } else { 0.75 },
                     radius: 0.21 + jitter.abs() * 0.12,
@@ -151,7 +157,9 @@ impl TireParticles {
     pub fn vertices(&self, view: View) -> Vec<Vertex> {
         let depth = |p: &Puff| {
             (0..3)
-                .map(|i| (p.position[i] - view.eye[i]) * view.forward[i])
+                .map(|i| {
+                    (p.position.component(i) - view.eye.component(i)) * view.forward.component(i)
+                })
                 .sum::<f32>()
         };
         let mut visible: Vec<_> = self.puffs.iter().filter(|p| depth(p) > 0.1).collect();
@@ -174,7 +182,8 @@ impl TireParticles {
                 [-1.0, 1.0],
             ] {
                 let position = std::array::from_fn(|i| {
-                    p.position[i] + radius * (view.right[i] * uv[0] + view.up[i] * uv[1])
+                    p.position.component(i)
+                        + radius * (view.right.component(i) * uv[0] + view.up.component(i) * uv[1])
                 });
                 vertices.push(Vertex {
                     position,
@@ -191,14 +200,16 @@ impl TireParticles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cars::CarModel;
 
     fn car(offset: f32) -> Vehicle {
-        let road = track::TrackId::Compact.track().at_distance(50.0);
-        let mut car = Vehicle::new(
-            road.lane_position(offset),
+        let road = track::LocationId::Compact
+            .try_track()
+            .unwrap()
+            .at_distance(50.0);
+        let mut car = crate::test_support::vehicle(
+            road.vehicle_position(offset),
             road.heading(),
-            CarModel::test_fixture(),
+            crate::cars::CarModel::TestFixture(0),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
         car.speed = 10.0;
@@ -219,9 +230,9 @@ mod tests {
         let track = crate::test_support::track();
         let road = track.at_distance(50.0);
         let mut car = Vehicle::on_track(
-            road.lane_position(2.0),
+            road.vehicle_position(2.0),
             road.heading(),
-            CarModel::test_fixture(),
+            crate::cars::CarModel::TestFixture(0),
             track.clone(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
@@ -232,20 +243,24 @@ mod tests {
             particles.puffs.is_empty(),
             "authored verge must use the selected road width"
         );
-        car.position = road.lane_position(road.width * 0.5 - car.model.wheel_centers()[0][0].abs());
+        car.position =
+            road.vehicle_position(road.width * 0.5 - car.model.wheel_centers()[0].x.abs());
         emit(&mut particles, &car, 30);
         assert!(!particles.puffs.is_empty());
         assert!(particles.puffs.iter().all(|p| p.kind == Kind::Dust));
         particles.reset_car(0);
-        car.position = road.lane_position(0.0);
+        car.position = road.vehicle_position(0.0);
         car.tire_scrub = 0.9;
         particles.record(0, &car, Duration::from_millis(100));
         assert!(!particles.puffs.is_empty());
         for puff in &particles.puffs {
             assert_eq!(puff.kind, Kind::Smoke);
             assert!(
-                (puff.position[1]
-                    - track.drive_height([puff.position[0], puff.position[2]])
+                (puff.position.y
+                    - track.drive_height(crate::geometry::XZ {
+                        x: puff.position.x,
+                        z: puff.position.z
+                    })
                     - 0.18)
                     .abs()
                     < 0.001
@@ -256,7 +271,7 @@ mod tests {
     #[test]
     fn spinning_tires_emit_smoke_before_the_car_has_pulled_away() {
         let mut car = car(0.0);
-        car.velocity = [0.0; 2];
+        car.velocity = crate::geometry::XZ { x: 0.0, z: 0.0 };
         car.speed = 0.0;
         car.wheel_spin = 0.8;
         let mut particles = TireParticles::default();
@@ -269,7 +284,7 @@ mod tests {
     fn smoke_needs_motion_and_scrub_dust_needs_the_verge() {
         let mut p = TireParticles::default();
         let mut v = car(0.0);
-        v.velocity = [0.0; 2];
+        v.velocity = crate::geometry::XZ { x: 0.0, z: 0.0 };
         emit(&mut p, &v, 60);
         assert!(p.puffs.is_empty());
         v = car(0.0);
@@ -280,7 +295,7 @@ mod tests {
         emit(&mut p, &v, 30);
         assert!(!p.puffs.is_empty() && p.puffs.iter().all(|p| p.kind == Kind::Smoke));
         // Place the mounted outer tire on the verge, regardless of track width.
-        let half_track = v.model.wheel_centers()[0][0].abs();
+        let half_track = v.model.wheel_centers()[0].x.abs();
         let mut edge = car(v.track.project(v.position).width * 0.5 - half_track);
         edge.tire_scrub = 0.0;
         let mut dust = TireParticles::default();
@@ -313,7 +328,7 @@ mod tests {
         emit(&mut b, &v, 60);
         assert_eq!(a.puffs, b.puffs);
         let mut moved = car(0.0);
-        moved.position[0] += 20.0;
+        moved.position.x += 20.0;
         let count = a.puffs.len();
         a.record(0, &moved, Duration::from_millis(100));
         assert_eq!(a.puffs.len(), count);
@@ -327,10 +342,26 @@ mod tests {
         let v = car(0.0);
         emit(&mut p, &v, 30);
         let view = View {
-            eye: [0.0, 10.0, -100.0],
-            right: [1.0, 0.0, 0.0],
-            up: [0.0, 1.0, 0.0],
-            forward: [0.0, 0.0, 1.0],
+            eye: crate::geometry::XYZ {
+                x: 0.0,
+                y: 10.0,
+                z: -100.0,
+            },
+            right: crate::geometry::XYZ {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            up: crate::geometry::XYZ {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            forward: crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         };
         let vertices = p.vertices(view);
         assert!(!vertices.is_empty() && vertices.len() <= MAX_PARTICLES * 6);

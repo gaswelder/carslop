@@ -1,5 +1,6 @@
 //! Controlled inputs for module tests. No installed car definitions or assets are read.
 use crate::cars::{CarSpec, EngineVoice, Gearbox};
+use crate::geometry::XYZ;
 use std::sync::{Arc, OnceLock};
 
 pub fn audio_voice() -> &'static EngineVoice {
@@ -37,10 +38,26 @@ pub fn car_spec() -> &'static CarSpec {
                 ]
             }),
             mounts: [
-                [-0.75, -0.1, -1.25],
-                [0.75, -0.1, -1.25],
-                [-0.75, -0.1, 1.25],
-                [0.75, -0.1, 1.25],
+                XYZ {
+                    x: -0.75,
+                    y: -0.1,
+                    z: -1.25,
+                },
+                XYZ {
+                    x: 0.75,
+                    y: -0.1,
+                    z: -1.25,
+                },
+                XYZ {
+                    x: -0.75,
+                    y: -0.1,
+                    z: 1.25,
+                },
+                XYZ {
+                    x: 0.75,
+                    y: -0.1,
+                    z: 1.25,
+                },
             ],
             wheel_radii: [0.32; 4],
         });
@@ -80,10 +97,14 @@ pub fn car_spec() -> &'static CarSpec {
     })
 }
 
-pub fn track() -> Arc<crate::track::Track> {
+pub fn track() -> Arc<crate::track::Location> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Module test road","scenery":"coastal","points":[[0,3,0,8],[400,6,0,8],[400,5,400,8],[0,3,400,8]]}"#).unwrap();
-    crate::track::register_file(file.path()).unwrap().0.track()
+    crate::track::register_file(file.path())
+        .unwrap()
+        .0
+        .try_track()
+        .unwrap()
 }
 
 pub fn car_definition() -> serde_json::Value {
@@ -141,7 +162,7 @@ pub fn model_glb(design: &crate::scene::car_glb::Design) -> Vec<u8> {
         let translation = if index == 0 {
             [0.0; 3]
         } else {
-            design.mounts[index - 1]
+            (design.mounts[index - 1]).into()
         };
         nodes.push(json!({"name":name,"mesh":index,"translation":translation}));
     }
@@ -198,4 +219,170 @@ pub fn fixture_spec(index: usize) -> &'static CarSpec {
     } else {
         SPECS.lock().unwrap()[index - 1]
     }
+}
+
+/// Tiny generated world with a real scene archive and one raw aerial tile.
+/// All fixtures use the same relative filenames to expose accidental cross-world reads.
+pub fn generated_location(
+    directory: &std::path::Path,
+    height: f32,
+    provider: &str,
+) -> crate::city_assets::CityAsset {
+    use std::fs;
+    fs::create_dir_all(directory.join("elevation")).unwrap();
+    fs::create_dir_all(directory.join("aerial")).unwrap();
+    let city = "CITY 2\nbounds -10 -10 30 30\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
+    fs::write(directory.join("city.txt"), city).unwrap();
+    fs::write(
+        directory.join("manifest.json"),
+        serde_json::json!({"name": directory.file_name().unwrap().to_string_lossy()}).to_string(),
+    )
+    .unwrap();
+    fs::write(directory.join("landscape.txt"), "LANDSCAPE 1\n").unwrap();
+    fs::write(directory.join("furniture.txt"), "FURNITURE 3\n").unwrap();
+    fs::write(
+        directory.join("elevation/heightfield.txt"),
+        format!("ELEVATION 1\ngrid 2 2 -10 -10 40 0\n{height} {height} {height} {height}\n"),
+    )
+    .unwrap();
+    crate::build_collision::build_collisions(
+        &directory.join("streets.bin"),
+        &crate::source_location::SourceLocation::<f32>::parse(city).unwrap(),
+        "STREETS 1 1\np 0 2 0 0 20 0\nt 1 0 -4 20 -4 20 4\nt 1 0 -4 20 4 0 4\nc 1 0 -4 20 -4 0 1\n"
+            .into(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("aerial/tiles.txt"),
+        "AERIAL 1\nsize 64 1\ntile -10 -10 30 30 tile.rgb 00000000\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("aerial/tile.rgb"),
+        vec![height as u8; 66 * 66 * 3],
+    )
+    .unwrap();
+    fs::write(
+        directory.join("aerial/source.json"),
+        serde_json::json!({"source":provider, "provider":provider}).to_string(),
+    )
+    .unwrap();
+    let assets = crate::city_assets::CityAsset::new(directory.to_path_buf());
+    let world = crate::world::CompiledLocation::load(&assets).unwrap();
+    crate::build_scene::build_scene(
+        &world,
+        None,
+        &directory.join("decorations.pack"),
+        &directory.join("scene.pack"),
+        directory,
+    )
+    .unwrap();
+    assets
+}
+
+pub fn car_model_with_spec(spec: CarSpec) -> crate::cars::CarModel {
+    crate::cars::CarModel::TestFixture(register_spec(spec))
+}
+
+pub fn scenic_id() -> crate::track::LocationId {
+    crate::track::register_file(std::path::Path::new(
+        "data/locations/scenic/source.track.json",
+    ))
+    .expect("cannot load Coastal Highway track definition")
+    .0
+}
+
+pub fn nicosia_id() -> crate::track::LocationId {
+    crate::track::LocationId::asset("data/locations/nicosia").expect("bundled Nicosia assets")
+}
+
+pub fn location_ids() -> [crate::track::LocationId; 3] {
+    [crate::track::LocationId::Compact, scenic_id(), nicosia_id()]
+}
+
+pub fn variable_width_track() -> Arc<crate::track::Location> {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
+    crate::track::register_file(file.path())
+        .unwrap()
+        .0
+        .try_track()
+        .unwrap()
+}
+
+pub fn angle(value: f32) -> f32 {
+    (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
+pub fn vehicle(
+    position: XYZ,
+    heading: f32,
+    model: crate::cars::CarModel,
+) -> crate::vehicle::Vehicle {
+    crate::vehicle::Vehicle::on_track(
+        position,
+        heading,
+        model,
+        crate::track::LocationId::Compact.try_track().unwrap(),
+    )
+}
+
+pub fn partition(vertices: Vec<crate::scene::Vertex>) -> Vec<crate::chunks::Chunk> {
+    let mut builder = crate::chunks::ChunkBuilder::default();
+    for triangle in vertices.as_chunks::<3>().0 {
+        builder.push(*triangle);
+    }
+    builder.finish()
+}
+
+pub struct Temp {
+    pub directory: std::path::PathBuf,
+    _lifetime: tempfile::TempDir,
+}
+impl Temp {
+    pub fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        Self {
+            directory: dir.path().to_path_buf(),
+            _lifetime: dir,
+        }
+    }
+}
+
+pub fn set_osm_tags(element: &mut crate::osm::OSMElement, tags: &[(&str, &str)]) {
+    let mut replacement = osm_element(element.id, tags);
+    replacement.coord = element.coord;
+    replacement.nodes = std::mem::take(&mut element.nodes);
+    replacement.members = std::mem::take(&mut element.members);
+    *element = replacement;
+}
+
+pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> crate::osm::OSMElement {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let parsed_id = id.max(1);
+    let mut xml = format!("<osm><node id=\"{parsed_id}\" lat=\"0\" lon=\"0\">");
+    for (key, value) in tags {
+        xml.push_str(&format!(
+            "<tag k=\"{}\" v=\"{}\"/>",
+            quick_xml::escape::escape(*key),
+            quick_xml::escape::escape(*value)
+        ));
+    }
+    xml.push_str("</node></osm>");
+    std::fs::write(file.path(), xml).unwrap();
+    let mut element = crate::osm::read(file.path())
+        .unwrap()
+        .nodes
+        .remove(&parsed_id)
+        .unwrap();
+    element.id = id;
+    element.coord = None;
+    element
+}
+
+pub fn nicosia_world() -> Arc<crate::track::Location> {
+    static WORLD: OnceLock<Arc<crate::track::Location>> = OnceLock::new();
+    WORLD
+        .get_or_init(|| nicosia_id().try_track().unwrap())
+        .clone()
 }

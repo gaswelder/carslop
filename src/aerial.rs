@@ -1,4 +1,5 @@
 //! Optional disk-backed aerial tiles, projected onto existing surface geometry.
+use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use std::{
     collections::{HashSet, VecDeque},
     ffi::CString,
@@ -24,15 +25,17 @@ fn capacity(catalog: &Catalog) -> usize {
 }
 #[derive(Clone, Debug)]
 struct Tile {
-    bounds: [f32; 4],
+    bounds: BoundingBoxXZ<f32>,
     name: String,
-    crc: u32,
 }
 #[derive(Clone, Debug)]
 struct Catalog {
     size: usize,
     gutter: usize,
     tiles: Vec<Tile>,
+}
+pub fn tile_filenames(text: &str) -> Result<Vec<String>, String> {
+    Catalog::parse(text).map(|catalog| catalog.tiles.into_iter().map(|tile| tile.name).collect())
 }
 impl Catalog {
     fn parse(text: &str) -> Result<Self, String> {
@@ -57,7 +60,7 @@ impl Catalog {
         let mut names = HashSet::new();
         for line in lines {
             let f: Vec<_> = line.split_whitespace().collect();
-            if f.len() != 7 || f[0] != "tile" {
+            if f.len() < 6 || f[0] != "tile" {
                 return Err("invalid aerial tile".into());
             }
             let mut bounds = [0.0; 4];
@@ -79,9 +82,17 @@ impl Catalog {
                 return Err("invalid aerial filename".into());
             }
             tiles.push(Tile {
-                bounds,
+                bounds: BoundingBoxXZ {
+                    min: XZ {
+                        x: bounds[0],
+                        z: bounds[1],
+                    },
+                    max: XZ {
+                        x: bounds[2],
+                        z: bounds[3],
+                    },
+                },
                 name: f[5].into(),
-                crc: u32::from_str_radix(f[6], 16).map_err(|_| "invalid aerial checksum")?,
             });
         }
         if tiles.is_empty() {
@@ -94,10 +105,11 @@ impl Catalog {
         })
     }
 }
-fn distance(bounds: [f32; 4], eye: [f32; 3]) -> f32 {
-    (eye[0] - eye[0].clamp(bounds[0], bounds[2])).hypot(eye[2] - eye[2].clamp(bounds[1], bounds[3]))
+fn distance(bounds: BoundingBoxXZ<f32>, eye: XYZ) -> f32 {
+    (eye.x - eye.x.clamp(bounds.min.x, bounds.max.x))
+        .hypot(eye.z - eye.z.clamp(bounds.min.z, bounds.max.z))
 }
-fn wanted(catalog: &Catalog, eye: [f32; 3], capacity: usize) -> Vec<usize> {
+fn wanted(catalog: &Catalog, eye: XYZ, capacity: usize) -> Vec<usize> {
     let mut ids: Vec<_> = (0..catalog.tiles.len())
         .filter(|i| distance(catalog.tiles[*i].bounds, eye) < 568.0)
         .collect();
@@ -112,9 +124,6 @@ fn wanted(catalog: &Catalog, eye: [f32; 3], capacity: usize) -> Vec<usize> {
 fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, String> {
     let tile = &catalog.tiles[id];
     let bytes = std::fs::read(&directory.join(&tile.name)).map_err(|e| e.to_string())?;
-    if crate::street_surface::crc32_bytes(&bytes) != tile.crc {
-        return Err(format!("corrupt aerial tile {}", tile.name));
-    }
     let dimension = (catalog.size + catalog.gutter * 2) as u32;
     if tile.name.ends_with(".rgb") {
         if bytes.len() != dimension as usize * dimension as usize * 3 {
@@ -132,8 +141,8 @@ fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u8>, 
         .map_err(|e| e.to_string())
 }
 
-/// All aerial builders use the same quality and checksum the encoded file bytes.
-pub(crate) fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
+/// All aerial builders use the same JPEG quality.
+pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80).encode(
         rgb,
@@ -204,29 +213,14 @@ impl Drop for TileLoader {
     }
 }
 
-pub fn source_available() -> bool {
-    crate::city_assets::CITY_ASSET
-        .read()
-        .unwrap()
-        .directory()
-        .join("aerial/tiles.txt")
-        .is_file()
-}
-pub fn attribution_label() -> &'static str {
-    static LABEL: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, &'static str>>,
-    > = std::sync::OnceLock::new();
-    let directory = crate::city_assets::CITY_ASSET
-        .read()
-        .unwrap()
-        .directory()
-        .to_path_buf();
-    let mut labels = LABEL.get_or_init(Default::default).lock().unwrap();
-    labels.entry(directory.clone()).or_insert_with(|| {
-        let path = directory.join("aerial/source.json");
-        let metadata = std::fs::read(&path)
-            .ok()
-            .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
+pub fn attribution_label(directory: &std::path::Path) -> Option<&'static str> {
+    if !directory.join("aerial/tiles.txt").is_file() {
+        return None;
+    }
+    let metadata = std::fs::read(directory.join("aerial/source.json"))
+        .ok()
+        .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
+    Some(
         if metadata
             .as_ref()
             .and_then(|v| v["source"].as_str())
@@ -241,8 +235,8 @@ pub fn attribution_label() -> &'static str {
             "AERIAL: CYPRUS DLS / 2019"
         } else {
             "AERIAL: LOCAL IMAGERY"
-        }
-    })
+        },
+    )
 }
 pub struct Aerial {
     loader: TileLoader,
@@ -252,12 +246,8 @@ pub struct Aerial {
     failed: HashSet<usize>,
 }
 impl Aerial {
-    pub fn open() -> Option<Self> {
-        let directory = crate::city_assets::CITY_ASSET
-            .read()
-            .unwrap()
-            .directory()
-            .join("aerial");
+    pub fn open(assets: &crate::city_assets::CityAsset) -> Option<Self> {
+        let directory = assets.directory().join("aerial");
         let path = directory.join("tiles.txt");
         if !path.is_file() {
             return None;
@@ -329,7 +319,7 @@ impl Aerial {
             failed: HashSet::new(),
         })
     }
-    pub fn bind(&mut self, program: u32, eye: [f32; 3]) {
+    pub fn bind(&mut self, program: u32, eye: XYZ) {
         let wanted = wanted(&self.catalog, eye, self.slots.len());
         for slot in &mut self.slots {
             if slot.is_some_and(|i| !wanted.contains(&i)) {
@@ -399,7 +389,7 @@ impl Aerial {
             let mut layers = Vec::<i32>::new();
             for (slot, id) in self.slots.iter().enumerate() {
                 if let Some(id) = id {
-                    bounds.extend(self.catalog.tiles[*id].bounds);
+                    bounds.extend(self.catalog.tiles[*id].bounds.to_array());
                     layers.push(slot as i32);
                 }
             }
@@ -437,11 +427,65 @@ impl Drop for Aerial {
 mod tests {
     use super::*;
     #[test]
+    fn two_imagery_workers_and_attributions_stay_with_their_asset_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let first =
+            crate::test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
+        let second = crate::test_support::generated_location(
+            &root.path().join("second"),
+            13.0,
+            "arcgisonline.com",
+        );
+        let mut workers = Vec::new();
+        for (assets, expected) in [(&first, 7), (&second, 13)] {
+            let directory = assets.directory().join("aerial");
+            let catalog =
+                Catalog::parse(&std::fs::read_to_string(directory.join("tiles.txt")).unwrap())
+                    .unwrap();
+            let loader = TileLoader::new(directory, catalog);
+            loader.request(std::iter::once(0));
+            workers.push((loader, expected));
+        }
+        for (loader, expected) in workers {
+            let (id, pixels) = loader
+                .ready
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+            assert_eq!(id, 0);
+            let pixels = pixels.unwrap();
+            assert_eq!(pixels.len(), 66 * 66 * 3);
+            assert!(pixels.iter().all(|&value| value == expected));
+        }
+        assert!(first.aerial_attribution().unwrap().contains("CYPRUS DLS"));
+        assert!(second.aerial_attribution().unwrap().contains("ESRI"));
+    }
+
+    #[test]
     fn catalog_validation_and_nearby_selection_are_bounded() {
         let c=Catalog::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 a.rgb 00000000\ntile 100 0 200 100 b.rgb 00000000\n").unwrap();
-        assert_eq!(wanted(&c, [150.0, 0.0, 50.0], 1), vec![1]);
+        assert_eq!(
+            wanted(
+                &c,
+                crate::geometry::XYZ {
+                    x: 150.0,
+                    y: 0.0,
+                    z: 50.0
+                },
+                1
+            ),
+            vec![1]
+        );
         assert!(capacity(&c) * layer_bytes(c.size + 2 * c.gutter) <= GPU_BUDGET);
-        assert!(wanted(&c, [2000.0, 0.0, 0.0], 32).is_empty());
+        assert!(wanted(
+            &c,
+            crate::geometry::XYZ {
+                x: 2000.0,
+                y: 0.0,
+                z: 0.0
+            },
+            32
+        )
+        .is_empty());
         assert!(
             Catalog::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 ../a.rgb 00000000\n").is_err()
         );
@@ -468,7 +512,11 @@ mod tests {
         let slots = capacity(&catalog);
         for x in [0., 62., 124., 248.] {
             for z in [0., 62., 124., 248.] {
-                let all = wanted(&catalog, [x, 0., z], usize::MAX);
+                let all = wanted(
+                    &catalog,
+                    crate::geometry::XYZ { x: x, y: 0., z: z },
+                    usize::MAX,
+                );
                 assert!(
                     all.len() <= slots,
                     "nearby city coverage requires {} slots, only {slots} available",
@@ -485,7 +533,7 @@ mod tests {
         std::fs::write(dir.path().join("a.jpg"), &bytes).unwrap();
         let catalog = Catalog::parse(&format!(
             "AERIAL 1\nsize 64 1\ntile 0 0 10 10 a.jpg {:08x}\ntile 10 0 20 10 missing.jpg 00000000\n",
-            crate::street_surface::crc32_bytes(&bytes)
+            0
         )).unwrap();
         let loader = TileLoader::new(dir.path().to_path_buf(), catalog.clone());
         loader.request([0, 1].into_iter());
@@ -508,7 +556,7 @@ mod tests {
         assert!(read_tile(dir.path(), &catalog, 0).is_err());
     }
     #[test]
-    fn tile_payload_rejects_corruption_and_truncation() {
+    fn raw_tile_payload_accepts_changes_and_rejects_truncation() {
         let path = std::env::temp_dir().join(format!(
             "aerial-tile-{}-{}",
             std::process::id(),
@@ -521,7 +569,7 @@ mod tests {
         let bytes = vec![127u8; 66 * 66 * 3];
         let c = Catalog::parse(&format!(
             "AERIAL 1\nsize 64 1\ntile 0 0 10 10 a.rgb {:08x}\n",
-            crate::street_surface::crc32_bytes(&bytes)
+            0
         ))
         .unwrap();
         std::fs::write(path.join("a.rgb"), &bytes).unwrap();
@@ -529,7 +577,7 @@ mod tests {
         let mut damaged = bytes.clone();
         damaged[15] ^= 1;
         std::fs::write(path.join("a.rgb"), &damaged).unwrap();
-        assert!(read_tile(&path, &c, 0).is_err());
+        assert_eq!(read_tile(&path, &c, 0).unwrap(), damaged);
         std::fs::write(path.join("a.rgb"), &bytes[..30]).unwrap();
         assert!(read_tile(&path, &c, 0).is_err());
         std::fs::remove_dir_all(path).unwrap();

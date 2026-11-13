@@ -226,11 +226,6 @@ impl RecordedEngine {
 }
 
 #[cfg(test)]
-pub(crate) fn validate_bank(directory: &Path) -> io::Result<()> {
-    EngineSamples::load(directory).map(|_| ())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     fn audio_dir() -> &'static Path {

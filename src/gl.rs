@@ -1,5 +1,6 @@
 //! OpenGL scene/HUD programs, mesh upload, and chase-camera math.
 
+use crate::geometry::{XYZ, XZ};
 use std::ffi::CString;
 
 use sdl3::video::Window;
@@ -388,12 +389,12 @@ const GL_FALSE: u8 = 0;
 const FOG_RANGE: [f32; 2] = [80.0, 340.0];
 const VIEW_DISTANCE: f32 = 440.0;
 
-pub struct Shader {
-    pub handle: gl::types::GLuint,
+struct Shader {
+    handle: gl::types::GLuint,
 }
 
 impl Shader {
-    pub fn compile(src: &str, kind: u32) -> Result<Shader, String> {
+    fn compile(src: &str, kind: u32) -> Result<Shader, String> {
         let handle = unsafe { gl::CreateShader(kind) };
         let c_src = CString::new(src).map_err(|_| "NUL in shader source".to_string())?;
         let strings = [c_src.as_ptr()];
@@ -550,9 +551,16 @@ impl Drop for Mesh {
 }
 
 impl Mesh {
-    pub fn new(track: &crate::track::Track) -> Result<Self, String> {
-        let archive = if track.city().is_some() {
-            Some(crate::scene_archive::Archive::open_default().map_err(|e| e.to_string())?)
+    pub fn new(track: &crate::track::Location) -> Result<Self, String> {
+        let archive = if track.has_compiled_roads() {
+            Some(
+                crate::scene_archive::Archive::open_for(
+                    track
+                        .assets()
+                        .ok_or("compiled world has no asset directory")?,
+                )
+                .map_err(|e| e.to_string())?,
+            )
         } else {
             None
         };
@@ -602,12 +610,9 @@ impl Mesh {
                 wheel_range,
             )
         };
-        let concrete_region = track
-            .city()
-            .and_then(|c| c.geographic_origin())
-            .is_some_and(|[lat, lon]| {
-                (35.10..35.24).contains(&lat) && (33.24..33.48).contains(&lon)
-            });
+        let concrete_region = track.origin.is_some_and(|origin| {
+            (35.10..35.24).contains(&origin.lat) && (33.24..33.48).contains(&origin.lon)
+        });
         Ok(Mesh {
             concrete_region,
             vao,
@@ -616,8 +621,8 @@ impl Mesh {
             city_chunks: std::cell::RefCell::new(city_chunks),
             archive: std::cell::RefCell::new(archive),
             prefetch,
-            aerial: std::cell::RefCell::new(if track.city().is_some() {
-                crate::aerial::Aerial::open()
+            aerial: std::cell::RefCell::new(if track.has_compiled_roads() {
+                track.assets().and_then(crate::aerial::Aerial::open)
             } else {
                 None
             }),
@@ -740,7 +745,19 @@ impl Mesh {
                 gl::GetUniformLocation(program, name.as_ptr()),
                 self.prefetch.is_some() as i32,
             );
-            set_scene_transform(program, camera, &model_matrix([0.0; 3], 0.0, 0.0));
+            set_scene_transform(
+                program,
+                camera,
+                &model_matrix(
+                    XYZ {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    0.0,
+                    0.0,
+                ),
+            );
             set_tint(program, [1.0; 3]);
             set_contacts(program, contacts);
             gl::DrawArrays(GL_TRIANGLES, 0, self.ground_vertex_count);
@@ -791,68 +808,6 @@ impl Mesh {
             self.visible_chunks.set(visible);
         }
     }
-    #[cfg(test)]
-    pub fn check_chunk_residency(&self, camera: &Camera) {
-        for chunk in self.city_chunks.borrow().iter() {
-            if crate::chunks::distance_squared(chunk.entry.bounds, camera.eye)
-                > (VIEW_DISTANCE + crate::chunks::SIZE).powi(2)
-            {
-                assert!(chunk.gpu.is_none(), "distant GPU buffer was not released");
-            } else if crate::chunks::visible(chunk.entry.bounds, camera.view_projection) {
-                assert!(chunk.gpu.is_some(), "visible chunk was not uploaded");
-            }
-        }
-    }
-    #[cfg(test)]
-    pub fn prefetched_ground_location(&self) -> Option<[f32; 2]> {
-        let key = self.prefetch.as_ref()?.wait_for_ground()?;
-        let chunks = self.city_chunks.borrow();
-        let bounds = chunks[key.0].entry.bounds;
-        Some([
-            (bounds[0][0] + bounds[1][0]) * 0.5,
-            (bounds[0][2] + bounds[1][2]) * 0.5,
-        ])
-    }
-    #[cfg(test)]
-    pub fn prefetch_stats(&self) -> (usize, usize, usize, usize, usize) {
-        self.prefetch
-            .as_ref()
-            .map_or((0, 0, 0, 0, 0), |p| p.stats())
-    }
-    #[cfg(test)]
-    pub fn paging_stats(&self) -> (usize, usize, usize) {
-        let archive = self.archive.borrow();
-        let Some(archive) = archive.as_ref() else {
-            return (0, 0, 0);
-        };
-        (
-            archive.bytes_read,
-            archive.peak_decode_bytes,
-            self.city_chunks
-                .borrow()
-                .iter()
-                .filter(|c| c.gpu.as_ref().is_some_and(|g| g.coarse))
-                .count(),
-        )
-    }
-    #[cfg(test)]
-    pub fn chunk_stats(&self) -> (usize, usize, usize, usize) {
-        let chunks = self.city_chunks.borrow();
-        (
-            chunks.len(),
-            chunks.iter().filter(|c| c.gpu.is_some()).count(),
-            self.visible_chunks.get(),
-            chunks
-                .iter()
-                .filter(|c| c.gpu.is_some())
-                .map(|c| {
-                    let gpu = c.gpu.as_ref().unwrap();
-                    (gpu.ground.count + gpu.buildings.count) as usize
-                        * std::mem::size_of::<crate::scene::Vertex>()
-                })
-                .sum(),
-        )
-    }
 }
 
 unsafe fn set_contacts(program: u32, contacts: &[crate::shadows::ContactShadow]) {
@@ -861,7 +816,7 @@ unsafe fn set_contacts(program: u32, contacts: &[crate::shadows::ContactShadow])
     let mut origins = [[0.0; 3]; MAX_CONTACTS];
     let mut axes = [[0.0; 4]; MAX_CONTACTS];
     for (i, contact) in contacts.iter().take(count).enumerate() {
-        origins[i] = contact.origin;
+        origins[i] = (contact.origin).into();
         axes[i] = contact.axes;
     }
     let location = |name: &str| {
@@ -934,7 +889,19 @@ impl SkidRenderer {
                 vertices.as_ptr() as *const _,
                 gl::STREAM_DRAW,
             );
-            set_scene_transform(program, camera, &model_matrix([0.0; 3], 0.0, 0.0));
+            set_scene_transform(
+                program,
+                camera,
+                &model_matrix(
+                    XYZ {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    0.0,
+                    0.0,
+                ),
+            );
             set_tint(program, [1.0; 3]);
             gl::DepthMask(gl::FALSE);
             gl::DrawArrays(GL_TRIANGLES, 0, vertices.len() as i32);
@@ -1027,9 +994,9 @@ impl ParticleRenderer {
             let name = CString::new("u_eye").unwrap();
             gl::Uniform3f(
                 gl::GetUniformLocation(self.program, name.as_ptr()),
-                camera.eye[0],
-                camera.eye[1],
-                camera.eye[2],
+                camera.eye.x,
+                camera.eye.y,
+                camera.eye.z,
             );
             set_fog(self.program);
             gl::Enable(gl::DEPTH_TEST);
@@ -1089,9 +1056,9 @@ unsafe fn set_scene_transform_clip(
     let name = CString::new("u_eye").unwrap();
     gl::Uniform3f(
         gl::GetUniformLocation(program, name.as_ptr()),
-        camera.eye[0],
-        camera.eye[1],
-        camera.eye[2],
+        camera.eye.x,
+        camera.eye.y,
+        camera.eye.z,
     );
     set_fog(program);
 }
@@ -1115,7 +1082,7 @@ unsafe fn set_tint(program: u32, tint: [f32; 3]) {
     );
 }
 
-pub fn perspective(aspect: f32, fov_y: f32, near: f32, far: f32) -> [f32; 16] {
+fn perspective(aspect: f32, fov_y: f32, near: f32, far: f32) -> [f32; 16] {
     let f = 1.0 / (fov_y * 0.5).tan();
     [
         f / aspect,
@@ -1140,7 +1107,7 @@ pub fn perspective(aspect: f32, fov_y: f32, near: f32, far: f32) -> [f32; 16] {
 pub struct Camera {
     view_projection: [f32; 16],
     relative_view_projection: [f32; 16],
-    eye: [f32; 3],
+    eye: XYZ,
     particle_view: crate::particles::View,
 }
 impl Camera {
@@ -1149,19 +1116,19 @@ impl Camera {
         // car detail. Adding it on the GPU first collapses nearby body panels.
         let mut relative = *model;
         for axis in 0..3 {
-            relative[12 + axis] -= self.eye[axis];
+            relative[12 + axis] -= self.eye.component(axis);
         }
         multiply(self.relative_view_projection, relative)
     }
     #[cfg(test)]
-    pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
+    fn project(&self, point: XYZ) -> Option<[f32; 2]> {
         let m = self.view_projection;
-        let w = m[3] * point[0] + m[7] * point[1] + m[11] * point[2] + m[15];
+        let w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
         if w <= 0.1 {
             return None;
         }
         Some(std::array::from_fn(|i| {
-            (m[i] * point[0] + m[i + 4] * point[1] + m[i + 8] * point[2] + m[i + 12]) / w
+            (m[i] * point.x + m[i + 4] * point.y + m[i + 8] * point.z + m[i + 12]) / w
         }))
     }
 }
@@ -1172,18 +1139,6 @@ pub fn set_signal_time(program: u32, seconds: f32) {
         gl::UseProgram(program);
         gl::Uniform1f(gl::GetUniformLocation(program, name.as_ptr()), seconds);
     }
-}
-
-#[cfg(test)]
-pub fn test_pixel(camera: &Camera, point: [f32; 3], width: i32, height: i32) -> [i32; 2] {
-    let m = camera.view_projection;
-    let clip: [f32; 4] = std::array::from_fn(|i| {
-        m[i] * point[0] + m[4 + i] * point[1] + m[8 + i] * point[2] + m[12 + i]
-    });
-    [
-        ((clip[0] / clip[3] * 0.5 + 0.5) * width as f32) as i32,
-        ((clip[1] / clip[3] * 0.5 + 0.5) * height as f32) as i32,
-    ]
 }
 
 pub fn chase_camera(aspect: f32, pose: crate::camera::Pose) -> Camera {
@@ -1201,29 +1156,44 @@ pub fn bonnet_camera(
         pose.eye,
         pose.target,
         0.0,
-        [body[4], body[5], body[6]],
+        XYZ {
+            x: body[4],
+            y: body[5],
+            z: body[6],
+        },
     )
 }
 
 pub fn garage_camera(
     aspect: f32,
-    position: [f32; 3],
+    position: XYZ,
     angle: f32,
-    city: Option<&crate::city::City>,
+    city: Option<&crate::world::Location>,
 ) -> Camera {
     let angle = angle + 0.8;
-    let eye = [
-        position[0] + angle.sin() * 8.0,
-        position[1] + 3.6,
-        position[2] + angle.cos() * 8.0,
-    ];
+    let eye = XYZ {
+        x: position.x + angle.sin() * 8.0,
+        y: position.y + 3.6,
+        z: position.z + angle.cos() * 8.0,
+    };
     let eye = city.map_or(eye, |city| {
-        city.camera_eye([position[0], position[1] + 0.5, position[2]], eye)
+        city.camera_eye(
+            XYZ {
+                x: position.x,
+                y: position.y + 0.5,
+                z: position.z,
+            },
+            eye,
+        )
     });
     let mut camera = camera_at(
         aspect,
         eye,
-        [position[0], position[1] + 0.25, position[2]],
+        XYZ {
+            x: position.x,
+            y: position.y + 0.25,
+            z: position.z,
+        },
         0.0,
     );
     // Keep the preview above the two selection columns.
@@ -1233,31 +1203,39 @@ pub fn garage_camera(
     camera
 }
 
-fn camera_at(aspect: f32, eye: [f32; 3], target: [f32; 3], horizontal_shift: f32) -> Camera {
-    camera_at_up(aspect, eye, target, horizontal_shift, [0.0, 1.0, 0.0])
+fn camera_at(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32) -> Camera {
+    camera_at_up(
+        aspect,
+        eye,
+        target,
+        horizontal_shift,
+        XYZ {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        },
+    )
 }
-fn camera_at_up(
-    aspect: f32,
-    eye: [f32; 3],
-    target: [f32; 3],
-    horizontal_shift: f32,
-    up_axis: [f32; 3],
-) -> Camera {
-    let forward = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_axis: XYZ) -> Camera {
+    let forward = normalize(XYZ {
+        x: target.x - eye.x,
+        y: target.y - eye.y,
+        z: target.z - eye.z,
+    });
     let right = normalize(cross(forward, up_axis));
     let up = cross(right, forward);
     let view = [
-        right[0],
-        up[0],
-        -forward[0],
+        right.x,
+        up.x,
+        -forward.x,
         0.0,
-        right[1],
-        up[1],
-        -forward[1],
+        right.y,
+        up.y,
+        -forward.y,
         0.0,
-        right[2],
-        up[2],
-        -forward[2],
+        right.z,
+        up.z,
+        -forward.z,
         0.0,
         -dot(right, eye),
         -dot(up, eye),
@@ -1284,7 +1262,7 @@ fn camera_at_up(
 /// Body transform shared by rendering and the bonnet camera mount.
 pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
     let mut body_position = vehicle.position;
-    body_position[1] += vehicle.curb_bump;
+    body_position.y += vehicle.curb_bump;
     body_model_matrix(
         body_position,
         vehicle.heading,
@@ -1293,41 +1271,48 @@ pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
     )
 }
 
-pub fn model_matrix(car_position: [f32; 3], vehicle_heading: f32, pitch: f32) -> [f32; 16] {
+fn model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32) -> [f32; 16] {
     body_model_matrix(car_position, vehicle_heading, pitch, 0.0)
 }
 
-pub fn body_model_matrix(
-    car_position: [f32; 3],
-    vehicle_heading: f32,
-    pitch: f32,
-    roll: f32,
-) -> [f32; 16] {
+fn body_model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32, roll: f32) -> [f32; 16] {
     let c = vehicle_heading.cos();
     let s = vehicle_heading.sin();
     let (sp, cp) = pitch.sin_cos();
     let (sr, cr) = roll.sin_cos();
-    let right = [c, 0.0, -s];
-    let up = [-s * sp, cp, -c * sp];
-    let forward = [s * cp, sp, c * cp];
-    let rolled_right: [f32; 3] = std::array::from_fn(|i| right[i] * cr + up[i] * sr);
-    let rolled_up: [f32; 3] = std::array::from_fn(|i| up[i] * cr - right[i] * sr);
+    let right = XYZ {
+        x: c,
+        y: 0.0,
+        z: -s,
+    };
+    let up = XYZ {
+        x: -s * sp,
+        y: cp,
+        z: -c * sp,
+    };
+    let forward = XYZ {
+        x: s * cp,
+        y: sp,
+        z: c * cp,
+    };
+    let rolled_right: XYZ = XYZ::from_fn(|i| right.component(i) * cr + up.component(i) * sr);
+    let rolled_up: XYZ = XYZ::from_fn(|i| up.component(i) * cr - right.component(i) * sr);
     [
-        rolled_right[0],
-        rolled_right[1],
-        rolled_right[2],
+        rolled_right.x,
+        rolled_right.y,
+        rolled_right.z,
         0.0,
-        rolled_up[0],
-        rolled_up[1],
-        rolled_up[2],
+        rolled_up.x,
+        rolled_up.y,
+        rolled_up.z,
         0.0,
-        forward[0],
-        forward[1],
-        forward[2],
+        forward.x,
+        forward.y,
+        forward.z,
         0.0,
-        car_position[0],
-        car_position[1],
-        car_position[2],
+        car_position.x,
+        car_position.y,
+        car_position.z,
         1.0,
     ]
 }
@@ -1343,42 +1328,65 @@ fn vehicle_wheel_local_matrix(
     index: usize,
 ) -> [f32; 16] {
     let mut center = car.model.wheel_centers()[index];
-    let mounted: [f32; 3] = std::array::from_fn(|i| {
-        body[i] * center[0] + body[4 + i] * center[1] + body[8 + i] * center[2] + body[12 + i]
+    let mounted: XYZ = XYZ::from_fn(|i| {
+        body[i] * center.x + body[4 + i] * center.y + body[8 + i] * center.z + body[12 + i]
     });
-    let ground = car.track.drive_height([mounted[0], mounted[2]]);
+    let ground = car.track.drive_height(XZ {
+        x: mounted.x,
+        z: mounted.z,
+    });
     let radius = car.model.spec().design.wheel_radii[index];
     // Bounded compression/droop keeps tires following bumps while the body
     // heaves and tilts on its springs. Airborne wheels stop at full extension.
-    center[1] += ((ground + radius - mounted[1]) / body[5].abs().max(0.5)).clamp(-0.16, 0.14);
+    center.y += ((ground + radius - mounted.y) / body[5].abs().max(0.5)).clamp(-0.16, 0.14);
     let front = index >= 2;
     wheel_matrix(
-        model_matrix([0.0; 3], 0.0, 0.0),
+        model_matrix(
+            XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+            0.0,
+        ),
         center,
         if front { car.front_wheel_angle() } else { 0.0 },
         car.wheel_phase[usize::from(front)],
     )
 }
 
-fn wheel_matrix(body: [f32; 16], center: [f32; 3], steer: f32, spin: f32) -> [f32; 16] {
+fn wheel_matrix(body: [f32; 16], center: XYZ, steer: f32, spin: f32) -> [f32; 16] {
     let mount = model_matrix(center, steer, 0.0);
-    let roll = model_matrix([0.0; 3], 0.0, -spin);
+    let roll = model_matrix(
+        XYZ {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+        0.0,
+        -spin,
+    );
     multiply(multiply(body, mount), roll)
 }
 
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+fn dot(a: XYZ, b: XYZ) -> f32 {
+    a.x * b.x + a.y * b.y + a.z * b.z
 }
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
+fn cross(a: XYZ, b: XYZ) -> XYZ {
+    XYZ {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x,
+    }
 }
-fn normalize(v: [f32; 3]) -> [f32; 3] {
+fn normalize(v: XYZ) -> XYZ {
     let length = dot(v, v).sqrt();
-    [v[0] / length, v[1] / length, v[2] / length]
+    XYZ {
+        x: v.x / length,
+        y: v.y / length,
+        z: v.z / length,
+    }
 }
 fn multiply(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     let mut out = [0.0; 16];
@@ -1467,15 +1475,37 @@ mod tests {
             let camera = super::chase_camera(
                 16.0 / 9.0,
                 crate::camera::Pose {
-                    eye: [origin[0] + 4.0, origin[1] + 2.0, origin[2] - 6.0],
-                    target: [origin[0], origin[1] + 0.25, origin[2]],
+                    eye: crate::geometry::XYZ {
+                        x: origin[0] + 4.0,
+                        y: origin[1] + 2.0,
+                        z: origin[2] - 6.0,
+                    },
+                    target: crate::geometry::XYZ {
+                        x: origin[0],
+                        y: origin[1] + 0.25,
+                        z: origin[2],
+                    },
                 },
             );
-            let clip = camera.clip_from_model(&super::model_matrix(origin, 0.7, 0.0));
-            let a = transform(clip, [0.5, 0.3, 1.0]);
-            let b = transform(clip, [0.5001, 0.3, 1.0]);
+            let clip = camera.clip_from_model(&super::model_matrix((origin).into(), 0.7, 0.0));
+            let a = transform(
+                clip,
+                crate::geometry::XYZ {
+                    x: 0.5,
+                    y: 0.3,
+                    z: 1.0,
+                },
+            );
+            let b = transform(
+                clip,
+                crate::geometry::XYZ {
+                    x: 0.5001,
+                    y: 0.3,
+                    z: 1.0,
+                },
+            );
             assert!(
-                (a[0] - b[0]).abs() > 0.00001,
+                (a.x - b.x).abs() > 0.00001,
                 "nearby panels must remain distinct"
             );
             if let Some((expected_a, expected_b)) = reference {
@@ -1496,18 +1526,18 @@ mod tests {
 
     use super::*;
 
-    fn transform(m: [f32; 16], p: [f32; 3]) -> [f32; 3] {
-        std::array::from_fn(|i| m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i])
+    fn transform(m: [f32; 16], p: crate::geometry::XYZ) -> crate::geometry::XYZ {
+        crate::geometry::XYZ::from_fn(|i| m[i] * p.x + m[4 + i] * p.y + m[8 + i] * p.z + m[12 + i])
     }
 
     #[test]
     fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
         let track = crate::test_support::track();
-        let model = crate::cars::CarModel::test_fixture();
+        let model = crate::cars::CarModel::TestFixture(0);
 
         let road = track.spawn();
         let mut car = crate::vehicle::Vehicle::on_track(
-            road.lane_position(0.0),
+            road.vehicle_position(0.0),
             road.heading(),
             model,
             track,
@@ -1524,12 +1554,12 @@ mod tests {
             for x in [-1.4, 1.4] {
                 for y in [-0.42, 1.25] {
                     for z in [-2.2, 2.2] {
-                        let p = [x, y, z];
+                        let p = crate::geometry::XYZ { x: x, y: y, z: z };
                         let clip = transform(matrix, p);
                         let w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
                         assert!(w > 0.0);
                         assert!(
-                            clip[0].abs() / w < 0.98 && clip[1].abs() / w < 0.98,
+                            clip.x.abs() / w < 0.98 && clip.y.abs() / w < 0.98,
                             "car clipped for {model:?} at {speed}: {:?}",
                             clip.map(|v| v / w)
                         );
@@ -1541,22 +1571,44 @@ mod tests {
 
     #[test]
     fn wheels_turn_about_their_axles_not_the_vehicle_origin() {
-        let car = crate::cars::CarModel::test_fixture();
+        let car = crate::cars::CarModel::TestFixture(0);
         for center in car.wheel_centers() {
-            let body = model_matrix([12.0, 3.0, -7.0], 1.2, 0.15);
+            let body = model_matrix(
+                crate::geometry::XYZ {
+                    x: 12.0,
+                    y: 3.0,
+                    z: -7.0,
+                },
+                1.2,
+                0.15,
+            );
             let axle = transform(body, center);
             for (steer, spin) in [(0.0, 0.0), (-0.4, 1.5), (0.4, 5.0)] {
                 let matrix = wheel_matrix(body, center, steer, spin);
-                let origin = transform(matrix, [0.0; 3]);
+                let origin = transform(
+                    matrix,
+                    crate::geometry::XYZ {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                );
                 for i in 0..3 {
-                    assert!((origin[i] - axle[i]).abs() < 0.0001);
+                    assert!((origin.component(i) - axle.component(i)).abs() < 0.0001);
                 }
-                let rim = transform(matrix, [0.0, crate::cars::WHEEL_RADIUS, 0.0]);
+                let rim = transform(
+                    matrix,
+                    crate::geometry::XYZ {
+                        x: 0.0,
+                        y: 0.4_f32,
+                        z: 0.0,
+                    },
+                );
                 let radius = (0..3)
-                    .map(|i| (rim[i] - axle[i]).powi(2))
+                    .map(|i| (rim.component(i) - axle.component(i)).powi(2))
                     .sum::<f32>()
                     .sqrt();
-                assert!((radius - crate::cars::WHEEL_RADIUS).abs() < 0.0001);
+                assert!((radius - 0.4_f32).abs() < 0.0001);
             }
         }
     }
@@ -1566,21 +1618,25 @@ mod tests {
         let track = crate::test_support::track();
         let road = track.spawn();
         let mut car = crate::vehicle::Vehicle::on_track(
-            road.lane_position(0.0),
+            road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::test_fixture(),
+            crate::cars::CarModel::TestFixture(0),
             track,
         );
         let mut chase = crate::camera::ChaseCamera::new(&car);
         chase.toggle_view();
         chase.toggle_view();
-        let point = [0.3, 0.25, 1.6];
+        let point = crate::geometry::XYZ {
+            x: 0.3,
+            y: 0.25,
+            z: 1.6,
+        };
         let reference = bonnet_camera(16.0 / 9.0, chase.pose(), &car)
             .project(transform(vehicle_body_matrix(&car), point))
             .unwrap();
         for i in 1..5 {
             car.heading += 0.7;
-            car.position[1] += 0.2;
+            car.position.y += 0.2;
             car.body_pitch = i as f32 * 0.03;
             car.body_roll = i as f32 * 0.025;
             car.curb_bump = 0.08;
@@ -1597,12 +1653,14 @@ mod tests {
 
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
-        let track = std::sync::Arc::new(crate::test_support::track().bump_test_track());
+        let track = std::sync::Arc::new(crate::test_support::bumpy_track(
+            &crate::test_support::track(),
+        ));
         let road = track.at_distance(54.0);
         let mut car = crate::vehicle::Vehicle::on_track(
-            road.lane_position(0.0),
+            road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::test_fixture(),
+            crate::cars::CarModel::TestFixture(0),
             track,
         );
         car.suspension_pitch = 0.0;
@@ -1610,10 +1668,20 @@ mod tests {
         let body = vehicle_body_matrix(&car);
         let wheel_y: [f32; 4] = std::array::from_fn(|i| {
             let matrix = vehicle_wheel_matrix(&car, body, i);
-            let center = transform(matrix, [0.0; 3]);
-            let ground = car.track.drive_height([center[0], center[2]]);
-            assert!((center[1] - car.model.spec().design.wheel_radii[i] - ground).abs() < 0.005);
-            center[1]
+            let center = transform(
+                matrix,
+                crate::geometry::XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            );
+            let ground = car.track.drive_height(crate::geometry::XZ {
+                x: center.x,
+                z: center.z,
+            });
+            assert!((center.y - car.model.spec().design.wheel_radii[i] - ground).abs() < 0.005);
+            center.y
         });
         assert!(
             wheel_y[2] - wheel_y[0] > 0.05,
@@ -1624,8 +1692,15 @@ mod tests {
             displaced[13] += height;
             for (i, mount) in car.model.wheel_centers().into_iter().enumerate() {
                 let nominal = transform(displaced, mount);
-                let wheel = transform(vehicle_wheel_matrix(&car, displaced, i), [0.0; 3]);
-                let travel = wheel[1] - nominal[1];
+                let wheel = transform(
+                    vehicle_wheel_matrix(&car, displaced, i),
+                    crate::geometry::XYZ {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                );
+                let travel = wheel.y - nominal.y;
                 let expected = if height < 0.0 { 0.14 } else { -0.16 };
                 assert!(
                     (travel - expected).abs() < 0.001,
@@ -1637,10 +1712,24 @@ mod tests {
 
     #[test]
     fn body_matrix_adds_roll_without_moving_the_car_or_scaling_axes() {
-        let origin = [12.0, 3.0, -7.0];
+        let origin = crate::geometry::XYZ {
+            x: 12.0,
+            y: 3.0,
+            z: -7.0,
+        };
         let flat = model_matrix(origin, 0.4, 0.0);
         let rolled = body_model_matrix(origin, 0.4, 0.0, 0.08);
-        assert_eq!(transform(rolled, [0.0; 3]), origin);
+        assert_eq!(
+            transform(
+                rolled,
+                crate::geometry::XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0
+                }
+            ),
+            origin
+        );
         assert_ne!(flat[1], rolled[1], "roll should tilt the local right axis");
         for axis in 0..3 {
             let length = (0..3)
@@ -1651,5 +1740,1099 @@ mod tests {
         }
         let right_dot_up: f32 = (0..3).map(|row| rolled[row] * rolled[4 + row]).sum();
         assert!(right_dot_up.abs() < 0.0001);
+    }
+}
+
+#[cfg(test)]
+mod renderer_tests {
+    fn assert_particle_pixel_readback(app: &App) {
+        let car = &app.session.vehicle;
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: crate::geometry::XYZ {
+                    x: car.position.x + 4.0,
+                    y: car.position.y + 6.0,
+                    z: car.position.z + 5.0,
+                },
+                target: car.position,
+            },
+        );
+        let read_color = || {
+            let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+            unsafe {
+                ::gl::ReadPixels(
+                    0,
+                    0,
+                    WINDOW_WIDTH,
+                    WINDOW_HEIGHT,
+                    ::gl::RGB,
+                    ::gl::UNSIGNED_BYTE,
+                    pixels.as_mut_ptr() as *mut _,
+                );
+            }
+            pixels
+        };
+        let read_depth = || {
+            let mut pixels = vec![0.0f32; (WINDOW_WIDTH * WINDOW_HEIGHT) as usize];
+            unsafe {
+                ::gl::ReadPixels(
+                    0,
+                    0,
+                    WINDOW_WIDTH,
+                    WINDOW_HEIGHT,
+                    ::gl::DEPTH_COMPONENT,
+                    ::gl::FLOAT,
+                    pixels.as_mut_ptr() as *mut _,
+                );
+            }
+            pixels
+        };
+        let state = || unsafe {
+            let mut blend = [0; 6];
+            for (i, parameter) in [
+                ::gl::BLEND_SRC_RGB,
+                ::gl::BLEND_DST_RGB,
+                ::gl::BLEND_SRC_ALPHA,
+                ::gl::BLEND_DST_ALPHA,
+                ::gl::BLEND_EQUATION_RGB,
+                ::gl::BLEND_EQUATION_ALPHA,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                ::gl::GetIntegerv(parameter, &mut blend[i]);
+            }
+            let mut depth_write = 0;
+            ::gl::GetBooleanv(::gl::DEPTH_WRITEMASK, &mut depth_write);
+            (
+                blend,
+                depth_write,
+                ::gl::IsEnabled(::gl::BLEND),
+                ::gl::IsEnabled(::gl::DEPTH_TEST),
+            )
+        };
+        gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+        gl::clear_screen();
+        app.mesh().draw_ground(
+            app.scene_program,
+            &camera,
+            &[shadows::ContactShadow::new(car)],
+        );
+        let before = read_color();
+        let depth = read_depth();
+        let previous = state();
+        let count = app.particle_renderer.draw(&camera, &app.session.particles);
+        assert!(count > 0);
+        assert_eq!(
+            state(),
+            previous,
+            "particle pass must restore blend/depth state"
+        );
+        assert_eq!(
+            read_depth(),
+            depth,
+            "transparent puffs must not write depth"
+        );
+        let after = read_color();
+        let changed = before
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(after.as_chunks::<3>().0)
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 2))
+            .count();
+        assert!(
+            changed > 25,
+            "particle pass did not visibly blend for {:?}",
+            car.model
+        );
+        assert!(
+            changed < (WINDOW_WIDTH * WINDOW_HEIGHT / 6) as usize,
+            "puffs must remain local"
+        );
+
+        // Put an opaque depth plane in front of every puff: no color may leak through.
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        let occluded = read_color();
+        unsafe {
+            ::gl::ClearDepth(0.0);
+            ::gl::Clear(::gl::DEPTH_BUFFER_BIT);
+            ::gl::ClearDepth(1.0);
+        }
+        app.particle_renderer.draw(&camera, &app.session.particles);
+        assert_eq!(
+            read_color(),
+            occluded,
+            "particles must respect opaque depth"
+        );
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        gl::clear_screen();
+    }
+
+    use crate::*;
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and a baked Nicosia location"]
+    fn imported_location_renderer_smoke() {
+        let mut app = App::with_location(true);
+        assert_ne!(app.session.track().id, crate::test_support::nicosia_id());
+        app.start_selected();
+        assert_eq!(app.session.track().id, crate::test_support::nicosia_id());
+        app.session.state = GameState::Menu;
+        app.capture_path = Some(std::env::temp_dir().join("carslop-imported.ppm"));
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        app.key_down(Keycode::Return);
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; renders and checks the compact pause menu"]
+    fn pause_menu_preview() {
+        let mut app = App::with_location(false);
+        app.start_selected();
+        app.key_down(Keycode::Escape);
+        let view = app.chase.view();
+        app.menu_click(410.0, 450.0);
+        assert_ne!(app.chase.view(), view);
+        let recovered = app.session.recoveries;
+        app.menu_click(870.0, 450.0);
+        assert_eq!(app.session.recoveries, recovered + 1);
+        assert!(app.session.state == GameState::Paused);
+        app.capture_path = Some("/tmp/carslop-pause.ppm".into());
+        app.render(Duration::ZERO);
+        app.menu_click(410.0, 313.0);
+        assert!(app.session.state == GameState::Driving);
+        app.key_down(Keycode::Escape);
+        app.menu_click(410.0, 382.0);
+        assert!(app.session.state == GameState::Menu);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; renders a suspension bump sequence"]
+    fn suspension_bump_preview() {
+        let app = App::with_location(false);
+        let track = std::sync::Arc::new(crate::test_support::bumpy_track(
+            &crate::test_support::scenic_id().try_track().unwrap(),
+        ));
+        let mesh = gl::Mesh::new(&track).unwrap();
+        let road = track.at_distance(50.0);
+        let mut car = vehicle::Vehicle::on_track(
+            road.vehicle_position(0.0),
+            road.heading(),
+            CarModel::first(),
+            track,
+        );
+        car.velocity = road.tangent.map(|v| v * 8.0);
+        let directory = std::path::Path::new("/tmp/carslop-suspension-preview");
+        std::fs::create_dir_all(directory).unwrap();
+        for frame in 0..60 {
+            car.update(Duration::from_secs_f64(1.0 / 30.0), Controls::default());
+            let p = car.position;
+            let (sin, cos) = car.heading.sin_cos();
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: crate::geometry::XYZ {
+                        x: p.x + cos * 6.5 + sin * 1.5,
+                        y: 2.35,
+                        z: p.z - sin * 6.5 + cos * 1.5,
+                    },
+                    target: crate::geometry::XYZ {
+                        x: p.x,
+                        y: 0.65,
+                        z: p.z,
+                    },
+                },
+            );
+            gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+            gl::clear_screen();
+            mesh.draw_ground(
+                app.scene_program,
+                &camera,
+                &[shadows::ContactShadow::new(&car)],
+            );
+            mesh.draw(
+                app.scene_program,
+                &camera,
+                &gl::vehicle_body_matrix(&car),
+                [0.6, 0.12, 0.065],
+                &car,
+            );
+            capture_frame(&directory.join(format!("frame-{frame:03}.ppm")));
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and Nicosia; renders an OSM building label"]
+    fn storefront_sign_preview() {
+        let mut app = App::new();
+        app.key_down(Keycode::F7);
+        app.start_selected();
+        let city = app.session.track();
+        let building = city
+            .buildings()
+            .iter()
+            .filter(|b| city.building_name(b.id).is_some())
+            .min_by(|a, b| {
+                let distance =
+                    |b: &city::Building| b.ground_outline[0].x.hypot(b.ground_outline[0].z);
+                distance(a).total_cmp(&distance(b))
+            })
+            .expect("map needs a named building");
+        let (a, b) = (0..building.ground_outline.len())
+            .map(|i| {
+                let a = building.ground_outline[i];
+                let b = building.ground_outline[(i + 1) % building.ground_outline.len()];
+                let mid = crate::geometry::XYZ {
+                    x: (a.x + b.x) * 0.5,
+                    y: building.base_y,
+                    z: (a.z + b.z) * 0.5,
+                };
+                let road = city.project(mid);
+                let distance = (mid.x - road.point.x).hypot(mid.z - road.point.z);
+                (a, b, distance)
+            })
+            .filter(|(a, b, _)| (a.x - b.x).hypot(a.z - b.z) >= 2.0)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(a, b, _)| (a, b))
+            .unwrap();
+        let length = (b.x - a.x).hypot(b.z - a.z);
+        let middle = crate::geometry::XYZ {
+            x: (a.x + b.x) * 0.5,
+            y: building.base_y + 2.8,
+            z: (a.z + b.z) * 0.5,
+        };
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: crate::geometry::XYZ {
+                    x: middle.x + (b.z - a.z) / length * (length * 0.65).clamp(7.0, 30.0),
+                    y: middle.y,
+                    z: middle.z - (b.x - a.x) / length * (length * 0.65).clamp(7.0, 30.0),
+                },
+                target: middle,
+            },
+        );
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        capture_frame(std::path::Path::new("/tmp/carslop-building-labels.ppm"));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and Nicosia; renders a limestone facade"]
+    fn limestone_facade_preview() {
+        capture_facade(1020326527, "/tmp/carslop-limestone.ppm");
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and Nicosia; renders stacked apartment balconies"]
+    fn apartment_facade_preview() {
+        capture_facade(1020849811, "/tmp/carslop-apartments.ppm");
+    }
+
+    fn capture_facade(id: u64, path: &str) {
+        let mut app = App::new();
+        app.selected_location = app
+            .locations
+            .iter()
+            .position(|entry| {
+                entry
+                    .track
+                    .asset_path()
+                    .is_some_and(|path| path.ends_with("nicosia"))
+            })
+            .expect("Nicosia location");
+        app.start_selected();
+        let city = app.session.track();
+        let building = city.buildings().iter().find(|b| b.id == id).unwrap();
+        let [a, c] = [building.ground_outline[0], building.ground_outline[1]];
+        let length = (c.x - a.x).hypot(c.z - a.z);
+        let mid = crate::geometry::XYZ {
+            x: (a.x + c.x) * 0.5,
+            y: building.base_y + building.height_meters * 0.45,
+            z: (a.z + c.z) * 0.5,
+        };
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: crate::geometry::XYZ {
+                    x: mid.x + (c.z - a.z) / length * 17.0 + (c.x - a.x) / length * 7.0,
+                    y: mid.y + 4.5,
+                    z: mid.z - (c.x - a.x) / length * 17.0 + (c.z - a.z) / length * 7.0,
+                },
+                target: mid,
+            },
+        );
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        capture_frame(std::path::Path::new(path));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL and the bundled Nicosia map"]
+    fn readme_screenshot() {
+        let mut app = App::new();
+        app.selected_location = app
+            .locations
+            .iter()
+            .position(|entry| {
+                entry
+                    .track
+                    .asset_path()
+                    .is_some_and(|path| path.ends_with("nicosia"))
+            })
+            .expect("Nicosia location");
+        app.start_selected();
+        let city = app.session.track();
+        let url = city
+            .google_maps_url(crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            })
+            .unwrap();
+        let coords: Vec<f64> = url
+            .split("query=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let (lat, lon) = (coords[0], coords[1]);
+        let x = ((33.3169556_f64 - lon).to_radians() * 6371000.0 * lat.to_radians().cos()) as f32;
+        let z = (-(35.1670537_f64 - lat).to_radians() * 6371000.0) as f32;
+        let road = city.project(crate::geometry::XYZ { x: x, y: 0.0, z: z });
+        app.session.vehicle.reset(
+            crate::geometry::XYZ {
+                x: x,
+                y: road.point.y + 0.48,
+                z: z,
+            },
+            road.heading(),
+        );
+        app.snap_camera();
+        app.capture_path = Some("/tmp/carslop-readme.ppm".into());
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; captures the location loading screen"]
+    fn location_loading_renderer_smoke() {
+        let mut app = App::with_location(false);
+        let path = "/tmp/location-loading.ppm";
+        loading::draw(
+            &app.window,
+            "NICOSIA",
+            "READING MAP AND BUILDING COLLISIONS",
+            12.0,
+        );
+        capture_frame(std::path::Path::new(&path));
+        gl::swap_window(&app.window);
+        unsafe {
+            assert_eq!(::gl::GetError(), ::gl::NO_ERROR);
+        }
+        // Completed loads must not create another loader or consume input.
+        assert!(loading::prepare(
+            crate::test_support::scenic_id(),
+            app.locations_cache.clone(),
+            &mut app.window,
+            &mut app.events,
+            &app.sdl_context
+        )
+        .is_some());
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; compares rear lamp pixels with the pedal up/down"]
+    fn stop_lights_renderer() {
+        let app = App::new();
+        for model in cars::ALL {
+            let mut car = crate::test_support::vehicle(app.session.vehicle.position, 0.0, model);
+            let p = car.position;
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: crate::geometry::XYZ {
+                        x: p.x,
+                        y: p.y + 1.2,
+                        z: p.z - 5.0,
+                    },
+                    target: crate::geometry::XYZ {
+                        x: p.x,
+                        y: p.y + 0.25,
+                        z: p.z,
+                    },
+                },
+            );
+            let matrix = gl::model_matrix(p, 0.0, 0.0);
+            let mut frames = Vec::new();
+            for pressed in [false, true, false] {
+                car.brake_lights = pressed;
+                gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+                gl::clear_screen();
+                app.mesh()
+                    .draw(app.scene_program, &camera, &matrix, [0.1, 0.3, 0.8], &car);
+                let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+                unsafe {
+                    ::gl::ReadBuffer(::gl::BACK);
+                    ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
+                    ::gl::ReadPixels(
+                        0,
+                        0,
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        ::gl::RGB,
+                        ::gl::UNSIGNED_BYTE,
+                        pixels.as_mut_ptr().cast(),
+                    );
+                }
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                frames.push(pixels);
+            }
+            let brightened = frames[0]
+                .chunks_exact(3)
+                .zip(frames[1].chunks_exact(3))
+                .filter(|(off, on)| on[0] > off[0].saturating_add(20) && on[0] > 220 && on[1] < 80)
+                .count();
+            assert!(
+                brightened > 100,
+                "stop lamps did not brighten: {model:?}, {brightened} pixels"
+            );
+            assert_eq!(
+                frames[0], frames[2],
+                "lamps must return to their unlit finish"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; compares car detail near and far from the map origin"]
+    fn car_details_stay_stable_far_from_the_map_origin() {
+        let app = App::with_location(false);
+        let track = std::sync::Arc::new(crate::test_support::flat_track(
+            &LocationId::Compact.try_track().unwrap(),
+        ));
+        let mut frames = Vec::new();
+        for (label, position) in [
+            ("near", [0.0, 100.0, 0.0]),
+            ("far", [12000.0, 100.0, 9000.0]),
+        ] {
+            let car = Vehicle::on_track((position).into(), 0.0, CarModel::first(), track.clone());
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: crate::geometry::XYZ {
+                        x: position[0] + 4.0,
+                        y: position[1] + 2.0,
+                        z: position[2] - 6.0,
+                    },
+                    target: crate::geometry::XYZ {
+                        x: position[0],
+                        y: position[1] + 0.25,
+                        z: position[2],
+                    },
+                },
+            );
+            gl::clear_screen();
+            app.mesh().draw(
+                app.scene_program,
+                &camera,
+                &gl::vehicle_body_matrix(&car),
+                [1.0, 0.18, 0.08],
+                &car,
+            );
+            let path = std::env::temp_dir().join(format!("carslop-car-precision-{label}.ppm"));
+            capture_frame(&path);
+            let bytes = std::fs::read(path).unwrap();
+            let header = format!("P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).len();
+            frames.push(bytes[header..].to_vec());
+        }
+        let changed = frames[0]
+            .chunks_exact(3)
+            .zip(frames[1].chunks_exact(3))
+            .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 20))
+            .count();
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        assert!(
+            changed < 150,
+            "car details flicker after a world translation: {changed} pixels"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; verifies reverse lamps in reverse, drive and neutral"]
+    fn reverse_lights_renderer() {
+        let app = App::new();
+        for model in cars::ALL {
+            let mut car = crate::test_support::vehicle(app.session.vehicle.position, 0.0, model);
+            let p = car.position;
+            let camera = gl::chase_camera(
+                WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                camera::Pose {
+                    eye: crate::geometry::XYZ {
+                        x: p.x,
+                        y: p.y + 1.2,
+                        z: p.z - 5.0,
+                    },
+                    target: crate::geometry::XYZ {
+                        x: p.x,
+                        y: p.y + 0.25,
+                        z: p.z,
+                    },
+                },
+            );
+            let matrix = gl::model_matrix(p, 0.0, 0.0);
+            let mut frames = Vec::new();
+            for gear in [1, 0, vehicle::NEUTRAL_GEAR] {
+                car.gear = gear;
+                gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+                gl::clear_screen();
+                app.mesh()
+                    .draw(app.scene_program, &camera, &matrix, [0.1, 0.3, 0.8], &car);
+                let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+                unsafe {
+                    ::gl::ReadBuffer(::gl::BACK);
+                    ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
+                    ::gl::ReadPixels(
+                        0,
+                        0,
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        ::gl::RGB,
+                        ::gl::UNSIGNED_BYTE,
+                        pixels.as_mut_ptr().cast(),
+                    );
+                }
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                frames.push(pixels);
+            }
+            let brightened = frames[0]
+                .chunks_exact(3)
+                .zip(frames[1].chunks_exact(3))
+                .filter(|(off, on)| {
+                    on[0] > off[0].saturating_add(20) && on[0] > 220 && on[1] > 220 && on[2] > 200
+                })
+                .count();
+            assert!(
+                brightened > 30,
+                "reverse lamps did not brighten: {model:?}, {brightened} pixels"
+            );
+            assert_eq!(
+                frames[0], frames[2],
+                "neutral must extinguish reverse lamps"
+            );
+        }
+    }
+
+    /// Export repeatable front/rear/side views for reviewing silhouette and shading.
+    #[test]
+    #[ignore = "requires SDL3/OpenGL; exports PPM previews to /tmp/car-preview"]
+    fn car_art_preview() {
+        use std::io::Write;
+        let directory = "/tmp/car-preview";
+        std::fs::create_dir_all(&directory).unwrap();
+        let app = App::new();
+        for car_model in cars::ALL {
+            let preview_car = vehicle::Vehicle::on_track(
+                app.session.vehicle.position,
+                0.0,
+                car_model,
+                app.session.vehicle.track.clone(),
+            );
+            let car = &preview_car;
+            let p = car.position;
+            for (name, offset) in [
+                ("front", [4.2, 2.1, 5.0]),
+                ("rear", [-4.2, 1.8, -5.0]),
+                ("side", [6.0, 1.0, 0.0]),
+                ("detail-front", [2.8, 1.45, 3.65]),
+                ("detail-rear", [-2.9, 1.55, -3.8]),
+                ("detail-side", [4.6, 0.65, 0.0]),
+                ("road", [-3.2, 1.5, -4.6]),
+            ] {
+                gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+                gl::clear_screen();
+                let camera = gl::chase_camera(
+                    WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                    camera::Pose {
+                        eye: crate::geometry::XYZ::from_fn(|i| p.component(i) + offset[i]),
+                        target: crate::geometry::XYZ {
+                            x: p.x,
+                            y: p.y + 0.25,
+                            z: p.z,
+                        },
+                    },
+                );
+                let model = gl::model_matrix(p, 0.0, 0.0);
+                let tint = if name == "road" {
+                    app.mesh().draw_ground(
+                        app.scene_program,
+                        &camera,
+                        &[shadows::ContactShadow::new(car)],
+                    );
+                    [0.10, 0.30, 0.24]
+                } else {
+                    [0.60, 0.12, 0.065]
+                };
+                app.mesh()
+                    .draw(app.scene_program, &camera, &model, tint, car);
+                let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+                unsafe {
+                    ::gl::ReadBuffer(::gl::BACK);
+                    ::gl::PixelStorei(::gl::PACK_ALIGNMENT, 1);
+                    ::gl::ReadPixels(
+                        0,
+                        0,
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        ::gl::RGB,
+                        ::gl::UNSIGNED_BYTE,
+                        pixels.as_mut_ptr().cast(),
+                    );
+                }
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                let mut file = std::fs::File::create(format!(
+                    "{directory}/car-{}-{name}.ppm",
+                    car_model.index()
+                ))
+                .unwrap();
+                write!(file, "P6\n{} {}\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT).unwrap();
+                for row in pixels
+                    .as_chunks::<{ (WINDOW_WIDTH * 3) as usize }>()
+                    .0
+                    .iter()
+                    .rev()
+                {
+                    file.write_all(row).unwrap();
+                }
+            }
+        }
+    }
+
+    fn contact_count(program: u32) -> i32 {
+        let name = std::ffi::CString::new("u_contact_count").unwrap();
+        let mut count = -1;
+        unsafe {
+            ::gl::GetUniformiv(
+                program,
+                ::gl::GetUniformLocation(program, name.as_ptr()),
+                &mut count,
+            );
+        }
+        count
+    }
+
+    fn assert_contact_pixel_readback(app: &App) {
+        let car = &app.session.vehicle;
+        let camera = gl::chase_camera(
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+            camera::Pose {
+                eye: crate::geometry::XYZ {
+                    x: car.position.x + 4.0,
+                    y: car.position.y + 9.0,
+                    z: car.position.z + 5.0,
+                },
+                target: car.position,
+            },
+        );
+        let read = || {
+            let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
+            unsafe {
+                ::gl::ReadPixels(
+                    0,
+                    0,
+                    WINDOW_WIDTH,
+                    WINDOW_HEIGHT,
+                    ::gl::RGB,
+                    ::gl::UNSIGNED_BYTE,
+                    pixels.as_mut_ptr() as *mut _,
+                );
+            }
+            pixels
+        };
+        gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+        gl::clear_screen();
+        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        app.skid_renderer
+            .draw(app.scene_program, &camera, &app.session.skids);
+        assert_eq!(contact_count(app.scene_program), 0);
+        let unshadowed = read();
+        gl::clear_screen();
+        app.mesh().draw_ground(
+            app.scene_program,
+            &camera,
+            &[shadows::ContactShadow::new(car)],
+        );
+        app.skid_renderer
+            .draw(app.scene_program, &camera, &app.session.skids);
+        let shadowed = read();
+        let mut changed = 0;
+        for (before, after) in unshadowed
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(shadowed.as_chunks::<3>().0)
+        {
+            assert!(
+                before
+                    .iter()
+                    .zip(after)
+                    .all(|(a, b)| *b <= a.saturating_add(1)),
+                "contact shading must never brighten the scene"
+            );
+            if before
+                .iter()
+                .zip(after)
+                .any(|(a, b)| a.saturating_sub(*b) > 2)
+            {
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 100,
+            "contact shadow changed only {changed} pixels for {:?}",
+            car.model
+        );
+        assert!(
+            changed < (WINDOW_WIDTH * WINDOW_HEIGHT / 8) as usize,
+            "contact shading must remain local"
+        );
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL"]
+    fn feedback_renderer_smoke() {
+        let mut app = App::with_location(false);
+        // Scenic fixtures are sampled from the route, never compact world coordinates.
+        for model in cars::ALL {
+            app.session = Session::on_track(model, crate::test_support::scenic_id());
+            app.ensure_mesh();
+            for distance in [50.0, 50.6] {
+                let road = app.session.track().at_distance(distance);
+                app.session
+                    .vehicle
+                    .reset(road.vehicle_position(0.0), road.heading());
+                app.session.vehicle.tire_scrub = 0.9;
+                app.session.skids.record(0, &app.session.vehicle);
+            }
+            assert!(!app.session.skids.vertices().is_empty());
+            let v = &mut app.session.vehicle;
+            v.velocity = crate::geometry::XZ {
+                x: v.heading.sin() * 8.0,
+                z: v.heading.cos() * 8.0,
+            };
+            v.update(
+                TICK,
+                Controls {
+                    steering: 0.8,
+                    handbrake: true,
+                    ..Controls::default()
+                },
+            );
+            for _ in 0..20 {
+                app.session.particles.advance(TICK);
+                app.session.particles.record(0, &app.session.vehicle, TICK);
+            }
+            assert_particle_pixel_readback(&app);
+            for fraction in [0.0, 0.25, 0.5, 0.75] {
+                let road = app
+                    .session
+                    .track()
+                    .at_distance(app.session.track().sampling_length() * fraction);
+                app.session
+                    .vehicle
+                    .reset(road.vehicle_position(0.0), road.heading());
+                app.snap_camera();
+                assert_contact_pixel_readback(&app);
+                for view in [camera::FollowView::Wide, camera::FollowView::Close] {
+                    while app.chase.view() != view {
+                        app.key_down(Keycode::Tab);
+                    }
+                    for _ in 0..120 {
+                        app.chase.update(&app.session.vehicle, TICK);
+                    }
+                    app.render(TICK);
+                    assert_eq!(
+                        contact_count(app.scene_program),
+                        1,
+                        "Scenic Free Drive has one shadow"
+                    );
+                    assert_eq!(
+                        unsafe { ::gl::GetError() },
+                        ::gl::NO_ERROR,
+                        "GL errors rendering Scenic {model:?} at {fraction} in {view:?}"
+                    );
+                }
+                app.session.state = GameState::Menu;
+                app.render(TICK);
+                assert_eq!(
+                    contact_count(app.scene_program),
+                    1,
+                    "Scenic garage has one shadow"
+                );
+                assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+                app.session.state = GameState::Driving;
+            }
+        }
+    }
+
+    #[test]
+    fn car_selection_and_restart_preserve_each_free_route() {
+        for id in crate::test_support::location_ids() {
+            let mut s = Session::on_track(crate::cars::CarModel::TestFixture(0), id.clone());
+            s.state = GameState::Menu;
+            for model in cars::ALL {
+                s.select_car(model);
+                assert_eq!(s.vehicle.model, model);
+                assert_eq!(s.track().id, id);
+                assert!(s.state == GameState::Menu);
+                let road = s.track().at_distance(s.track().sampling_length() * 0.5);
+                s.vehicle.reset(road.vehicle_position(0.0), road.heading());
+                s.recoveries = 2;
+                s.restart();
+                assert_eq!(s.track().id, id);
+                assert_eq!(s.vehicle.model, model);
+                assert_eq!(s.vehicle.position, s.track().spawn().vehicle_position(0.0));
+                assert_eq!(s.recoveries, 0);
+                assert!(s.state == GameState::Driving);
+                s.state = GameState::Menu;
+            }
+        }
+    }
+
+    #[test]
+    fn free_recovery_uses_selected_route() {
+        for id in crate::test_support::location_ids() {
+            let mut s = Session::on_track(crate::cars::CarModel::TestFixture(0), id.clone());
+            let road = s.track().at_distance(s.track().sampling_length() * 0.5);
+            s.vehicle.reset(road.vehicle_position(1.0), road.heading());
+            assert!(s.recover());
+            let recovered = s.track().project(s.vehicle.position);
+            assert!((recovered.distance - road.distance).abs() < 0.1);
+            assert!(recovered.offset.abs() < 0.01);
+            assert_eq!(s.track().id, id);
+        }
+    }
+
+    #[test]
+    fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
+        let mut s = Session::on_track(
+            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::nicosia_id(),
+        );
+        let start = s.vehicle.position;
+        for _ in 0..40 {
+            s.tick(Controls {
+                throttle: 0.6,
+                ..Controls::default()
+            });
+        }
+        assert!((s.vehicle.position.x - start.x).hypot(s.vehicle.position.z - start.z) > 0.5);
+        s.state = GameState::Paused;
+        let frozen = s.vehicle.position;
+        for _ in 0..10 {
+            s.tick(Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(s.vehicle.position, frozen);
+        s.state = GameState::Driving;
+        assert!(s.recover());
+        assert_eq!(s.track().id, crate::test_support::nicosia_id());
+        assert!(s.track().road_clearance(s.vehicle.position) < 0.0);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; exports the bonnet camera for visual review"]
+    fn bonnet_camera_preview() {
+        let mut app = App::with_location(false);
+        app.key_down(Keycode::Return);
+        while app.chase.view() != camera::FollowView::Bonnet {
+            app.key_down(Keycode::Tab);
+        }
+        app.snap_camera();
+        app.capture_path = Some(std::path::PathBuf::from("/tmp/bonnet-camera.ppm"));
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; starts and renders a circuit created after compilation"]
+    fn runtime_track_renderer() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"version":2,"name":"Runtime Circuit","points":[[0,0,0,9],[100,2,0,9],[100,4,100,9],[0,1,100,9]]}"#).unwrap();
+        let (id, name) = track::register_file(file.path()).unwrap();
+        let mut app = App::with_location(false);
+        app.locations.push(city_assets::MenuLocation {
+            name: name.into(),
+            track: id.clone(),
+            assets: None,
+        });
+        app.selected_location = app.locations.len() - 1;
+        app.start_selected();
+        assert_eq!(app.session.track().id, id);
+        assert!(app.session.state == GameState::Driving);
+        assert_eq!(app.session.track().at_distance(0.0).width, 9.0);
+        for _ in 0..120 {
+            app.session.tick(vehicle::Controls {
+                throttle: 1.0,
+                ..Default::default()
+            });
+        }
+        app.render(Duration::ZERO);
+        assert!(app.session.vehicle.position.iter().all(|v| v.is_finite()));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
+    fn no_city_startup_renderer_smoke() {
+        let mut app = App::with_location(false);
+        assert!(app.locations.len() >= 2);
+        app.capture_path = Some(std::env::temp_dir().join("carslop-menu.ppm"));
+        app.render(Duration::ZERO);
+        app.capture_path = None;
+        if cars::ALL.len() > 3 {
+            app.menu_action(hud::MenuAction::CarPage(1));
+            assert_eq!(app.session.vehicle.model, cars::ALL[3]);
+            app.render(Duration::ZERO);
+            app.menu_action(hud::MenuAction::CarPage(-1));
+            assert_eq!(app.session.vehicle.model, cars::ALL[0]);
+        }
+        let city_choice = app
+            .locations
+            .iter()
+            .position(|entry| entry.track == crate::test_support::nicosia_id())
+            .unwrap();
+        app.menu_action(hud::MenuAction::Choice(city_choice));
+        app.key_down(Keycode::F7);
+        for _ in 0..6 {
+            app.menu_focus = 0;
+            app.key_down(Keycode::Down);
+            app.render(Duration::ZERO);
+            assert_ne!(app.session.track().id, crate::test_support::nicosia_id());
+        }
+        assert!(!app.meshes.contains_key(&crate::test_support::nicosia_id()));
+        let scenic_choice = app
+            .locations
+            .iter()
+            .position(|entry| {
+                entry
+                    .track
+                    .asset_path()
+                    .is_some_and(|p| p.ends_with("scenic"))
+            })
+            .unwrap();
+        app.menu_action(hud::MenuAction::Choice(scenic_choice));
+        assert_eq!(app.session.track().id, LocationId::Compact);
+        app.key_down(Keycode::Return);
+        assert_eq!(app.session.track().id, app.locations[scenic_choice].track);
+        assert!(app.session.state == GameState::Driving);
+        assert!(app.meshes.contains_key(&app.session.track().id));
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        drop(app);
+        if let Ok(path) = std::path::Path::new("data/locations/nicosia").canonicalize() {
+            let mut app = App::with_location(true);
+            let selected = &app.locations[app.selected_location];
+            assert_eq!(
+                selected.track.asset_path().unwrap().canonicalize().unwrap(),
+                path
+            );
+            assert_ne!(app.session.track().id, crate::test_support::nicosia_id());
+            assert!(!app.meshes.contains_key(&crate::test_support::nicosia_id()));
+            app.render(Duration::ZERO);
+            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        }
+    }
+
+    #[test]
+    fn session_changes_keep_the_loaded_world_after_another_selection_or_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let first_assets =
+            test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
+        let second_assets =
+            test_support::generated_location(&root.path().join("second"), 13.0, "arcgisonline.com");
+        let first_id = LocationId::asset(first_assets.directory()).unwrap();
+        let second_id = LocationId::asset(second_assets.directory()).unwrap();
+        let mut cache = track::LocationCache::default();
+        let first = cache.prepare_for_render(&first_id).unwrap();
+        cache.install(first.clone());
+        let mut session = Session::on_world(crate::cars::CarModel::TestFixture(0), first.clone());
+        let second = cache.prepare_for_render(&second_id).unwrap();
+        cache.install(second);
+        session.restart();
+        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
+        assert_eq!(
+            session.vehicle.position,
+            first.spawn().vehicle_position(0.0)
+        );
+        session.state = GameState::Menu;
+        session.select_car(crate::cars::CarModel::TestFixture(0));
+        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
+        let position = session.vehicle.position;
+        std::fs::remove_file(second_assets.directory().join("scene.pack")).unwrap();
+        assert!(cache.prepare_for_render(&second_id).is_err());
+        assert_eq!(session.vehicle.position, position);
+        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
+    }
+
+    #[test]
+    #[ignore = "requires SDL/OpenGL; checks two asset identities and failed render preparation"]
+    fn explicit_location_switch_renderer() {
+        let root = tempfile::tempdir().unwrap();
+        let first_assets =
+            test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
+        let second_assets =
+            test_support::generated_location(&root.path().join("second"), 13.0, "arcgisonline.com");
+        let first_id = LocationId::asset(first_assets.directory()).unwrap();
+        let second_id = LocationId::asset(second_assets.directory()).unwrap();
+        let mut app = App::with_location(false);
+        let first = first_id.try_track().unwrap();
+        app.install_location(first.clone()).unwrap();
+        app.render(Duration::ZERO);
+        let second = second_id.try_track().unwrap();
+        std::fs::rename(
+            second_assets.directory().join("scene.pack"),
+            second_assets.directory().join("saved.pack"),
+        )
+        .unwrap();
+        let position = app.session.vehicle.position;
+        assert!(app.install_location(second.clone()).is_err());
+        assert!(std::sync::Arc::ptr_eq(&first, &app.session.vehicle.track));
+        assert_eq!(app.session.vehicle.position, position);
+        assert!(app.meshes.contains_key(&first_id));
+        assert!(!app.meshes.contains_key(&second_id));
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+        std::fs::rename(
+            second_assets.directory().join("saved.pack"),
+            second_assets.directory().join("scene.pack"),
+        )
+        .unwrap();
+        app.install_location(second.clone()).unwrap();
+        assert_eq!(app.session.track().id, second_id);
+        assert!(app.meshes.contains_key(&second_id));
+        assert!(!app.meshes.contains_key(&first_id));
+        assert!(std::sync::Arc::ptr_eq(
+            &second,
+            &app.locations_cache.prepare_for_render(&second_id).unwrap()
+        ));
+        assert_eq!(
+            first.assets().unwrap().directory(),
+            first_assets.directory()
+        );
+        app.render(Duration::ZERO);
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
 }

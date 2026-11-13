@@ -1,11 +1,10 @@
-use crate::location::{empty, invalid, line, polygon, Result};
-use crate::osm::OSMMap;
-use crate::world::{Boundary, BoundingBox, P};
-use geo::{Area, BooleanOps, BoundingRect, Contains, MapCoords, Validation};
-use geo::{Coord, MultiPolygon, Polygon};
-use serde_json::{json, Value};
+use crate::error::{invalid, Result};
+use crate::geometry::empty;
+use crate::osm::{OSMBoundary, OSMMap};
+use geo::{Area, BooleanOps, Contains, Validation};
+use geo::{LineString, MultiPolygon, Polygon};
 
-pub fn resolve_boundary(source: &OSMMap, relation: i64) -> Result<Boundary> {
+pub fn resolve_boundary(source: &OSMMap, relation: i64) -> Result<OSMBoundary> {
     //
     // Find the relation in the map
     //
@@ -64,10 +63,10 @@ pub fn resolve_boundary(source: &OSMMap, relation: i64) -> Result<Boundary> {
                                 source.nodes.get(id).and_then(|n| n.coord).ok_or_else(|| {
                                     invalid(format!("missing boundary node {id}"))
                                 })?;
-                            Ok([p[1], p[0]])
+                            Ok((p.lon, p.lat))
                         })
                         .collect::<Result<Vec<_>>>()?;
-                let polygon = polygon(&points);
+                let polygon = Polygon::new(LineString::from(points), vec![]);
                 if !polygon.is_valid() || polygon.unsigned_area() == 0.0 {
                     return Err(invalid("invalid boundary ring"));
                 }
@@ -106,78 +105,5 @@ pub fn resolve_boundary(source: &OSMMap, relation: i64) -> Result<Boundary> {
     if geometry.0.is_empty() || !geometry.is_valid() {
         return Err(invalid("invalid administrative geometry"));
     }
-    Ok(Boundary { relation, geometry })
-}
-
-impl Boundary {
-    pub fn bbox(&self) -> BoundingBox {
-        let b = self.geometry.bounding_rect().unwrap();
-        BoundingBox {
-            south: b.min().y,
-            west: b.min().x,
-            north: b.max().y,
-            east: b.max().x,
-        }
-    }
-    pub fn local(&self, origin: P) -> MultiPolygon<f64> {
-        self.geometry.map_coords(|c| Coord {
-            x: (c.x - origin[1]).to_radians() * 6371000.0 * origin[0].to_radians().cos(),
-            y: -(c.y - origin[0]).to_radians() * 6371000.0,
-        })
-    }
-    pub fn to_geojson(&self) -> Value {
-        let coordinates: Vec<Vec<Vec<[f64; 2]>>> = self
-            .geometry
-            .0
-            .iter()
-            .map(|p| {
-                std::iter::once(p.exterior())
-                    .chain(p.interiors())
-                    .map(|r| r.0.iter().map(|c| [c.x, c.y]).collect())
-                    .collect()
-            })
-            .collect();
-        json!({"type":"Feature","properties":{"osm_relation":self.relation},"geometry":{"type":"MultiPolygon","coordinates":coordinates}})
-    }
-    pub fn from_manifest(manifest: &Value) -> Result<Option<Self>> {
-        manifest.get("boundary").map(Self::from_geojson).transpose()
-    }
-    fn from_geojson(v: &Value) -> Result<Self> {
-        if v["type"] != "Feature" || v["geometry"]["type"] != "MultiPolygon" {
-            return Err(invalid("expected boundary MultiPolygon feature"));
-        }
-        let coordinates: Vec<Vec<Vec<[f64; 2]>>> =
-            serde_json::from_value(v["geometry"]["coordinates"].clone())?;
-        let mut polygons = vec![];
-        for rings in coordinates {
-            if rings.is_empty()
-                || rings.iter().any(|r| {
-                    r.len() < 4
-                        || r.first() != r.last()
-                        || r.iter().any(|p| {
-                            !p[0].is_finite()
-                                || !p[1].is_finite()
-                                || p[0].abs() > 180.
-                                || p[1].abs() > 90.
-                        })
-                })
-            {
-                return Err(invalid("invalid boundary coordinates"));
-            }
-            polygons.push(Polygon::new(
-                line(&rings[0]),
-                rings[1..].iter().map(|r| line(r)).collect(),
-            ));
-        }
-        let geometry = MultiPolygon(polygons);
-        if geometry.0.is_empty() || !geometry.is_valid() {
-            return Err(invalid("invalid boundary geometry"));
-        }
-        Ok(Self {
-            relation: v["properties"]["osm_relation"]
-                .as_i64()
-                .ok_or_else(|| invalid("missing boundary relation ID"))?,
-            geometry,
-        })
-    }
+    Ok(OSMBoundary { relation, geometry })
 }

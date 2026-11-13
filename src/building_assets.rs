@@ -1,5 +1,6 @@
 //! File-backed architectural parts, loaded only while baking location geometry.
 use super::{mesh_glb, Builder};
+use crate::geometry::{XYZ, XZ};
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use serde_json::Value;
 use std::{io, path::Path};
@@ -26,7 +27,7 @@ fn range(value: &Value, name: &str) -> io::Result<[f32; 2]> {
 
 pub(super) struct Part {
     meshes: Vec<mesh_glb::Mesh>,
-    pub size: [f32; 3],
+    pub size: XYZ,
     scale_axes: [bool; 3],
 }
 impl Part {
@@ -54,7 +55,7 @@ impl Part {
             serde_json::from_value(definition["scale_axes"].clone()).map_err(invalid)?;
         Ok(Self {
             meshes: mesh_glb::load(&directory.join(path))?,
-            size,
+            size: (size).into(),
             scale_axes,
         })
     }
@@ -64,24 +65,24 @@ impl Part {
     pub fn place(
         &self,
         b: &mut Builder,
-        edge: [[f32; 2]; 2],
+        edge: [XZ<f32>; 2],
         center: f32,
         y: f32,
-        requested: [f32; 3],
+        requested: XYZ,
         tints: &Tints,
     ) {
         let [a, c] = edge;
-        let length = (c[0] - a[0]).hypot(c[1] - a[1]);
-        let tangent = Vec3::new((c[0] - a[0]) / length, 0.0, (c[1] - a[1]) / length);
+        let length = (c.x - a.x).hypot(c.z - a.z);
+        let tangent = Vec3::new((c.x - a.x) / length, 0.0, (c.z - a.z) / length);
         let outward = Vec3::new(tangent.z, 0.0, -tangent.x);
         let scale = Vec3::from_array(std::array::from_fn(|i| {
             if self.scale_axes[i] {
-                requested[i] / self.size[i]
+                requested.component(i) / self.size.component(i)
             } else {
                 1.0
             }
         }));
-        let origin = Vec3::new(a[0], y, a[1]) + tangent * (center - self.size[0] * scale.x * 0.5);
+        let origin = Vec3::new(a.x, y, a.z) + tangent * (center - self.size.x * scale.x * 0.5);
         let transform = Mat4::from_cols(
             (tangent * scale.x).extend(0.0),
             (Vec3::Y * scale.y).extend(0.0),
@@ -155,7 +156,7 @@ impl Catalog {
     pub fn load_default() -> io::Result<Self> {
         Self::load(Path::new("data/buildings"))
     }
-    pub fn load(directory: &Path) -> io::Result<Self> {
+    fn load(directory: &Path) -> io::Result<Self> {
         let path = directory.join("parts.json");
         Self::decode(directory, &std::fs::read(&path)?)
             .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
@@ -220,10 +221,17 @@ mod tests {
         // placement must preserve outward normals and triangle winding.
         catalog.window.place(
             &mut b,
-            [[10., 20.], [10., 30.]],
+            [
+                crate::geometry::XZ { x: 10., z: 20. },
+                crate::geometry::XZ { x: 10., z: 30. },
+            ],
             5.,
             7.,
-            [2., 3., 100.],
+            crate::geometry::XYZ {
+                x: 2.,
+                y: 3.,
+                z: 100.,
+            },
             &tints(),
         );
         assert_eq!(b.vertices.len(), 24);
@@ -247,9 +255,21 @@ mod tests {
             .iter()
             .any(|v| v.color == tints().glass && v.material == [0.0, 0.45]));
         let mut b = Builder::default();
-        catalog
-            .entrance
-            .place(&mut b, [[0., 0.], [10., 0.]], 5., 0., [100.; 3], &tints());
+        catalog.entrance.place(
+            &mut b,
+            [
+                crate::geometry::XZ { x: 0., z: 0. },
+                crate::geometry::XZ { x: 10., z: 0. },
+            ],
+            5.,
+            0.,
+            crate::geometry::XYZ {
+                x: 100.,
+                y: 100.,
+                z: 100.,
+            },
+            &tints(),
+        );
         let width = b
             .vertices
             .iter()

@@ -1,7 +1,7 @@
 //! OSM PBF source extraction for the location compiler.
 use crate::{
-    location::{invalid, Result},
-    world::BoundingBox,
+    error::{invalid, Result},
+    geometry::BoundingBox,
 };
 use quick_xml::{
     events::{BytesEnd, BytesStart, Event},
@@ -151,10 +151,10 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
             _ => None,
         };
         if let Some((id, lat, lon)) = n {
-            if lat >= bounds.south
-                && lat <= bounds.north
-                && lon >= bounds.west
-                && lon <= bounds.east
+            if lat >= bounds.min_lat
+                && lat <= bounds.max_lat
+                && lon >= bounds.min_lon
+                && lon <= bounds.max_lon
             {
                 inside.insert(id);
             }

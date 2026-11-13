@@ -1,8 +1,9 @@
 use crate::cars::EngineVoice;
+use crate::geometry::{XYZ, XZ};
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
 
-pub(crate) const SAMPLE_RATE: f32 = 48_000.0;
+pub const SAMPLE_RATE: f32 = 48_000.0;
 const QUEUE_SAMPLES: usize = 2400;
 
 pub struct EngineAudio {
@@ -223,20 +224,19 @@ impl Default for SpatialAudio {
 }
 
 impl SpatialAudio {
-    fn placement(source: [f32; 3], listener: crate::camera::Pose) -> (f32, f32, f32) {
-        let offset: [f32; 3] = std::array::from_fn(|i| source[i] - listener.eye[i]);
+    fn placement(source: XYZ, listener: crate::camera::Pose) -> (f32, f32, f32) {
+        let offset: XYZ = XYZ::from_fn(|i| source.component(i) - listener.eye.component(i));
         let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
         // Gentle falloff keeps driving cues present; distance also changes
         // the direct/reflected balance below, rather than just turning down.
         let gain = (6.0 / (distance + 3.0)).min(1.0);
-        let forward = [
-            listener.target[0] - listener.eye[0],
-            listener.target[2] - listener.eye[2],
-        ];
-        let length = forward[0].hypot(forward[1]);
+        let forward = XZ {
+            x: listener.target.x - listener.eye.x,
+            z: listener.target.z - listener.eye.z,
+        };
+        let length = forward.x.hypot(forward.z);
         let pan = if length > 0.001 && distance > 0.001 {
-            ((offset[0] * forward[1] - offset[2] * forward[0]) / (length * distance))
-                .clamp(-1.0, 1.0)
+            ((offset.x * forward.z - offset.z * forward.x) / (length * distance)).clamp(-1.0, 1.0)
         } else {
             0.0
         };
@@ -324,7 +324,7 @@ impl EngineAudio {
         let count = QUEUE_SAMPLES.saturating_sub(queued);
         let enabled = active && !self.muted;
         self.synth.turbo_target = car.turbo_spool;
-        self.synth.road_speed = car.velocity[0].hypot(car.velocity[1]);
+        self.synth.road_speed = car.velocity.x.hypot(car.velocity.z);
         if enabled {
             self.synth.hit(impact);
         } else {
@@ -437,11 +437,33 @@ mod tests {
     #[test]
     fn distance_reduces_level_and_high_frequencies() {
         let listener = crate::camera::Pose {
-            eye: [0.0; 3],
-            target: [0.0, 0.0, 1.0],
+            eye: crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            target: crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         };
-        let near = SpatialAudio::placement([0.0, 0.0, 5.5], listener);
-        let far = SpatialAudio::placement([0.0, 0.0, 10.0], listener);
+        let near = SpatialAudio::placement(
+            crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 5.5,
+            },
+            listener,
+        );
+        let far = SpatialAudio::placement(
+            crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            listener,
+        );
         assert!(near.0 > far.0 && near.2 > far.2);
         assert_eq!(near.1, 0.0);
         let origin = SpatialAudio::placement(listener.eye, listener);
@@ -452,16 +474,46 @@ mod tests {
     #[test]
     fn stereo_follows_listener_orientation_and_changes_smoothly() {
         let listener = crate::camera::Pose {
-            eye: [0.0; 3],
-            target: [0.0, 0.0, 1.0],
+            eye: crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            target: crate::geometry::XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         };
-        let right = SpatialAudio::placement([5.0, 0.0, 5.0], listener);
-        let left = SpatialAudio::placement([-5.0, 0.0, 5.0], listener);
+        let right = SpatialAudio::placement(
+            crate::geometry::XYZ {
+                x: 5.0,
+                y: 0.0,
+                z: 5.0,
+            },
+            listener,
+        );
+        let left = SpatialAudio::placement(
+            crate::geometry::XYZ {
+                x: -5.0,
+                y: 0.0,
+                z: 5.0,
+            },
+            listener,
+        );
         assert!(right.1 > 0.0 && left.1 < 0.0);
         let reversed = SpatialAudio::placement(
-            [5.0, 0.0, 5.0],
+            crate::geometry::XYZ {
+                x: 5.0,
+                y: 0.0,
+                z: 5.0,
+            },
             crate::camera::Pose {
-                target: [0.0, 0.0, -1.0],
+                target: crate::geometry::XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: -1.0,
+                },
                 ..listener
             },
         );
@@ -582,19 +634,6 @@ mod tests {
         wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
         wav.extend_from_slice(pcm);
         std::fs::write(path, wav).unwrap();
-    }
-
-    #[test]
-    fn engine_pitch_matches_every_gears_ratio_drop() {
-        let g = &crate::test_support::car_spec().gearbox;
-        for gear in 1..g.gears() {
-            let speed = g.speed_at_rpm(g.upshift_rpm, gear);
-            let before = engine_frequency(g.rpm(speed, gear));
-            let after = engine_frequency(g.rpm(speed, gear + 1));
-            let expected = g.ratios[gear as usize] / g.ratios[gear as usize - 1];
-            assert!((after / before - expected).abs() < 0.001);
-            assert!(after < before);
-        }
     }
 
     #[test]

@@ -1,23 +1,13 @@
-# Rust build output
 /target/
-
-# Local Python environments and bytecode
-/.venv*/
-__pycache__/
-*.py[cod]
-
-# Machine-specific editor settings
 /.vscode/
 
-# Generated locations, local previews, and validation output
-/artifacts/
 /data/*
 !/data/cars/
 !/data/buildings/
 !/data/locations/
 /data/locations/*
 !/data/locations/scenic.track.json
-/Screenshot From *.png
 
-# Import download cache
-/.cache/
+tools
+src-locations
+artifacts

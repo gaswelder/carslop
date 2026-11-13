@@ -1,6 +1,7 @@
 //! Seekable offline render geometry. Only the index remains in CPU memory;
 //! individual layers are decoded, uploaded, and immediately released.
-use crate::{chunks::Chunk, scene::Vertex, street_surface::crc32_bytes};
+use crate::geometry::XYZ;
+use crate::{chunks::Chunk, scene::Vertex};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -13,11 +14,10 @@ const ENTRY_SIZE: usize = 72;
 pub struct Span {
     offset: u64,
     pub count: usize,
-    crc: u32,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
-    pub bounds: [[f32; 3]; 2],
+    pub bounds: [XYZ; 2],
     pub layers: [Span; 3],
 }
 pub struct Archive {
@@ -70,30 +70,28 @@ impl Archive {
         for _ in 0..n {
             let mut bytes = [0u8; ENTRY_SIZE];
             file.read_exact(&mut bytes)?;
-            let bounds: [[f32; 3]; 2] = std::array::from_fn(|side| {
-                std::array::from_fn(|axis| {
+            let bounds: [XYZ; 2] = std::array::from_fn(|side| {
+                XYZ::from_fn(|axis| {
                     let i = (side * 3 + axis) * 4;
                     f32::from_le_bytes(bytes[i..i + 4].try_into().unwrap())
                 })
             });
             if (0..3).any(|i| {
-                !bounds[0][i].is_finite()
-                    || !bounds[1][i].is_finite()
-                    || bounds[0][i] > bounds[1][i]
+                !bounds[0].component(i).is_finite()
+                    || !bounds[1].component(i).is_finite()
+                    || bounds[0].component(i) > bounds[1].component(i)
             }) {
                 return Err(error("invalid chunk bounds"));
             }
             let mut layers = [Span {
                 offset: 0,
                 count: 0,
-                crc: 0,
             }; 3];
             for (layer, span) in layers.iter_mut().enumerate() {
                 let i = 24 + layer * 16;
                 *span = Span {
                     offset: u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap()),
                     count: u32::from_le_bytes(bytes[i + 8..i + 12].try_into().unwrap()) as usize,
-                    crc: u32::from_le_bytes(bytes[i + 12..i + 16].try_into().unwrap()),
                 };
                 let end = span.offset.saturating_add((span.count * STRIDE) as u64);
                 if span.count % 3 != 0
@@ -121,14 +119,8 @@ impl Archive {
     pub fn fork(&self) -> std::io::Result<Self> {
         Self::open(&self.path)
     }
-    pub fn open_default() -> std::io::Result<Self> {
-        Self::open(
-            &crate::city_assets::CITY_ASSET
-                .read()
-                .unwrap()
-                .directory()
-                .join("scene.pack"),
-        )
+    pub fn open_for(assets: &crate::city_assets::CityAsset) -> std::io::Result<Self> {
+        Self::open(&assets.directory().join("scene.pack"))
     }
     pub fn read_layer(&mut self, index: usize, layer: usize) -> std::io::Result<Vec<Vertex>> {
         let entry = self
@@ -146,9 +138,6 @@ impl Archive {
         self.peak_decode_bytes = self
             .peak_decode_bytes
             .max(bytes.len() + span.count * std::mem::size_of::<Vertex>());
-        if crc32_bytes(&bytes) != span.crc {
-            return Err(error("damaged scene layer; rebuild the city archive"));
-        }
         let mut vertices = Vec::with_capacity(span.count);
         for b in bytes.as_chunks::<STRIDE>().0 {
             let position = std::array::from_fn(|i| {
@@ -178,7 +167,7 @@ impl Archive {
 // Packed fragments live on the location's disk, never in /tmp (which may be RAM).
 // Only fragment offsets and bounds remain resident as the city is generated.
 struct SpoolChunk {
-    bounds: [[f32; 3]; 2],
+    bounds: [XYZ; 2],
     fragments: Vec<(u64, usize)>,
 }
 pub struct Spool {
@@ -201,14 +190,18 @@ impl Spool {
             fragments: Vec::new(),
         });
         for axis in 0..3 {
-            entry.bounds[0][axis] = entry.bounds[0][axis].min(chunk.bounds[0][axis]);
-            entry.bounds[1][axis] = entry.bounds[1][axis].max(chunk.bounds[1][axis]);
+            *entry.bounds[0].component_mut(axis) = entry.bounds[0]
+                .component(axis)
+                .min(chunk.bounds[0].component(axis));
+            *entry.bounds[1].component_mut(axis) = entry.bounds[1]
+                .component(axis)
+                .max(chunk.bounds[1].component(axis));
         }
         entry.fragments.push((offset, bytes.len()));
         Ok(())
     }
 }
-pub(crate) fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Result<()> {
+pub fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Result<()> {
     let cells: std::collections::BTreeSet<_> = layers
         .iter()
         .flat_map(|layer| layer.chunks.keys().copied())
@@ -222,20 +215,25 @@ pub(crate) fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Resul
     let mut entries = Vec::with_capacity(cells.len());
     let mut buffer = vec![0u8; 64 * 1024];
     for cell in cells {
-        let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
+        let mut bounds = [
+            XYZ::from_fn(|_| f32::INFINITY),
+            XYZ::from_fn(|_| f32::NEG_INFINITY),
+        ];
         let mut spans = [Span {
             offset: 0,
             count: 0,
-            crc: 0,
         }; 3];
         for (layer, spool) in layers.iter_mut().enumerate() {
             let offset = file.stream_position()?;
             let mut count = 0;
-            let mut crc = crc32fast::Hasher::new();
             if let Some(chunk) = spool.chunks.get(&cell) {
                 for axis in 0..3 {
-                    bounds[0][axis] = bounds[0][axis].min(chunk.bounds[0][axis]);
-                    bounds[1][axis] = bounds[1][axis].max(chunk.bounds[1][axis]);
+                    *bounds[0].component_mut(axis) = bounds[0]
+                        .component(axis)
+                        .min(chunk.bounds[0].component(axis));
+                    *bounds[1].component_mut(axis) = bounds[1]
+                        .component(axis)
+                        .max(chunk.bounds[1].component(axis));
                 }
                 for &(start, size) in &chunk.fragments {
                     count += size / STRIDE;
@@ -244,7 +242,6 @@ pub(crate) fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Resul
                     while remaining > 0 {
                         let n = remaining.min(buffer.len());
                         spool.file.read_exact(&mut buffer[..n])?;
-                        crc.update(&buffer[..n]);
                         file.write_all(&buffer[..n])?;
                         remaining -= n;
                     }
@@ -253,11 +250,7 @@ pub(crate) fn write_spooled(path: &Path, layers: &mut [Spool]) -> std::io::Resul
             if count > 2_000_000 {
                 return Err(error("scene layer exceeds archive limit"));
             }
-            spans[layer] = Span {
-                offset,
-                count,
-                crc: crc.finalize(),
-            };
+            spans[layer] = Span { offset, count };
         }
         entries.push(Entry {
             bounds,
@@ -285,7 +278,8 @@ fn write_index(file: &mut File, entries: &[Entry]) -> std::io::Result<()> {
         for span in entry.layers {
             file.write_all(&span.offset.to_le_bytes())?;
             file.write_all(&(span.count as u32).to_le_bytes())?;
-            file.write_all(&span.crc.to_le_bytes())?;
+            // Reserved bytes preserve the existing archive index layout.
+            file.write_all(&[0; 4])?;
         }
     }
     Ok(())
@@ -345,7 +339,7 @@ mod tests {
             Spool::new(directory.path()).unwrap(),
             Spool::new(directory.path()).unwrap(),
         ];
-        for chunk in crate::chunks::partition(triangle()) {
+        for chunk in crate::test_support::partition(triangle()) {
             layers[2].append(chunk).unwrap();
         }
         write_spooled(&path, &mut layers).unwrap();
@@ -356,11 +350,18 @@ mod tests {
             assert_eq!(
                 archive.entries[cell].bounds,
                 [
-                    [255.75 + offset, 4.125, -1234.5],
-                    [257.0 + offset, 7.0, -1234.5]
+                    crate::geometry::XYZ {
+                        x: 255.75 + offset,
+                        y: 4.125,
+                        z: -1234.5
+                    },
+                    crate::geometry::XYZ {
+                        x: 257.0 + offset,
+                        y: 7.0,
+                        z: -1234.5
+                    }
                 ]
             );
-            // Reading each layer also verifies its stored checksum.
             let loaded = archive.read_layer(cell, 0).unwrap();
             assert_eq!(loaded.len(), 90_000);
             for (j, tri) in loaded.chunks_exact(3).enumerate() {
@@ -418,7 +419,7 @@ mod tests {
         write(
             &path.0,
             [
-                crate::chunks::partition(vertices.clone()),
+                crate::test_support::partition(vertices.clone()),
                 Vec::new(),
                 Vec::new(),
             ],
@@ -448,7 +449,7 @@ mod tests {
     fn fixture(path: &Path) {
         write(
             path,
-            std::array::from_fn(|_| crate::chunks::partition(triangle())),
+            std::array::from_fn(|_| crate::test_support::partition(triangle())),
         )
         .unwrap();
     }
@@ -493,7 +494,7 @@ mod tests {
         assert!(Archive::open(&path.0).is_err());
     }
     #[test]
-    fn truncated_and_corrupt_archives_fail_explicitly() {
+    fn archive_accepts_payload_edits_and_rejects_truncation() {
         let path = TestFile::new();
         fixture(&path.0);
         let mut archive = Archive::open(&path.0).unwrap();
@@ -505,7 +506,7 @@ mod tests {
         file.seek(SeekFrom::Start(offset)).unwrap();
         file.write_all(&[255]).unwrap();
         file.flush().unwrap();
-        assert!(archive.read_layer(0, 0).is_err());
+        assert!(archive.read_layer(0, 0).is_ok());
         file.set_len(20).unwrap();
         assert!(Archive::open(&path.0).is_err());
     }

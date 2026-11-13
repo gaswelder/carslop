@@ -1,8 +1,10 @@
 //! Compile mapped road controls into furniture assets.
 use crate::build_surfaces::Surfaces;
-use crate::location::{add, along, dist, dot, mul, path_length, project, sub, unit, Result};
+use crate::error::Result;
+use crate::geometry::XZ;
+use crate::geometry::{add, along, dist, dot, mul, path_length, project, sub, unit};
 use crate::osm::{OSMElement, OSMMap};
-use crate::world::{LocationMap, P};
+use crate::source_location::SourceLocation;
 use geo::MultiPolygon;
 use geo::{Buffer, Point};
 use std::collections::BTreeMap;
@@ -13,15 +15,15 @@ use std::path::Path;
 struct Feature {
     id: i64,
     kind: usize,
-    position: P,
-    travel: P,
+    position: XZ,
+    travel: XZ,
     value: u16,
     phase: i64,
     width: f64,
-    source: P,
+    source: XZ,
 }
 
-pub fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<P>) {
+fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<XZ>) {
     let key = [
         "traffic_signals:direction",
         "stop:direction",
@@ -46,7 +48,14 @@ pub fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<P>) {
                 .or_else(|| crate::osm::number(value))
                 .map(f64::to_radians)
             {
-                (vec![], false, Some([-angle.sin(), angle.cos()]))
+                (
+                    vec![],
+                    false,
+                    Some(XZ {
+                        x: -angle.sin(),
+                        z: angle.cos(),
+                    }),
+                )
             } else {
                 (vec![-1, 1], true, None)
             }
@@ -56,32 +65,45 @@ pub fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<P>) {
 
 pub fn build_furniture(
     source: &OSMMap,
-    map: &LocationMap,
+    map: &SourceLocation<f64>,
     s: &Surfaces,
-    checksum: u32,
     output_path: &Path,
 ) -> Result<()> {
+    let placements = place_furniture(source, map, s);
+    let mut file = BufWriter::new(fs::File::create(output_path)?);
+    crate::asset_codecs::furniture::write(&mut file, &placements)?;
+    file.flush()?;
+    Ok(())
+}
+
+/// Compute placements without creating files or quantizing source geometry.
+fn place_furniture(
+    source: &OSMMap,
+    map: &SourceLocation<f64>,
+    s: &Surfaces,
+) -> Vec<crate::asset_codecs::furniture::FurnitureRecord> {
     let tree = crate::build_surfaces::index(&s.paths);
     let obstacles = crate::build_surfaces::PolygonIndex::new(&s.obstacles);
     let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
     let lookup: std::collections::HashMap<_, _> = map
-        .nodes
+        .road_nodes
         .iter()
         .enumerate()
         .map(|(i, p)| {
             (
-                (
-                    (p[0] * 1000.0).round() as i64,
-                    (p[1] * 1000.0).round() as i64,
-                ),
+                ((p.x * 1000.0).round() as i64, (p.z * 1000.0).round() as i64),
                 i,
             )
         })
         .collect();
     let mut hosts: BTreeMap<i64, std::collections::BTreeSet<i64>> = BTreeMap::new();
-    for road in &map.roads {
-        for id in &source.ways[&road.way].nodes {
-            hosts.entry(*id).or_default().insert(road.way);
+    for road in &map.road_lines {
+        let Some(way_id) = road.osm_way_id else {
+            continue;
+        };
+        let way = &source.ways[&way_id];
+        for id in &way.nodes {
+            hosts.entry(*id).or_default().insert(way.id);
         }
     }
     let mut features: Vec<Feature> = vec![];
@@ -116,23 +138,22 @@ pub fn build_furniture(
             0
         };
         let node = lookup
-            .get(&(
-                (p[0] * 1000.0).round() as i64,
-                (p[1] * 1000.0).round() as i64,
-            ))
+            .get(&((p.x * 1000.0).round() as i64, (p.z * 1000.0).round() as i64))
             .copied();
         let candidates = if let Some(n) = node {
             s.adjacency[n]
                 .iter()
                 .filter(|i| {
-                    hosts
-                        .get(&e.id)
-                        .is_some_and(|h| h.contains(&map.roads[**i].way))
+                    hosts.get(&e.id).is_some_and(|h| {
+                        map.road_lines[**i]
+                            .osm_way_id
+                            .is_some_and(|id| h.contains(&id))
+                    })
                 })
                 .copied()
                 .collect::<Vec<_>>()
         } else {
-            let closest = tree.nearest_neighbor(&p).unwrap().road;
+            let closest = tree.nearest_neighbor(&p).unwrap().road_index;
             if project(&s.paths[closest], p).0 <= 15.0 {
                 vec![closest]
             } else {
@@ -142,7 +163,7 @@ pub fn build_furniture(
         let (directions, inferred, absolute) = directions(e, kind);
         let mut placements: Vec<Feature> = vec![];
         for i in candidates {
-            let r = &map.roads[i];
+            let r = &map.road_lines[i];
             let path = &s.paths[i];
             let n = path_length(path);
             let direction = if let Some(node) = node {
@@ -188,27 +209,36 @@ pub fn build_furniture(
                 continue;
             }
             let setback = if node.is_some_and(|n| s.adjacency[n].len() >= 3) {
-                (r.width / 2.0 + 1.5).max(4.0).min(n * 0.7)
+                (r.road_width_start_meters / 2.0 + 1.5)
+                    .max(4.0)
+                    .min(n * 0.7)
             } else {
                 0.0
             };
-            let left = [travel[1], -travel[0]];
+            let left = XZ {
+                x: travel.z,
+                z: -travel.x,
+            };
             let mut position = None;
             for extra in [0.0, 1.5, 3.0] {
                 let anchor = along(
                     path,
                     (station - direction as f64 * (setback + extra)).clamp(0.0, n),
                 );
-                if node.is_none()
-                    && extra == 0.0
-                    && !conflicts(&Point::new(p[0], p[1]).buffer(0.18))
+                if node.is_none() && extra == 0.0 && !conflicts(&Point::new(p.x, p.z).buffer(0.18))
                 {
                     position = Some(p);
                     break;
                 }
                 for step in 0..31 {
-                    let q = add(anchor, mul(left, r.width / 2.0 + 0.35 + step as f64 * 0.25));
-                    if map.contains(q) && !conflicts(&Point::new(q[0], q[1]).buffer(0.18)) {
+                    let q = add(
+                        anchor,
+                        mul(
+                            left,
+                            r.road_width_start_meters / 2.0 + 0.35 + step as f64 * 0.25,
+                        ),
+                    );
+                    if map.contains(q) && !conflicts(&Point::new(q.x, q.z).buffer(0.18)) {
                         position = Some(q);
                         break;
                     }
@@ -233,7 +263,7 @@ pub fn build_furniture(
                 travel,
                 value,
                 phase: 0,
-                width: r.width,
+                width: r.road_width_start_meters,
                 source: p,
             });
         }
@@ -304,22 +334,180 @@ pub fn build_furniture(
                 % 50;
         }
     }
-    let mut file = BufWriter::new(fs::File::create(output_path)?);
-    writeln!(file, "FURNITURE 3 {:08x} {:08x}", checksum, s.text_crc)?;
-    for f in &unique {
-        let kind = match f.kind {
-            0 => "signal",
-            1 => "stop",
-            2 => "yield",
-            3 => "speed_limit",
-            _ => unreachable!("unknown furniture kind"),
-        };
-        writeln!(
-            file,
-            "{} {} {:.3} {:.3} {:.7} {:.7} {} {}",
-            f.id, kind, f.position[0], f.position[1], f.travel[0], f.travel[1], f.value, f.phase
-        )?;
+    use crate::world::FurnitureKind;
+    unique
+        .into_iter()
+        .map(|f| crate::asset_codecs::furniture::FurnitureRecord {
+            source_id: f.id,
+            kind: match f.kind {
+                0 => FurnitureKind::Signal,
+                1 => FurnitureKind::Stop,
+                2 => FurnitureKind::Yield,
+                3 => FurnitureKind::Speed,
+                _ => unreachable!("unknown furniture kind"),
+            },
+            position: f.position,
+            travel: f.travel,
+            value: f.value,
+            phase: f.phase as u8,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::{BoundingBoxXZ, LatLon};
+    use crate::source_location::SourceRoad;
+    use crate::world::FurnitureKind;
+
+    fn element(id: i64, p: XZ, tags: &[(&str, &str)]) -> OSMElement {
+        let mut element = crate::test_support::osm_element(id, tags);
+        element.coord = Some(LatLon::new(
+            -p.z.to_degrees() / 6371000.,
+            p.x.to_degrees() / 6371000.,
+        ));
+        element
     }
-    file.flush()?;
-    Ok(())
+
+    fn junction() -> (OSMMap, SourceLocation<f64>, Surfaces) {
+        let points = [
+            XZ { x: -40., z: 0. },
+            XZ { x: 0., z: 0. },
+            XZ { x: 0., z: -40. },
+        ];
+        let mut source = OSMMap {
+            nodes: BTreeMap::new(),
+            ways: BTreeMap::new(),
+            relations: vec![],
+            bounds: None,
+        };
+        for (i, p) in points.into_iter().enumerate() {
+            source
+                .nodes
+                .insert(i as i64 + 1, element(i as i64 + 1, p, &[]));
+        }
+        crate::test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[
+                ("highway", "traffic_signals"),
+                ("traffic_signals:direction", "both"),
+            ],
+        );
+        for (id, nodes) in [(101, vec![1, 2]), (102, vec![3, 2])] {
+            source.ways.insert(id, {
+                let mut way = OSMElement::default();
+                way.id = id;
+                way.nodes = nodes;
+                way
+            });
+        }
+        let mut map = SourceLocation::empty();
+        map.origin = Some(LatLon::new(0., 0.));
+        map.bounding_box = BoundingBoxXZ {
+            min: XZ { x: -50., z: -50. },
+            max: XZ { x: 50., z: 50. },
+        };
+        map.road_nodes = points.into_iter().map(|p| p.at_height(0.)).collect();
+        map.road_lines = vec![
+            SourceRoad {
+                osm_way_id: Some(101),
+                ..SourceRoad::new([0, 1], 8.)
+            },
+            SourceRoad {
+                osm_way_id: Some(102),
+                ..SourceRoad::new([2, 1], 6.5)
+            },
+        ];
+        let output = tempfile::tempdir().unwrap();
+        let mut surfaces =
+            crate::build_surfaces::write_streets_txt(&map, &output.path().join("streets.txt"))
+                .unwrap()
+                .surfaces;
+        surfaces.paths = vec![vec![points[0], points[1]], vec![points[2], points[1]]];
+        surfaces.adjacency = vec![vec![0], vec![0, 1], vec![1]];
+        surfaces.obstacles = MultiPolygon(vec![]);
+        (source, map, surfaces)
+    }
+
+    #[test]
+    fn placement_without_files_preserves_left_curbs_and_signal_phase_groups() {
+        let (source, map, surfaces) = junction();
+        let placed = place_furniture(&source, &map, &surfaces);
+        assert_eq!(placed.len(), 2);
+        assert!(placed
+            .iter()
+            .all(|p| p.kind == FurnitureKind::Signal && p.source_id == 2));
+        let horizontal = placed.iter().find(|p| p.travel.x > 0.9).unwrap();
+        let vertical = placed.iter().find(|p| p.travel.z > 0.9).unwrap();
+        assert!(horizontal.position.z < -4.);
+        assert!(vertical.position.x > 3.25);
+        assert_eq!(horizontal.phase, 2);
+        assert_eq!(vertical.phase, 27);
+        // A wrong-way control must not be placed on either incoming one-way road.
+        let mut wrong_way = map;
+        for road in &mut wrong_way.road_lines {
+            road.direction = -1;
+        }
+        assert!(place_furniture(&source, &wrong_way, &surfaces).is_empty());
+    }
+
+    #[test]
+    fn placement_filters_ambiguous_stops_invalid_speeds_and_blocked_poles() {
+        let (mut source, map, mut surfaces) = junction();
+        let node = source.nodes.get_mut(&2).unwrap();
+        crate::test_support::set_osm_tags(node, &[("highway", "stop")]);
+        assert!(place_furniture(&source, &map, &surfaces).is_empty());
+        crate::test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[("highway", "stop"), ("direction", "forward")],
+        );
+        let stops = place_furniture(&source, &map, &surfaces);
+        assert_eq!(stops.len(), 2);
+        assert!(stops.iter().all(|p| p.kind == FurnitureKind::Stop));
+        crate::test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[("traffic_sign", "maxspeed"), ("maxspeed", "200")],
+        );
+        assert!(place_furniture(&source, &map, &surfaces).is_empty());
+        crate::test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[("traffic_sign", "maxspeed"), ("maxspeed", "30")],
+        );
+        let speeds = place_furniture(&source, &map, &surfaces);
+        assert_eq!(speeds.len(), 2);
+        assert!(speeds
+            .iter()
+            .all(|p| p.kind == FurnitureKind::Speed && p.value == 30));
+        surfaces.obstacles = MultiPolygon(vec![crate::geometry::polygon(&[
+            XZ { x: -50., z: -50. },
+            XZ { x: 50., z: -50. },
+            XZ { x: 50., z: 50. },
+            XZ { x: -50., z: 50. },
+        ])]);
+        assert!(place_furniture(&source, &map, &surfaces).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+    #[test]
+    fn compass_faces_opposite_travel_and_explicit_directions_take_precedence() {
+        let mut e = OSMElement::default();
+        crate::test_support::set_osm_tags(&mut e, &[("direction", "N")]);
+        let (d, inferred, travel) = directions(&e, 3);
+        assert!(d.is_empty());
+        assert!(!inferred);
+        let p = travel.unwrap();
+        assert!(p.x.abs() < 1e-10);
+        assert!((p.z - 1.).abs() < 1e-10);
+        crate::test_support::set_osm_tags(
+            &mut e,
+            &[("direction", "N"), ("traffic_sign:direction", "backward")],
+        );
+        assert_eq!(directions(&e, 3), (vec![-1], false, None));
+        crate::test_support::set_osm_tags(&mut e, &[]);
+        assert_eq!(directions(&e, 1), (vec![-1, 1], true, None));
+    }
 }

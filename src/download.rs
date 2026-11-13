@@ -1,25 +1,17 @@
 //! Download source files into the compiler cache.
-use crate::{
-    imagery::{image_path, Block, CORE, PAD, SERVICE},
-    location::{invalid, Result},
-};
-use serde_json::Value;
+use crate::error::{invalid, Result};
 use std::{
     fs,
     io::{Read, Write},
     path::Path,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
     time::Duration,
 };
 
 pub struct DownloadOptions {
     pub attempts: usize,
-    pub max_bytes: Option<u64>,
-    pub validate: fn(&Path) -> Result<bool>,
-    pub replace_invalid: bool,
+    pub(super) max_bytes: Option<u64>,
+    pub(super) validate: fn(&Path) -> Result<bool>,
+    pub(super) replace_invalid: bool,
 }
 
 impl Default for DownloadOptions {
@@ -51,7 +43,7 @@ pub fn download(
     {
         return Ok(());
     }
-    println!("Downloading {url}");
+    println!("Downloading {} from {url}", path.display());
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -105,87 +97,103 @@ pub fn download(
     unreachable!("download attempts are nonzero")
 }
 
-fn url(b: &Block) -> String {
-    let e = b.extent;
-    format!("{SERVICE}/export?bbox={:.9},{:.9},{:.9},{:.9}&bboxSR=3857&imageSR=3857&size={},{}&format=jpg&f=image",e[0],e[1],e[2],e[3],CORE+2*PAD,CORE+2*PAD)
-}
-fn valid_image(path: &Path) -> Result<bool> {
-    let bytes = fs::read(path)?;
-    Ok(image::load_from_memory(&bytes)
-        .is_ok_and(|im| im.width() == CORE + 2 * PAD && im.height() == CORE + 2 * PAD))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    fn serve(responses: Vec<(usize, &'static [u8])>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (length, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        (url, server)
+    }
 
-fn valid_service(path: &Path) -> Result<bool> {
-    Ok(serde_json::from_slice::<Value>(&fs::read(path)?)
-        .is_ok_and(|value| value.get("error").is_none()))
-}
+    fn valid_payload(path: &Path) -> Result<bool> {
+        Ok(fs::read(path)? == b"valid")
+    }
 
-pub fn download_tiles(work: &Path, service_path: &Path, all: &[Block]) -> Result<()> {
-    fs::create_dir_all(work)?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .into();
-    download(
-        &agent,
-        &format!("{SERVICE}?f=pjson"),
-        service_path,
-        &DownloadOptions {
-            validate: valid_service,
+    #[test]
+    fn retries_invalid_responses_and_replaces_invalid_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cached.data");
+        fs::write(&path, b"invalid").unwrap();
+        let (url, server) = serve(vec![(3, b"bad"), (5, b"valid")]);
+        let options = DownloadOptions {
+            attempts: 2,
+            validate: valid_payload,
             replace_invalid: true,
             ..DownloadOptions::default()
-        },
-    )?;
-    let options = DownloadOptions {
-        attempts: 3,
-        max_bytes: Some(32 * 1024 * 1024),
-        validate: valid_image,
-        replace_invalid: true,
-    };
-    let next = AtomicUsize::new(0);
-    let (send, recv) = mpsc::channel();
-    std::thread::scope(|scope| {
-        for _ in 0..4 {
-            let send = send.clone();
-            let agent = agent.clone();
-            let next = &next;
-            let options = &options;
-            scope.spawn(move || loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= all.len() {
-                    break;
-                }
-                let block = &all[i];
-                let result = download(&agent, &url(block), &image_path(work, block), options)
-                    .map_err(|e| format!("block {},{}: {e}", block.x, block.y));
-                let failed = result.is_err();
-                let _ = send.send(result);
-                if failed {
-                    next.store(all.len(), Ordering::Relaxed);
-                    break;
-                }
-            });
+        };
+        download(&ureq::Agent::new_with_defaults(), &url, &path, &options).unwrap();
+        server.join().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"valid");
+        download(
+            &ureq::Agent::new_with_defaults(),
+            "invalid-url",
+            &path,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn oversized_or_truncated_responses_do_not_replace_existing_files() {
+        for (length, body, limit) in [
+            (5, b"valid".as_slice(), Some(4)),
+            (8, b"short".as_slice(), None),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("cached.data");
+            fs::write(&path, b"invalid").unwrap();
+            let (url, server) = serve(vec![(length, body)]);
+            let options = DownloadOptions {
+                max_bytes: limit,
+                validate: valid_payload,
+                replace_invalid: true,
+                ..DownloadOptions::default()
+            };
+            assert!(download(&ureq::Agent::new_with_defaults(), &url, &path, &options).is_err());
+            server.join().unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"invalid");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
         }
-        drop(send);
-        let mut count = 0;
-        let mut error = None;
-        for result in recv {
-            match result {
-                Ok(()) => {
-                    count += 1;
-                    if count % 10 == 0 || count == all.len() {
-                        println!("Images ready: {count}/{}", all.len());
-                    }
-                }
-                Err(e) => error = Some(e),
-            }
-        }
-        if let Some(e) = error {
-            Err(invalid(e))
-        } else if count != all.len() {
-            Err(invalid("incomplete image downloads"))
-        } else {
-            Ok(())
-        }
-    })
+    }
+
+    #[test]
+    fn default_options_reuse_nonempty_cached_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cached.data");
+        fs::write(&path, b"cached").unwrap();
+        download(
+            &ureq::Agent::new_with_defaults(),
+            "invalid-url",
+            &path,
+            &DownloadOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"cached");
+    }
 }

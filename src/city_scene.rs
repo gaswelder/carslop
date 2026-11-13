@@ -2,14 +2,16 @@ use super::{
     building_assets::{Catalog, Tints},
     Builder, Surface,
 };
-use crate::city::{Building, City};
+use crate::city::Building;
+use crate::geometry::{XYZ, XZ};
+use crate::world::Location;
 
-fn cross(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
-    (b[0] as f64 - a[0] as f64) * (c[1] as f64 - a[1] as f64)
-        - (b[1] as f64 - a[1] as f64) * (c[0] as f64 - a[0] as f64)
+fn cross(a: XZ<f32>, b: XZ<f32>, c: XZ<f32>) -> f64 {
+    (b.x as f64 - a.x as f64) * (c.z as f64 - a.z as f64)
+        - (b.z as f64 - a.z as f64) * (c.x as f64 - a.x as f64)
 }
 /// Ear clipping preserves concave footprints rather than filling their courtyards.
-fn roof_triangles(polygon: &[[f32; 2]]) -> Vec<[usize; 3]> {
+fn roof_triangles(polygon: &[XZ<f32>]) -> Vec<[usize; 3]> {
     let mut indices: Vec<_> = (0..polygon.len()).collect();
     let mut triangles = Vec::new();
     while indices.len() > 3 {
@@ -58,13 +60,13 @@ fn roof_triangles(polygon: &[[f32; 2]]) -> Vec<[usize; 3]> {
 }
 
 #[cfg(test)]
-pub(super) fn build(b: &mut Builder, city: &City) {
+fn build(b: &mut Builder, city: &Location) {
     ground_mesh(b, city, None);
     buildings(b, city, true).unwrap();
 }
-pub(super) fn buildings(b: &mut Builder, city: &City, detailed: bool) -> std::io::Result<()> {
+pub(super) fn buildings(b: &mut Builder, city: &Location, detailed: bool) -> std::io::Result<()> {
     let models = Catalog::load_default()?;
-    for building in &city.buildings {
+    for building in city.buildings() {
         building_mesh(b, building, city, detailed, &models);
     }
     Ok(())
@@ -84,29 +86,37 @@ fn terrain_mesh(
                 field.point(col, row + 1),
             ];
             for v in &mut p {
-                v[1] -= 0.02;
+                v.y -= 0.02;
             }
             if let Some(boundary) = boundary {
-                let cell = crate::location::polygon(&p.map(|v| [v[0] as f64, v[2] as f64]));
+                let cell = crate::geometry::polygon(&p.map(|v| XZ {
+                    x: v.x as f64,
+                    z: v.z as f64,
+                }));
                 if !boundary.intersects(&cell) {
                     continue;
                 }
                 if !boundary.contains(&cell) {
                     // Preserve the height field's diagonal and its two planar faces.
                     for indices in [[0, 1, 2], [0, 2, 3]] {
-                        let face = crate::location::polygon(
-                            &indices.map(|i| [p[i][0] as f64, p[i][2] as f64]),
-                        );
+                        let face = crate::geometry::polygon(&indices.map(|i| XZ {
+                            x: p[i].x as f64,
+                            z: p[i].z as f64,
+                        }));
                         for polygon in boundary.intersection(&face) {
                             for triangle in polygon.earcut_triangles() {
                                 let points =
                                     [triangle.v1(), triangle.v2(), triangle.v3()].map(|c| {
                                         let x = c.x as f32;
                                         let z = c.y as f32;
-                                        [x, field.height([x, z]) - 0.02, z]
+                                        XYZ {
+                                            x,
+                                            y: field.height(XZ { x, z }) - 0.02,
+                                            z,
+                                        }
                                     });
                                 b.upward_quad(
-                                    [points[0], points[1], points[2], points[0]],
+                                    [(points[0]), (points[1]), (points[2]), (points[0])],
                                     Surface::road([0.64, 0.63, 0.54]),
                                 );
                             }
@@ -124,67 +134,78 @@ fn terrain_mesh(
         }
     }
 }
-pub(super) fn ground_mesh(b: &mut Builder, city: &City, boundary: Option<&geo::MultiPolygon<f64>>) {
-    let field = city
-        .elevation
-        .as_ref()
-        .expect("city rendering requires elevation");
+pub(super) fn ground_mesh(
+    b: &mut Builder,
+    city: &Location,
+    boundary: Option<&geo::MultiPolygon<f64>>,
+) {
+    let field = city.elevation().expect("city rendering requires elevation");
     terrain_mesh(b, field, boundary);
-    let ground_colors = [
-        [0.39, 0.48, 0.25],
-        [0.43, 0.53, 0.30],
-        [0.40, 0.46, 0.28],
-        [0.40, 0.42, 0.43],
-        [0.68, 0.69, 0.66],
-        [0.72, 0.73, 0.70],
-        [0.62, 0.58, 0.46],
-        [0.29, 0.48, 0.35],
-        [0.21, 0.57, 0.67],
-    ];
-    for triangle in &city.landscape.ground {
-        field.drape(triangle.points, |mut p| {
+    for triangle in city.ground_triangles() {
+        field.drape(triangle.points.map(Into::into), |mut p| {
             for v in &mut p {
-                v[1] += 0.005;
+                v.y += 0.005;
             }
             b.upward_quad(
                 [p[0], p[1], p[2], p[0]],
-                Surface::road(ground_colors[triangle.style]),
+                Surface::road(triangle.material.color()),
             );
         });
     }
-    for tree in &city.landscape.trees {
+    for tree in city.trees() {
         mapped_tree(b, city, tree);
     }
-    let surfaces = city
-        .surfaces
-        .as_ref()
-        .expect("city rendering requires compiled street surfaces");
+    assert!(
+        city.has_compiled_roads(),
+        "city rendering requires compiled street surfaces"
+    );
     // The compiler partitions these surfaces, so gutters and street classes
     // meet along shared edges rather than overlapping coplanar strips.
-    let colors = crate::street_surface::COLORS;
-    let pavement = surfaces.pavement_height;
-    let heights = [0.05, 0.05, 0.05, 0.05, 0.07, pavement, pavement, 0.08];
-    for triangle in &surfaces.triangles {
-        let style = triangle.style;
-        field.drape(triangle.points, |mut p| {
+    let pavement = city.pavement_height_meters();
+    for triangle in city.road_triangles() {
+        let height = triangle.usage.render_height(pavement);
+        field.drape(triangle.points.map(Into::into), |mut p| {
             for v in &mut p {
-                v[1] += heights[style];
+                v.y += height;
             }
-            b.upward_quad([p[0], p[1], p[2], p[0]], Surface::road(colors[style]));
+            b.upward_quad(
+                [p[0], p[1], p[2], p[0]],
+                Surface::road(triangle.material.color()),
+            );
         });
     }
-    for curb in &surfaces.curbs {
+    for curb in city.curbs() {
         let [a, c] = curb.ends;
-        let top = if curb.style == 2 { 0.08 } else { pavement };
+        let top = if curb.style == crate::world::CurbStyle::ServiceRoad {
+            0.08
+        } else {
+            pavement
+        };
         for pair in city.ground_segment(a, c).windows(2) {
             let a = pair[0];
             let c = pair[1];
             b.quad(
                 [
-                    [a[0], a[1] + 0.05, a[2]],
-                    [c[0], c[1] + 0.05, c[2]],
-                    [c[0], c[1] + top, c[2]],
-                    [a[0], a[1] + top, a[2]],
+                    XYZ {
+                        x: a.x,
+                        y: a.y + 0.05,
+                        z: a.z,
+                    },
+                    XYZ {
+                        x: c.x,
+                        y: c.y + 0.05,
+                        z: c.z,
+                    },
+                    XYZ {
+                        x: c.x,
+                        y: c.y + top,
+                        z: c.z,
+                    },
+                    XYZ {
+                        x: a.x,
+                        y: a.y + top,
+                        z: a.z,
+                    },
                 ],
                 Surface::matte([0.77, 0.75, 0.66]),
             );
@@ -212,14 +233,14 @@ fn tinted(color: [f32; 3], gain: f32) -> [f32; 3] {
 fn building_mesh(
     b: &mut Builder,
     building: &Building,
-    city: &City,
+    city: &Location,
     detailed: bool,
     models: &Catalog,
 ) {
     // These are regional art variations, rather than surveyed OSM materials.
-    let nicosia = city
-        .geographic_origin()
-        .is_some_and(|[lat, lon]| (35.10..35.24).contains(&lat) && (33.24..33.48).contains(&lon));
+    let nicosia = city.origin.is_some_and(|origin| {
+        (35.10..35.24).contains(&origin.lat) && (33.24..33.48).contains(&origin.lon)
+    });
     let palette = if nicosia {
         [
             [0.97, 0.96, 0.94], // white plaster
@@ -253,29 +274,45 @@ fn building_mesh(
             [0.69, 0.57, 0.48],
         ][visual_seed(id, 3) as usize % 5]
     });
-    let height = building.base_y + building.height;
+    let height = building.base_y + building.height_meters;
     // Generate the complete shared shell first. Near detail never changes the
     // mapped footprint and roof outline. Balcony furniture is near detail.
-    for i in 0..building.polygon.len() {
-        let a = building.polygon[i];
-        let c = building.polygon[(i + 1) % building.polygon.len()];
+    for i in 0..building.ground_outline.len() {
+        let a = building.ground_outline[i];
+        let c = building.ground_outline[(i + 1) % building.ground_outline.len()];
         for pair in city.ground_segment(a, c).windows(2) {
             let a = pair[0];
             let c = pair[1];
             b.quad(
                 [
-                    [c[0], c[1] - 0.03, c[2]],
-                    [a[0], a[1] - 0.03, a[2]],
-                    [a[0], height, a[2]],
-                    [c[0], height, c[2]],
+                    XYZ {
+                        x: c.x,
+                        y: c.y - 0.03,
+                        z: c.z,
+                    },
+                    XYZ {
+                        x: a.x,
+                        y: a.y - 0.03,
+                        z: a.z,
+                    },
+                    XYZ {
+                        x: a.x,
+                        y: height,
+                        z: a.z,
+                    },
+                    XYZ {
+                        x: c.x,
+                        y: height,
+                        z: c.z,
+                    },
                 ],
                 wall,
             );
         }
     }
-    for triangle in roof_triangles(&building.polygon) {
-        let p = triangle.map(|i| [building.polygon[i][0], height, building.polygon[i][1]]);
-        b.upward_quad([p[0], p[1], p[2], p[0]], roof);
+    for triangle in roof_triangles(&building.ground_outline) {
+        let p = triangle.map(|i| building.ground_outline[i].at_height(height));
+        b.upward_quad([(p[0]), (p[1]), (p[2]), (p[0])], roof);
     }
     if !detailed {
         return;
@@ -319,7 +356,7 @@ fn building_mesh(
     let storey = if nicosia {
         // OSM heights commonly use 3.1 m per level. Fit complete storeys to the
         // measured height so rounding cannot leave a blank top floor.
-        building.height / (building.height / 3.1).round().max(1.0)
+        building.height_meters / (building.height_meters / 3.1).round().max(1.0)
     } else {
         2.85 + variation(id, 8) * 0.55
     };
@@ -340,14 +377,17 @@ fn building_mesh(
         shutter: shutter.color,
         glass: [1.0; 3],
     };
-    for i in 0..building.polygon.len() {
-        let a = building.polygon[i];
-        let c = building.polygon[(i + 1) % building.polygon.len()];
-        let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+    for i in 0..building.ground_outline.len() {
+        let a = building.ground_outline[i];
+        let c = building.ground_outline[(i + 1) % building.ground_outline.len()];
+        let length = (c.x - a.x).hypot(c.z - a.z);
         if length < 3.0 {
             continue;
         }
-        let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
+        let normal = XZ {
+            x: (c.z - a.z) / length,
+            z: -(c.x - a.x) / length,
+        };
         // Coordinates are metres along the wall and absolute elevation.
         let panel = |b: &mut Builder,
                      left: f32,
@@ -356,19 +396,17 @@ fn building_mesh(
                      top: f32,
                      depth: f32,
                      surface: Surface| {
-            let p = |along: f32, y: f32| {
-                [
-                    a[0] + (c[0] - a[0]) * along / length + normal[0] * depth,
-                    y,
-                    a[1] + (c[1] - a[1]) * along / length + normal[1] * depth,
-                ]
+            let p = |along: f32, y: f32| crate::geometry::XYZ {
+                x: a.x + (c.x - a.x) * along / length + normal.x * depth,
+                y: y,
+                z: a.z + (c.z - a.z) * along / length + normal.z * depth,
             };
             b.quad(
                 [
-                    p(right, bottom),
-                    p(left, bottom),
-                    p(left, top),
-                    p(right, top),
+                    (p(right, bottom)),
+                    (p(left, bottom)),
+                    (p(left, top)),
+                    (p(right, top)),
                 ],
                 surface,
             );
@@ -385,7 +423,7 @@ fn building_mesh(
         );
         let columns = ((length - 1.0) / spacing).floor().clamp(1.0, 20.0) as usize;
         let half = (window_width * 0.5).min(length / columns as f32 * 0.29);
-        for floor in 0..((building.height / storey + 0.001).floor() as usize).min(16) {
+        for floor in 0..((building.height_meters / storey + 0.001).floor() as usize).min(16) {
             let bottom = building.base_y + 0.85 + floor as f32 * storey;
             let top = (bottom + window_height).min(height - 0.45);
             if top <= bottom + 0.3 {
@@ -399,7 +437,7 @@ fn building_mesh(
                 if floor == 0
                     && i == 0
                     && length > models.placement.entrance_min_wall
-                    && building.height > models.placement.entrance_min_height
+                    && building.height_meters > models.placement.entrance_min_height
                     && (center - length * 0.5).abs() < half + 0.72
                 {
                     continue;
@@ -411,11 +449,11 @@ fn building_mesh(
                     [a, c],
                     center,
                     bottom - 0.07,
-                    [
-                        half * 2.0 + 0.14,
-                        top - bottom + 0.14,
-                        models.window.size[2],
-                    ],
+                    XYZ {
+                        x: half * 2.0 + 0.14,
+                        y: top - bottom + 0.14,
+                        z: models.window.size.z,
+                    },
                     &tints,
                 );
                 if style == 0 && length / columns as f32 > window_width + 0.8 {
@@ -440,7 +478,7 @@ fn building_mesh(
         // One recessed-looking entrance, reserved for a single substantial wall.
         if i == 0
             && length > models.placement.entrance_min_wall
-            && building.height > models.placement.entrance_min_height
+            && building.height_meters > models.placement.entrance_min_height
         {
             let center = length * 0.5;
             let bottom = building.base_y + 0.02;
@@ -450,17 +488,17 @@ fn building_mesh(
         }
         // Broad stacked terraces on two substantial exterior faces. Keep them
         // off concave footprints, where an outward projection could fill a court.
-        let convex = (0..building.polygon.len()).all(|j| {
+        let convex = (0..building.ground_outline.len()).all(|j| {
             cross(
-                building.polygon[j],
-                building.polygon[(j + 1) % building.polygon.len()],
-                building.polygon[(j + 2) % building.polygon.len()],
+                building.ground_outline[j],
+                building.ground_outline[(j + 1) % building.ground_outline.len()],
+                building.ground_outline[(j + 2) % building.ground_outline.len()],
             ) >= -0.0001
         });
         if nicosia
             && convex
             && (style == 1 || style == 2)
-            && building.height >= models.placement.balcony_min_height
+            && building.height_meters >= models.placement.balcony_min_height
             && length >= models.placement.balcony_min_wall
             && i < models.placement.balcony_max_walls
         {
@@ -471,23 +509,23 @@ fn building_mesh(
 
 fn apartment_balconies(
     b: &mut Builder,
-    a: [f32; 2],
-    c: [f32; 2],
+    a: XZ<f32>,
+    c: XZ<f32>,
     building: &Building,
     storey: f32,
     style: u64,
     models: &Catalog,
     tints: &Tints,
 ) {
-    let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+    let length = (c.x - a.x).hypot(c.z - a.z);
     let rules = &models.placement;
     let width = (length * rules.balcony_width_ratio).min(rules.balcony_max_width);
     let depth = rules.balcony_depth[0]
         + variation(building.id, 21) * (rules.balcony_depth[1] - rules.balcony_depth[0]);
     let model = &models.balconies[usize::from(style == 2)];
-    for floor in 1..((building.height / storey + 0.001).floor() as usize).min(16) {
+    for floor in 1..((building.height_meters / storey + 0.001).floor() as usize).min(16) {
         let y = building.base_y + floor as f32 * storey + rules.balcony_floor_offset;
-        if y + rules.balcony_headroom >= building.base_y + building.height {
+        if y + rules.balcony_headroom >= building.base_y + building.height_meters {
             continue;
         }
         model.place(
@@ -495,7 +533,11 @@ fn apartment_balconies(
             [a, c],
             length * 0.5,
             y,
-            [width, model.size[1], depth],
+            XYZ {
+                x: width,
+                y: model.size.y,
+                z: depth,
+            },
             tints,
         );
     }
@@ -505,8 +547,8 @@ fn apartment_balconies(
 // city-wide inferred vegetation. Trunks and building edges keep flat normals.
 fn canopy_quad(
     b: &mut Builder,
-    points: [[f32; 3]; 4],
-    center: [f32; 3],
+    points: [XYZ; 4],
+    center: XYZ,
     vertical_scale: f32,
     color: [f32; 3],
 ) {
@@ -516,15 +558,15 @@ fn canopy_quad(
             continue;
         }
         let vertices = p.map(|position| {
-            let delta = [
-                position[0] - center[0],
-                (position[1] - center[1]) * vertical_scale,
-                position[2] - center[2],
-            ];
+            let delta = XYZ {
+                x: position.x - center.x,
+                y: (position.y - center.y) * vertical_scale,
+                z: position.z - center.z,
+            };
             let length = delta.iter().map(|n| n * n).sum::<f32>().sqrt().max(0.00001);
             super::Vertex {
-                position,
-                normal: delta.map(|n| n / length),
+                position: (position).into(),
+                normal: (delta.map(|n| n / length)).into(),
                 color,
                 material: [0.0, 0.0],
             }
@@ -537,19 +579,19 @@ fn canopy_quad(
     }
 }
 
-fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
-    let [x, z] = tree.point;
-    let y = city.height([x, z]);
-    let h = tree.height;
-    let r = tree.radius;
+fn mapped_tree(b: &mut Builder, city: &Location, tree: &crate::landscape::Tree) {
+    let XZ { x, z } = tree.coords;
+    let y = city.height(XZ { x, z });
+    let h = tree.height_meters;
+    let r = tree.crown_radius_meters;
     let id = tree.id;
     let inferred = id >= (1_u64 << 63);
     let family = visual_seed(id, 20) % 4;
     let rotation = variation(id, 21) * std::f32::consts::TAU;
-    let lean = [
-        (variation(id, 22) - 0.5) * r * 0.16,
-        (variation(id, 23) - 0.5) * r * 0.16,
-    ];
+    let lean = XZ {
+        x: (variation(id, 22) - 0.5) * r * 0.16,
+        z: (variation(id, 23) - 0.5) * r * 0.16,
+    };
     let trunk_radius = (r * (0.055 + variation(id, 24) * 0.035)).clamp(0.08, 0.27);
     let bark = Surface::matte(tinted([0.38, 0.31, 0.23], 0.78 + variation(id, 25) * 0.35));
     // A tapered six-sided trunk has the same triangle budget as the old cuboid.
@@ -558,13 +600,16 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
         let c = rotation + (i + 1) as f32 * std::f32::consts::TAU / 6.0;
         let p = |angle: f32, top: bool| {
             let scale = if top { 0.55 } else { 1.0 };
-            [
-                x + angle.cos() * trunk_radius * scale + if top { lean[0] } else { 0.0 },
-                y + if top { h * 0.65 } else { -0.05 },
-                z + angle.sin() * trunk_radius * scale + if top { lean[1] } else { 0.0 },
-            ]
+            crate::geometry::XYZ {
+                x: x + angle.cos() * trunk_radius * scale + if top { lean.x } else { 0.0 },
+                y: y + if top { h * 0.65 } else { -0.05 },
+                z: z + angle.sin() * trunk_radius * scale + if top { lean.z } else { 0.0 },
+            }
         };
-        b.quad([p(a, false), p(a, true), p(c, true), p(c, false)], bark);
+        b.quad(
+            [(p(a, false)), (p(a, true)), (p(c, true)), (p(c, false))],
+            bark,
+        );
     }
     // Broad, oval, upright and spreading crowns; all remain inside the mapped
     // height/radius envelope so vegetation does not spread into cleared roads.
@@ -619,11 +664,11 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
     let (rotation_sin, rotation_cos) = rotation.sin_cos();
     let crown_bottom = rings.first().unwrap().0;
     let crown_top = rings.last().unwrap().0;
-    let crown_center = [
-        x + lean[0] * 0.2,
-        y + h * (crown_bottom + crown_top) * 0.5,
-        z + lean[1] * 0.2,
-    ];
+    let crown_center = XYZ {
+        x: x + lean.x * 0.2,
+        y: y + h * (crown_bottom + crown_top) * 0.5,
+        z: z + lean.z * 0.2,
+    };
     let vertical_scale = (r / (h * (crown_top - crown_bottom) * 0.5)).powi(2);
     for pair in rings.windows(2) {
         for i in 0..segments {
@@ -632,18 +677,30 @@ fn mapped_tree(b: &mut Builder, city: &City, tree: &crate::landscape::Tree) {
                 let ripple = 0.88 + variation(id ^ (index % segments) as u64, 29) * 0.12;
                 let radius = r * ring.1 * ripple;
                 let drift = (ring.0 - 0.3).max(0.0);
-                let local = [angle.cos() * radius, angle.sin() * radius * oval];
-                [
-                    x + local[0] * rotation_cos - local[1] * rotation_sin + lean[0] * drift,
-                    y + h * ring.0,
-                    z + local[0] * rotation_sin + local[1] * rotation_cos + lean[1] * drift,
-                ]
+                let local = XZ {
+                    x: angle.cos() * radius,
+                    z: angle.sin() * radius * oval,
+                };
+                crate::geometry::XYZ {
+                    x: x + local.x * rotation_cos - local.z * rotation_sin + lean.x * drift,
+                    y: y + h * ring.0,
+                    z: z + local.x * rotation_sin + local.z * rotation_cos + lean.z * drift,
+                }
             };
             let a = p(i, pair[0]);
             let c = p(i, pair[1]);
             let d = p(i + 1, pair[1]);
             let e = p(i + 1, pair[0]);
-            canopy_quad(b, [a, c, d, e], crown_center, vertical_scale, base);
+            canopy_quad(b, [(a), (c), (d), (e)], crown_center, vertical_scale, base);
+        }
+    }
+}
+
+impl crate::world::TriangleUsage {
+    fn render_height(self, pavement_height: f32) -> f32 {
+        match self {
+            Self::Marking => 0.07,
+            _ => self.support_height(pavement_height),
         }
     }
 }
@@ -655,32 +712,44 @@ mod tests {
         static MODELS: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
         MODELS.get_or_init(|| Catalog::load_default().unwrap())
     }
-    fn small_city() -> City {
-        City::parse("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
+    fn small_city() -> Location {
+        crate::test_support::parse_world(
+            "CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
+        )
+        .unwrap()
     }
 
     #[test]
     fn administrative_terrain_preserves_holes_area_and_height_planes() {
         use geo::{Area, BooleanOps, MultiPolygon};
         let mut city = small_city();
-        city.elevation = Some(crate::elevation::HeightField::generate(
-            [[-8., -8.], [8., 8.]],
-            |p| p[0] * p[1] * 0.1,
-        ));
-        let shell = crate::location::polygon(&[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]);
-        let hole = crate::location::polygon(&[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]);
+        crate::test_support::set_elevation(
+            &mut city,
+            Some(crate::elevation::HeightField::generate(
+                crate::geometry::BoundingBoxXZ {
+                    min: crate::geometry::XZ { x: -8., z: -8. },
+                    max: crate::geometry::XZ { x: 8., z: 8. },
+                },
+                |p| p.x * p.z * 0.1,
+            )),
+        );
+        let shell = crate::geometry::polygon(
+            &[[-6., -5.], [6., -5.], [6., 5.], [-6., 5.]]
+                .map(|[x, z]| crate::geometry::XZ { x, z }),
+        );
+        let hole = crate::geometry::polygon(
+            &[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]
+                .map(|[x, z]| crate::geometry::XZ { x, z }),
+        );
         let boundary = shell.difference(&hole);
         let mut builder = Builder::default();
-        terrain_mesh(
-            &mut builder,
-            city.elevation.as_ref().unwrap(),
-            Some(&boundary),
-        );
+        terrain_mesh(&mut builder, city.elevation().unwrap(), Some(&boundary));
         let mut area = 0.;
         for vertices in builder.vertices.as_chunks::<3>().0 {
-            let triangle = crate::location::polygon(
-                &vertices.map(|v| [v.position[0] as f64, v.position[2] as f64]),
-            );
+            let triangle = crate::geometry::polygon(&vertices.map(|v| crate::geometry::XZ {
+                x: v.position[0] as f64,
+                z: v.position[2] as f64,
+            }));
             area += triangle.unsigned_area();
             assert!(
                 MultiPolygon(vec![triangle])
@@ -691,11 +760,10 @@ mod tests {
             for v in vertices {
                 assert!(
                     (v.position[1]
-                        - city
-                            .elevation
-                            .as_ref()
-                            .unwrap()
-                            .height([v.position[0], v.position[2]])
+                        - city.elevation().unwrap().height(crate::geometry::XZ {
+                            x: v.position[0],
+                            z: v.position[2]
+                        })
                         + 0.02)
                         .abs()
                         < 0.0001
@@ -723,7 +791,16 @@ mod tests {
             assert_eq!(joined, "HIGH COMMISSION OF THE REPUBLIC OF INDIA");
             assert!(pixel > 0.0);
             let mut b = Builder::default();
-            storefront_sign(&mut b, &long, [[0.0, 0.0], [length, 0.0]], 2.0, height);
+            storefront_sign(
+                &mut b,
+                &long,
+                [
+                    crate::geometry::XZ { x: 0.0, z: 0.0 },
+                    crate::geometry::XZ { x: length, z: 0.0 },
+                ],
+                2.0,
+                height,
+            );
             for v in b.vertices {
                 assert!(v.position[0] >= 0.29 && v.position[0] <= length - 0.29);
                 assert!(v.position[1] >= 2.29 && v.position[1] <= 2.0 + height - 0.29);
@@ -750,18 +827,24 @@ mod tests {
             })
             .collect();
         for [a, c] in [
-            [[0.0, 0.0], [10.0, 0.0]],
-            [[10.0, 0.0], [10.0, 10.0]],
-            [[10.0, 10.0], [0.0, 10.0]],
-            [[0.0, 10.0], [0.0, 0.0]],
+            [XZ { x: 0.0, z: 0.0 }, XZ { x: 10.0, z: 0.0 }],
+            [XZ { x: 10.0, z: 0.0 }, XZ { x: 10.0, z: 10.0 }],
+            [XZ { x: 10.0, z: 10.0 }, XZ { x: 0.0, z: 10.0 }],
+            [XZ { x: 0.0, z: 10.0 }, XZ { x: 0.0, z: 0.0 }],
         ] {
             let mut b = Builder::default();
             storefront_sign(&mut b, &label, [a, c], 0.0, 8.0);
-            let normal = [(c[1] - a[1]) / 10.0, -(c[0] - a[0]) / 10.0];
+            let normal = crate::geometry::XZ {
+                x: (c.z - a.z) / 10.0,
+                z: -(c.x - a.x) / 10.0,
+            };
             // Camera right = cross(-outward_normal, world_up).
-            let right = [normal[1], -normal[0]];
+            let right = crate::geometry::XZ {
+                x: normal.z,
+                z: -normal.x,
+            };
             let screen_x = |v: &super::super::Vertex| {
-                (v.position[0] - c[0]) * right[0] + (v.position[2] - c[1]) * right[1]
+                (v.position[0] - c.x) * right.x + (v.position[2] - c.z) * right.z
             };
             let text = &b.vertices[6..];
             let left = text.iter().map(screen_x).fold(f32::INFINITY, f32::min);
@@ -778,7 +861,7 @@ mod tests {
             for quad in b.vertices[6..].chunks_exact(6) {
                 let min_x = quad
                     .iter()
-                    .map(|v| (v.position[0] - c[0]) * right[0] + (v.position[2] - c[1]) * right[1])
+                    .map(|v| (v.position[0] - c.x) * right.x + (v.position[2] - c.z) * right.z)
                     .fold(f32::INFINITY, f32::min);
                 let top = quad
                     .iter()
@@ -792,7 +875,7 @@ mod tests {
             assert_eq!(actual, expected);
             for v in b.vertices {
                 assert_eq!(v.material[0], -3.0);
-                assert!(v.normal[0] * normal[0] + v.normal[2] * normal[1] > 0.999);
+                assert!(v.normal[0] * normal.x + v.normal[2] * normal.z > 0.999);
             }
         }
     }
@@ -804,9 +887,9 @@ mod tests {
         for id in (0..32).chain((0..32).map(|id| id | (1_u64 << 63))) {
             let tree = crate::landscape::Tree {
                 id,
-                point: [0.0; 2],
-                height: 8.0,
-                radius: 3.0,
+                coords: crate::geometry::XZ { x: 0.0, z: 0.0 },
+                height_meters: 8.0,
+                crown_radius_meters: 3.0,
             };
             let mut first = Builder::default();
             let mut again = Builder::default();
@@ -816,8 +899,8 @@ mod tests {
             assert!(first.vertices.len() <= if id >= (1_u64 << 63) { 108 } else { 216 });
             for vertex in &first.vertices {
                 let [x, y, z] = vertex.position;
-                assert!(x.hypot(z) <= tree.radius + 0.001);
-                assert!((-0.051..=tree.height).contains(&y));
+                assert!(x.hypot(z) <= tree.crown_radius_meters + 0.001);
+                assert!((-0.051..=tree.height_meters).contains(&y));
                 assert!((vertex.normal.iter().map(|n| n * n).sum::<f32>() - 1.0).abs() < 0.001);
                 assert!(vertex.color.iter().all(|c| (0.0..=1.0).contains(c)));
             }
@@ -839,9 +922,15 @@ mod tests {
         for id in 0..32 {
             let building = Building {
                 id,
-                height: 10.0,
+                height_meters: 10.0,
                 base_y: 0.0,
-                polygon: vec![[-6.0, -5.0], [6.0, -5.0], [6.0, 5.0], [-6.0, 5.0]],
+                tagged: true,
+                ground_outline: vec![
+                    crate::geometry::XZ { x: -6.0, z: -5.0 },
+                    crate::geometry::XZ { x: 6.0, z: -5.0 },
+                    crate::geometry::XZ { x: 6.0, z: 5.0 },
+                    crate::geometry::XZ { x: -6.0, z: 5.0 },
+                ],
             };
             let mut near = Builder::default();
             let mut again = Builder::default();
@@ -871,7 +960,7 @@ mod tests {
 
     #[test]
     fn nicosia_terraces_are_bounded_and_leave_the_mapped_shell_intact() {
-        let city = City::parse(
+        let city = crate::test_support::parse_world(
             "CITY 2\norigin 35.17 33.32\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
         )
         .unwrap();
@@ -879,9 +968,15 @@ mod tests {
         for id in 0..32 {
             let building = Building {
                 id,
-                height: 9.3,
+                height_meters: 9.3,
                 base_y: 0.0,
-                polygon: vec![[-6.0, -5.0], [6.0, -5.0], [6.0, 5.0], [-6.0, 5.0]],
+                tagged: true,
+                ground_outline: vec![
+                    crate::geometry::XZ { x: -6.0, z: -5.0 },
+                    crate::geometry::XZ { x: 6.0, z: -5.0 },
+                    crate::geometry::XZ { x: 6.0, z: 5.0 },
+                    crate::geometry::XZ { x: -6.0, z: 5.0 },
+                ],
             };
             let mut near = Builder::default();
             let mut far = Builder::default();
@@ -922,26 +1017,34 @@ mod tests {
 
     #[test]
     fn concave_and_bundled_roofs_preserve_footprint_area() {
-        let city_track = crate::track::TrackId::Engomi.track();
-        let city = city_track.city().unwrap();
+        let city_track = crate::test_support::nicosia_world();
+        let city = &city_track;
         let concave = vec![
-            [0.0, 0.0],
-            [4.0, 0.0],
-            [4.0, 1.0],
-            [1.0, 1.0],
-            [1.0, 4.0],
-            [0.0, 4.0],
+            crate::geometry::XZ { x: 0.0, z: 0.0 },
+            crate::geometry::XZ { x: 4.0, z: 0.0 },
+            crate::geometry::XZ { x: 4.0, z: 1.0 },
+            crate::geometry::XZ { x: 1.0, z: 1.0 },
+            crate::geometry::XZ { x: 1.0, z: 4.0 },
+            crate::geometry::XZ { x: 0.0, z: 4.0 },
         ];
-        for polygon in std::iter::once(&concave).chain(city.buildings.iter().map(|b| &b.polygon)) {
+        for polygon in
+            std::iter::once(&concave).chain(city.buildings().iter().map(|b| &b.ground_outline))
+        {
             let actual = roof_triangles(polygon)
                 .iter()
-                .map(|t| cross(polygon[t[0]], polygon[t[1]], polygon[t[2]]) * 0.5)
+                .map(|t| {
+                    cross(
+                        (polygon[t[0]]).into(),
+                        (polygon[t[1]]).into(),
+                        (polygon[t[2]]).into(),
+                    ) * 0.5
+                })
                 .sum::<f64>();
             let expected = (0..polygon.len())
                 .map(|i| {
                     let a = polygon[i];
                     let c = polygon[(i + 1) % polygon.len()];
-                    a[0] as f64 * c[1] as f64 - c[0] as f64 * a[1] as f64
+                    a.x as f64 * c.z as f64 - c.x as f64 * a.z as f64
                 })
                 .sum::<f64>()
                 * 0.5;
@@ -953,16 +1056,16 @@ mod tests {
     }
     #[test]
     fn distant_buildings_keep_identical_walls_roofs_and_foundations() {
-        let city_track = crate::track::TrackId::Engomi.track();
-        let city = city_track.city().unwrap();
+        let city_track = crate::test_support::nicosia_world();
+        let city = &city_track;
         let building = city
-            .buildings
+            .buildings()
             .iter()
             .find(|b| {
-                b.height > 6.0
-                    && b.polygon
+                b.height_meters > 6.0
+                    && b.ground_outline
                         .windows(2)
-                        .any(|p| (p[0][0] - p[1][0]).hypot(p[0][1] - p[1][1]) > 8.0)
+                        .any(|p| (p[0].x - p[1].x).hypot(p[0].z - p[1].z) > 8.0)
             })
             .unwrap();
         let mut near = Builder::default();
@@ -980,12 +1083,12 @@ mod tests {
 
     #[test]
     fn city_geometry_is_finite_and_bounded_in_size() {
-        let city_track = crate::track::TrackId::Engomi.track();
-        let city = city_track.city().unwrap();
+        let city_track = crate::test_support::nicosia_world();
+        let city = &city_track;
         let mut b = Builder::default();
         build(&mut b, city);
-        let area =
-            (city.bounds[1][0] - city.bounds[0][0]) * (city.bounds[1][1] - city.bounds[0][1]);
+        let area = (city.bounding_box().max.x - city.bounding_box().min.x)
+            * (city.bounding_box().max.z - city.bounding_box().min.z);
         // At most one million vertices per square kilometre at this detail level.
         let budget = area as usize;
         eprintln!(
@@ -1010,8 +1113,8 @@ mod tests {
 }
 
 /// Runtime signs also work with existing baked city archives.
-pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
-    for building in &city.buildings {
+pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
+    for building in city.buildings() {
         let Some(name) = city.building_name(building.id) else {
             continue;
         };
@@ -1020,24 +1123,28 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
             continue;
         }
         // Put the shopfront on the wall closest to the street network.
-        let edge = (0..building.polygon.len())
+        let edge = (0..building.ground_outline.len())
             .filter_map(|i| {
-                let a = building.polygon[i];
-                let c = building.polygon[(i + 1) % building.polygon.len()];
-                let length = (c[0] - a[0]).hypot(c[1] - a[1]);
+                let a = building.ground_outline[i];
+                let c = building.ground_outline[(i + 1) % building.ground_outline.len()];
+                let length = (c.x - a.x).hypot(c.z - a.z);
                 if length < 2.0 {
                     return None;
                 }
-                let midpoint = [(a[0] + c[0]) * 0.5, building.base_y, (a[1] + c[1]) * 0.5];
+                let midpoint = crate::geometry::XYZ {
+                    x: (a.x + c.x) * 0.5,
+                    y: building.base_y,
+                    z: (a.z + c.z) * 0.5,
+                };
                 let road = city.project(midpoint);
-                let distance = (midpoint[0] - road.point[0]).hypot(midpoint[2] - road.point[2]);
+                let distance = (midpoint.x - road.point.x).hypot(midpoint.z - road.point.z);
                 Some((distance, a, c))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let Some((_, a, c)) = edge else {
             continue;
         };
-        storefront_sign(b, &label, [a, c], building.base_y, building.height);
+        storefront_sign(b, &label, [a, c], building.base_y, building.height_meters);
     }
 }
 
@@ -1045,27 +1152,33 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &City) {
 fn storefront_sign(
     b: &mut Builder,
     label: &[char],
-    [a, c]: [[f32; 2]; 2],
+    [a, c]: [crate::geometry::XZ<f32>; 2],
     base_y: f32,
     height: f32,
 ) {
-    let length = (c[0] - a[0]).hypot(c[1] - a[1]);
-    let normal = [(c[1] - a[1]) / length, -(c[0] - a[0]) / length];
+    let length = (c.x - a.x).hypot(c.z - a.z);
+    let normal = crate::geometry::XZ {
+        x: (c.z - a.z) / length,
+        z: -(c.x - a.x) / length,
+    };
     let (lines, pixel) = storefront_layout(label, length, height);
     let width = lines.iter().map(Vec::len).max().unwrap_or(0) as f32 * 6.0 * pixel;
     let left = (length - width) * 0.5;
     let panel_height = lines.len() as f32 * 9.0 * pixel;
     let top = base_y + (panel_height + 1.0).min(height - 0.3);
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
-        let point = |x: f32, y: f32| {
-            [
-                c[0] + (a[0] - c[0]) * x / length + normal[0] * depth,
-                y,
-                c[1] + (a[1] - c[1]) * x / length + normal[1] * depth,
-            ]
+        let point = |x: f32, y: f32| crate::geometry::XYZ {
+            x: c.x + (a.x - c.x) * x / length + normal.x * depth,
+            y: y,
+            z: c.z + (a.z - c.z) * x / length + normal.z * depth,
         };
         b.quad(
-            [point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1)],
+            [
+                (point(x0, y0)),
+                (point(x1, y0)),
+                (point(x1, y1)),
+                (point(x0, y1)),
+            ],
             Surface {
                 color,
                 material: [-3.0, 0.0],

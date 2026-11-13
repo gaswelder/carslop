@@ -1,16 +1,17 @@
 //! Static glTF 2.0 car artwork adapted to the existing colored-triangle renderer.
 use super::mesh_glb;
 use super::Vertex;
+use crate::geometry::XYZ;
 use glam::{Mat4, Vec3};
 use std::{io, path::Path};
 
 const PARTS: [&str; 5] = ["body", "wheel_rl", "wheel_rr", "wheel_fl", "wheel_fr"];
 
 #[derive(Clone)]
-pub(crate) struct Design {
+pub struct Design {
     pub body: Vec<Vertex>,
     pub wheels: [Vec<Vertex>; 4],
-    pub mounts: [[f32; 3]; 4],
+    pub mounts: [XYZ; 4],
     pub wheel_radii: [f32; 4],
 }
 impl Design {
@@ -21,7 +22,7 @@ impl Design {
             self.wheels
                 .iter()
                 .zip(self.mounts)
-                .flat_map(|(wheel, mount)| wheel.iter().map(move |v| v.position[1] + mount[1])),
+                .flat_map(|(wheel, mount)| wheel.iter().map(move |v| v.position[1] + mount.y)),
         );
         let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
         for y in heights {
@@ -38,14 +39,15 @@ impl Design {
     /// wheels. Overlaps count once; scanline spans keep detailed models inexpensive.
     pub fn frontal_area_m2(&self) -> f32 {
         const RESOLUTION: usize = 512;
-        let parts =
-            || std::iter::once((&self.body, [0.0; 3])).chain(self.wheels.iter().zip(self.mounts));
+        let parts = || {
+            std::iter::once((&self.body, XYZ::default())).chain(self.wheels.iter().zip(self.mounts))
+        };
         let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
         let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
         for (vertices, offset) in parts() {
             for vertex in vertices {
-                let x = (vertex.position[0] + offset[0]) as f64;
-                let y = (vertex.position[1] + offset[1]) as f64;
+                let x = (vertex.position[0] + offset.x) as f64;
+                let y = (vertex.position[1] + offset.y) as f64;
                 if !x.is_finite() || !y.is_finite() {
                     return f32::NAN;
                 }
@@ -68,8 +70,8 @@ impl Design {
                 let points: [(f64, f64); 3] = std::array::from_fn(|i| {
                     let p = triangle[i].position;
                     (
-                        ((p[0] + offset[0]) as f64 - min_x) * scale / width,
-                        ((p[1] + offset[1]) as f64 - min_y) * scale / height,
+                        ((p[0] + offset.x) as f64 - min_x) * scale / width,
+                        ((p[1] + offset.y) as f64 - min_y) * scale / height,
                     )
                 });
                 let bottom = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
@@ -100,7 +102,7 @@ fn invalid(message: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
 
-pub(crate) fn load(path: &Path) -> io::Result<Design> {
+pub fn load(path: &Path) -> io::Result<Design> {
     std::fs::read(path)
         .and_then(|bytes| decode(&bytes))
         .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
@@ -123,7 +125,8 @@ fn decode(bytes: &[u8]) -> io::Result<Design> {
             }
         }
         let [body, rl, rr, fl, fr] = importer.vertices;
-        let mounts = std::array::from_fn(|i| importer.origins[i + 1].unwrap().to_array());
+        let mounts =
+            std::array::from_fn(|i| XYZ::from(importer.origins[i + 1].unwrap().to_array()));
         let wheels = [rl, rr, fl, fr];
         let wheel_radii = std::array::from_fn(|i| {
             wheels[i]
@@ -257,13 +260,13 @@ mod tests {
     fn height_includes_body_and_mounted_wheels_and_ignores_vertical_offset() {
         let mut design = (*crate::test_support::car_spec().design).clone();
         assert!((design.height() - 1.3).abs() < 0.00001);
-        design.mounts[0][1] = -2.0;
+        design.mounts[0].y = -2.0;
         assert!((design.height() - 3.0).abs() < 0.00001);
         for v in &mut design.body {
             v.position[1] += 10.0;
         }
         for mount in &mut design.mounts {
-            mount[1] += 10.0;
+            mount.y += 10.0;
         }
         assert!((design.height() - 3.0).abs() < 0.00001);
         design.body[0].position[1] = f32::NAN;
@@ -302,7 +305,11 @@ mod tests {
             .collect();
         design.body.extend(duplicate);
         assert!((design.frontal_area_m2() - 2.0).abs() < 0.00001);
-        design.mounts[0] = [2.0, 0.0, 0.0];
+        design.mounts[0] = crate::geometry::XYZ {
+            x: 2.0,
+            y: 0.0,
+            z: 0.0,
+        };
         design.wheels[0] = vec![
             vertex(0.0, 0.0, 0.0),
             vertex(1.0, 0.0, 0.0),
@@ -314,8 +321,8 @@ mod tests {
             v.position[1] -= 5.0;
         }
         for mount in &mut design.mounts {
-            mount[0] += 10.0;
-            mount[1] -= 5.0;
+            mount.x += 10.0;
+            mount.y -= 5.0;
         }
         assert!((design.frontal_area_m2() - 2.5).abs() < 0.01);
     }
@@ -329,8 +336,22 @@ mod tests {
             .push(json!({"translation":[5,0,0],"scale":[-2,3,1],"children":[0,1,2,3,4]}));
         doc["scenes"][0]["nodes"] = json!([5]);
         let design = decode(&pack(&doc, &bin)).unwrap();
-        assert_eq!(design.mounts[0], [5., 6., 3.]);
-        assert_eq!(design.mounts[3], [-1., 6., 3.]);
+        assert_eq!(
+            design.mounts[0],
+            crate::geometry::XYZ {
+                x: 5.,
+                y: 6.,
+                z: 3.
+            }
+        );
+        assert_eq!(
+            design.mounts[3],
+            crate::geometry::XYZ {
+                x: -1.,
+                y: 6.,
+                z: 3.
+            }
+        );
         assert_eq!(design.body[0].position, [5., 0., 0.]);
         assert_eq!(design.body[1].position, [5., 3., 0.]); // mirrored winding corrected
         assert_eq!(design.wheels[0][0].position, [0.; 3]);
