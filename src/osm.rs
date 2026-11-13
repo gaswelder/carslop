@@ -169,7 +169,17 @@ fn attrs(e: &BytesStart<'_>) -> Result<BTreeMap<String, String>> {
 }
 
 pub fn read(path: &Path) -> Result<OSMMap> {
-    let mut reader = Reader::from_reader(BufReader::new(fs::File::open(path)?));
+    let map = read_xml(BufReader::new(fs::File::open(path)?))?;
+    if map.nodes.is_empty() {
+        return Err(invalid(
+            "expected an OSM XML file containing nodes (.pbf is not supported)",
+        ));
+    }
+    Ok(map)
+}
+
+pub fn read_xml(source: impl std::io::BufRead) -> Result<OSMMap> {
+    let mut reader = Reader::from_reader(source);
     let mut buffer = Vec::new();
     let mut current: Option<(String, OSMElement)> = None;
     let mut source = OSMMap {
@@ -295,10 +305,8 @@ pub fn read(path: &Path) -> Result<OSMMap> {
         buffer.clear();
     }
     flush(&mut current, &mut source);
-    if !root || !closed || source.nodes.is_empty() {
-        return Err(invalid(
-            "expected an OSM XML file containing nodes (.pbf is not supported)",
-        ));
+    if !root || !closed {
+        return Err(invalid("expected an OSM XML file (.pbf is not supported)"));
     }
     Ok(source)
 }

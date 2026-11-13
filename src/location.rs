@@ -64,6 +64,8 @@ pub struct Streets {
 pub struct Labels {
     pub streets: Vec<(i64, String)>,
     pub buildings: Vec<(u64, String)>,
+    #[serde(default)]
+    pub storefronts: Vec<(u64, String)>,
 }
 
 /// References to immutable, already compiled payloads, not a source/build folder.

@@ -56,6 +56,9 @@ impl Location {
         city.bounding_box = stored.extent;
         city.street_names = stored.labels.streets.into_iter().collect();
         city.building_names = stored.labels.buildings.into_iter().collect();
+        for (id, name) in stored.labels.storefronts {
+            city.storefront_names.entry(id).or_default().push(name);
+        }
         let field = stored.elevation;
         let (surfaces, paths) = crate::street_surface::StreetSurface::from_geometry(
             stored.streets,

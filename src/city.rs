@@ -11,90 +11,211 @@ use std::collections::HashMap;
 #[cfg(test)]
 use crate::world::spatial::*;
 
-/// Read just way labels, without building the full OSM geometry again.
+/// Source labels and businesses associated with their containing building.
 pub struct OsmLabels {
     pub streets: HashMap<i64, String>,
     pub buildings: HashMap<u64, String>,
+    pub storefronts: Vec<(u64, String)>,
 }
 
 pub fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
-    use quick_xml::{events::Event, Reader};
-    let mut reader = Reader::from_reader(source);
-    let mut buffer = Vec::new();
-    let mut names = HashMap::new();
-    let mut buildings = HashMap::new();
-    let mut building = false;
-    let mut way = None;
-    let mut labels = [String::new(), String::new(), String::new()];
-    loop {
-        match reader
-            .read_event_into(&mut buffer)
-            .map_err(|e| e.to_string())?
-        {
-            Event::Start(e) if e.name().as_ref() == "way" => {
-                way = None;
-                building = false;
-                labels.iter_mut().for_each(String::clear);
-                for attr in e.attributes() {
-                    let attr = attr.map_err(|e| e.to_string())?;
-                    if attr.key.as_ref() == "id" {
-                        way = attr.value.parse().ok();
-                    }
-                }
-            }
-            Event::Start(e) | Event::Empty(e) if way.is_some() && e.name().as_ref() == "tag" => {
-                let mut key = String::new();
-                let mut value = String::new();
-                for attr in e.attributes() {
-                    let attr = attr.map_err(|e| e.to_string())?;
-                    let decoded = attr
-                        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
-                        .map_err(|e| e.to_string())?;
-                    match attr.key.as_ref() {
-                        "k" => key = decoded.into_owned(),
-                        "v" => value = decoded.into_owned(),
-                        _ => {}
-                    }
-                }
-                if key == "building" {
-                    building = !matches!(value.as_str(), "" | "no");
-                }
-                let index = match key.as_str() {
-                    "name:en" => Some(0),
-                    "name" => Some(1),
-                    "ref" => Some(2),
-                    _ => None,
-                };
-                if let Some(index) = index {
-                    labels[index] = value.trim().to_owned();
-                }
-            }
-            Event::End(e) if e.name().as_ref() == "way" => {
-                if let Some(id) = way.take() {
-                    if building {
-                        if let Some(label) = labels[..2].iter().find(|s| !s.is_empty()) {
-                            buildings.insert(id as u64, label.clone());
-                        }
-                    }
-                    if let Some(label) = labels.iter().find(|label| !label.is_empty()) {
-                        names.insert(id, label.clone());
-                    }
-                }
-            }
-            Event::Eof => break,
-            _ => {}
+    let map = crate::osm::read_xml(source).map_err(|e| e.to_string())?;
+    Ok(osm_labels(&map))
+}
+
+fn osm_labels(map: &crate::osm::OSMMap) -> OsmLabels {
+    use geo::{Area, BoundingRect, Intersects};
+    let name = |e: &crate::osm::OSMElement| {
+        [e.tag("name:en"), e.tag("name")]
+            .into_iter()
+            .map(str::trim)
+            .find(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_owned()
+    };
+    let mut labels = OsmLabels {
+        streets: HashMap::new(),
+        buildings: HashMap::new(),
+        storefronts: Vec::new(),
+    };
+    let mut footprints = Vec::new();
+    for way in map.ways.values() {
+        let label = name(way);
+        let street = if label.is_empty() {
+            way.tag("ref").trim()
+        } else {
+            &label
+        };
+        if !street.is_empty() {
+            labels.streets.insert(way.id, street.to_owned());
         }
-        buffer.clear();
+        if matches!(way.tag("building"), "" | "no") {
+            continue;
+        }
+        if !label.is_empty() {
+            labels.buildings.insert(way.id as u64, label);
+        }
+        if way.nodes.len() < 4 || way.nodes.first() != way.nodes.last() {
+            continue;
+        }
+        let points: Option<Vec<_>> = way
+            .nodes
+            .iter()
+            .map(|id| {
+                map.nodes
+                    .get(id)?
+                    .coord
+                    .map(|p| crate::geometry::XZ { x: p.lon, z: p.lat })
+            })
+            .collect();
+        if let Some(points) = points {
+            let polygon = crate::geometry::polygon(&points);
+            if let Some(bounds) = polygon.bounding_rect() {
+                footprints.push((way.id as u64, polygon, bounds));
+            }
+        }
     }
-    Ok(OsmLabels {
-        streets: names,
-        buildings,
-    })
+    let index = rstar::RTree::bulk_load(
+        footprints
+            .iter()
+            .enumerate()
+            .map(|(i, (_, _, bounds))| {
+                rstar::primitives::GeomWithData::new(
+                    rstar::primitives::Rectangle::from_corners(
+                        [bounds.min().x, bounds.min().y],
+                        [bounds.max().x, bounds.max().y],
+                    ),
+                    i,
+                )
+            })
+            .collect(),
+    );
+    for node in map.nodes.values() {
+        // Named outdoor features and transport stops are not building tenants.
+        let business = ["shop", "office", "craft"]
+            .iter()
+            .any(|key| !matches!(node.tag(key), "" | "no" | "vacant"))
+            || matches!(
+                node.tag("amenity"),
+                "bank"
+                    | "bar"
+                    | "cafe"
+                    | "restaurant"
+                    | "fast_food"
+                    | "ice_cream"
+                    | "pub"
+                    | "pharmacy"
+                    | "clinic"
+                    | "dentist"
+                    | "doctors"
+                    | "veterinary"
+            )
+            || node.tag("tourism") == "gallery"
+            || !matches!(node.tag("healthcare"), "" | "no");
+        let label = name(node);
+        if !business || label.is_empty() {
+            continue;
+        }
+        let Some(p) = node.coord else {
+            continue;
+        };
+        let point = geo::Point::new(p.lon, p.lat);
+        let envelope = rstar::AABB::from_point([p.lon, p.lat]);
+        let owner = index
+            .locate_in_envelope_intersecting(&envelope)
+            .map(|entry| &footprints[entry.data])
+            .filter(|(_, polygon, _)| polygon.intersects(&point))
+            .min_by(|a, b| {
+                a.1.unsigned_area()
+                    .total_cmp(&b.1.unsigned_area())
+                    .then(a.0.cmp(&b.0))
+            });
+        if let Some((id, _, _)) = owner {
+            labels.storefronts.push((*id, label));
+        }
+    }
+    labels.storefronts.sort();
+    labels.storefronts.dedup();
+    labels
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn business_nodes_share_buildings_without_losing_names_or_label_precedence() {
+        let source = r#"<osm>
+<node id="1" lat="0" lon="0"/><node id="2" lat="0" lon="1"/>
+<node id="3" lat="1" lon="1"/><node id="4" lat="1" lon="0"/>
+<node id="5" lat="0.2" lon="0.2"><tag k="shop" v="clothes"/><tag k="name" v="Orchestra"/></node>
+<node id="6" lat="0.8" lon="0.2"><tag k="amenity" v="ice_cream"/><tag k="name" v="Local"/><tag k="name:en" v="Pahit &amp; Ice"/></node>
+<node id="7" lat="0.8" lon="0.8"><tag k="highway" v="bus_stop"/><tag k="name" v="Bus stop"/></node>
+<node id="8" lat="2" lon="2"><tag k="shop" v="electronics"/><tag k="name" v="Outside"/></node>
+<node id="9" lat="0.4" lon="0.2"><tag k="shop" v="clothes"/><tag k="name" v="Orchestra"/></node>
+<way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="1"/>
+<tag k="building" v="yes"/><tag k="name" v="Shopping centre"/></way>
+<way id="11"><nd ref="1"/><nd ref="2"/><tag k="highway" v="primary"/><tag k="name" v="Local road"/><tag k="name:en" v="28th October"/></way>
+</osm>"#;
+        let labels = read_osm_labels(source.as_bytes()).unwrap();
+        assert_eq!(labels.buildings[&10], "Shopping centre");
+        assert_eq!(labels.streets[&11], "28th October");
+        assert_eq!(
+            labels.storefronts,
+            vec![(10, "Orchestra".into()), (10, "Pahit & Ice".into())]
+        );
+        let stored = crate::location::Labels {
+            streets: labels.streets.into_iter().collect(),
+            buildings: labels.buildings.into_iter().collect(),
+            storefronts: labels.storefronts,
+        };
+        let bytes = serde_json::to_vec(&stored).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<crate::location::Labels>(&bytes).unwrap(),
+            stored
+        );
+        let legacy: crate::location::Labels =
+            serde_json::from_str(r#"{"streets":[],"buildings":[]}"#).unwrap();
+        assert!(legacy.storefronts.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires the downloaded Engomi OSM extract; exports labels to /tmp/carslop-engomi-labels.json"]
+    fn downloaded_engomi_businesses_have_storefronts() {
+        let labels = crate::source_location::read_legacy_labels(std::path::Path::new(
+            "src-locations/relation-17716182",
+        ))
+        .unwrap();
+        for (id, expected) in [
+            (1019204039, "Stephanis Electronics"),
+            (1019204039, "EuroBank"),
+            (1019204039, "Cytashop"),
+            (1019204034, "Orchestra"),
+            (1019204038, "Pahit Ice"),
+            (1019204038, "Εν ελλαδι"),
+        ] {
+            assert!(
+                labels.storefronts.contains(&(id, expected.into())),
+                "missing {expected} on {id}"
+            );
+        }
+        for expected in ["Art Works", "Dr Xristakis Xristodoulou"] {
+            assert!(
+                labels.storefronts.iter().any(|(_, name)| name == expected),
+                "missing {expected}"
+            );
+        }
+        eprintln!(
+            "{} named buildings; {} business storefronts",
+            labels.buildings.len(),
+            labels.storefronts.len()
+        );
+        std::fs::write(
+            std::env::temp_dir().join("carslop-engomi-labels.json"),
+            serde_json::to_vec(&labels).unwrap(),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn repeated_light_barrier_contacts_preserve_sliding_speed() {

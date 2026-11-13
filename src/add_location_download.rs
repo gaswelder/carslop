@@ -57,7 +57,7 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
         &options,
     )?;
 
-    // Parse the boundary.
+    // Parse and validate the boundary.
     println!("parsing the boundary");
     let boundary_map = osm::read(&download_dir.join(BOUNDARY_FILE))?;
     let name = osm::import_name(
@@ -68,17 +68,11 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
             .ok_or_else(|| invalid("requested relation missing from boundary response"))?,
     );
     let boundary = boundary::resolve_boundary(&boundary_map, relation)?;
-    println!(
-        "read the boundary {}: {} polygons",
-        relation,
-        boundary.geometry.0.len()
-    );
-
-    // Check boundary size.
     let (width, height) = boundary.size();
     if width > 80000. || height > 80000. {
         return Err(invalid("the boundary exceeds compiler's 80 km limit"));
     }
+
     let imagery_blocks = imagery_blocks(&boundary, MAX_IMAGERY_BLOCKS)?;
 
     // Persist the index alongside the sources so resuming selects the same extract.

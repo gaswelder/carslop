@@ -703,6 +703,57 @@ impl crate::world::TriangleUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_building_storefronts_load_and_render_separate_panels() {
+        let directory = tempfile::tempdir().unwrap();
+        let asset = crate::test_support::stored_location(directory.path(), true);
+        let labels = crate::location::Labels {
+            streets: Vec::new(),
+            buildings: vec![(1, "Centre".into())],
+            storefronts: vec![(1, "Centre".into()), (1, "Shop".into()), (1, "Cafe".into())],
+        };
+        std::fs::write(
+            directory.path().join("labels.json"),
+            serde_json::to_vec(&labels).unwrap(),
+        )
+        .unwrap();
+        let city = crate::world::Location::load(&asset).unwrap();
+        assert_eq!(city.storefront_names(1).len(), 3);
+        let mut builder = Builder::default();
+        storefront_signs(&mut builder, &city);
+        assert!(builder
+            .vertices
+            .iter()
+            .all(|v| v.position.iter().all(|n| n.is_finite())));
+        let panels: Vec<_> = builder
+            .vertices
+            .iter()
+            .filter(|v| v.color == [0.035, 0.09, 0.10])
+            .collect();
+        assert_eq!(panels.len(), 18, "each business needs its own panel");
+        let bounds: Vec<_> = panels
+            .chunks_exact(6)
+            .map(|vertices| {
+                [0, 1, 2].map(|axis| {
+                    vertices
+                        .iter()
+                        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                            (lo.min(v.position[axis]), hi.max(v.position[axis]))
+                        })
+                })
+            })
+            .collect();
+        for (i, a) in bounds.iter().enumerate() {
+            for b in &bounds[i + 1..] {
+                assert!(
+                    (0..3).any(|axis| a[axis].1 < b[axis].0 || b[axis].1 < a[axis].0),
+                    "storefront panels overlap"
+                );
+            }
+        }
+    }
+
     fn small_city() -> Location {
         crate::test_support::parse_world(
             "CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
@@ -840,11 +891,8 @@ mod tests {
 /// Runtime signs also work with existing baked city archives.
 pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
     for building in city.buildings() {
-        let Some(name) = city.building_name(building.id) else {
-            continue;
-        };
-        let label: Vec<_> = name.to_uppercase().chars().take(80).collect();
-        if label.is_empty() {
+        let names = city.storefront_names(building.id);
+        if names.is_empty() {
             continue;
         }
         // Put the shopfront on the wall closest to the street network.
@@ -869,7 +917,28 @@ pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
         let Some((_, a, c)) = edge else {
             continue;
         };
-        storefront_sign(b, &label, [a, c], building.base_y, building.height_meters);
+        // Keep narrow frontages readable by stacking tenants in additional rows.
+        let length = (c.x - a.x).hypot(c.z - a.z);
+        let columns = names.len().min((length / 2.0).floor().max(1.0) as usize);
+        let rows = names.len().div_ceil(columns);
+        let height = building.height_meters / rows as f32;
+        for (i, name) in names.iter().enumerate() {
+            let label: Vec<_> = name.to_uppercase().chars().take(80).collect();
+            let point = |t: f32| crate::geometry::XZ {
+                x: a.x + (c.x - a.x) * t,
+                z: a.z + (c.z - a.z) * t,
+            };
+            let column = i % columns;
+            let start = point(column as f32 / columns as f32);
+            let end = point((column + 1) as f32 / columns as f32);
+            storefront_sign(
+                b,
+                &label,
+                [start, end],
+                building.base_y + (i / columns) as f32 * height,
+                height,
+            );
+        }
     }
 }
 
@@ -890,7 +959,7 @@ fn storefront_sign(
     let width = lines.iter().map(Vec::len).max().unwrap_or(0) as f32 * 6.0 * pixel;
     let left = (length - width) * 0.5;
     let panel_height = lines.len() as f32 * 9.0 * pixel;
-    let top = base_y + (panel_height + 1.0).min(height - 0.3);
+    let top = base_y + (panel_height + 1.0).min(height - (height * 0.1).min(0.3));
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
         let point = |x: f32, y: f32| crate::geometry::XYZ {
             x: c.x + (a.x - c.x) * x / length + normal.x * depth,
@@ -967,6 +1036,6 @@ fn storefront_layout(label: &[char], length: f32, height: f32) -> (Vec<Vec<char>
     let widest = lines.iter().map(Vec::len).max().unwrap_or(1) as f32;
     let pixel = 0.25_f32
         .min((length - 0.6) / (widest * 6.0 + 2.0))
-        .min((height - 0.6).min(3.8) / (lines.len().max(1) as f32 * 9.0));
+        .min((height - 0.6).max(height * 0.5).min(3.8) / (lines.len().max(1) as f32 * 9.0));
     (lines, pixel)
 }

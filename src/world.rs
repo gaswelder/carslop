@@ -38,6 +38,7 @@ pub struct Location {
     street_names: HashMap<i64, String>,
     /// Building labels keyed by source building ID.
     building_names: HashMap<u64, String>,
+    storefront_names: HashMap<u64, Vec<String>>,
 }
 
 /// Regular terrain grid whose cells are triangulated for consistent height and contact queries.
@@ -270,6 +271,7 @@ impl Location {
             ground: crate::landscape::GroundCover::new(Vec::new(), Vec::new()),
             street_names: HashMap::new(),
             building_names: HashMap::new(),
+            storefront_names: HashMap::new(),
         }
     }
 }
@@ -313,6 +315,22 @@ impl Location {
     }
     pub fn building_name(&self, id: u64) -> Option<&str> {
         self.building_names.get(&id).map(String::as_str)
+    }
+
+    pub fn storefront_names(&self, id: u64) -> Vec<&str> {
+        let mut names: Vec<_> = self
+            .storefront_names
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        if let Some(name) = self.building_name(id) {
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                names.insert(0, name);
+            }
+        }
+        names
     }
 
     pub fn terrain_bounds(&self) -> BoundingBoxXZ<f32> {

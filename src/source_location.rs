@@ -102,7 +102,11 @@ pub fn read_legacy_labels(
     let mut buildings: Vec<_> = labels.buildings.into_iter().collect();
     streets.sort();
     buildings.sort();
-    Ok(crate::location::Labels { streets, buildings })
+    Ok(crate::location::Labels {
+        streets,
+        buildings,
+        storefronts: labels.storefronts,
+    })
 }
 
 /// Build-stage adapter: reduce source tags to playable labels on every rebuild.
