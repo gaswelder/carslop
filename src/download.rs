@@ -43,7 +43,7 @@ pub fn download(
     {
         return Ok(());
     }
-    println!("Downloading {} from {url}", path.display());
+    println!("Downloading {url}");
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

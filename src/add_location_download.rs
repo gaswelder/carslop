@@ -49,7 +49,6 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
         .into();
 
     // Download the location boundary.
-    println!("downloading the requested boundary");
     let options = download::DownloadOptions::default();
     download::download(
         &agent,
@@ -89,7 +88,6 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
     let regional_osm_url = index.covering_extract(&boundary)?;
 
     // Download the region map.
-    println!("downloading the region map");
     download::download(
         &agent,
         regional_osm_url,
@@ -106,7 +104,6 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
 
     // Download relevant Mapzen/Skadi HGT tiles.
     let height_tiles = elevation_tiles(boundary.bbox());
-    println!("downloading elevation tiles");
     for tile in &height_tiles {
         download::download(
             &agent,
