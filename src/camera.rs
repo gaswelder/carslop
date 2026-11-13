@@ -1,7 +1,7 @@
 //! Render-only chase-camera tuning. Never writes vehicle state.
 
 use crate::geometry::{XYZ, XZ};
-use crate::{track, vehicle::Vehicle};
+use crate::{phys_car::Vehicle, track};
 use std::{
     f32::consts::{PI, TAU},
     time::Duration,
@@ -242,7 +242,7 @@ mod tests {
         crate::test_support::vehicle(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
         )
     }
 
@@ -264,7 +264,7 @@ mod tests {
         let mut scenic = Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
             track.clone(),
         );
         scenic.speed = 30.0;

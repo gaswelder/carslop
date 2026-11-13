@@ -3,7 +3,7 @@
 use crate::geometry::{XYZ, XZ};
 #[cfg(test)]
 use crate::track;
-use crate::{scene::Vertex, vehicle::Vehicle};
+use crate::{phys_car::Vehicle, scene::Vertex};
 use std::{collections::VecDeque, time::Duration};
 
 const MAX_MARKS: usize = 2048;
@@ -42,7 +42,7 @@ impl SkidMarks {
             self.break_trail(index);
             return;
         }
-        let centers = car.model.wheel_centers();
+        let centers = car.spec.design.mounts;
         let contacts: [(XYZ, bool); 2] = [centers[0], centers[1]].map(|p| {
             let (s, c) = car.heading.sin_cos();
             let x = car.position.x + p.x * c + p.z * s;
@@ -147,9 +147,9 @@ impl SkidMarks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cars::CarModel;
+    use crate::asset_car;
 
-    fn sliding(model: CarModel, distance: f32) -> Vehicle {
+    fn sliding(model: std::sync::Arc<asset_car::CarSpec>, distance: f32) -> Vehicle {
         let road = track::LocationId::Compact
             .try_track()
             .unwrap()
@@ -162,15 +162,15 @@ mod tests {
 
     #[test]
     fn trails_never_bridge_recovery_or_grip_changes() {
-        let model = crate::cars::CarModel::TestFixture(0);
+        let model = crate::test_support::car();
         let mut marks = SkidMarks::default();
-        marks.record(0, &sliding(model, 50.0));
-        marks.record(0, &sliding(model, 100.0));
+        marks.record(0, &sliding(model.clone(), 50.0));
+        marks.record(0, &sliding(model.clone(), 100.0));
         assert!(marks.marks.is_empty());
         marks.break_trail(0);
-        marks.record(0, &sliding(model, 100.5));
+        marks.record(0, &sliding(model.clone(), 100.5));
         assert!(marks.marks.is_empty());
-        let mut car = sliding(model, 101.0);
+        let mut car = sliding(model.clone(), 101.0);
         car.tire_scrub = 0.0;
         marks.record(0, &car);
         marks.record(0, &sliding(model, 101.5));
@@ -179,14 +179,14 @@ mod tests {
 
     #[test]
     fn trail_storage_is_bounded_and_stationary_cars_leave_nothing() {
-        let model = crate::cars::CarModel::TestFixture(0);
+        let model = crate::test_support::car();
         let mut marks = SkidMarks::default();
         for _ in 0..100 {
-            marks.record(0, &sliding(model, 50.0));
+            marks.record(0, &sliding(model.clone(), 50.0));
         }
         assert!(marks.marks.is_empty());
         for i in 0..3000 {
-            marks.record(0, &sliding(model, 50.0 + i as f32 * 0.25));
+            marks.record(0, &sliding(model.clone(), 50.0 + i as f32 * 0.25));
         }
         assert!(!marks.marks.is_empty());
         assert!(marks.marks.len() <= MAX_MARKS);

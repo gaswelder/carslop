@@ -7,7 +7,7 @@ use std::{io, path::Path};
 
 const PARTS: [&str; 5] = ["body", "wheel_rl", "wheel_rr", "wheel_fl", "wheel_fr"];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Design {
     pub body: Vec<Vertex>,
     pub wheels: [Vec<Vertex>; 4],

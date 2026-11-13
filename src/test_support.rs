@@ -1,11 +1,11 @@
 //! Controlled inputs for module tests. No installed car definitions or assets are read.
-use crate::cars::{CarSpec, EngineVoice, Gearbox};
+use crate::asset_car;
 use crate::geometry::XYZ;
 use std::sync::{Arc, OnceLock};
 
-pub fn audio_voice() -> &'static EngineVoice {
-    static VOICE: OnceLock<EngineVoice> = OnceLock::new();
-    VOICE.get_or_init(|| EngineVoice {
+pub fn audio_voice() -> &'static asset_car::EngineVoice {
+    static VOICE: OnceLock<asset_car::EngineVoice> = OnceLock::new();
+    VOICE.get_or_init(|| asset_car::EngineVoice {
         harmonics: vec![[1.0, 0.6], [2.0, 0.25], [3.0, 0.15]],
         gain: 2.0,
         coast_gain: 0.4,
@@ -15,8 +15,8 @@ pub fn audio_voice() -> &'static EngineVoice {
     })
 }
 
-pub fn car_spec() -> &'static CarSpec {
-    static SPEC: OnceLock<CarSpec> = OnceLock::new();
+pub fn car_spec() -> &'static asset_car::CarSpec {
+    static SPEC: OnceLock<asset_car::CarSpec> = OnceLock::new();
     SPEC.get_or_init(|| {
         let vertex = |position| crate::scene::Vertex {
             position,
@@ -62,10 +62,10 @@ pub fn car_spec() -> &'static CarSpec {
             wheel_radii: [0.32; 4],
         });
         let frontal_area_m2 = design.frontal_area_m2();
-        CarSpec {
+        asset_car::CarSpec {
             design,
-            name: "TEST VEHICLE",
-            mass: 1200.0,
+            name: "TEST VEHICLE".into(),
+            weight_kg: 1200.0,
             top_speed: 50.0,
             brake_force: 22000.0,
             tire_friction_coefficient: 1.2,
@@ -80,18 +80,35 @@ pub fn car_spec() -> &'static CarSpec {
             brake_bias: 0.65,
             corner_stiffness: [70000.0; 2],
             engine_max_torque_nm: 180.0,
-            engine_torque_curve: vec![(0.0, 0.6), (3500.0, 1.0), (6500.0, 0.9), (33500.0, 0.0)],
+            engine_torque_curve: vec![
+                asset_car::TorquePoint {
+                    rpm: 0.0,
+                    torque: 0.6,
+                },
+                asset_car::TorquePoint {
+                    rpm: 3500.0,
+                    torque: 1.0,
+                },
+                asset_car::TorquePoint {
+                    rpm: 6500.0,
+                    torque: 0.9,
+                },
+                asset_car::TorquePoint {
+                    rpm: 33500.0,
+                    torque: 0.0,
+                },
+            ],
             redline_rpm: 6500.0,
             suspension_hz: 1.7,
-            gearbox: Gearbox {
-                ratios: &[3.0, 2.0, 1.4, 1.0, 0.8],
+            gearbox: asset_car::Gearbox {
+                ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
                 rolling_radius: 0.32,
                 reverse_ratio: 3.0,
                 upshift_rpm: 5500.0,
                 downshift_rpm: 2200.0,
             },
-            engine_power_watts: 120.0 * crate::cars::WATTS_PER_HP,
+            engine_power_watts: 120.0 * crate::asset_car::WATTS_PER_HP,
             drag_coefficient: 0.3,
             frontal_area_m2,
             turbo: None,
@@ -112,15 +129,15 @@ pub fn track() -> Arc<crate::track::Location> {
 pub fn car_definition() -> serde_json::Value {
     let s = car_spec();
     serde_json::json!({
-        "name": s.name, "weight_kg": s.mass, "brake_force": s.brake_force,
+        "name": s.name, "weight_kg": s.weight_kg, "brake_force": s.brake_force,
         "tire_friction_coefficient": s.tire_friction_coefficient,
-        "engine_power_hp": s.engine_power_watts / crate::cars::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
+        "engine_power_hp": s.engine_power_watts / crate::asset_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / s.design.height(), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
         "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine_max_torque_nm,
-        "engine_torque_curve": s.engine_torque_curve.iter().map(|&(rpm, torque)|
-            serde_json::json!({"rpm": rpm, "torque": torque})).collect::<Vec<_>>(),
+        "engine_torque_curve": s.engine_torque_curve.iter().map(|point|
+            serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
         "suspension_hz": s.suspension_hz,
         "gearbox": {"ratios": s.gearbox.ratios, "final_drive": s.gearbox.final_drive,
             "reverse_ratio": s.gearbox.reverse_ratio, "upshift_rpm": s.gearbox.upshift_rpm,
@@ -208,21 +225,8 @@ pub fn write_car(directory: &std::path::Path) -> serde_json::Value {
     definition
 }
 
-// Index zero is the standard fixture; other entries belong to individual tests.
-static SPECS: std::sync::Mutex<Vec<&'static CarSpec>> = std::sync::Mutex::new(Vec::new());
-
-pub fn register_spec(spec: CarSpec) -> usize {
-    let mut specs = SPECS.lock().unwrap();
-    specs.push(Box::leak(Box::new(spec)));
-    specs.len()
-}
-
-pub fn fixture_spec(index: usize) -> &'static CarSpec {
-    if index == 0 {
-        car_spec()
-    } else {
-        SPECS.lock().unwrap()[index - 1]
-    }
+pub fn cars() -> Vec<std::sync::Arc<crate::asset_car::CarSpec>> {
+    crate::asset_car::load(std::path::Path::new("data/cars")).unwrap()
 }
 
 /// Tiny generated world with a real scene archive and one raw aerial tile.
@@ -284,8 +288,8 @@ pub fn generated_location(
     assets
 }
 
-pub fn car_model_with_spec(spec: CarSpec) -> crate::cars::CarModel {
-    crate::cars::CarModel::TestFixture(register_spec(spec))
+pub fn car() -> Arc<asset_car::CarSpec> {
+    Arc::new(car_spec().clone())
 }
 
 pub fn scenic_id() -> crate::track::LocationId {
@@ -321,9 +325,9 @@ pub fn angle(value: f32) -> f32 {
 pub fn vehicle(
     position: XYZ,
     heading: f32,
-    model: crate::cars::CarModel,
-) -> crate::vehicle::Vehicle {
-    crate::vehicle::Vehicle::on_track(
+    model: std::sync::Arc<crate::asset_car::CarSpec>,
+) -> crate::phys_car::Vehicle {
+    crate::phys_car::Vehicle::on_track(
         position,
         heading,
         model,

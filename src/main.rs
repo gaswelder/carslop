@@ -3,8 +3,8 @@ mod add_location_compile;
 mod add_location_download;
 mod add_location_trees;
 mod aerial;
+mod asset_car;
 mod asset_codecs;
-mod audio;
 mod authoring;
 mod boundary;
 mod build_collision;
@@ -14,7 +14,6 @@ mod build_scene;
 mod build_surfaces;
 mod build_terrain;
 mod camera;
-mod cars;
 mod chunks;
 mod city;
 mod city_assets;
@@ -35,28 +34,29 @@ mod loading;
 mod location;
 mod osm;
 mod particles;
-mod powertrain;
+mod phys_powertrain;
 mod prefetch;
 mod scene;
 mod scene_archive;
 mod shadows;
+mod sound_car;
 mod source_location;
 mod sources;
 mod src_files;
 mod street_surface;
 #[cfg(test)]
 use world::test_support;
+mod phys_car;
 mod track;
 mod traffic;
 mod tree_obstacles;
 mod tree_preview;
-mod vehicle;
 mod vehicle_location;
 mod world;
 
-use cars::CarModel;
 use error::invalid;
 use log::{info, warn};
+use phys_car::{Controls, Vehicle};
 use sdl3::{
     event::{Event, WindowEvent},
     keyboard::Keycode,
@@ -68,7 +68,6 @@ use std::{
     time::{Duration, Instant},
 };
 use track::{Location, LocationId};
-use vehicle::{Controls, Vehicle};
 
 const HELP: &str = "Arguments: <command>
 Commands:
@@ -102,11 +101,14 @@ struct Session {
 
 impl Session {
     #[cfg(test)]
-    fn on_track(model: CarModel, id: LocationId) -> Self {
+    fn on_track(model: std::sync::Arc<asset_car::CarSpec>, id: LocationId) -> Self {
         Self::on_world(model, id.try_track().unwrap())
     }
 
-    fn on_world(model: CarModel, track: std::sync::Arc<Location>) -> Self {
+    fn on_world(
+        model: std::sync::Arc<asset_car::CarSpec>,
+        track: std::sync::Arc<Location>,
+    ) -> Self {
         let start = track.spawn();
         Self {
             vehicle: {
@@ -129,10 +131,10 @@ impl Session {
     }
 
     fn restart(&mut self) {
-        *self = Self::on_world(self.vehicle.model, self.vehicle.track.clone());
+        *self = Self::on_world(self.vehicle.spec.clone(), self.vehicle.track.clone());
     }
 
-    fn select_car(&mut self, model: CarModel) {
+    fn select_car(&mut self, model: std::sync::Arc<asset_car::CarSpec>) {
         if self.state != GameState::Menu {
             return;
         }
@@ -140,11 +142,6 @@ impl Session {
         self.state = GameState::Menu;
     }
 
-    fn cycle_car(&mut self, direction: i32) {
-        let next = (self.vehicle.model.index() as i32 + direction)
-            .rem_euclid(cars::ALL.len() as i32) as usize;
-        self.select_car(cars::ALL[next]);
-    }
     fn update_feedback(&mut self) {
         self.skids.advance(TICK);
         self.skids.record(0, &self.vehicle);
@@ -180,7 +177,7 @@ impl Session {
 
 struct App {
     // Audio and GL resources are dropped before their owning SDL context.
-    audio: Option<audio::EngineAudio>,
+    audio: Option<sound_car::EngineAudio>,
     meshes: HashMap<LocationId, gl::Mesh>,
     locations_cache: track::LocationCache,
     skid_renderer: gl::SkidRenderer,
@@ -192,6 +189,8 @@ struct App {
     window: Window,
     sdl_context: sdl3::Sdl,
     events: sdl3::EventPump,
+    cars: Vec<std::sync::Arc<asset_car::CarSpec>>,
+    selected_car: usize,
     session: Session,
     chase: camera::ChaseCamera,
     preview_angle: f32,
@@ -220,6 +219,8 @@ impl App {
     }
 
     fn with_location(city: bool) -> Self {
+        let cars = asset_car::load(std::path::Path::new("data/cars")).expect("failed to load cars");
+        assert!(!cars.is_empty(), "No valid cars in data/cars");
         let sdl_context = sdl3::init().expect("SDL init failed");
         let video = sdl_context.video().expect("failed to get video subsystem");
         let gl_attr = video.gl_attr();
@@ -284,7 +285,7 @@ impl App {
             .filter(|entry| entry.track.asset_path().is_none())
             .map_or(LocationId::Compact, |entry| entry.track.clone());
         let mut session = Session::on_world(
-            CarModel::first(),
+            cars[0].clone(),
             preview.try_track().expect("menu preview world"),
         );
         session.state = GameState::Menu;
@@ -298,7 +299,7 @@ impl App {
         let particle_renderer =
             gl::ParticleRenderer::new().expect("failed to create particle renderer");
         let hud = hud::Hud::new();
-        let audio = match audio::EngineAudio::new(&sdl_context) {
+        let audio = match sound_car::EngineAudio::new(&sdl_context) {
             Ok(audio) => Some(audio),
             Err(error) => {
                 warn!("Audio unavailable; continuing silently: {error}");
@@ -319,6 +320,8 @@ impl App {
             particle_renderer,
             hud,
             audio,
+            cars,
+            selected_car: 0,
             session,
             chase,
             preview_angle: 0.0,
@@ -356,7 +359,7 @@ impl App {
         let candidate_mesh = if self.meshes.contains_key(&world.id) {
             None
         } else {
-            Some(gl::Mesh::new(&world)?)
+            Some(gl::Mesh::new(&world, &self.cars)?)
         };
         if let Some(mesh) = candidate_mesh {
             self.meshes.insert(world.id.clone(), mesh);
@@ -365,7 +368,7 @@ impl App {
         self.meshes
             .retain(|key, _| key.asset_path().is_none() || key == &world.id);
         self.locations_cache.install(world.clone());
-        self.session = Session::on_world(self.session.vehicle.model, world);
+        self.session = Session::on_world(self.session.vehicle.spec.clone(), world);
         self.restart();
         Ok(())
     }
@@ -384,7 +387,7 @@ impl App {
             }
             self.meshes.insert(
                 track.id.clone(),
-                gl::Mesh::new(track).expect("failed to create route mesh"),
+                gl::Mesh::new(track, &self.cars).expect("failed to create route mesh"),
             );
         }
     }
@@ -485,6 +488,21 @@ impl App {
         Ok(())
     }
 
+    fn select_car(&mut self, index: usize) {
+        if self.session.state == GameState::Menu {
+            if let Some(spec) = self.cars.get(index) {
+                self.selected_car = index;
+                self.session.select_car(spec.clone());
+            }
+        }
+    }
+
+    fn cycle_car(&mut self, direction: i32) {
+        let next =
+            (self.selected_car as i32 + direction).rem_euclid(self.cars.len() as i32) as usize;
+        self.select_car(next);
+    }
+
     fn menu_action(&mut self, action: hud::MenuAction) {
         if self.session.state != GameState::Menu {
             return;
@@ -504,18 +522,15 @@ impl App {
                 self.menu_focus = 0;
             }
             hud::MenuAction::CarPage(direction) => {
-                let current = cars::ALL
-                    .into_iter()
-                    .position(|car| car == self.session.vehicle.model)
-                    .unwrap_or(0);
-                let pages = cars::ALL.len().div_ceil(3);
-                let page = (current as i32 / 3 + direction).rem_euclid(pages as i32) as usize;
-                self.session.select_car(cars::ALL[page * 3]);
+                let pages = self.cars.len().div_ceil(3);
+                let page =
+                    (self.selected_car as i32 / 3 + direction).rem_euclid(pages as i32) as usize;
+                self.select_car(page * 3);
                 self.menu_focus = 1;
             }
-            hud::MenuAction::Car(car) => {
+            hud::MenuAction::Car(index) => {
                 self.menu_focus = 1;
-                self.session.select_car(car);
+                self.select_car(index);
             }
             hud::MenuAction::Start => {
                 self.start_selected();
@@ -549,7 +564,8 @@ impl App {
                 point[1],
                 self.selected_location,
                 self.locations.len(),
-                self.session.vehicle.model,
+                self.selected_car,
+                self.cars.len(),
             ) {
                 self.menu_action(action);
             }
@@ -581,7 +597,7 @@ impl App {
                                 .rem_euclid(self.locations.len() as i32)
                                 as usize;
                         }
-                        1 => self.session.cycle_car(direction),
+                        1 => self.cycle_car(direction),
                         _ if key == Keycode::Space => {
                             self.start_selected();
                             return;
@@ -708,10 +724,8 @@ impl App {
                     Keycode::F2 => 1,
                     _ => 2,
                 };
-                if let Some(model) = cars::ALL.into_iter().nth(model) {
-                    self.session.select_car(model);
-                    self.snap_camera();
-                }
+                self.select_car(model);
+                self.snap_camera();
             }
             Keycode::F6 if self.session.state == GameState::Menu => {
                 self.selected_location = if self.selected_location == 0 { 1 } else { 0 };
@@ -762,7 +776,7 @@ impl App {
         let _ = self.window.set_title(&format!(
             "{} | {} | FREE DRIVE",
             self.session.track().display_name,
-            self.session.vehicle.model.spec().name,
+            self.session.vehicle.spec.name,
         ));
     }
 
@@ -801,8 +815,14 @@ impl App {
         }
         for &(vehicle, tint) in &vehicles {
             let model = gl::vehicle_body_matrix(vehicle);
-            self.mesh()
-                .draw(self.scene_program, &camera, &model, tint, vehicle);
+            self.mesh().draw(
+                self.scene_program,
+                &camera,
+                &model,
+                tint,
+                vehicle,
+                self.selected_car,
+            );
         }
         // Transparent puffs follow all opaque world/car draws and precede the HUD.
         if !in_menu {
@@ -821,7 +841,8 @@ impl App {
                 hud::MainMenu {
                     locations: &self.locations,
                     selected: self.selected_location,
-                    car: s.vehicle.model,
+                    car: self.selected_car,
+                    cars: &self.cars,
                     focus: self.menu_focus,
                 },
             );
@@ -835,7 +856,7 @@ impl App {
                 car.heading,
                 hud::Gauges {
                     rpm: car.engine_rpm,
-                    redline_rpm: car.model.spec().redline_rpm,
+                    redline_rpm: car.spec.redline_rpm,
                     speed_kmh: car.speed.abs() * 3.6,
                     gear: car.gear,
                 },

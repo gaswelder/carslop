@@ -1,4 +1,4 @@
-use crate::audio::SAMPLE_RATE;
+use crate::sound_car::SAMPLE_RATE;
 use std::{
     io,
     io::Read,

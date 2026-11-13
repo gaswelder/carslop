@@ -1,4 +1,4 @@
-use crate::cars::EngineVoice;
+use crate::asset_car;
 use crate::geometry::{XYZ, XZ};
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
@@ -19,7 +19,7 @@ struct Voice<'a> {
     frequency: f32,
     load: f32,
     scrub: f32,
-    tuning: &'a EngineVoice,
+    tuning: &'a asset_car::EngineVoice,
     enabled: bool,
 }
 
@@ -309,7 +309,7 @@ impl EngineAudio {
 
     pub fn update(
         &mut self,
-        car: &crate::vehicle::Vehicle,
+        car: &crate::phys_car::Vehicle,
         listener: crate::camera::Pose,
         throttle: bool,
         active: bool,
@@ -338,7 +338,7 @@ impl EngineAudio {
                 car.engine_load
             },
             scrub: car.tire_scrub,
-            tuning: &car.model.spec().audio,
+            tuning: &car.spec.audio,
             enabled,
         };
         let placement = SpatialAudio::placement(car.position, listener);
@@ -363,7 +363,7 @@ fn output_sample(driving: f32) -> f32 {
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
-    rpm.max(crate::vehicle::IDLE_RPM) / 30.0
+    rpm.max(crate::phys_car::IDLE_RPM) / 30.0
 }
 
 #[cfg(test)]

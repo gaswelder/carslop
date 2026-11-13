@@ -1,9 +1,9 @@
 //! Small deterministic tire puffs, advanced only by the fixed simulation clock.
 
 use crate::geometry::{XYZ, XZ};
+use crate::phys_car::Vehicle;
 #[cfg(test)]
 use crate::track;
-use crate::vehicle::Vehicle;
 use std::time::Duration;
 
 const MAX_PARTICLES: usize = 160;
@@ -94,7 +94,7 @@ impl TireParticles {
             emitter.credit = [0.0; 2];
             return;
         }
-        let centers = car.model.wheel_centers();
+        let centers = car.spec.design.mounts;
         let (s, c) = car.heading.sin_cos();
         for (wheel, center) in centers[..2].iter().enumerate() {
             let x = car.position.x + center.x * c + center.z * s;
@@ -209,7 +209,7 @@ mod tests {
         let mut car = crate::test_support::vehicle(
             road.vehicle_position(offset),
             road.heading(),
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
         );
         car.velocity = road.tangent.map(|v| v * 10.0);
         car.speed = 10.0;

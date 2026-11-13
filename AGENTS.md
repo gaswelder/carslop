@@ -1,5 +1,8 @@
 # Project conventions
 
+Use structs with named fields instead of tuples for data whose members have
+distinct meanings.
+
 Avoid import aliases. When a member name is ambiguous, import only its namespace
 and qualify references through that namespace instead of importing individual members.
 

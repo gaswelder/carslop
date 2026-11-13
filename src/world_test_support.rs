@@ -1,6 +1,6 @@
 //! Shared world fixtures. Private world and road state stays inside its owner.
 use super::*;
-pub use crate::cars::test_support::*;
+pub use crate::asset_car::test_support::*;
 use crate::city_assets::CityAsset;
 use crate::source_location::{SourceLocation, SourceRoad};
 use std::path::Path;

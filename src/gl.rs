@@ -551,7 +551,10 @@ impl Drop for Mesh {
 }
 
 impl Mesh {
-    pub fn new(track: &crate::track::Location) -> Result<Self, String> {
+    pub fn new(
+        track: &crate::track::Location,
+        cars: &[std::sync::Arc<crate::asset_car::CarSpec>],
+    ) -> Result<Self, String> {
         let archive = if track.has_compiled_roads() {
             Some(
                 crate::scene_archive::Archive::open_for(
@@ -593,7 +596,7 @@ impl Mesh {
                 world_count: ground_vertex_count,
                 car_ranges,
                 wheel_range,
-            } = crate::scene::build(track);
+            } = crate::scene::build(track, cars);
             gl::BufferData(
                 GL_ARRAY_BUFFER,
                 (verts.len() * std::mem::size_of::<crate::scene::Vertex>()) as isize,
@@ -638,7 +641,8 @@ impl Mesh {
         camera: &Camera,
         model: &[f32; 16],
         tint: [f32; 3],
-        car: &crate::vehicle::Vehicle,
+        car: &crate::phys_car::Vehicle,
+        car_index: usize,
     ) {
         unsafe {
             gl::BindVertexArray(self.vao);
@@ -653,7 +657,7 @@ impl Mesh {
             let reverse_light = CString::new("u_reverse_light").unwrap();
             let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
             gl::Uniform1f(reverse_light, if car.gear == 0 { 1.0 } else { 0.0 });
-            let range = &self.car_ranges[car.model.index()];
+            let range = &self.car_ranges[car_index];
             gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
             gl::Uniform1f(brake_light, 0.0);
             gl::Uniform1f(reverse_light, 0.0);
@@ -665,9 +669,9 @@ impl Mesh {
                 set_scene_transform_clip(program, camera, &matrix, &clip);
                 gl::DrawArrays(
                     GL_TRIANGLES,
-                    self.wheel_range[car.model.index()][index].start,
-                    self.wheel_range[car.model.index()][index].end
-                        - self.wheel_range[car.model.index()][index].start,
+                    self.wheel_range[car_index][index].start,
+                    self.wheel_range[car_index][index].end
+                        - self.wheel_range[car_index][index].start,
                 );
             }
         }
@@ -1148,7 +1152,7 @@ pub fn chase_camera(aspect: f32, pose: crate::camera::Pose) -> Camera {
 pub fn bonnet_camera(
     aspect: f32,
     pose: crate::camera::Pose,
-    car: &crate::vehicle::Vehicle,
+    car: &crate::phys_car::Vehicle,
 ) -> Camera {
     let body = vehicle_body_matrix(car);
     camera_at_up(
@@ -1260,7 +1264,7 @@ fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_ax
 }
 
 /// Body transform shared by rendering and the bonnet camera mount.
-pub fn vehicle_body_matrix(vehicle: &crate::vehicle::Vehicle) -> [f32; 16] {
+pub fn vehicle_body_matrix(vehicle: &crate::phys_car::Vehicle) -> [f32; 16] {
     let mut body_position = vehicle.position;
     body_position.y += vehicle.curb_bump;
     body_model_matrix(
@@ -1318,16 +1322,20 @@ fn body_model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32, roll: 
 }
 
 #[cfg(test)]
-fn vehicle_wheel_matrix(car: &crate::vehicle::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
+fn vehicle_wheel_matrix(
+    car: &crate::phys_car::Vehicle,
+    body: [f32; 16],
+    index: usize,
+) -> [f32; 16] {
     multiply(body, vehicle_wheel_local_matrix(car, body, index))
 }
 
 fn vehicle_wheel_local_matrix(
-    car: &crate::vehicle::Vehicle,
+    car: &crate::phys_car::Vehicle,
     body: [f32; 16],
     index: usize,
 ) -> [f32; 16] {
-    let mut center = car.model.wheel_centers()[index];
+    let mut center = car.spec.design.mounts[index];
     let mounted: XYZ = XYZ::from_fn(|i| {
         body[i] * center.x + body[4 + i] * center.y + body[8 + i] * center.z + body[12 + i]
     });
@@ -1335,7 +1343,7 @@ fn vehicle_wheel_local_matrix(
         x: mounted.x,
         z: mounted.z,
     });
-    let radius = car.model.spec().design.wheel_radii[index];
+    let radius = car.spec.design.wheel_radii[index];
     // Bounded compression/droop keeps tires following bumps while the body
     // heaves and tilts on its springs. Airborne wheels stop at full extension.
     center.y += ((ground + radius - mounted.y) / body[5].abs().max(0.5)).clamp(-0.16, 0.14);
@@ -1525,13 +1533,13 @@ mod tests {
     #[test]
     fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
         let track = crate::test_support::track();
-        let model = crate::cars::CarModel::TestFixture(0);
+        let model = crate::test_support::car();
 
         let road = track.spawn();
-        let mut car = crate::vehicle::Vehicle::on_track(
+        let mut car = crate::phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            model,
+            model.clone(),
             track,
         );
         for speed in [-6.0, 0.0, 30.0, 45.0] {
@@ -1563,8 +1571,8 @@ mod tests {
 
     #[test]
     fn wheels_turn_about_their_axles_not_the_vehicle_origin() {
-        let car = crate::cars::CarModel::TestFixture(0);
-        for center in car.wheel_centers() {
+        let car = crate::test_support::car();
+        for center in car.design.mounts {
             let body = model_matrix(
                 crate::geometry::XYZ {
                     x: 12.0,
@@ -1609,10 +1617,10 @@ mod tests {
     fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
         let track = crate::test_support::track();
         let road = track.spawn();
-        let mut car = crate::vehicle::Vehicle::on_track(
+        let mut car = crate::phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
             track,
         );
         let mut chase = crate::camera::ChaseCamera::new(&car);
@@ -1649,10 +1657,10 @@ mod tests {
             &crate::test_support::track(),
         ));
         let road = track.at_distance(54.0);
-        let mut car = crate::vehicle::Vehicle::on_track(
+        let mut car = crate::phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
             road.heading(),
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
             track,
         );
         car.suspension_pitch = 0.0;
@@ -1672,7 +1680,7 @@ mod tests {
                 x: center.x,
                 z: center.z,
             });
-            assert!((center.y - car.model.spec().design.wheel_radii[i] - ground).abs() < 0.005);
+            assert!((center.y - car.spec.design.wheel_radii[i] - ground).abs() < 0.005);
             center.y
         });
         assert!(
@@ -1682,7 +1690,7 @@ mod tests {
         for height in [-1.0, 1.0] {
             let mut displaced = body;
             displaced[13] += height;
-            for (i, mount) in car.model.wheel_centers().into_iter().enumerate() {
+            for (i, mount) in car.spec.design.mounts.into_iter().enumerate() {
                 let nominal = transform(displaced, mount);
                 let wheel = transform(
                     vehicle_wheel_matrix(&car, displaced, i),
@@ -1837,7 +1845,7 @@ mod renderer_tests {
         assert!(
             changed > 25,
             "particle pass did not visibly blend for {:?}",
-            car.model
+            car.spec
         );
         assert!(
             changed < (WINDOW_WIDTH * WINDOW_HEIGHT / 6) as usize,
@@ -1869,8 +1877,9 @@ mod renderer_tests {
     #[ignore = "requires SDL3/OpenGL; compares rear lamp pixels with the pedal up/down"]
     fn stop_lights_renderer() {
         let app = App::new();
-        for model in cars::ALL {
-            let mut car = crate::test_support::vehicle(app.session.vehicle.position, 0.0, model);
+        for (car_index, model) in app.cars.clone().into_iter().enumerate() {
+            let mut car =
+                crate::test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -1893,8 +1902,14 @@ mod renderer_tests {
                 car.brake_lights = pressed;
                 gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
                 gl::clear_screen();
-                app.mesh()
-                    .draw(app.scene_program, &camera, &matrix, [0.1, 0.3, 0.8], &car);
+                app.mesh().draw(
+                    app.scene_program,
+                    &camera,
+                    &matrix,
+                    [0.1, 0.3, 0.8],
+                    &car,
+                    car_index,
+                );
                 let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
                 unsafe {
                     ::gl::ReadBuffer(::gl::BACK);
@@ -1940,7 +1955,7 @@ mod renderer_tests {
             ("near", [0.0, 100.0, 0.0]),
             ("far", [12000.0, 100.0, 9000.0]),
         ] {
-            let car = Vehicle::on_track((position).into(), 0.0, CarModel::first(), track.clone());
+            let car = Vehicle::on_track((position).into(), 0.0, app.cars[0].clone(), track.clone());
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
@@ -1963,6 +1978,7 @@ mod renderer_tests {
                 &gl::vehicle_body_matrix(&car),
                 [1.0, 0.18, 0.08],
                 &car,
+                0,
             );
             let path = std::env::temp_dir().join(format!("carslop-car-precision-{label}.ppm"));
             capture_frame(&path);
@@ -1986,8 +2002,9 @@ mod renderer_tests {
     #[ignore = "requires SDL3/OpenGL; verifies reverse lamps in reverse, drive and neutral"]
     fn reverse_lights_renderer() {
         let app = App::new();
-        for model in cars::ALL {
-            let mut car = crate::test_support::vehicle(app.session.vehicle.position, 0.0, model);
+        for (car_index, model) in app.cars.clone().into_iter().enumerate() {
+            let mut car =
+                crate::test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -2006,12 +2023,18 @@ mod renderer_tests {
             );
             let matrix = gl::model_matrix(p, 0.0, 0.0);
             let mut frames = Vec::new();
-            for gear in [1, 0, vehicle::NEUTRAL_GEAR] {
+            for gear in [1, 0, phys_car::NEUTRAL_GEAR] {
                 car.gear = gear;
                 gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
                 gl::clear_screen();
-                app.mesh()
-                    .draw(app.scene_program, &camera, &matrix, [0.1, 0.3, 0.8], &car);
+                app.mesh().draw(
+                    app.scene_program,
+                    &camera,
+                    &matrix,
+                    [0.1, 0.3, 0.8],
+                    &car,
+                    car_index,
+                );
                 let mut pixels = vec![0u8; (WINDOW_WIDTH * WINDOW_HEIGHT * 3) as usize];
                 unsafe {
                     ::gl::ReadBuffer(::gl::BACK);
@@ -2131,7 +2154,7 @@ mod renderer_tests {
         assert!(
             changed > 100,
             "contact shadow changed only {changed} pixels for {:?}",
-            car.model
+            car.spec
         );
         assert!(
             changed < (WINDOW_WIDTH * WINDOW_HEIGHT / 8) as usize,
@@ -2145,8 +2168,9 @@ mod renderer_tests {
     fn feedback_renderer_smoke() {
         let mut app = App::with_location(false);
         // Scenic fixtures are sampled from the route, never compact world coordinates.
-        for model in cars::ALL {
-            app.session = Session::on_track(model, crate::test_support::scenic_id());
+        for (car_index, model) in app.cars.clone().into_iter().enumerate() {
+            app.selected_car = car_index;
+            app.session = Session::on_track(model.clone(), crate::test_support::scenic_id());
             app.ensure_mesh();
             for distance in [50.0, 50.6] {
                 let road = app.session.track().at_distance(distance);
@@ -2220,11 +2244,11 @@ mod renderer_tests {
     #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
         for id in crate::test_support::location_ids() {
-            let mut s = Session::on_track(crate::cars::CarModel::TestFixture(0), id.clone());
+            let mut s = Session::on_track(crate::test_support::car(), id.clone());
             s.state = GameState::Menu;
-            for model in cars::ALL {
-                s.select_car(model);
-                assert_eq!(s.vehicle.model, model);
+            for model in crate::test_support::cars() {
+                s.select_car(model.clone());
+                assert!(std::sync::Arc::ptr_eq(&s.vehicle.spec, &model));
                 assert_eq!(s.track().id, id);
                 assert!(s.state == GameState::Menu);
                 let road = s.track().at_distance(s.track().sampling_length() * 0.5);
@@ -2232,7 +2256,7 @@ mod renderer_tests {
                 s.recoveries = 2;
                 s.restart();
                 assert_eq!(s.track().id, id);
-                assert_eq!(s.vehicle.model, model);
+                assert!(std::sync::Arc::ptr_eq(&s.vehicle.spec, &model));
                 assert_eq!(s.vehicle.position, s.track().spawn().vehicle_position(0.0));
                 assert_eq!(s.recoveries, 0);
                 assert!(s.state == GameState::Driving);
@@ -2244,7 +2268,7 @@ mod renderer_tests {
     #[test]
     fn free_recovery_uses_selected_route() {
         for id in crate::test_support::location_ids() {
-            let mut s = Session::on_track(crate::cars::CarModel::TestFixture(0), id.clone());
+            let mut s = Session::on_track(crate::test_support::car(), id.clone());
             let road = s.track().at_distance(s.track().sampling_length() * 0.5);
             s.vehicle.reset(road.vehicle_position(1.0), road.heading());
             assert!(s.recover());
@@ -2258,7 +2282,7 @@ mod renderer_tests {
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
         let mut s = Session::on_track(
-            crate::cars::CarModel::TestFixture(0),
+            crate::test_support::car(),
             crate::test_support::nicosia_id(),
         );
         let start = s.vehicle.position;
@@ -2292,12 +2316,20 @@ mod renderer_tests {
         app.capture_path = Some(std::env::temp_dir().join("carslop-menu.ppm"));
         app.render(Duration::ZERO);
         app.capture_path = None;
-        if cars::ALL.len() > 3 {
+        if app.cars.len() > 3 {
             app.menu_action(hud::MenuAction::CarPage(1));
-            assert_eq!(app.session.vehicle.model, cars::ALL[3]);
+            assert_eq!(app.selected_car, 3);
+            assert!(std::sync::Arc::ptr_eq(
+                &app.session.vehicle.spec,
+                &app.cars[3]
+            ));
             app.render(Duration::ZERO);
             app.menu_action(hud::MenuAction::CarPage(-1));
-            assert_eq!(app.session.vehicle.model, cars::ALL[0]);
+            assert_eq!(app.selected_car, 0);
+            assert!(std::sync::Arc::ptr_eq(
+                &app.session.vehicle.spec,
+                &app.cars[0]
+            ));
         }
         let city_choice = app
             .locations
@@ -2358,7 +2390,7 @@ mod renderer_tests {
         let mut cache = track::LocationCache::default();
         let first = cache.prepare_for_render(&first_id).unwrap();
         cache.install(first.clone());
-        let mut session = Session::on_world(crate::cars::CarModel::TestFixture(0), first.clone());
+        let mut session = Session::on_world(crate::test_support::car(), first.clone());
         let second = cache.prepare_for_render(&second_id).unwrap();
         cache.install(second);
         session.restart();
@@ -2368,7 +2400,7 @@ mod renderer_tests {
             first.spawn().vehicle_position(0.0)
         );
         session.state = GameState::Menu;
-        session.select_car(crate::cars::CarModel::TestFixture(0));
+        session.select_car(crate::test_support::car());
         assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
         let position = session.vehicle.position;
         std::fs::remove_file(second_assets.directory().join("scene.pack")).unwrap();

@@ -1,5 +1,5 @@
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
-use crate::{cars, track, world::Material};
+use crate::{asset_car, track, world::Material};
 use std::f32::consts::TAU;
 use std::ops::Range;
 
@@ -162,18 +162,18 @@ pub struct Geometry {
     pub wheel_range: Vec<[Range<i32>; 4]>,
 }
 
-pub fn build(track: &track::Location) -> Geometry {
+pub fn build(track: &track::Location, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
     if track.has_compiled_roads() {
         let city = track;
         let mut b = Builder::default();
         city_scene::storefront_signs(&mut b, city);
-        return finish(b);
+        return finish(b, cars);
     }
     let mut b = Builder::default();
     terrain(&mut b, track);
     road(&mut b, track);
     scenery(&mut b, track);
-    finish(b)
+    finish(b, cars)
 }
 
 pub fn city_layer_spooled(
@@ -194,27 +194,35 @@ pub fn city_layer_spooled(
     b.chunks.unwrap().finish_spooled()
 }
 
-fn finish(mut b: Builder) -> Geometry {
+fn finish(mut b: Builder, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
     let world_count = b.vertices.len();
-    let car_ranges = cars::ALL.map(|model| {
-        let start = b.vertices.len() as i32;
-        car(&mut b, model);
-        start..b.vertices.len() as i32
-    });
-    let wheel_range = cars::ALL.map(|model| {
-        let design = &model.spec().design;
-        let mut ranges: [Range<i32>; 4] = std::array::from_fn(|_| 0..0);
-        for index in 0..4 {
-            if let Some(previous) = (0..index).find(|&i| design.wheels[i] == design.wheels[index]) {
-                ranges[index] = ranges[previous].clone();
-            } else {
-                let start = b.vertices.len() as i32;
-                b.vertices.extend_from_slice(&design.wheels[index]);
-                ranges[index] = start..b.vertices.len() as i32;
+    let car_ranges = cars
+        .iter()
+        .map(|model| {
+            let start = b.vertices.len() as i32;
+            car(&mut b, model);
+            start..b.vertices.len() as i32
+        })
+        .collect();
+    let wheel_range = cars
+        .iter()
+        .map(|model| {
+            let design = &model.design;
+            let mut ranges: [Range<i32>; 4] = std::array::from_fn(|_| 0..0);
+            for index in 0..4 {
+                if let Some(previous) =
+                    (0..index).find(|&i| design.wheels[i] == design.wheels[index])
+                {
+                    ranges[index] = ranges[previous].clone();
+                } else {
+                    let start = b.vertices.len() as i32;
+                    b.vertices.extend_from_slice(&design.wheels[index]);
+                    ranges[index] = start..b.vertices.len() as i32;
+                }
             }
-        }
-        ranges
-    });
+            ranges
+        })
+        .collect();
     Geometry {
         vertices: b.vertices,
         world_count,
@@ -844,8 +852,8 @@ pub fn authored_decorations(
     [chunks.finish(), Vec::new(), Vec::new()]
 }
 
-fn car(b: &mut Builder, model: cars::CarModel) {
-    b.vertices.extend_from_slice(&model.spec().design.body);
+fn car(b: &mut Builder, model: &std::sync::Arc<asset_car::CarSpec>) {
+    b.vertices.extend_from_slice(&model.design.body);
 }
 
 impl Material {
@@ -949,7 +957,7 @@ mod tests {
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
         let route = crate::test_support::scenic_id().try_track().unwrap();
-        let geometry = build(&route);
+        let geometry = build(&route, &crate::test_support::cars());
         assert!(
             geometry.world_count > 100_000 && geometry.world_count < 1_800_000,
             "scenic geometry budget exceeded: {} world / {} total vertices",

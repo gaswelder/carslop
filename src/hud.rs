@@ -1,7 +1,7 @@
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 #[cfg(test)]
 use crate::track::LocationId;
-use crate::{cars::CarModel, track::Location};
+use crate::{asset_car, track::Location};
 use std::ffi::CString;
 
 const CHOICES_PER_PAGE: usize = 3;
@@ -21,13 +21,14 @@ pub enum MenuAction {
     Choice(usize),
     Page(i32),
     CarPage(i32),
-    Car(CarModel),
+    Car(usize),
     Start,
 }
 pub struct MainMenu<'a> {
     pub locations: &'a [crate::city_assets::MenuLocation],
     pub selected: usize,
-    pub car: CarModel,
+    pub car: usize,
+    pub cars: &'a [std::sync::Arc<asset_car::CarSpec>],
     pub focus: usize,
 }
 fn page_hit_test(x: f32, y: f32, left: f32) -> Option<i32> {
@@ -62,24 +63,18 @@ pub fn selection_menu_hit_test(
     y: f32,
     selected: usize,
     count: usize,
-    car: CarModel,
+    car: usize,
+    car_count: usize,
 ) -> Option<MenuAction> {
     if let Some(direction) = page_hit_test(x, y, 0.06) {
         return Some(MenuAction::CarPage(direction));
     }
-    let page_start = crate::cars::ALL
-        .into_iter()
-        .position(|model| model == car)
-        .unwrap_or(0)
-        / CHOICES_PER_PAGE
-        * CHOICES_PER_PAGE;
+    let page_start = car / CHOICES_PER_PAGE * CHOICES_PER_PAGE;
     for slot in 0..CHOICES_PER_PAGE {
         let r = car_box(slot);
         if x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] {
-            return crate::cars::ALL
-                .into_iter()
-                .nth(page_start + slot)
-                .map(MenuAction::Car);
+            let index = page_start + slot;
+            return (index < car_count).then_some(MenuAction::Car(index));
         }
     }
     location_menu_hit_test(x, y, selected, count)
@@ -512,7 +507,7 @@ impl Hud {
         let white = [0.9, 0.95, 1.0];
         let muted = [0.55, 0.66, 0.70];
         text(&mut v, "CHOOSE YOUR DRIVE", [-0.92, 0.89], 0.006, white);
-        let name = menu.car.spec().name;
+        let name = &menu.cars[menu.car].name;
         let size = 0.005_f32.min(1.5 / (name.chars().count().max(1) as f32 * 6.0));
         text(
             &mut v,
@@ -529,10 +524,10 @@ impl Hud {
                 [0.025, 0.05, 0.075],
             );
         }
-        let spec = menu.car.spec();
+        let spec = &menu.cars[menu.car];
         let power = format!(
             "{:.0} HP",
-            spec.engine_power_watts / crate::cars::WATTS_PER_HP
+            spec.engine_power_watts / crate::asset_car::WATTS_PER_HP
         );
         for (x, y, label, value) in [
             (-0.84, 0.66, "ENGINE POWER", power),
@@ -548,7 +543,7 @@ impl Hud {
                 "TOP SPEED",
                 format!("{:.0} KM/H", spec.top_speed * 3.6),
             ),
-            (0.54, 0.45, "WEIGHT", format!("{:.0} KG", spec.mass)),
+            (0.54, 0.45, "WEIGHT", format!("{:.0} KG", spec.weight_kg)),
         ] {
             text(&mut v, label, [x, y], 0.0027, muted);
             text(&mut v, &value, [x, y - 0.07], 0.0038, white);
@@ -583,10 +578,11 @@ impl Hud {
                 menu.focus == 0,
             );
         }
-        let selected_car = menu.car.index();
-        choice_header(&mut v, "CAR", 0.06, selected_car, crate::cars::ALL.len());
-        for (i, car) in crate::cars::ALL
-            .into_iter()
+        let selected_car = menu.car;
+        choice_header(&mut v, "CAR", 0.06, selected_car, menu.cars.len());
+        for (i, car) in menu
+            .cars
+            .iter()
             .enumerate()
             .skip(selected_car / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
             .take(CHOICES_PER_PAGE)
@@ -594,8 +590,8 @@ impl Hud {
             choice_button(
                 &mut v,
                 car_box(i % CHOICES_PER_PAGE),
-                car.spec().name,
-                menu.car == car,
+                &car.name,
+                menu.car == i,
                 menu.focus == 1,
             );
         }
@@ -1032,7 +1028,7 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
     c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
     c.label("GEAR", [166.0, 129.0], 0.95, muted);
     c.label(
-        &if gauges.gear == crate::vehicle::NEUTRAL_GEAR {
+        &if gauges.gear == crate::phys_car::NEUTRAL_GEAR {
             "N".into()
         } else if gauges.gear == 0 {
             "R".into()
@@ -1350,24 +1346,23 @@ mod tests {
 
     #[test]
     fn car_pages_select_visible_rows_and_ignore_empty_rows() {
-        for (selected, car) in crate::cars::ALL.into_iter().enumerate() {
+        let car_count = 5;
+        for selected in 0..car_count {
             for slot in 0..CHOICES_PER_PAGE {
                 let r = car_box(slot);
-                let expected = crate::cars::ALL
-                    .into_iter()
-                    .nth(selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE + slot)
-                    .map(MenuAction::Car);
+                let index = selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE + slot;
+                let expected = (index < car_count).then_some(MenuAction::Car(index));
                 assert_eq!(
-                    selection_menu_hit_test(0.5, (r[1] + r[3]) * 0.5, 0, 4, car),
+                    selection_menu_hit_test(0.5, (r[1] + r[3]) * 0.5, 0, 4, selected, car_count),
                     expected
                 );
             }
             assert_eq!(
-                selection_menu_hit_test(0.43, 0.14, 0, 4, car),
+                selection_menu_hit_test(0.43, 0.14, 0, 4, selected, car_count),
                 Some(MenuAction::CarPage(-1))
             );
             assert_eq!(
-                selection_menu_hit_test(0.73, 0.14, 0, 4, car),
+                selection_menu_hit_test(0.73, 0.14, 0, 4, selected, car_count),
                 Some(MenuAction::CarPage(1))
             );
         }
