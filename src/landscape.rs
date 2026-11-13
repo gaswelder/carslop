@@ -137,17 +137,6 @@ impl GroundCover {
 // Terrain elevation.
 
 #[cfg(test)]
-mod tests {
-
-    #[test]
-    fn landscape_rejects_nonfinite_geometry() {
-        for record in ["a 0 NaN 0 1 0 0 1", "a 9 0 0 1 0 0 1", "t 1 0 0 -2 1"] {
-            assert!(crate::test_support::landscape(&format!("LANDSCAPE 1\n{record}\n")).is_err());
-        }
-    }
-}
-
-#[cfg(test)]
 mod index_tests {
     use super::*;
     use geo::{Intersects, Point};

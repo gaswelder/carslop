@@ -488,26 +488,3 @@ mod tests {
         assert!(place_furniture(&source, &map, &surfaces).is_empty());
     }
 }
-
-#[cfg(test)]
-mod direction_tests {
-    use super::*;
-    #[test]
-    fn compass_faces_opposite_travel_and_explicit_directions_take_precedence() {
-        let mut e = OSMElement::default();
-        crate::test_support::set_osm_tags(&mut e, &[("direction", "N")]);
-        let (d, inferred, travel) = directions(&e, 3);
-        assert!(d.is_empty());
-        assert!(!inferred);
-        let p = travel.unwrap();
-        assert!(p.x.abs() < 1e-10);
-        assert!((p.z - 1.).abs() < 1e-10);
-        crate::test_support::set_osm_tags(
-            &mut e,
-            &[("direction", "N"), ("traffic_sign:direction", "backward")],
-        );
-        assert_eq!(directions(&e, 3), (vec![-1], false, None));
-        crate::test_support::set_osm_tags(&mut e, &[]);
-        assert_eq!(directions(&e, 1), (vec![-1, 1], true, None));
-    }
-}

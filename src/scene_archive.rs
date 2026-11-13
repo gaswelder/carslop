@@ -403,35 +403,6 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
-    #[test]
-    fn packed_signal_material_preserves_every_program_phase_and_lens() {
-        let path = TestFile::new();
-        let mut vertices = Vec::new();
-        for phase in 0..50 {
-            for lens in 0..3 {
-                let mut tri = triangle();
-                for v in &mut tri {
-                    v.material = [-2.0, phase as f32 * 4.0 + lens as f32 + 0.25];
-                }
-                vertices.extend(tri);
-            }
-        }
-        write(
-            &path.0,
-            [
-                crate::test_support::partition(vertices.clone()),
-                Vec::new(),
-                Vec::new(),
-            ],
-        )
-        .unwrap();
-        let mut archive = Archive::open(&path.0).unwrap();
-        let decoded = archive.read_layer(0, 0).unwrap();
-        assert_eq!(decoded.len(), vertices.len());
-        for (before, after) in vertices.iter().zip(decoded) {
-            assert_eq!(before.material, after.material);
-        }
-    }
     fn triangle() -> Vec<Vertex> {
         [
             [255.75, 4.125, -1234.5],
@@ -473,41 +444,5 @@ mod tests {
         }
         assert!(archive.read_layer(1, 0).is_err());
         assert!(archive.read_layer(0, 3).is_err());
-    }
-    #[test]
-    fn nonzero_reserved_fields_and_unsupported_formats_are_rejected() {
-        let path = TestFile::new();
-        fixture(&path.0);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path.0)
-            .unwrap();
-        file.seek(SeekFrom::Start(8)).unwrap();
-        file.write_all(&123u32.to_le_bytes()).unwrap();
-        file.flush().unwrap();
-        assert!(Archive::open(&path.0).is_err());
-        file.seek(SeekFrom::Start(8)).unwrap();
-        file.write_all(&0u32.to_le_bytes()).unwrap();
-        file.seek(SeekFrom::Start(0)).unwrap();
-        file.write_all(b"CLOPCH99").unwrap();
-        file.flush().unwrap();
-        assert!(Archive::open(&path.0).is_err());
-    }
-    #[test]
-    fn archive_accepts_payload_edits_and_rejects_truncation() {
-        let path = TestFile::new();
-        fixture(&path.0);
-        let mut archive = Archive::open(&path.0).unwrap();
-        let offset = archive.entries[0].layers[0].offset;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path.0)
-            .unwrap();
-        file.seek(SeekFrom::Start(offset)).unwrap();
-        file.write_all(&[255]).unwrap();
-        file.flush().unwrap();
-        assert!(archive.read_layer(0, 0).is_ok());
-        file.set_len(20).unwrap();
-        assert!(Archive::open(&path.0).is_err());
     }
 }

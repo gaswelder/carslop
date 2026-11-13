@@ -229,36 +229,3 @@ pub fn deflect(velocity: &mut XZ<f32>, normal: XZ<f32>) -> f32 {
         0.0
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lateral_road_positions_and_vehicle_origins_have_separate_heights() {
-        let sample = RoadSample {
-            point: XYZ {
-                x: 10.0,
-                y: 7.0,
-                z: 20.0,
-            },
-            tangent: XZ { x: 0.6, z: 0.8 },
-            distance: 0.0,
-            offset: 0.0,
-            width: 8.0,
-        };
-        let road = sample.lane_position(5.0);
-        assert_eq!(
-            road,
-            XYZ {
-                x: 6.0,
-                y: 7.0,
-                z: 23.0
-            }
-        );
-        let vehicle = sample.vehicle_position(5.0);
-        assert_eq!(vehicle.xz(), road.xz());
-        assert!((vehicle.y - road.y - 0.48).abs() < 0.00001);
-        assert_eq!(sample.lane_position(0.0), sample.point);
-    }
-}

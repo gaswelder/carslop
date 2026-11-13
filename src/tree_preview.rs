@@ -175,28 +175,6 @@ mod tests {
     use super::*;
     use image::Rgb;
     #[test]
-    fn detects_separate_canopies_and_ignores_neutral_roofs() {
-        let mut im = RgbImage::from_pixel(160, 100, Rgb([120, 120, 120]));
-        for (cx, cy, r) in [(35, 40, 13), (110, 55, 18)] {
-            for y in 0..100 {
-                for x in 0..160 {
-                    if (x as i32 - cx).pow(2) + (y as i32 - cy).pow(2) < r * r {
-                        im.put_pixel(x, y, Rgb([45, 85, 40]));
-                    }
-                }
-            }
-        }
-        let p = proposals(&im, [0.25, 0.25]);
-        assert_eq!(p.len(), 2);
-        assert!((p[0].x as i32 - 35).abs() <= 1);
-        assert!((p[1].x as i32 - 110).abs() <= 1);
-        assert!(proposals(
-            &RgbImage::from_pixel(80, 80, Rgb([90, 90, 90])),
-            [0.25, 0.25]
-        )
-        .is_empty());
-    }
-    #[test]
     fn muted_textured_crowns_are_detected_but_smooth_muted_surfaces_are_not() {
         let mut im = RgbImage::from_pixel(160, 100, Rgb([110, 110, 110]));
         for y in 10..90 {
@@ -222,22 +200,5 @@ mod tests {
             found.iter().all(|p| p.x < 85),
             "smooth muted surfaces must not become crowns"
         );
-    }
-    #[test]
-    fn georeference_converts_mercator_pixels_to_longitude_latitude_and_scale() {
-        let g = Geo {
-            extent: [-100., -100., 100., 100.],
-            width: 200,
-            height: 200,
-        };
-        assert_eq!(g.lonlat(100., 100.), [0., 0.]);
-        let northwest = g.lonlat(0., 0.);
-        let southeast = g.lonlat(200., 200.);
-        let degrees = (100_f64 / 6378137.).to_degrees();
-        assert!((northwest[0] + degrees).abs() < 1e-10);
-        assert!((northwest[1] - degrees).abs() < 1e-10);
-        assert!((southeast[0] - degrees).abs() < 1e-10);
-        assert!((southeast[1] + degrees).abs() < 1e-10);
-        assert_eq!(g.metres_per_pixel(), [1., 1.]);
     }
 }

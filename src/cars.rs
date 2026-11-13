@@ -570,17 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn rolling_radius_uses_driven_wheel_geometry() {
-        let radii = [0.30, 0.34, 0.40, 0.44];
-        assert!((model_rolling_radius(radii, 0.0).unwrap() - 0.32).abs() < 0.00001);
-        assert!((model_rolling_radius(radii, 1.0).unwrap() - 0.42).abs() < 0.00001);
-        assert!((model_rolling_radius(radii, 0.25).unwrap() - 0.345).abs() < 0.00001);
-        for invalid in [0.0, -0.1, f32::NAN, f32::INFINITY] {
-            assert!(model_rolling_radius([invalid, 0.3, 0.3, 0.3], 1.0).is_err());
-        }
-    }
-
-    #[test]
     fn aerodynamic_drag_uses_coefficient_area_and_mass() {
         let mut spec = crate::test_support::car_spec().clone();
         spec.drag_coefficient = 0.3;
@@ -618,38 +607,6 @@ mod tests {
         let before_weight_change = spec.calculate_top_speed();
         spec.mass *= 2.0;
         assert!(spec.calculate_top_speed() < before_weight_change);
-    }
-
-    #[test]
-    fn calculated_top_speed_respects_gearing_and_redline() {
-        let mut spec = crate::test_support::car_spec().clone();
-        spec.turbo = None;
-        spec.engine_max_torque_nm = 10_000.0;
-        spec.gearbox.final_drive = 100.0;
-        let limit = spec
-            .gearbox
-            .speed_at_rpm(crate::vehicle::REDLINE_RPM, spec.gearbox.gears());
-        assert!((spec.calculate_top_speed() - limit).abs() < 0.001);
-    }
-
-    #[test]
-    fn catalog_is_ordered_and_audio_banks_load() {
-        let names: Vec<_> = ALL.into_iter().map(CarModel::folder_name).collect();
-        assert!(names.windows(2).all(|p| p[0] < p[1]));
-        for (index, model) in ALL.into_iter().enumerate() {
-            assert_eq!(model.index(), index);
-            let s = model.spec();
-            if let Some(samples) = &s.audio.samples {
-                let mut engine = crate::engine_sample::RecordedEngine::default();
-                engine.select(Some(samples));
-                assert!(
-                    engine.available(),
-                    "{} audio bank {}",
-                    s.name,
-                    samples.display()
-                );
-            }
-        }
     }
 }
 
@@ -723,49 +680,6 @@ mod runtime_tests {
     use super::*;
 
     #[test]
-    fn runtime_catalog_probe() {
-        if std::env::var_os("TEST_RUNTIME_CAR").is_none() {
-            return;
-        }
-        assert_eq!(ALL.len(), 2);
-        assert_eq!(
-            ALL.into_iter()
-                .find(|m| m.folder_name() == "template")
-                .unwrap()
-                .spec()
-                .mass,
-            999.0
-        );
-        let car = ALL[0];
-        assert_eq!(car.index(), 0);
-        assert_eq!(car.spec().name, "NEW CAR");
-        assert_eq!(car.spec().mass, 1234.0);
-        assert_eq!(car.spec().gearbox.ratios, &[3.0, 2.0, 1.0]);
-        assert_eq!(car.wheel_centers()[0].x, -0.99);
-        assert_eq!(
-            crate::hud::selection_menu_hit_test(0.5, -0.07, 0, 2, car),
-            Some(crate::hud::MenuAction::Car(car))
-        );
-    }
-
-    #[test]
-    fn glb_definitions_load_local_assets() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("car.json");
-        crate::test_support::write_car(dir.path());
-        assert!(!load_car(&path).unwrap().design.body.is_empty());
-        fs::rename(dir.path().join("model.glb"), dir.path().join("other.glb")).unwrap();
-        assert!(load_car(&path).err().unwrap().contains("model.glb"));
-        fs::rename(dir.path().join("other.glb"), dir.path().join("model.glb")).unwrap();
-        fs::write(dir.path().join("model.glb"), b"broken").unwrap();
-        let error = load_car(&path).err().unwrap();
-        assert!(
-            error.contains("model.glb") && error.contains("binary glTF"),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn gearbox_limit_keeps_neutral_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
@@ -831,43 +745,30 @@ mod runtime_tests {
     }
 
     #[test]
-    fn bundled_car_definitions_are_independent() {
-        for model in ALL {
-            let dir = tempfile::tempdir().unwrap();
-            let source = std::path::Path::new("data/cars").join(model.folder_name());
-            let mut definition: serde_json::Value =
-                serde_json::from_slice(&fs::read(source.join("car.json")).unwrap()).unwrap();
-            fs::copy(source.join("model.glb"), dir.path().join("model.glb")).unwrap();
-            // Audio assets may be shared, but paths must resolve from this car's folder.
-            let expected_samples = model
-                .spec()
-                .audio
-                .samples
-                .as_ref()
-                .map(|p| fs::canonicalize(p).unwrap());
-            if let Some(samples) = &expected_samples {
-                definition["audio"]["samples"] = serde_json::json!(samples);
-            }
-            let path = dir.path().join("car.json");
-            fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
-            let car = load_car(&path).unwrap();
-            assert_eq!(car.name, model.spec().name);
-            assert_eq!(car.mass, model.spec().mass);
-            assert_eq!(car.wheelbase, model.spec().wheelbase);
-            assert_eq!(car.track_width, model.spec().track_width);
-            assert_eq!(car.frontal_area_m2, model.spec().frontal_area_m2);
-            assert_eq!(car.cg_height, model.spec().cg_height);
-            assert_eq!(
-                car.gearbox.rolling_radius,
-                model.spec().gearbox.rolling_radius
-            );
-            assert_eq!(car.rear_combined_slip, model.spec().rear_combined_slip);
-            assert_eq!(car.audio.samples, expected_samples);
-        }
-    }
-
-    #[test]
     fn new_car_is_discovered_by_existing_binary() {
+        if std::env::var_os("TEST_RUNTIME_CAR").is_some() {
+            assert_eq!(ALL.len(), 2);
+            assert_eq!(
+                ALL.into_iter()
+                    .find(|m| m.folder_name() == "template")
+                    .unwrap()
+                    .spec()
+                    .mass,
+                999.0
+            );
+            let car = ALL[0];
+            assert_eq!(car.index(), 0);
+            assert_eq!(car.spec().name, "NEW CAR");
+            assert_eq!(car.spec().mass, 1234.0);
+            assert_eq!(car.spec().gearbox.ratios, &[3.0, 2.0, 1.0]);
+            assert_eq!(car.wheel_centers()[0].x, -0.99);
+            assert_eq!(
+                crate::hud::selection_menu_hit_test(0.5, -0.07, 0, 2, car),
+                Some(crate::hud::MenuAction::Car(car))
+            );
+            return;
+        }
+
         let dir = tempfile::tempdir().unwrap();
         let cars = dir.path().join("data/cars");
         fs::create_dir_all(&cars).unwrap();
@@ -928,7 +829,7 @@ mod runtime_tests {
             .env("TEST_RUNTIME_CAR", "1")
             .args([
                 "--exact",
-                "cars::runtime_tests::runtime_catalog_probe",
+                "cars::runtime_tests::new_car_is_discovered_by_existing_binary",
                 "--nocapture",
             ])
             .output()

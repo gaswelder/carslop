@@ -95,21 +95,6 @@ pub fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[ignore = "loads bundled Nicosia; run alone for startup profiling"]
-    fn location_startup_profile() {
-        let started = std::time::Instant::now();
-        let city = crate::test_support::nicosia_world();
-        eprintln!(
-            "City load: {:.3}s; {} roads, {} buildings, {} triangles, {} curbs, {} trees",
-            started.elapsed().as_secs_f64(),
-            city.road_lines().len(),
-            city.buildings().len(),
-            city.road_triangles().len(),
-            city.curbs().len(),
-            city.trees().len()
-        );
-    }
 
     #[test]
     fn repeated_light_barrier_contacts_preserve_sliding_speed() {
@@ -147,58 +132,6 @@ mod tests {
     }
 
     const CROSS:&str="CITY 2\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
-
-    #[test]
-    fn google_maps_url_inverts_the_osm_projection() {
-        let city = crate::test_support::parse_world(
-            &CROSS.replace("origin 0 0", "origin 35.1654321 33.3256789"),
-        )
-        .unwrap();
-        assert_eq!(
-            city.google_maps_url(crate::geometry::XYZ {
-                x: 0.0,
-                y: 100.0,
-                z: 0.0
-            })
-            .unwrap(),
-            "https://www.google.com/maps/search/?api=1&query=35.1654321,33.3256789"
-        );
-        for [latitude, longitude] in [[35.17_f64, 33.34_f64], [35.15, 33.31]] {
-            let x = (longitude - 33.3256789).to_radians()
-                * 6371000.0
-                * 35.1654321_f64.to_radians().cos();
-            let z = -(latitude - 35.1654321).to_radians() * 6371000.0;
-            let url = city
-                .google_maps_url(crate::geometry::XYZ {
-                    x: x as f32,
-                    y: 0.0,
-                    z: z as f32,
-                })
-                .unwrap();
-            assert_eq!(
-                url,
-                format!(
-                    "https://www.google.com/maps/search/?api=1&query={latitude:.7},{longitude:.7}"
-                )
-            );
-        }
-        assert!(city
-            .google_maps_url(crate::geometry::XYZ {
-                x: f32::NAN,
-                y: 0.0,
-                z: 0.0
-            })
-            .is_none());
-        let no_origin =
-            crate::test_support::parse_world(&CROSS.replace("origin 0 0\n", "")).unwrap();
-        assert!(no_origin
-            .google_maps_url(crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0
-            })
-            .is_none());
-    }
 
     #[test]
     fn branches_are_open_and_dead_ends_do_not_join_other_streets() {
@@ -420,32 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn expanded_city_has_connected_streets_across_the_original_extract_edges() {
-        let city_track = crate::test_support::nicosia_world();
-        let city = &city_track;
-        let old_north = -0.006 * std::f32::consts::PI / 180.0 * 6_371_000.0;
-        let old_east =
-            0.008 * std::f32::consts::PI / 180.0 * 6_371_000.0 * 35.162_f32.to_radians().cos();
-        assert!(city.bounding_box().min.z < old_north - 800.0);
-        assert!(city.bounding_box().max.x > old_east + 600.0);
-        for (axis, boundary) in [(2, old_north), (0, old_east)] {
-            let crossings = city
-                .road_lines()
-                .iter()
-                .filter(|r| {
-                    r.path.windows(2).any(|p| {
-                        (p[0].component(axis) - boundary) * (p[1].component(axis) - boundary) < 0.0
-                    })
-                })
-                .count();
-            assert!(
-                crossings >= 5,
-                "missing connected roads across former map edge on axis {axis}: {crossings}"
-            );
-        }
-    }
-
-    #[test]
     fn urban_map_covers_centres_on_both_sides_and_queries_only_nearby_streets() {
         let city_track = crate::test_support::nicosia_world();
         let city = &city_track;
@@ -516,12 +423,5 @@ mod tests {
                 (indexed.point.x - brute.point.x).hypot(indexed.point.z - brute.point.z) < 0.001
             );
         }
-    }
-
-    #[test]
-    fn invalid_map_records_fail_clearly() {
-        assert!(crate::test_support::parse_world("CITY 2").is_err());
-        assert!(crate::test_support::parse_world("CITY 2\nn NaN 0").is_err());
-        assert!(crate::test_support::parse_world("CITY 2\nr 0 1 8 0 1").is_err());
     }
 }

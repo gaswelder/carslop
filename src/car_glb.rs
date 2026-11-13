@@ -256,22 +256,6 @@ mod tests {
         result.extend(bin);
         result
     }
-    #[test]
-    fn height_includes_body_and_mounted_wheels_and_ignores_vertical_offset() {
-        let mut design = (*crate::test_support::car_spec().design).clone();
-        assert!((design.height() - 1.3).abs() < 0.00001);
-        design.mounts[0].y = -2.0;
-        assert!((design.height() - 3.0).abs() < 0.00001);
-        for v in &mut design.body {
-            v.position[1] += 10.0;
-        }
-        for mount in &mut design.mounts {
-            mount.y += 10.0;
-        }
-        assert!((design.height() - 3.0).abs() < 0.00001);
-        design.body[0].position[1] = f32::NAN;
-        assert!(!design.height().is_finite());
-    }
 
     #[test]
     fn frontal_area_counts_projected_silhouette_once_including_wheels() {

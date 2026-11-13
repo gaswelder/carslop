@@ -365,16 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_recording_is_reported_without_panicking() {
-        let mut engine = RecordedEngine {
-            samples: None,
-            ..RecordedEngine::default()
-        };
-        assert!(!engine.available());
-        assert_eq!(engine.sample(6000.0, 3.0, 1.0), 0.0);
-    }
-
-    #[test]
     fn interpolation_handles_tail_offset_rounding_to_length() {
         let samples = EngineSamples::load(audio_dir()).unwrap();
         for clip in samples

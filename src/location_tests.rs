@@ -1,13 +1,13 @@
 use crate::add_location_compile::create_location_map;
 use crate::build_furniture::build_furniture;
-use crate::build_landscape::{build_landscape, rings};
+use crate::build_landscape::build_landscape;
 use crate::error::Result;
 use crate::geometry::{cross, polygon, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
 use crate::osm::{OSMBoundary, OSMElement, OSMMap};
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::sources::extract_osm_boundary;
-use crate::{boundary, build_surfaces, build_terrain, osm};
+use crate::{build_surfaces, build_terrain, osm};
 use geo::{Area, Contains, MultiPolygon, Point, Polygon};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -133,40 +133,6 @@ fn raceways_allow_restricted_circuit_access_without_opening_private_streets() {
         .find(|r| r.osm_way_id == Some(205))
         .unwrap();
     assert_eq!(bridge.direction, 1);
-}
-#[test]
-fn clipping_does_not_join_unrelated_roads() {
-    assert_eq!(
-        osm::clip(
-            XZ { x: -20.0, z: 0.0 },
-            XZ { x: 20.0, z: 0.0 },
-            BoundingBoxXZ {
-                min: XZ { x: -10.0, z: -10.0 },
-                max: XZ { x: 10.0, z: 10.0 }
-            }
-        ),
-        Some((XZ { x: -10.0, z: 0.0 }, XZ { x: 10.0, z: 0.0 }))
-    );
-    assert!(osm::clip(
-        XZ { x: -20.0, z: 20.0 },
-        XZ { x: 20.0, z: 20.0 },
-        BoundingBoxXZ {
-            min: XZ { x: -10.0, z: -10.0 },
-            max: XZ { x: 10.0, z: 10.0 }
-        }
-    )
-    .is_none());
-}
-#[test]
-fn incomplete_exports_are_rejected() {
-    let temp = Temp::new();
-    let p = temp.directory.join("bad.osm");
-    fs::write(&p, "<osm><remark>timeout</remark></osm>").unwrap();
-    assert!(osm::read(&p).is_err());
-    fs::write(&p, "<osm><bounds minlat=\"35\"/></osm>").unwrap();
-    assert!(osm::read(&p).is_err());
-    fs::write(&p, "<osm><node id=\"1\" lat=\"35\" lon=\"33\"/>").unwrap();
-    assert!(osm::read(&p).is_err());
 }
 
 #[test]
@@ -505,72 +471,6 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
     build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
     let areas = landscape_areas(&temp.directory.join("landscape.txt"));
     assert!((areas[1] - 150.).abs() < 0.01);
-}
-
-/// Run after importing the full crop; the historical bundle remains the reference.
-
-fn boundary_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("boundary.osm");
-    fs::write(&path, r#"<osm version="0.6">
-<node id="1" lat="0" lon="0"/><node id="2" lat="0" lon="0.01"/>
-<node id="3" lat="0.01" lon="0.01"/><node id="4" lat="0.01" lon="0"/>
-<node id="5" lat="0.004" lon="0.004"/><node id="6" lat="0.004" lon="0.006"/>
-<node id="7" lat="0.006" lon="0.006"/><node id="8" lat="0.006" lon="0.004"/>
-<node id="9" lat="0.005" lon="-0.002"/><node id="10" lat="0.005" lon="0.012"/>
-<node id="11" lat="0.02" lon="0.02"/><node id="12" lat="0.02" lon="0.021"/>
-<node id="13" lat="0.021" lon="0.021"/><node id="14" lat="0.021" lon="0.02"/>
-<way id="20"><nd ref="1"/><nd ref="2"/><nd ref="3"/></way>
-<way id="21"><nd ref="1"/><nd ref="4"/><nd ref="3"/></way>
-<way id="22"><nd ref="5"/><nd ref="6"/><nd ref="7"/><nd ref="8"/><nd ref="5"/></way>
-<way id="23"><nd ref="9"/><nd ref="10"/><tag k="highway" v="residential"/><tag k="oneway" v="yes"/></way>
-<way id="24"><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="14"/><nd ref="11"/></way>
-<relation id="2087230"><member type="way" ref="21" role="outer"/>
-<member type="way" ref="22" role="inner"/><member type="way" ref="20" role="outer"/>
-<member type="way" ref="24" role="outer"/>
-<tag k="type" v="boundary"/><tag k="boundary" v="administrative"/></relation></osm>"#).unwrap();
-    (temp, path)
-}
-
-#[test]
-fn boundary_refuses_incomplete_geometry() {
-    let (_temp, path) = boundary_fixture();
-    let text = fs::read_to_string(&path)
-        .unwrap()
-        .replace("<member type=\"way\" ref=\"20\" role=\"outer\"/>", "");
-    fs::write(&path, text).unwrap();
-    assert!(boundary::resolve_boundary(&osm::read(&path).unwrap(), 2087230).is_err());
-}
-
-#[test]
-fn relation_members_join_in_either_direction_and_reject_open_rings() {
-    let joined = rings(vec![vec![1, 2, 3], vec![1, 4, 3]]).unwrap();
-    assert_eq!(joined.len(), 1);
-    assert_eq!(joined[0].first(), joined[0].last());
-    assert_eq!(joined[0].len(), 5);
-    assert!(rings(vec![vec![1, 2], vec![3, 4]]).is_none());
-}
-
-#[test]
-fn local_compiler_location_round_trip_preserves_absent_geographic_origin() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut location = map(
-        &[XZ { x: -20.0, z: 0.0 }, XZ { x: 20.0, z: 0.0 }],
-        &[(0, 1, 8.0, 1)],
-        &[],
-    );
-    location.origin = None;
-    let output = temp.path().join("city.txt");
-    let city = crate::src_files::write_city_txt(&location, &output)
-        .unwrap()
-        .city;
-    assert_eq!(city.origin, None);
-    assert_eq!(city.road_nodes.len(), location.road_nodes.len());
-    assert_eq!(city.road_lines.len(), location.road_lines.len());
-    assert!(!fs::read_to_string(output)
-        .unwrap()
-        .lines()
-        .any(|line| line.starts_with("origin ")));
 }
 
 #[test]

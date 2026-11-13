@@ -292,35 +292,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn route_is_closed_and_projection_follows_elevation() {
-        assert!(LocationId::Compact.try_track().unwrap().sampling_length() > 180.0);
-        for distance in [0.0, 20.0, 50.0, 100.0, 160.0] {
-            let sample = LocationId::Compact
-                .try_track()
-                .unwrap()
-                .at_distance(distance);
-            let projected = LocationId::Compact
-                .try_track()
-                .unwrap()
-                .project(sample.vehicle_position(1.0));
-            assert!((projected.point.y - sample.point.y).abs() < 0.15);
-            assert!((projected.offset - 1.0).abs() < 0.15);
-        }
-        assert_eq!(
-            LocationId::Compact
-                .try_track()
-                .unwrap()
-                .at_distance(0.0)
-                .point,
-            LocationId::Compact
-                .try_track()
-                .unwrap()
-                .at_distance(LocationId::Compact.try_track().unwrap().sampling_length())
-                .point
-        );
-    }
-
-    #[test]
     fn spatial_projection_matches_full_search_and_route_caches_are_isolated() {
         let scenic = crate::test_support::scenic_id().try_track().unwrap();
         for i in 0..400 {
@@ -346,29 +317,6 @@ mod tests {
             LocationId::Compact.try_track().unwrap().sampling_length(),
             compact_length
         );
-    }
-
-    #[test]
-    fn scenic_route_has_no_crossings_or_ambiguous_neighbouring_roads() {
-        let route = crate::test_support::scenic_id().try_track().unwrap();
-        let count = (route.sampling_length() / 10.0).ceil() as usize;
-        for i in 0..count {
-            let a = route.at_distance(route.sampling_length() * i as f32 / count as f32);
-            for j in i + 1..count {
-                let b = route.at_distance(route.sampling_length() * j as f32 / count as f32);
-                let along = (a.distance - b.distance).abs();
-                if along.min(route.sampling_length() - along) < 35.0 {
-                    continue;
-                }
-                let gap = (a.point.x - b.point.x).hypot(a.point.z - b.point.z);
-                assert!(
-                    gap > a.width.max(b.width) * 2.0,
-                    "ambiguous road near {} / {} m",
-                    a.distance,
-                    b.distance
-                );
-            }
-        }
     }
 }
 

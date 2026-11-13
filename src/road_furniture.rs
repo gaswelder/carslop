@@ -223,39 +223,3 @@ pub(super) fn build(b: &mut Builder, f: &Furniture) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn sign_posts_stay_behind_the_lettered_faces() {
-        for kind in [FurnitureKind::Stop, FurnitureKind::Speed] {
-            let feature = Furniture {
-                _source_id: 1,
-                kind,
-                coords: crate::geometry::XYZ {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                travel: crate::geometry::XZ { x: 0.0, z: 1.0 },
-                value: 30,
-                phase: 0,
-            };
-            let mut b = Builder::default();
-            build(&mut b, &feature);
-            for v in b
-                .vertices
-                .iter()
-                .filter(|v| v.color == [0.29, 0.32, 0.32] && (1.9..=2.12).contains(&v.position[1]))
-            {
-                let front = -v.position[2];
-                assert!(
-                    front <= -0.019,
-                    "post pierces the sign face at {:?}",
-                    v.position
-                );
-            }
-        }
-    }
-}

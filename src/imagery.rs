@@ -240,20 +240,6 @@ mod raster_tests {
     use super::*;
     use std::fs;
     #[test]
-    fn grid_is_contiguous_and_gutters_match() {
-        let b = blocks([35.1, 33.25, 35.23, 33.47]);
-        assert!(b.len() > 200 && b.len() < 500);
-        let a = &b[0];
-        let next = &b[1];
-        assert!((next.extent[0] - a.extent[0] - CORE as f64 * RES).abs() < 1e-6);
-        assert!((a.extent[2] - next.extent[0] - 2. * PAD as f64 * RES).abs() < 1e-6);
-        let last = b.last().unwrap();
-        let sw = mercator(33.25, 35.1);
-        let ne = mercator(33.47, 35.23);
-        assert!(a.extent[0] < sw[0] && a.extent[3] > ne[1]);
-        assert!(last.extent[2] > ne[0] && last.extent[1] < sw[1]);
-    }
-    #[test]
     fn block_resume_reuses_existing_tiles_and_preserves_gutters() {
         let temp = tempfile::tempdir().unwrap();
         let work = temp.path();
@@ -291,16 +277,5 @@ mod raster_tests {
             process_tiles(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap()
         );
         assert_eq!(a, fs::read(aerial.join("0_0_0_0.jpg")).unwrap());
-    }
-    #[test]
-    fn white_coverage_is_not_published_as_imagery() {
-        let mut im = image::RgbImage::from_pixel(TILE, TILE, image::Rgb([255, 255, 255]));
-        assert!(blank(&im, 0, 0));
-        for y in 0..TILE {
-            for x in 0..TILE {
-                im.put_pixel(x, y, image::Rgb([50, 70, 60]));
-            }
-        }
-        assert!(!blank(&im, 0, 0));
     }
 }

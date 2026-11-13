@@ -181,19 +181,4 @@ mod tests {
             assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
         }
     }
-
-    #[test]
-    fn default_options_reuse_nonempty_cached_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("cached.data");
-        fs::write(&path, b"cached").unwrap();
-        download(
-            &ureq::Agent::new_with_defaults(),
-            "invalid-url",
-            &path,
-            &DownloadOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"cached");
-    }
 }

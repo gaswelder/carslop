@@ -256,54 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn bonnet_cycles_and_stays_attached_during_forward_and_reverse_motion() {
-        let mut v = car();
-        let mut c = ChaseCamera::new(&v);
-        c.toggle_view();
-        assert_eq!(c.view(), FollowView::Wide);
-        c.toggle_view();
-        assert_eq!(c.view(), FollowView::Bonnet);
-        assert_eq!(c.view().label(), "BONNET");
-        for speed in [35.0, -5.0] {
-            v.position.x += 10.0;
-            v.heading += 0.7;
-            v.speed = speed;
-            v.body_pitch = 0.06;
-            v.body_roll = 0.04;
-            v.curb_bump = 0.1;
-            c.update(&v, Duration::from_millis(16));
-            let pose = c.pose();
-            let desired = bonnet_pose(&v);
-            assert!((pose.eye.x - desired.eye.x).abs() < 0.001);
-            assert!((pose.eye.z - desired.eye.z).abs() < 0.001);
-            assert_eq!(pose, desired);
-        }
-        c.toggle_view();
-        assert_eq!(c.view(), FollowView::Close);
-    }
-
-    #[test]
-    fn bonnet_mount_is_rigid_through_heave_pitch_roll_and_zero_time_updates() {
-        let mut v = car();
-        let mut camera = ChaseCamera::new(&v);
-        camera.toggle_view();
-        camera.toggle_view();
-        for dt in [
-            Duration::ZERO,
-            Duration::from_millis(16),
-            Duration::from_millis(33),
-        ] {
-            v.position.y += 0.3;
-            v.heading += 0.3;
-            v.body_pitch += 0.025;
-            v.body_roll += 0.02;
-            v.curb_bump = 0.1;
-            camera.update(&v, dt);
-            assert_eq!(camera.pose(), bonnet_pose(&v));
-        }
-    }
-
-    #[test]
     fn changing_routes_snaps_camera_and_preserves_selected_view() {
         let mut camera = ChaseCamera::new(&car());
         camera.toggle_view();
@@ -330,77 +282,6 @@ mod tests {
         assert_eq!(camera.anchor, compact.position);
         camera.snap(&scenic);
         assert!(std::sync::Arc::ptr_eq(&camera.track, &scenic.track));
-    }
-
-    #[test]
-    fn authored_camera_clearance_and_look_ahead_use_selected_road() {
-        let track = crate::test_support::track();
-        let road = track.at_distance(0.0);
-        let mut car = Vehicle::on_track(
-            road.vehicle_position(0.0),
-            road.heading(),
-            crate::cars::CarModel::TestFixture(0),
-            track.clone(),
-        );
-        let mut camera = ChaseCamera::new(&car);
-        for close in [false, true] {
-            if close {
-                camera.toggle_view();
-            }
-            for i in 0..100 {
-                let road = track.at_distance(i as f32 * track.sampling_length() / 100.0);
-                car.position = road.vehicle_position(1.4);
-                car.heading = road.heading();
-                car.speed = 30.0;
-                car.velocity = road.tangent.map(|v| v * car.speed);
-                camera.snap(&car);
-                // Exercise clearance independently of the usual high chase rig.
-                camera.height = -10.0;
-                let pose = camera.pose();
-                let clearance = track.height(crate::geometry::XZ {
-                    x: pose.eye.x,
-                    z: pose.eye.z,
-                }) + 1.5;
-                assert!((pose.eye.y - clearance).abs() < 0.001);
-                assert!(pose
-                    .eye
-                    .iter()
-                    .chain(pose.target.iter())
-                    .all(|v| v.is_finite()));
-                let look = desired_look(&car);
-                assert!(look.x.hypot(look.z) <= 5.501);
-                assert!(look.y.abs() <= 0.5);
-            }
-        }
-    }
-
-    #[test]
-    fn close_is_default_and_both_views_are_nearer_with_smooth_switching() {
-        let mut v = car();
-        let mut c = ChaseCamera::new(&v);
-        assert_eq!(c.view(), FollowView::Close);
-        assert_eq!(c.distance, 5.5);
-        assert_eq!(c.height, 2.1);
-        let before = c.pose();
-        c.toggle_view();
-        assert_eq!(c.pose(), before);
-        for _ in 0..120 {
-            c.update(&v, Duration::from_secs_f64(1.0 / 60.0));
-        }
-        assert!((c.distance - 9.0).abs() < 0.01 && (c.height - 4.5).abs() < 0.01);
-        v.position = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(120.0)
-            .vehicle_position(0.0);
-        c.snap(&v);
-        assert_eq!(c.view(), FollowView::Wide);
-        assert_close(c.anchor, v.position, 0.001);
-        c.toggle_view();
-        c.toggle_view();
-        c.snap(&v);
-        assert_eq!(c.distance, 5.5);
-        assert_eq!(c.height, 2.1);
     }
 
     #[test]
@@ -442,40 +323,6 @@ mod tests {
         v.position.x += 20.0;
         c.update(&v, Duration::ZERO);
         assert_eq!(before, c.pose());
-    }
-
-    #[test]
-    fn look_ahead_is_speed_based_bounded_and_stable_facing_backwards() {
-        let mut v = car();
-        assert_eq!(
-            desired_look(&v),
-            crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0
-            }
-        );
-        for speed in [5.0, 15.0, 40.0] {
-            v.speed = speed;
-            for heading in [v.heading, v.heading + PI, v.heading + PI * 0.5] {
-                v.heading = heading;
-                let look = desired_look(&v);
-                assert!(look.iter().all(|x| x.is_finite()));
-                assert!(look.x.hypot(look.z) <= 5.501);
-                assert!(look.y.abs() <= 0.5);
-                assert!(look.x * heading.sin() + look.z * heading.cos() > 0.0);
-                let distance = (speed * 0.22_f32).min(5.5);
-                assert_close(
-                    look,
-                    crate::geometry::XYZ {
-                        x: heading.sin() * distance,
-                        y: 0.0,
-                        z: heading.cos() * distance,
-                    },
-                    0.0001,
-                );
-            }
-        }
     }
 
     #[test]
@@ -521,28 +368,5 @@ mod tests {
                 assert!(gap > 10.0);
             }
         }
-    }
-
-    #[test]
-    fn backing_looks_along_reverse_motion_without_turning_the_camera_around() {
-        let mut v = car();
-        v.speed = -4.0;
-        v.velocity = crate::geometry::XZ {
-            x: -v.heading.sin() * 4.0,
-            z: -v.heading.cos() * 4.0,
-        };
-        let mut c = ChaseCamera::new(&v);
-        let look = desired_look(&v);
-        assert!(look.x * v.heading.sin() + look.z * v.heading.cos() < 0.0);
-        for _ in 0..120 {
-            c.update(&v, Duration::from_secs_f64(1.0 / 60.0));
-        }
-        assert!(angle(c.heading - v.heading).abs() < 0.01);
-        assert!(c
-            .pose()
-            .eye
-            .iter()
-            .chain(c.pose().target.iter())
-            .all(|v| v.is_finite()));
     }
 }

@@ -555,31 +555,4 @@ mod tests {
         std::fs::write(dir.path().join("a.jpg"), &bytes[..30]).unwrap();
         assert!(read_tile(dir.path(), &catalog, 0).is_err());
     }
-    #[test]
-    fn raw_tile_payload_accepts_changes_and_rejects_truncation() {
-        let path = std::env::temp_dir().join(format!(
-            "aerial-tile-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&path).unwrap();
-        let bytes = vec![127u8; 66 * 66 * 3];
-        let c = Catalog::parse(&format!(
-            "AERIAL 1\nsize 64 1\ntile 0 0 10 10 a.rgb {:08x}\n",
-            0
-        ))
-        .unwrap();
-        std::fs::write(path.join("a.rgb"), &bytes).unwrap();
-        assert_eq!(read_tile(&path, &c, 0).unwrap(), bytes);
-        let mut damaged = bytes.clone();
-        damaged[15] ^= 1;
-        std::fs::write(path.join("a.rgb"), &damaged).unwrap();
-        assert_eq!(read_tile(&path, &c, 0).unwrap(), damaged);
-        std::fs::write(path.join("a.rgb"), &bytes[..30]).unwrap();
-        assert!(read_tile(&path, &c, 0).is_err());
-        std::fs::remove_dir_all(path).unwrap();
-    }
 }

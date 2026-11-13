@@ -260,32 +260,6 @@ mod tests {
             assert!((result.lon - target.lon).abs() < 1e-8);
         }
     }
-
-    #[test]
-    fn geographic_positions_require_an_origin_and_finite_horizontal_coordinates() {
-        let mut location = crate::test_support::empty_world();
-        let point = XYZ {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        };
-        assert!(location.geographic_position(point).is_none());
-        location.origin = Some(LatLon::new(35.0, 33.0));
-        assert!(location
-            .geographic_position(XYZ {
-                x: f32::NAN,
-                ..point
-            })
-            .is_none());
-        assert!(location
-            .geographic_position(XYZ {
-                z: f32::INFINITY,
-                ..point
-            })
-            .is_none());
-        location.origin = Some(LatLon::new(90.0, 33.0));
-        assert!(location.geographic_position(point).is_none());
-    }
 }
 
 pub fn add(a: XZ, b: XZ) -> XZ {

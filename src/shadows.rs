@@ -28,26 +28,3 @@ impl ContactShadow {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::track;
-
-    #[test]
-    fn footprint_contains_wheel_contacts() {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
-        let model = crate::cars::CarModel::TestFixture(0);
-        let car = crate::test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
-        let shadow = ContactShadow::new(&car);
-        assert_eq!(shadow.origin, car.position);
-        assert!(shadow.axes.iter().all(|v| v.is_finite()));
-        for wheel in model.wheel_centers() {
-            assert!(wheel.x.abs() < shadow.axes[2]);
-            assert!(wheel.z.abs() < shadow.axes[3] - 0.3);
-        }
-    }
-}

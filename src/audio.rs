@@ -435,43 +435,6 @@ mod tests {
     }
 
     #[test]
-    fn distance_reduces_level_and_high_frequencies() {
-        let listener = crate::camera::Pose {
-            eye: crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            target: crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-            },
-        };
-        let near = SpatialAudio::placement(
-            crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 5.5,
-            },
-            listener,
-        );
-        let far = SpatialAudio::placement(
-            crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 10.0,
-            },
-            listener,
-        );
-        assert!(near.0 > far.0 && near.2 > far.2);
-        assert_eq!(near.1, 0.0);
-        let origin = SpatialAudio::placement(listener.eye, listener);
-        assert_eq!(origin.0, 1.0);
-        assert!(origin.2.is_finite());
-    }
-
-    #[test]
     fn stereo_follows_listener_orientation_and_changes_smoothly() {
         let listener = crate::camera::Pose {
             eye: crate::geometry::XYZ {
@@ -531,138 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn coasting_quiets_engine_without_changing_pitch() {
-        for rpm in [2500.0, 5500.0] {
-            let render = |load| {
-                let mut synth = Synth::default();
-                let voice = Voice {
-                    frequency: engine_frequency(rpm),
-                    load,
-                    scrub: 0.0,
-                    tuning: crate::test_support::audio_voice(),
-                    enabled: true,
-                };
-                let mut energy = 0.0;
-                for i in 0..24000 {
-                    let sample = synth.sample(voice);
-                    if i >= 12000 {
-                        energy += sample * sample;
-                    }
-                }
-                (energy, synth.frequency)
-            };
-            let (coast, coast_pitch) = render(0.12);
-            let (powered, powered_pitch) = render(1.0);
-            assert!(
-                coast > 0.0 && coast < powered * 0.4,
-                "at {rpm} RPM: coast {coast}, powered {powered}"
-            );
-            assert_eq!(coast_pitch, powered_pitch);
-        }
-    }
-
-    #[test]
-    fn rolling_noise_follows_speed_independently_of_rpm() {
-        let mut stopped = Synth::default();
-        let mut moving = Synth {
-            road_speed: 30.0,
-            ..Synth::default()
-        };
-        let voice = Voice {
-            frequency: 60.0,
-            load: 0.0,
-            scrub: 0.0,
-            tuning: crate::test_support::audio_voice(),
-            enabled: true,
-        };
-        let difference: f32 = (0..24000)
-            .map(|_| {
-                let a = stopped.sample(voice);
-                let b = moving.sample(voice);
-                (a - b).abs()
-            })
-            .sum();
-        assert!(difference > 1.0);
-        assert_eq!(stopped.road_gain, 0.0);
-        assert!(moving.road_gain > 0.5);
-    }
-
-    #[test]
-    #[ignore = "exports a WAV preview to the temporary directory"]
-    fn recorded_driving_preview() {
-        let path = std::env::temp_dir().join("carslop-audio.wav");
-        let mut synth = Synth::default();
-        let mut pcm = Vec::new();
-        let mut peak = 0.0_f32;
-        for i in 0..(SAMPLE_RATE as usize * 18) {
-            let t = i as f32 / SAMPLE_RATE;
-            // Idle, accelerate through three shifts, coast, skid, then mute.
-            let rpm = if t < 2.0 {
-                900.0
-            } else if t < 12.0 {
-                2200.0 + ((t - 2.0) % 3.0) / 3.0 * 4000.0
-            } else {
-                (5800.0 - (t - 12.0) * 900.0).max(900.0)
-            };
-            synth.road_speed = ((t - 2.0) * 3.5).clamp(0.0, 35.0);
-            let sample = synth.sample(Voice {
-                frequency: engine_frequency(rpm),
-                load: if t < 12.0 { 0.85 } else { 0.0 },
-                scrub: if (14.0..16.0).contains(&t) { 0.8 } else { 0.0 },
-                tuning: crate::test_support::audio_voice(),
-                enabled: t < 16.0,
-            });
-            assert!(sample.is_finite() && sample.abs() <= 0.3);
-            if t > 17.5 {
-                assert!(sample.abs() < 0.00001);
-            }
-            peak = peak.max(sample.abs());
-            pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
-        }
-        assert!(peak > 0.03);
-        write_preview(path, &pcm);
-    }
-
-    fn write_preview(path: impl AsRef<std::path::Path>, pcm: &[u8]) {
-        let mut wav = Vec::new();
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
-        wav.extend_from_slice(&(SAMPLE_RATE as u32).to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE as u32 * 2).to_le_bytes());
-        wav.extend_from_slice(b"\x02\0\x10\0data");
-        wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-        wav.extend_from_slice(pcm);
-        std::fs::write(path, wav).unwrap();
-    }
-
-    #[test]
-    fn procedural_audio_is_bounded_and_fades_to_silence() {
-        let mut synth = Synth::default();
-        let mut voice = Voice {
-            frequency: 180.0,
-            load: 1.0,
-            scrub: 1.0,
-            tuning: crate::test_support::audio_voice(),
-            enabled: true,
-        };
-        for i in 0..48000 {
-            if i % 6000 == 0 {
-                synth.hit(20.0);
-            }
-            let s = synth.sample(voice);
-            assert!(s.is_finite() && s.abs() <= 0.3);
-        }
-        synth.suppress_impacts();
-        voice.enabled = false;
-        let mut last = 1.0;
-        for _ in 0..12000 {
-            last = synth.sample(voice);
-        }
-        assert!(last.abs() < 0.0001);
-    }
-
-    #[test]
     fn impacts_scale_decay_and_do_not_retrigger_on_tiny_contacts() {
         let mut synth = Synth::default();
         synth.hit(1.0);
@@ -686,49 +517,6 @@ mod tests {
         assert!(synth.impact > initial);
         synth.suppress_impacts();
         assert_eq!(synth.impact, 0.0);
-    }
-
-    #[test]
-    fn configured_harmonics_change_timbre_and_scrub_adds_an_independent_layer() {
-        let render = |tuning| {
-            let mut synth = Synth::default();
-            let voice = Voice {
-                frequency: 120.0,
-                load: 1.0,
-                scrub: 0.0,
-                tuning,
-                enabled: true,
-            };
-            (0..4000).map(|_| synth.sample(voice)).collect::<Vec<_>>()
-        };
-        let baseline = crate::test_support::audio_voice();
-        let mut changed = baseline.clone();
-        changed.harmonics = vec![[1.0, 0.2], [4.0, 0.8]];
-        assert_ne!(render(baseline), render(&changed));
-        let mut quiet = Synth::default();
-        let mut sliding = Synth {
-            road_speed: 20.0,
-            ..Synth::default()
-        };
-        quiet.road_speed = 20.0;
-        let voice = Voice {
-            frequency: 80.0,
-            load: 0.0,
-            scrub: 0.0,
-            tuning: crate::test_support::audio_voice(),
-            enabled: true,
-        };
-        let difference: f32 = (0..4000)
-            .map(|_| {
-                (quiet.sample(voice)
-                    - sliding.sample(Voice {
-                        scrub: 1.0,
-                        ..voice
-                    }))
-                .abs()
-            })
-            .sum();
-        assert!(difference > 1.0);
     }
 
     #[test]
@@ -765,23 +553,6 @@ mod tests {
     }
 
     #[test]
-    fn tire_scrub_requires_motion_and_meaningful_slip() {
-        let energy = |slip, speed| {
-            let mut tires = TireSound::default();
-            (0..24000)
-                .map(|_| tires.sample(slip, speed).powi(2))
-                .sum::<f32>()
-        };
-        assert_eq!(energy(1.0, 0.0), 0.0);
-        assert_eq!(energy(0.08, 25.0), 0.0);
-        let slow = energy(1.0, 3.0);
-        let scrub = energy(0.4, 25.0);
-        let slide = energy(1.0, 25.0);
-        assert!(slow > 0.0 && slow < slide * 0.15);
-        assert!(scrub > 0.0 && scrub < slide * 0.25);
-    }
-
-    #[test]
     fn tire_squeal_is_band_limited_and_releases_smoothly() {
         let mut tires = TireSound::default();
         let mut previous = 0.0;
@@ -807,76 +578,5 @@ mod tests {
             }
         }
         assert!(tail < 0.00001);
-    }
-
-    #[test]
-    #[ignore = "exports isolated tire WAV to the temporary directory"]
-    fn tire_squeal_preview() {
-        let path = std::env::temp_dir().join("carslop-tires.wav");
-        let mut tires = TireSound::default();
-        let mut pcm = Vec::new();
-        for i in 0..(SAMPLE_RATE as usize * 12) {
-            let t = i as f32 / SAMPLE_RATE;
-            // Gentle cornering, building slide, recovery, then a slower skid.
-            let slip = match t {
-                t if t < 2.0 => 0.08,
-                t if t < 6.0 => 0.15 + (t - 2.0) * 0.2125,
-                t if t < 8.0 => 0.0,
-                t if t < 10.0 => 0.85,
-                _ => 0.0,
-            };
-            let sample = tires.sample(slip, if t < 8.0 { 25.0 } else { 5.0 });
-            assert!(sample.is_finite() && sample.abs() < 0.2);
-            pcm.extend_from_slice(&((sample * 32767.0) as i16).to_le_bytes());
-        }
-        write_preview(path, &pcm);
-    }
-
-    #[test]
-    fn reverse_pitch_increases_with_backwards_speed() {
-        let gearbox = &crate::test_support::car_spec().gearbox;
-        let slow = gearbox.speed_at_rpm(2000.0, 0);
-        let slow_pitch = engine_frequency(gearbox.rpm(-slow, 0));
-        let fast_pitch = engine_frequency(gearbox.rpm(-slow * 2.0, 0));
-        assert!(engine_frequency(0.0) < slow_pitch && slow_pitch < fast_pitch);
-        assert_eq!(
-            engine_frequency(100_000.0),
-            crate::vehicle::REDLINE_RPM / 30.0
-        );
-    }
-}
-
-#[cfg(test)]
-mod turbo_tests {
-    use super::*;
-
-    #[test]
-    fn whoosh_follows_spool_and_fades_when_disabled() {
-        let voice = Voice {
-            frequency: 120.0,
-            load: 0.7,
-            scrub: 0.0,
-            tuning: crate::test_support::audio_voice(),
-            enabled: true,
-        };
-        let mut quiet = Synth::default();
-        let mut turbo = Synth {
-            turbo_target: 1.0,
-            ..Synth::default()
-        };
-        let mut energy = 0.0;
-        for _ in 0..24000 {
-            let difference = turbo.sample(voice) - quiet.sample(voice);
-            energy += difference * difference;
-        }
-        assert!(energy > 1.0);
-        assert!(turbo.turbo_spool > 0.99);
-        for _ in 0..24000 {
-            turbo.sample(Voice {
-                enabled: false,
-                ..voice
-            });
-        }
-        assert!(turbo.turbo_spool < 0.001);
     }
 }

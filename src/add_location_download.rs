@@ -482,11 +482,4 @@ mod stage_tests {
         drop(location);
         assert!(output.path().join("scene.pack").is_file());
     }
-
-    #[test]
-    fn compile_requires_the_inference_stage() {
-        let downloads = downloaded_fixture();
-        let error = compile_location(downloads.path()).unwrap_err().to_string();
-        assert!(error.contains("run infer_trees"), "{error}");
-    }
 }

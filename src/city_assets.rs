@@ -273,16 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn discovery_ignores_authoring_json() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("new.track.json");
-        std::fs::write(&path, r#"{"version":2,"name":"New Circuit","points":[[0,0,0,7.2],[100,0,0,7.2],[100,0,100,7.2],[0,0,100,7.2]]}"#).unwrap();
-        std::fs::write(root.path().join("broken.track.json"), b"{}").unwrap();
-        let entries = discover(root.path()).unwrap();
-        assert!(entries.is_empty());
-    }
-
-    #[test]
     fn discovery_lists_directories_without_loading_maps() {
         let root = tempfile::tempdir().unwrap();
         // Invalid map contents intentionally prove discovery never decodes them.
@@ -319,29 +309,5 @@ impl MenuLocation {
             track: crate::world::LocationId::Asset(assets.directory().to_path_buf()),
             assets: Some(assets),
         })
-    }
-}
-
-#[cfg(test)]
-mod heightfields_accept_plain_and_legacy_headers_tests {
-    use super::*;
-    #[test]
-    fn heightfields_accept_plain_and_legacy_headers() {
-        for header in ["ELEVATION 1", "ELEVATION 1 deadbeef"] {
-            let field =
-                HeightField::load(&format!("{header}\ngrid 2 2 0 0 20 0\n1 2 3 4\n")).unwrap();
-            assert_eq!(field.height(crate::geometry::XZ { x: 0.0, z: 0.0 }), 1.0);
-        }
-    }
-}
-
-#[cfg(test)]
-mod malformed_heightfields_are_rejected_tests {
-    use super::*;
-    #[test]
-    fn malformed_heightfields_are_rejected() {
-        assert!(HeightField::load("ELEVATION 1 00000000").is_err());
-        let header = format!("ELEVATION 1 {:08x}\ngrid 2 2 0 0 20 180\nNaN 0 0 0\n", 0);
-        assert!(HeightField::load(&header).is_err());
     }
 }

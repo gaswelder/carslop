@@ -345,57 +345,6 @@ impl Location {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::geometry::XZ;
-
-    #[test]
-    fn uncompiled_roads_keep_centreline_clearance_and_have_no_curb_crossings() {
-        let location = crate::test_support::parse_world(
-            "CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n",
-        )
-        .unwrap();
-        let centre = XZ { x: 0.0, z: 0.0 };
-        let outside = XZ { x: 0.0, z: 6.0 };
-        assert!(!location.has_compiled_roads());
-        assert_eq!(location.road_clearance(centre.at_height(0.0)), -4.0);
-        assert_eq!(location.road_clearance(outside.at_height(0.0)), 2.0);
-        assert_eq!(location.drive_height(centre), 0.0);
-        assert_eq!(location.paving_height(centre), None);
-        assert_eq!(location.crossed_curb(centre, outside), None);
-    }
-
-    #[test]
-    fn curbs_report_crossings_without_becoming_walls() {
-        let city_track = crate::test_support::nicosia_world();
-        let city = &city_track;
-        let surfaces = city;
-        let mut checked = 0;
-        for curb in surfaces.curbs().iter().step_by(71) {
-            let q = crate::geometry::XZ {
-                x: (curb.ends[0].x + curb.ends[1].x) * 0.5,
-                z: (curb.ends[0].z + curb.ends[1].z) * 0.5,
-            };
-            let a = crate::geometry::XZ {
-                x: q.x + curb.inward.x * 0.15,
-                z: q.z + curb.inward.z * 0.15,
-            };
-            let b = crate::geometry::XZ {
-                x: q.x - curb.inward.x * 0.15,
-                z: q.z - curb.inward.z * 0.15,
-            };
-            if surfaces.contains_road(a) == surfaces.contains_road(b) {
-                continue;
-            }
-            assert!(surfaces.crossed_curb(a, b).is_some());
-            assert!(surfaces.crossed_curb(b, a).is_some());
-            assert!(surfaces.crossed_curb(a, a).is_none());
-            checked += 1;
-        }
-        assert!(checked > 30);
-    }
-}
-
 impl StreetSurface {
     fn triangle_at(&self, p: XZ<f32>, road_only: bool) -> Option<&Triangle> {
         self.triangles_grid

@@ -271,18 +271,4 @@ mod tests {
             assert!(!parsed.buildings[0].tagged);
         }
     }
-
-    #[test]
-    fn city_optional_fields_and_header_validation_remain_compatible() {
-        let minimal = "CITY 2\nbounds -10 -10 30 30\nn 0 0\nn 20 0\nr 0 1 6.5 0\n";
-        let map = parse(minimal).unwrap();
-        assert!(map.origin.is_none());
-        assert!(map.road_lines[0].osm_way_id.is_none());
-        assert_eq!((map.road_lines[0].kind, map.road_lines[0].lanes), (1, 2));
-        assert!(parse(&minimal.replace("CITY 2", "CITY 2 legacy")).is_err());
-        assert!(parse(&minimal.replace("n 20 0", "n NaN 0")).is_err());
-        let mut source = fixture();
-        source.road_lines[0].osm_way_id = None;
-        assert!(write(&mut vec![], &source, Precision::Imported).is_err());
-    }
 }

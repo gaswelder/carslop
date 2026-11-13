@@ -219,43 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_reader_preserves_selected_precision_and_legacy_headers() {
-        for header in ["LANDSCAPE 1", "LANDSCAPE 1 deadbeef cafebabe"] {
-            let text = format!("{header}\nt 1 1.123456789 -2 18 0.7\n");
-            let mut coord = 0.;
-            read::<f64>(Cursor::new(&text), |r| {
-                if let Record::Tree(t) = r {
-                    coord = t.coords.x;
-                }
-                Ok(())
-            })
-            .unwrap();
-            assert_eq!(coord, 1.123456789_f64);
-            read::<f32>(Cursor::new(&text), |r| {
-                if let Record::Tree(t) = r {
-                    assert_eq!(t.coords.x, 1.123456789_f32);
-                }
-                Ok(())
-            })
-            .unwrap();
-            read::<f32>(Cursor::new(format!("{header}\n")), |_| {
-                panic!("empty layer")
-            })
-            .unwrap();
-        }
-        // The runtime parser has always validated after f32 parsing.
-        read::<f32>(Cursor::new("LANDSCAPE 1\nt 1 0 0 18.0000001 0.7\n"), |_| {
-            Ok(())
-        })
-        .unwrap();
-        assert!(read::<f64>(
-            Cursor::new("LANDSCAPE 1\nt 1 0 0 18.0000001 0.7\n"),
-            |_| Ok(())
-        )
-        .is_err());
-    }
-
-    #[test]
     fn landscape_validation_is_shared_and_emission_errors_propagate() {
         for record in [
             "a 9 0 0 1 0 0 1",

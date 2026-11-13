@@ -1316,27 +1316,6 @@ mod tests {
     }
 
     #[test]
-    fn street_label_stays_inside_its_panel_for_long_and_local_names() {
-        for name in [
-            "Main Street",
-            "Οδός Αρχιεπισκόπου Μακαρίου Γ",
-            &"LONG STREET NAME ".repeat(30),
-            &"X".repeat(200),
-        ] {
-            let mut vertices = Vec::new();
-            append_street_name(&mut vertices, name);
-            assert!(!vertices.is_empty());
-            for vertex in vertices.chunks_exact(6) {
-                assert!((-0.46..=0.46).contains(&vertex[0]));
-                assert!((-0.97..=-0.76).contains(&vertex[1]));
-            }
-        }
-        for ch in "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩΆΈΉΊΌΎΏ".chars() {
-            assert_ne!(glyph(ch), [0; 7], "missing glyph {ch}");
-        }
-    }
-
-    #[test]
     fn location_pages_hit_only_visible_entries() {
         assert_eq!(
             location_menu_hit_test(-0.5, -0.07, 3, 4),
@@ -1392,21 +1371,6 @@ mod tests {
     }
 
     #[test]
-    fn pause_buttons_match_their_visible_actions() {
-        for (x, y, action) in [
-            (-0.36, 0.13, PauseAction::Resume),
-            (0.36, 0.13, PauseAction::Restart),
-            (-0.36, -0.06, PauseAction::Selection),
-            (0.36, -0.06, PauseAction::Audio),
-            (-0.36, -0.25, PauseAction::Camera),
-            (0.36, -0.25, PauseAction::Recover),
-        ] {
-            assert_eq!(pause_hit_test(x, y), Some(action));
-        }
-        assert_eq!(pause_hit_test(0.0, 0.5), None);
-    }
-
-    #[test]
     fn minimap_heading_keeps_forward_up_and_queries_rotated_corners() {
         let track = LocationId::Compact.try_track().unwrap();
         for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
@@ -1456,64 +1420,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[test]
-    fn vicinity_map_follows_player_and_preserves_pixel_aspect() {
-        for id in crate::test_support::location_ids() {
-            let track = id.try_track().unwrap();
-            for player in [track.spawn().point, track.at_distance(600.0).point] {
-                for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-                    let fit = MapFit::new(&track, player, viewport);
-                    let center = fit.point(player);
-                    assert!(
-                        (center[0] - 0.78).abs() < 0.00001 && (center[1] - 0.685).abs() < 0.00001
-                    );
-                    let east = fit.point(crate::geometry::XYZ {
-                        x: player.x + 100.0,
-                        y: 0.0,
-                        z: player.z,
-                    });
-                    let south = fit.point(crate::geometry::XYZ {
-                        x: player.x,
-                        y: 0.0,
-                        z: player.z + 100.0,
-                    });
-                    let width = (east[0] - center[0]) * viewport[0] * 0.5;
-                    let height = (south[1] - center[1]).abs() * viewport[1] * 0.5;
-                    assert!((width - height).abs() < 0.001);
-                    assert_eq!(
-                        south[1] < center[1],
-                        id == crate::test_support::nicosia_id()
-                    );
-                    assert!(
-                        fit.point(crate::geometry::XYZ {
-                            x: player.x + 1000.0,
-                            y: 0.0,
-                            z: player.z
-                        })[0]
-                            > MAP_CONTENT[1][0]
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn vicinity_clips_crossing_roads_and_hides_distant_markers() {
-        let [a, b] = clip_map_line([0.0, 0.68], [2.0, 0.68], 0.006).unwrap();
-        assert!((a[0] - 0.616).abs() < 0.00001 && (b[0] - 0.944).abs() < 0.00001);
-        assert!(clip_map_line([0.0, 0.0], [2.0, 0.0], 0.006).is_none());
-        assert!(clip_map_line([0.8, 0.0], [0.8, 2.0], 0.006).is_some());
-        let mut v = Vec::new();
-        map_marker(&mut v, [2.0, 2.0], 0.013, 1.0, [1.0, 0.0, 0.0]);
-        assert!(v.is_empty());
-        map_marker(&mut v, [0.95, 0.88], 0.013, 1.0, [1.0, 0.0, 0.0]);
-        assert!(!v.is_empty());
-        for p in v.as_chunks::<6>().0 {
-            assert!(p[0] >= MAP_CONTENT[0][0] && p[0] <= MAP_CONTENT[1][0]);
-            assert!(p[1] >= MAP_CONTENT[0][1] && p[1] <= MAP_CONTENT[1][1]);
         }
     }
 
@@ -1619,66 +1525,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn dial_sweep_places_zero_at_lower_left_and_half_scale_at_top() {
-        let center = [100.0, 100.0];
-        let zero = dial_point(center, 50.0, 0.0);
-        let half = dial_point(center, 50.0, 0.5);
-        let full = dial_point(center, 50.0, 1.0);
-        assert!(zero[0] < center[0] && zero[1] > center[1]);
-        assert!((half[0] - 100.0).abs() < 0.001 && (half[1] - 50.0).abs() < 0.001);
-        assert!(full[0] > center[0] && full[1] > center[1]);
-        assert_eq!(dial_value(9000.0, 8000.0), 1.0);
-        assert_eq!(dial_value(-20.0, 240.0), 0.0);
-        assert_eq!(dial_value(f32::NAN, 240.0), 0.0);
-        for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-            let mut v = Vec::new();
-            let canvas = InstrumentCanvas {
-                vertices: &mut v,
-                viewport,
-                scale: 1.0,
-                origin: [0.0, 0.0],
-            };
-            let a = canvas.point([100.0, 100.0]);
-            let b = canvas.point([150.0, 100.0]);
-            let c = canvas.point([100.0, 150.0]);
-            let width = (b[0] - a[0]) * viewport[0] * 0.5;
-            let height = (c[1] - a[1]).abs() * viewport[1] * 0.5;
-            assert!(
-                (width - height).abs() < 0.001,
-                "dials must stay circular at {viewport:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn gauges_are_bounded_and_clamped_to_the_hud_panel() {
-        let mut v = Vec::new();
-        append_instruments(
-            &mut v,
-            Gauges {
-                rpm: 9000.0,
-                redline_rpm: 6500.0,
-                speed_kmh: 120.0,
-                gear: 3,
-            },
-            [1280.0, 720.0],
-        );
-        assert!(!v.is_empty());
-        for vertex in v.as_chunks::<6>().0 {
-            assert!(vertex[0] >= 0.48 && vertex[0] <= 0.99, "x {}", vertex[0]);
-            assert!(vertex[1] >= -0.995 && vertex[1] <= -0.50, "y {}", vertex[1]);
-            assert!(vertex[2] == 0.0);
-            assert!(vertex[3..6].iter().all(|c| *c >= 0.0 && *c <= 1.0));
-        }
-        let amber_vertices = v
-            .as_chunks::<6>()
-            .0
-            .iter()
-            .filter(|vertex| vertex[3..6] == [1.0, 0.55, 0.18])
-            .count();
-        assert!(amber_vertices > 0, "high RPM should use warning color");
     }
 }

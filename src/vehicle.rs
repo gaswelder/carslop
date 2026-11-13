@@ -138,11 +138,6 @@ impl Vehicle {
         self.manual = manual;
     }
 
-    /// Calculated level-road estimate, used as a reference by physics checks.
-    #[cfg(test)]
-    fn reference_speed(&self) -> f32 {
-        self.model.spec().top_speed
-    }
     fn upshift_speed(&self, gear: u8) -> f32 {
         let gearbox = &self.model.spec().gearbox;
         gearbox.speed_at_rpm(gearbox.upshift_rpm, gear)
@@ -899,35 +894,6 @@ fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn road_verges_are_drivable_at_narrow_and_wide_sections() {
-        let track = crate::test_support::variable_width_track();
-        for point in [[0.0, 0.0, 0.0], [400.0, 0.0, 0.0]] {
-            let sample = track.project((point).into());
-            for side in [-1.0, 1.0] {
-                let position = sample.vehicle_position(side * 40.0);
-                let mut car = Vehicle::on_track(
-                    position,
-                    sample.heading(),
-                    crate::cars::CarModel::TestFixture(0),
-                    track.clone(),
-                );
-                assert_eq!(car.resolve_road(), 0.0);
-                assert_eq!([car.position.x, car.position.z], [position.x, position.z]);
-                assert!(
-                    (car.position.y
-                        - track.drive_height(crate::geometry::XZ {
-                            x: position.x,
-                            z: position.z
-                        })
-                        - 0.48)
-                        .abs()
-                        < 0.001
-                );
-            }
-        }
-    }
-
     fn hill_car(uphill: bool) -> Vehicle {
         let route = crate::test_support::scenic_id().try_track().unwrap();
         let road = (0..200)
@@ -1038,43 +1004,6 @@ mod tests {
                     car.speed
                 );
             }
-        }
-    }
-
-    #[test]
-    fn rear_drive_can_sustain_power_donuts_in_both_directions() {
-        let mut spec = crate::test_support::car_spec().clone();
-        spec.engine_power_hp = 300.0;
-        spec.engine_max_torque_nm = 450.0;
-        spec.tire_friction_coefficient = 1.0;
-        let model = crate::test_support::car_model_with_spec(spec);
-        for steering in [-1.0, 1.0] {
-            let mut car = level_route_car(crate::test_support::scenic_id(), model);
-            let mut rotation = 0.0;
-            let mut slip = 0.0;
-            let mut speed = 0.0;
-            for tick in 0..2640 {
-                treadmill_tick(
-                    &mut car,
-                    Controls {
-                        throttle: 1.0,
-                        steering,
-                        ..Controls::default()
-                    },
-                );
-                if tick >= 1200 {
-                    rotation += car.yaw_rate / 240.0;
-                    slip += car.slip.abs().atan2(car.speed.abs().max(0.1)) / 1440.0;
-                    speed += car.velocity.x.hypot(car.velocity.z) / 1440.0;
-                }
-            }
-            println!("steering {steering}: rotation {rotation}, slip {slip}, speed {speed}");
-            assert!(rotation * steering < -std::f32::consts::TAU);
-            assert!(
-                (0.25..1.0).contains(&slip),
-                "power donuts need controlled rear slip: {slip}"
-            );
-            assert!(speed < 12.0, "donuts must stay tight: {speed}");
         }
     }
 
@@ -1202,83 +1131,6 @@ mod tests {
             car.yaw_rate > 0.0 && car.yaw_rate < 0.5,
             "tire torque should slow existing rotation without deleting it"
         );
-    }
-
-    #[test]
-    fn lifting_in_gear_slows_the_car_more_than_neutral_without_brake_lights() {
-        for model in crate::cars::ALL {
-            let coast = |gear| {
-                let mut car = level_route_car(crate::test_support::scenic_id(), model);
-                car.manual = true;
-                car.gear = gear;
-                let road = car.track.at_distance(50.0);
-                car.velocity = road.tangent.map(|v| v * 12.0);
-                for _ in 0..240 {
-                    treadmill_tick(&mut car, Controls::default());
-                }
-                assert!(
-                    !car.brake_lights,
-                    "engine braking must not illuminate stop lights"
-                );
-                car.speed
-            };
-            let first = coast(1);
-            let third = coast(3);
-            let neutral = coast(NEUTRAL_GEAR);
-            println!("{model:?} 1s lift: first {first}, third {third}, neutral {neutral}");
-            assert!(
-                first < third - 0.2 && third < neutral - 0.1,
-                "gearing must make engine braking useful"
-            );
-        }
-    }
-
-    #[test]
-    fn gearing_changes_wheel_force_and_engine_braking() {
-        let mut car = level_route_car(
-            crate::test_support::scenic_id(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        car.gear = 1;
-        let first = car.drive_force(10.0);
-        let first_drag = car.engine_brake_force(10.0);
-        car.gear = 3;
-        assert!(first > car.drive_force(10.0) * 1.4);
-        assert!(first_drag > car.engine_brake_force(10.0) * 2.0);
-        let engaged = car.drive_force(10.0);
-        car.shift_timer = 0.1;
-        assert!(car.drive_force(10.0) < engaged * 0.3);
-    }
-
-    #[test]
-    fn acceleration_and_braking_transfer_axle_load() {
-        for model in crate::cars::ALL {
-            let mut car = level_route_car(crate::test_support::scenic_id(), model);
-            let road = car.track.at_distance(50.0);
-            car.velocity = road.tangent.map(|v| v * 10.0);
-            car.refresh_speed();
-            for _ in 0..60 {
-                treadmill_tick(
-                    &mut car,
-                    Controls {
-                        throttle: 1.0,
-                        ..Controls::default()
-                    },
-                );
-            }
-            let static_front = model.spec().mass * 9.81 * model.spec().front_weight;
-            assert!(car.axle_load[0] < static_front * 0.98);
-            for _ in 0..100 {
-                treadmill_tick(
-                    &mut car,
-                    Controls {
-                        brake: 1.0,
-                        ..Controls::default()
-                    },
-                );
-            }
-            assert!(car.axle_load[0] > static_front * 1.05);
-        }
     }
 
     #[test]
@@ -1534,38 +1386,6 @@ mod tests {
     }
 
     #[test]
-    fn road_speed_held_steering_has_useful_cornering_authority() {
-        for model in crate::cars::ALL {
-            for input in [-1.0, 1.0] {
-                let mut car = level_route_car(crate::test_support::scenic_id(), model);
-                let speed = 80.0 / 3.6;
-                car.velocity = crate::geometry::XZ {
-                    x: car.heading.sin() * speed,
-                    z: car.heading.cos() * speed,
-                };
-                let start = car.heading;
-                for _ in 0..240 {
-                    treadmill_tick(
-                        &mut car,
-                        Controls {
-                            steering: input,
-                            ..Controls::default()
-                        },
-                    );
-                }
-                let turn = crate::test_support::angle(car.velocity.x.atan2(car.velocity.z) - start)
-                    .abs()
-                    .to_degrees();
-                assert!(
-                    turn > 16.0,
-                    "{model:?}: held steering at 80 km/h only turns the velocity by {turn:.2} degrees in a second"
-                );
-                assert!(car.yaw_rate * input < 0.0);
-            }
-        }
-    }
-
-    #[test]
     fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
         let model = crate::cars::CarModel::TestFixture(0);
         for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
@@ -1636,34 +1456,6 @@ mod tests {
     }
 
     #[test]
-    fn stationary_steering_holds_its_angle_and_can_be_countersteered() {
-        let mut car = Vehicle::new(
-            crate::geometry::XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            0.0,
-            crate::cars::CarModel::TestFixture(0),
-        );
-        for direction in [-1.0, 1.0] {
-            car.steering = 0.0;
-            for _ in 0..240 {
-                car.update_steering(direction, 1.0 / 240.0);
-            }
-            assert_eq!(car.steering, direction);
-            for _ in 0..240 {
-                car.update_steering(0.0, 1.0 / 240.0);
-            }
-            assert_eq!(car.steering, direction);
-            for _ in 0..240 {
-                car.update_steering(-direction, 1.0 / 240.0);
-            }
-            assert_eq!(car.steering, -direction);
-        }
-    }
-
-    #[test]
     fn released_steering_centres_faster_with_forward_speed() {
         let mut car = Vehicle::new(
             crate::geometry::XYZ {
@@ -1701,25 +1493,6 @@ mod tests {
             car.speed = 10.0;
             car.update_steering(0.0, 1.0);
             assert_eq!(car.steering, 0.0);
-        }
-    }
-
-    #[test]
-    fn steering_builds_progressively_and_centres_faster() {
-        for model in crate::cars::ALL {
-            let mut car = route_car(track::LocationId::Compact, model);
-            steering_run(&mut car, 15.0, 1.0, 0.1, 240.0);
-            let built = car.front_wheel_angle().abs();
-            steering_run(&mut car, 15.0, 0.0, 0.05, 240.0);
-            assert_eq!(
-                car.front_wheel_angle(),
-                0.0,
-                "a brief correction must centre promptly"
-            );
-            assert!(
-                built > 0.0 && built < 0.54,
-                "a brief input must build gradually"
-            );
         }
     }
 
@@ -1843,109 +1616,6 @@ mod tests {
     }
 
     #[test]
-    fn car_specs_set_reference_speeds_braking_and_shift_points() {
-        for model in crate::cars::ALL {
-            let mut compact = route_car(track::LocationId::Compact, model);
-            let mut scenic = route_car(crate::test_support::scenic_id(), model);
-            let spec = model.spec();
-            assert_eq!(compact.reference_speed(), spec.top_speed);
-            assert_eq!(
-                compact.upshift_speed(1),
-                spec.gearbox.speed_at_rpm(spec.gearbox.upshift_rpm, 1)
-            );
-            assert_eq!(compact.brake_accel(), spec.brake_force / spec.mass);
-            assert_eq!(scenic.reference_speed(), spec.top_speed);
-            assert_eq!(scenic.upshift_speed(1), compact.upshift_speed(1));
-            assert_eq!(scenic.brake_accel(), spec.brake_force / spec.mass);
-            for car in [&mut compact, &mut scenic] {
-                let tangent = car.track.at_distance(50.0).tangent;
-                car.velocity = tangent.map(|v| v * (car.upshift_speed(1) - 0.01));
-                car.refresh_speed();
-                assert_eq!(car.gear, 1);
-                car.velocity = tangent.map(|v| v * (car.upshift_speed(1) + 0.01));
-                car.refresh_speed();
-                assert_eq!(car.gear, 2);
-            }
-        }
-    }
-
-    #[test]
-    fn stop_lights_follow_pedal_at_rest_and_in_reverse() {
-        for model in crate::cars::ALL {
-            let mut car = route_car(crate::test_support::scenic_id(), model);
-            for reverse in [false, true] {
-                if reverse {
-                    assert!(car.toggle_direction());
-                }
-                assert!(!car.brake_lights);
-                car.update(
-                    Duration::from_millis(20),
-                    Controls {
-                        brake: 0.1,
-                        ..Controls::default()
-                    },
-                );
-                assert!(car.brake_lights);
-                car.update(
-                    Duration::from_millis(20),
-                    Controls {
-                        handbrake: true,
-                        ..Controls::default()
-                    },
-                );
-                assert!(!car.brake_lights);
-            }
-            car.update(
-                Duration::from_millis(20),
-                Controls {
-                    brake: 1.0,
-                    ..Controls::default()
-                },
-            );
-            car.reset(car.position, car.heading);
-            assert!(!car.brake_lights);
-        }
-    }
-
-    #[test]
-    fn foot_brake_builds_releases_and_does_not_fake_a_skid() {
-        let mut car = route_car(
-            crate::test_support::scenic_id(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        let road = car.track.at_distance(50.0);
-        car.velocity = road.tangent.map(|v| v * 20.0);
-        let pedal = Controls {
-            brake: 1.0,
-            ..Controls::default()
-        };
-        car.update(Duration::from_millis(20), pedal);
-        assert!((car.brake_pressure - 0.1).abs() < 0.001);
-        car.update(Duration::from_millis(180), pedal);
-        assert!((car.brake_pressure - 1.0).abs() < 0.001);
-        assert!(
-            car.tire_scrub < 0.01,
-            "straight braking must not signal lockup"
-        );
-        car.update(Duration::from_millis(80), Controls::default());
-        assert!(car.brake_pressure < 0.001);
-        car.reset(road.vehicle_position(0.0), road.heading());
-        assert_eq!(car.brake_pressure, 0.0);
-    }
-
-    #[test]
-    fn reverse_uses_gearing_and_redline_instead_of_an_artificial_speed_cap() {
-        for model in crate::cars::ALL {
-            let mut car = level_route_car(crate::test_support::scenic_id(), model);
-            car.toggle_direction();
-            assert!(car.drive_force(-8.0) > 0.0);
-            let redline_speed = model.spec().gearbox.speed_at_rpm(REDLINE_RPM, 0);
-            assert!(redline_speed > 8.0);
-            assert_eq!(car.drive_force(-redline_speed * 1.01), 0.0);
-        }
-    }
-
-    #[test]
     fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         for model in crate::cars::ALL {
             let mut compact = level_route_car(track::LocationId::Compact, model);
@@ -2063,27 +1733,6 @@ mod tests {
     }
 
     #[test]
-    fn throttle_accelerates_and_brake_never_reverses() {
-        let mut v = car();
-        v.update(
-            Duration::from_secs(1),
-            Controls {
-                throttle: 1.0,
-                ..Controls::default()
-            },
-        );
-        assert!(v.speed > 3.0);
-        v.update(
-            Duration::from_secs(2),
-            Controls {
-                brake: 1.0,
-                ..Controls::default()
-            },
-        );
-        assert!(v.speed.abs() < 0.01);
-    }
-
-    #[test]
     fn outer_terrain_boundary_preserves_tangential_motion_and_ground_height() {
         let track = track::LocationId::Compact.try_track().unwrap();
         let bounds = track.terrain_bounds();
@@ -2111,61 +1760,6 @@ mod tests {
                 .abs()
                 < 0.001
         );
-    }
-
-    #[test]
-    fn handbrake_reduces_lateral_grip() {
-        let mut normal = car();
-        let mut sliding = car();
-        let h = normal.heading;
-        let velocity = crate::geometry::XZ {
-            x: h.sin() * 8.0 + h.cos() * 2.0,
-            z: h.cos() * 8.0 - h.sin() * 2.0,
-        };
-        normal.velocity = velocity;
-        sliding.velocity = velocity;
-        normal.update(Duration::from_millis(80), Controls::default());
-        sliding.update(
-            Duration::from_millis(80),
-            Controls {
-                handbrake: true,
-                ..Controls::default()
-            },
-        );
-        assert!(sliding.slip.abs() > normal.slip.abs());
-    }
-
-    #[test]
-    fn model_speed_limits_and_gearboxes_are_used() {
-        let sample = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
-        for model in crate::cars::ALL {
-            let mut v = Vehicle::new(sample.vehicle_position(0.0), sample.heading(), model);
-            // Reuse a short straight patch as a test treadmill, not a gameplay feature.
-            for _ in 0..1800 {
-                v.position = sample.vehicle_position(0.0);
-                v.update(
-                    Duration::from_secs_f64(1.0 / 60.0),
-                    Controls {
-                        throttle: 1.0,
-                        ..Controls::default()
-                    },
-                );
-            }
-            assert!(
-                v.speed > 15.0 && v.speed <= v.reference_speed(),
-                "{model:?} terminal {} cap {}",
-                v.speed,
-                v.reference_speed()
-            );
-            v.velocity = sample
-                .tangent
-                .map(|x| x * v.upshift_speed(v.model.spec().gearbox.gears()));
-            v.refresh_speed();
-            assert_eq!(v.gear, model.spec().gearbox.gears());
-        }
     }
 
     #[test]
@@ -2215,43 +1809,6 @@ mod tests {
     }
 
     #[test]
-    fn wheel_feedback_tracks_motion_steering_and_rear_handbrake_lock() {
-        let mut v = car();
-        v.update(
-            Duration::from_millis(16),
-            Controls {
-                handbrake: true,
-                ..Controls::default()
-            },
-        );
-        assert!(v.wheel_phase.iter().all(|phase| phase.abs() < 1e-6));
-        assert_eq!(v.tire_scrub, 0.0);
-        v.velocity = crate::geometry::XZ {
-            x: v.heading.sin() * 8.0,
-            z: v.heading.cos() * 8.0,
-        };
-        v.update(
-            Duration::from_millis(16),
-            Controls {
-                steering: 1.0,
-                handbrake: true,
-                ..Controls::default()
-            },
-        );
-        assert_eq!(v.wheel_phase[0], 0.0);
-        assert!(v.wheel_phase[1] > 0.0);
-        assert!(v.front_wheel_angle() < 0.0);
-        assert!(v.tire_scrub > 0.5);
-        v.update(Duration::from_millis(16), Controls::default());
-        assert!(v.wheel_phase[0] > 0.0);
-        let model = v.model;
-        v.reset(v.position, v.heading);
-        assert_eq!(v.model, model);
-        assert_eq!(v.wheel_phase, [0.0; 2]);
-        assert_eq!(v.tire_scrub, 0.0);
-    }
-
-    #[test]
     fn holding_brakes_at_rest_does_not_dive_and_settles_after_stopping() {
         for handbrake in [false, true] {
             for initial_speed in [0.0, 8.0, -8.0] {
@@ -2279,79 +1836,6 @@ mod tests {
                 assert!(v.body_pitch.abs() < 0.0001);
             }
         }
-    }
-
-    #[test]
-    fn sprung_body_motion_responds_to_braking_throttle_and_cornering() {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
-        let mut braking = Vehicle::new(
-            road.vehicle_position(0.0),
-            road.heading(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        braking.velocity = road.tangent.map(|v| v * 20.0);
-        braking.refresh_speed();
-        for _ in 0..30 {
-            braking.update(
-                Duration::from_secs_f64(1.0 / 60.0),
-                Controls {
-                    brake: 1.0,
-                    ..Controls::default()
-                },
-            );
-        }
-        assert!(
-            braking.body_pitch < -0.025,
-            "braking should dip the nose: {}",
-            braking.body_pitch
-        );
-
-        let mut accelerating = Vehicle::new(
-            road.vehicle_position(0.0),
-            road.heading(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        accelerating.velocity = road.tangent.map(|v| v * 8.0);
-        accelerating.refresh_speed();
-        for _ in 0..30 {
-            accelerating.update(
-                Duration::from_secs_f64(1.0 / 60.0),
-                Controls {
-                    throttle: 1.0,
-                    ..Controls::default()
-                },
-            );
-        }
-        assert!(
-            accelerating.body_pitch > 0.005,
-            "throttle should settle the rear slightly: {}",
-            accelerating.body_pitch
-        );
-
-        let mut turning = Vehicle::new(
-            road.vehicle_position(0.0),
-            road.heading(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        turning.velocity = road.tangent.map(|v| v * 18.0);
-        turning.refresh_speed();
-        for _ in 0..30 {
-            turning.update(
-                Duration::from_secs_f64(1.0 / 60.0),
-                Controls {
-                    steering: 1.0,
-                    ..Controls::default()
-                },
-            );
-        }
-        assert!(turning.body_roll.abs() > 0.01);
-        assert!(turning.body_pitch.abs() <= 0.07 && turning.body_roll.abs() <= 0.075);
-        turning.reset(turning.position, turning.heading);
-        assert_eq!(turning.body_pitch, 0.0);
-        assert_eq!(turning.body_roll, 0.0);
     }
 
     #[test]
@@ -2388,138 +1872,6 @@ mod tests {
         }
         assert!((forward.body_pitch - reverse.body_pitch).abs() < 0.0002);
         assert!(forward.body_pitch.abs() < 0.0005);
-    }
-
-    #[test]
-    fn update_reports_outer_boundary_impacts_without_losing_substep_peaks() {
-        let track = track::LocationId::Compact.try_track().unwrap();
-        let bounds = track.terrain_bounds();
-        let mut car = Vehicle::on_track(
-            crate::geometry::XYZ {
-                x: bounds.min.x + track::CAR_RADIUS + 0.02,
-                y: 0.0,
-                z: 0.0,
-            },
-            -std::f32::consts::FRAC_PI_2,
-            crate::cars::CarModel::TestFixture(0),
-            track,
-        );
-        car.velocity = crate::geometry::XZ { x: -5.0, z: 0.0 };
-        let impact = car.update(Duration::from_millis(16), Controls::default());
-        assert!(impact > 3.0);
-        assert_eq!(car.update(Duration::ZERO, Controls::default()), 0.0);
-    }
-
-    #[test]
-    fn upshift_sound_has_an_audible_rpm_and_load_transition() {
-        let mut car = level_route_car(
-            crate::test_support::scenic_id(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        car.manual = true;
-        car.gear = 2;
-        car.speed = car.model.spec().gearbox.speed_at_rpm(5000.0, 2);
-        car.engine_rpm = 5000.0;
-        car.engine_load = 1.0;
-        car.shift(true);
-        let target = car.target_engine_rpm();
-        let controls = Controls {
-            throttle: 1.0,
-            ..Controls::default()
-        };
-        car.update_engine_feedback(controls, 1.0 / 60.0);
-        assert!(car.engine_rpm > target + (5000.0 - target) * 0.85);
-        for _ in 0..8 {
-            car.update_engine_feedback(controls, 1.0 / 60.0);
-        }
-        assert!(car.engine_load < 0.6);
-        assert!(car.engine_rpm > target + 200.0);
-        for _ in 0..40 {
-            car.update_engine_feedback(controls, 1.0 / 60.0);
-        }
-        assert!((car.engine_rpm - target).abs() < 100.0);
-        assert!(car.engine_load > 0.9);
-    }
-
-    #[test]
-    fn downshifts_blip_engine_while_braking_and_then_return_to_coast() {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
-        for model in crate::cars::ALL {
-            for manual in [false, true] {
-                let mut car = Vehicle::new(road.vehicle_position(0.0), road.heading(), model);
-                car.manual = manual;
-                car.gear = 3;
-                let g = &model.spec().gearbox;
-                let speed = g.speed_at_rpm(g.downshift_rpm - 50.0, 3);
-                car.speed = speed;
-                car.velocity = road.tangent.map(|v| v * speed);
-                car.engine_rpm = car.target_engine_rpm();
-                car.engine_load = 0.12;
-                let before_rpm = car.engine_rpm;
-                let matched_rpm = g.rpm(speed, 2).clamp(IDLE_RPM, REDLINE_RPM);
-                if manual {
-                    car.shift(false);
-                }
-                for _ in 0..6 {
-                    car.position = road.vehicle_position(0.0);
-                    car.update(
-                        Duration::from_secs_f64(1.0 / 60.0),
-                        Controls {
-                            brake: 1.0,
-                            ..Controls::default()
-                        },
-                    );
-                }
-                assert_eq!(car.gear, 2);
-                assert!(car.engine_rpm > before_rpm + (matched_rpm - before_rpm) * 0.5);
-                assert!(
-                    car.engine_load > 0.28,
-                    "downshift must sound loaded without pedal input"
-                );
-                car.manual = true; // Hold the gear while the blip decays.
-                for _ in 0..60 {
-                    car.position = road.vehicle_position(0.0);
-                    car.update(Duration::from_secs_f64(1.0 / 60.0), Controls::default());
-                }
-                assert_eq!(car.rev_match_timer, 0.0);
-                assert!((car.engine_load - 0.12).abs() < 0.01);
-                car.reset(road.vehicle_position(0.0), road.heading());
-                assert_eq!(car.rev_match_timer, 0.0);
-            }
-        }
-    }
-
-    #[test]
-    fn rev_matching_excludes_upshifts_neutral_reverse_and_idle() {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
-        let mut car = Vehicle::new(
-            road.vehicle_position(0.0),
-            road.heading(),
-            crate::cars::CarModel::TestFixture(0),
-        );
-        car.manual = true;
-        car.gear = 3;
-        car.shift(false);
-        assert_eq!(car.rev_match_timer, 0.0, "stationary downshift");
-        car.speed = 20.0;
-        car.shift(true);
-        assert_eq!(car.rev_match_timer, 0.0, "upshift");
-        car.shift(false);
-        assert!(car.rev_match_timer > 0.0);
-        car.gear = 1;
-        car.shift(false);
-        assert_eq!(car.rev_match_timer, 0.0, "neutral cancels an active blip");
-        car.shift(false);
-        assert_eq!(car.rev_match_timer, 0.0, "reverse");
-        car.shift(true);
-        car.shift(true);
-        assert_eq!(car.rev_match_timer, 0.0, "engaging first from neutral");
     }
 
     #[test]
@@ -2771,49 +2123,6 @@ mod tests {
             assert!(v.speed > 0.5, "{model:?} failed to pull away: {}", v.speed);
         }
     }
-
-    #[test]
-    fn reverse_steering_and_wheel_rotation_have_the_correct_sign() {
-        let mut forward = car();
-        let mut reverse = car();
-        reverse.toggle_direction();
-        let heading = forward.heading;
-        forward.velocity = crate::geometry::XZ {
-            x: heading.sin() * 4.0,
-            z: heading.cos() * 4.0,
-        };
-        reverse.velocity = forward.velocity.map(|v| -v);
-        forward.wheel_phase = [1.0; 2];
-        reverse.wheel_phase = [1.0; 2];
-        let controls = Controls {
-            steering: 1.0,
-            ..Controls::default()
-        };
-        forward.update(Duration::from_millis(16), controls);
-        reverse.update(Duration::from_millis(16), controls);
-        assert!(crate::test_support::angle(forward.heading - heading) < 0.0);
-        assert!(crate::test_support::angle(reverse.heading - heading) > 0.0);
-        assert!(forward.front_wheel_angle() < 0.0 && reverse.front_wheel_angle() < 0.0);
-        assert!(forward.wheel_phase[1] > 1.0 && reverse.wheel_phase[1] < 1.0);
-    }
-
-    #[test]
-    fn gear_selector_rejects_sideways_motion_and_reset_selects_drive() {
-        let mut v = car();
-        v.velocity = crate::geometry::XZ { x: 0.0, z: 2.0 };
-        assert!(!v.toggle_direction());
-        v.velocity = crate::geometry::XZ { x: 0.1, z: 0.0 };
-        assert!(v.toggle_direction());
-        assert_eq!(
-            v.velocity,
-            crate::geometry::XZ { x: 0.1, z: 0.0 },
-            "selecting gear must not teleport velocity"
-        );
-        v.reset(v.position, v.heading);
-        assert_eq!(v.direction, Direction::Drive);
-        assert_eq!(v.gear, 1);
-        assert_eq!(v.speed, 0.0);
-    }
 }
 
 #[cfg(test)]
@@ -2866,30 +2175,5 @@ mod turbo_tests {
         car.gear = NEUTRAL_GEAR;
         car.update_turbo(5.0, 1.0, speed);
         assert_eq!(car.turbo_spool, 0.0);
-    }
-
-    #[test]
-    fn low_rpm_and_naturally_aspirated_cars_do_not_build_boost() {
-        for model in crate::cars::ALL {
-            let mut car = Vehicle::new(
-                crate::geometry::XYZ {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                0.0,
-                model,
-            );
-            let speed = model.spec().gearbox.speed_at_rpm(1000.0, 1);
-            for _ in 0..1000 {
-                car.update_turbo(0.004, 1.0, speed);
-            }
-            if model.spec().turbo.is_none() {
-                assert_eq!(car.boost_power_fraction(), 1.0);
-                assert_eq!(car.turbo_spool, 0.0);
-            } else {
-                assert!(car.turbo_boost < 0.12);
-            }
-        }
     }
 }

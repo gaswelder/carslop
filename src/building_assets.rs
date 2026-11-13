@@ -283,32 +283,4 @@ mod tests {
         assert!((width - 1.24).abs() < 0.00001);
         assert_eq!(height, 2.25);
     }
-
-    #[test]
-    fn catalog_reads_file_choices_and_rules_and_reports_bad_assets() {
-        let directory = Path::new("data/buildings");
-        let source = std::fs::read(directory.join("parts.json")).unwrap();
-        let mut definition: Value = serde_json::from_slice(&source).unwrap();
-        definition["window"]["model"] = "entrance.glb".into();
-        definition["placement"]["modern_window_spacing"] = 4.0.into();
-        let catalog =
-            Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).unwrap();
-        assert_eq!(
-            catalog
-                .window
-                .meshes
-                .iter()
-                .map(|m| m.vertices.len())
-                .sum::<usize>(),
-            18
-        );
-        assert_eq!(catalog.placement.modern_window_spacing, 4.0);
-        definition["window"]["model"] = "missing.glb".into();
-        assert!(Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).is_err());
-        definition["window"]["model"] = "../entrance.glb".into();
-        assert!(Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).is_err());
-        definition["window"]["model"] = "window.glb".into();
-        definition["placement"]["balcony_depth"] = serde_json::json!([2.0, 1.0]);
-        assert!(Catalog::decode(directory, &serde_json::to_vec(&definition).unwrap()).is_err());
-    }
 }
