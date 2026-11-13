@@ -530,7 +530,10 @@ impl Hud {
             );
         }
         let spec = menu.car.spec();
-        let power = format!("{:.0} HP", spec.engine_power_hp);
+        let power = format!(
+            "{:.0} HP",
+            spec.engine_power_watts / crate::cars::WATTS_PER_HP
+        );
         for (x, y, label, value) in [
             (-0.84, 0.66, "ENGINE POWER", power),
             (

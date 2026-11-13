@@ -363,7 +363,7 @@ fn output_sample(driving: f32) -> f32 {
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
-    rpm.clamp(crate::vehicle::IDLE_RPM, crate::vehicle::REDLINE_RPM) / 30.0
+    rpm.max(crate::vehicle::IDLE_RPM) / 30.0
 }
 
 #[cfg(test)]

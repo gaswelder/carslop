@@ -15,6 +15,25 @@
     48000
   ],
   "engine_max_torque_nm": 125,
+  "engine_torque_curve": [
+    {
+      "rpm": 0,
+      "torque": 0.6
+    },
+    {
+      "rpm": 3500,
+      "torque": 1
+    },
+    {
+      "rpm": 6500,
+      "torque": 0.9
+    },
+    {
+      "rpm": 33500,
+      "torque": 0
+    }
+  ],
+  "redline_rpm": 6500,
   "suspension_hz": 1.55,
   "gearbox": {
     "ratios": [

@@ -80,6 +80,8 @@ pub fn car_spec() -> &'static CarSpec {
             brake_bias: 0.65,
             corner_stiffness: [70000.0; 2],
             engine_max_torque_nm: 180.0,
+            engine_torque_curve: vec![(0.0, 0.6), (3500.0, 1.0), (6500.0, 0.9), (33500.0, 0.0)],
+            redline_rpm: 6500.0,
             suspension_hz: 1.7,
             gearbox: Gearbox {
                 ratios: &[3.0, 2.0, 1.4, 1.0, 0.8],
@@ -89,7 +91,7 @@ pub fn car_spec() -> &'static CarSpec {
                 upshift_rpm: 5500.0,
                 downshift_rpm: 2200.0,
             },
-            engine_power_hp: 120.0,
+            engine_power_watts: 120.0 * crate::cars::WATTS_PER_HP,
             drag_coefficient: 0.3,
             frontal_area_m2,
             turbo: None,
@@ -112,11 +114,13 @@ pub fn car_definition() -> serde_json::Value {
     serde_json::json!({
         "name": s.name, "weight_kg": s.mass, "brake_force": s.brake_force,
         "tire_friction_coefficient": s.tire_friction_coefficient,
-        "engine_power_hp": s.engine_power_hp,
+        "engine_power_hp": s.engine_power_watts / crate::cars::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / s.design.height(), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
         "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine_max_torque_nm,
+        "engine_torque_curve": s.engine_torque_curve.iter().map(|&(rpm, torque)|
+            serde_json::json!({"rpm": rpm, "torque": torque})).collect::<Vec<_>>(),
         "suspension_hz": s.suspension_hz,
         "gearbox": {"ratios": s.gearbox.ratios, "final_drive": s.gearbox.final_drive,
             "reverse_ratio": s.gearbox.reverse_ratio, "upshift_rpm": s.gearbox.upshift_rpm,

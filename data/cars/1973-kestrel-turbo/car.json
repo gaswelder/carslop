@@ -14,7 +14,58 @@
     66000,
     132000
   ],
-  "engine_max_torque_nm": 375,
+  "engine_max_torque_nm": 412,
+  "engine_torque_curve": [
+    {
+      "rpm": 1500,
+      "torque": 0.4422
+    },
+    {
+      "rpm": 2000,
+      "torque": 0.4631
+    },
+    {
+      "rpm": 2500,
+      "torque": 0.4948
+    },
+    {
+      "rpm": 3000,
+      "torque": 0.7077
+    },
+    {
+      "rpm": 3500,
+      "torque": 1
+    },
+    {
+      "rpm": 4000,
+      "torque": 1
+    },
+    {
+      "rpm": 4500,
+      "torque": 1
+    },
+    {
+      "rpm": 5000,
+      "torque": 1
+    },
+    {
+      "rpm": 5500,
+      "torque": 0.895
+    },
+    {
+      "rpm": 6000,
+      "torque": 0.72
+    },
+    {
+      "rpm": 6500,
+      "torque": 0.545
+    },
+    {
+      "rpm": 7000,
+      "torque": 0.37
+    }
+  ],
+  "redline_rpm": 6500,
   "suspension_hz": 1.85,
   "rear_combined_slip": [
     0.94,

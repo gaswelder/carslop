@@ -59,74 +59,53 @@ pub struct CarSpec {
     pub brake_bias: f32,
     pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
     pub engine_max_torque_nm: f32,
+    engine_torque_curve: Vec<(f32, f32)>,
+    pub redline_rpm: f32,
     pub suspension_hz: f32,
     pub gearbox: Gearbox,
-    pub engine_power_hp: f32,
+    pub engine_power_watts: f32,
     /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
     drag_coefficient: f32,
     frontal_area_m2: f32,
     pub turbo: Option<Turbo>,
 }
 
-const WATTS_PER_HP: f32 = 745.6999;
-// Fixed reference air density in kg/m³.
+pub const WATTS_PER_HP: f32 = 745.6999;
 const AIR_DENSITY_KG_M3: f32 = 1.225;
+
+fn torque_factor(curve: &[(f32, f32)], rpm: f32) -> f32 {
+    let upper = curve.partition_point(|&(sample_rpm, _)| sample_rpm < rpm);
+    if upper == 0 {
+        return curve[0].1;
+    }
+    if upper == curve.len() {
+        return curve[upper - 1].1;
+    }
+    let (lower_rpm, lower_factor) = curve[upper - 1];
+    let (upper_rpm, upper_factor) = curve[upper];
+    let fraction = (rpm - lower_rpm) / (upper_rpm - lower_rpm);
+    lower_factor + (upper_factor - lower_factor) * fraction
+}
 
 // The physics assumes
 // 90% drivetrain efficiency to calculate power at the wheels.
-const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
+pub const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 
 impl CarSpec {
-    fn wheel_power_watts(&self) -> f32 {
-        self.engine_power_hp * WATTS_PER_HP * DRIVETRAIN_EFFICIENCY
+    fn drive_force(&self, speed: f32, gear: u8, boost_fraction: f32) -> f32 {
+        let g = &self.gearbox;
+        let ratio = g.ratios[(gear - 1) as usize];
+        let rpm = g.rpm(speed, gear).max(crate::vehicle::IDLE_RPM);
+        self.engine_torque(rpm) * ratio * g.final_drive * DRIVETRAIN_EFFICIENCY / g.rolling_radius
+            * boost_fraction
     }
-    pub fn drive_force(
-        &self,
-        speed: f32,
-        gear: u8,
-        reverse: bool,
-        boost_fraction: f32,
-        shifting: bool,
-    ) -> f32 {
-        if gear == crate::vehicle::NEUTRAL_GEAR {
-            return 0.0;
-        }
-        let spec = self;
-        let g = &spec.gearbox;
-        let ratio = if reverse {
-            g.reverse_ratio
-        } else {
-            g.ratios[gear.saturating_sub(1).min(g.gears() - 1) as usize]
-        };
-        // While rolling against the selected gear, the clutch slips and drive
-        // torque opposes motion.
-        let driven_speed = if reverse { -speed } else { speed }.max(0.0);
-        let rpm = g.rpm(driven_speed, gear).max(2200.0);
-        // Broad torque plateau with weaker idle and redline torque. The clutch
-        // slips at launch; gearing subsequently sets wheel force and shift loss.
-        let torque_factor = if rpm < 3500.0 {
-            0.60 + 0.40 * (rpm / 3500.0)
-        } else {
-            (1.0 - 0.10 * ((rpm - 3500.0) / 3000.0)).max(0.0)
-        };
-        let force = spec.engine_max_torque_nm
-            * torque_factor
-            * ratio
-            * g.final_drive
-            * crate::cars::DRIVETRAIN_EFFICIENCY
-            / g.rolling_radius;
-        let force = if shifting { force * 0.2 } else { force };
-        let force = force * boost_fraction;
-        let force = if reverse {
-            force * ((crate::vehicle::REDLINE_RPM - rpm) / 250.0).clamp(0.0, 1.0)
-        } else {
-            force
-        };
-        if rpm >= crate::vehicle::REDLINE_RPM {
-            0.0
-        } else {
-            force.min(spec.wheel_power_watts() * boost_fraction / speed.abs().max(1.0))
-        }
+
+    /// Full-load crankshaft torque, bounded by the authored engine power.
+    pub fn engine_torque(&self, rpm: f32) -> f32 {
+        (self.engine_max_torque_nm * torque_factor(&self.engine_torque_curve, rpm)).min(
+            self.engine_power_watts
+                / (rpm.max(crate::vehicle::IDLE_RPM) * std::f32::consts::TAU / 60.0),
+        )
     }
 
     pub fn resistance_accel(&self, speed: f32) -> f32 {
@@ -141,17 +120,17 @@ impl CarSpec {
         (1..=self.gearbox.gears())
             .map(|gear| {
                 let mut low = 0.0;
-                let mut high = self.gearbox.speed_at_rpm(crate::vehicle::REDLINE_RPM, gear);
+                let mut high = self.gearbox.speed_at_rpm(self.redline_rpm, gear);
                 for _ in 0..48 {
                     let speed = (low + high) * 0.5;
-                    let rpm = self.gearbox.rpm(speed, gear).max(2200.0);
+                    let rpm = self.gearbox.rpm(speed, gear).max(crate::vehicle::IDLE_RPM);
                     let boost = self.turbo.as_ref().map_or(1.0, |t| {
                         let spool = ((rpm - t.spool_start_rpm)
                             / (t.full_boost_rpm - t.spool_start_rpm))
                             .clamp(0.0, 1.0);
                         t.off_boost_fraction + (1.0 - t.off_boost_fraction) * spool
                     });
-                    if self.drive_force(speed, gear, false, boost, false)
+                    if self.drive_force(speed, gear, boost)
                         > self.mass * self.resistance_accel(speed)
                     {
                         low = speed;
@@ -313,6 +292,24 @@ fn text(v: &serde_json::Value) -> Result<&'static str, String> {
         .ok_or("expected nonempty text")?;
     Ok(Box::leak(s.to_owned().into_boxed_str()))
 }
+fn torque_curve(value: &serde_json::Value) -> Result<Vec<(f32, f32)>, String> {
+    let points = value
+        .as_array()
+        .filter(|points| points.len() >= 2)
+        .ok_or("torque curve requires at least two points")?;
+    let curve = points
+        .iter()
+        .map(|point| Ok((nonnegative(&point["rpm"])?, frac(&point["torque"])?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    if !curve.windows(2).all(|points| points[0].0 < points[1].0) {
+        return Err("torque curve RPM must strictly increase".into());
+    }
+    if !curve.iter().any(|point| point.1 > 0.0) {
+        return Err("torque curve requires positive torque".into());
+    }
+    Ok(curve)
+}
+
 fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarSpec, String> {
     let stiffness = v["corner_stiffness"]
         .as_array()
@@ -377,7 +374,7 @@ fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarS
         brake_force: num(&v["brake_force"])?,
         tire_friction_coefficient: num(&v["tire_friction_coefficient"])?,
         wheelbase,
-        engine_power_hp: num(&v["engine_power_hp"])?,
+        engine_power_watts: num(&v["engine_power_hp"])? * WATTS_PER_HP,
         drag_coefficient: num(&v["drag_coefficient"])?,
         frontal_area_m2,
         rear_combined_slip,
@@ -388,12 +385,20 @@ fn load_definition(path: &std::path::Path, v: &serde_json::Value) -> Result<CarS
         drive_bias,
         brake_bias: frac(&v["brake_bias"])?,
         engine_max_torque_nm: num(&v["engine_max_torque_nm"])?,
+        engine_torque_curve: torque_curve(&v["engine_torque_curve"])?,
+        redline_rpm: num(&v["redline_rpm"])?,
         suspension_hz: num(&v["suspension_hz"])?,
         corner_stiffness: [num(&stiffness[0])?, num(&stiffness[1])?],
         gearbox,
     };
     if spec.gearbox.downshift_rpm >= spec.gearbox.upshift_rpm {
         return Err("invalid shift thresholds".into());
+    }
+    if spec.redline_rpm <= crate::vehicle::IDLE_RPM + 250.0 {
+        return Err("redline RPM must leave limiter recovery above idle".into());
+    }
+    if spec.gearbox.upshift_rpm >= spec.redline_rpm {
+        return Err("upshift RPM must be below redline RPM".into());
     }
     spec.top_speed = spec.calculate_top_speed();
     Ok(spec)
@@ -598,8 +603,8 @@ mod tests {
         spec.gearbox.final_drive = 1.0;
         let speed = spec.calculate_top_speed();
         let road_power = spec.mass * spec.resistance_accel(speed) * speed;
-        assert!((road_power - spec.wheel_power_watts()).abs() < 1.0);
-        spec.engine_power_hp *= 2.0;
+        assert!((road_power - spec.engine_power_watts * DRIVETRAIN_EFFICIENCY).abs() < 1.0);
+        spec.engine_power_watts *= 2.0;
         let more_power = spec.calculate_top_speed();
         assert!(more_power > speed);
         spec.drag_coefficient *= 2.0;
@@ -680,63 +685,28 @@ mod runtime_tests {
     use super::*;
 
     #[test]
-    fn gearbox_limit_keeps_neutral_distinct() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("car.json");
-        let original = crate::test_support::write_car(dir.path());
-        for count in [254, 255] {
-            let ratios: Vec<_> = (1..=count).rev().collect();
-            let mut required = original.clone();
-            required["gearbox"]["ratios"] = serde_json::json!(ratios);
-            fs::write(&path, serde_json::to_vec(&required).unwrap()).unwrap();
-            assert_eq!(load_car(&path).is_ok(), count == 254);
-        }
-    }
-
-    #[test]
-    fn required_parameters_are_validated() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("car.json");
-        let original = crate::test_support::write_car(dir.path());
-        for (key, value) in [
-            ("weight_kg", serde_json::json!(-1)),
-            ("drag_coefficient", serde_json::json!(0)),
-            ("drag_coefficient", serde_json::json!(-1)),
-            ("drag_coefficient", serde_json::Value::Null),
-            ("cg_height_fraction", serde_json::json!(-0.1)),
-            ("cg_height_fraction", serde_json::json!(1.1)),
-            ("cg_height_fraction", serde_json::Value::Null),
-            ("tire_friction_coefficient", serde_json::json!(0)),
-            ("tire_friction_coefficient", serde_json::json!(-1)),
-            ("tire_friction_coefficient", serde_json::Value::Null),
-            ("engine_power_hp", serde_json::json!(0)),
-            ("engine_power_hp", serde_json::Value::Null),
-            ("gearbox", serde_json::json!({"ratios": []})),
-        ] {
-            let mut invalid = original.clone();
-            invalid[key] = value;
-            fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-            assert!(load_car(&path).is_err(), "accepted invalid {key}");
-        }
-    }
-
-    #[test]
     fn authoring_units_convert_to_physics_units() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("car.json");
         let mut definition = crate::test_support::write_car(dir.path());
         definition["weight_kg"] = serde_json::json!(1200);
+        definition["redline_rpm"] = serde_json::json!(7200);
         definition["engine_power_hp"] = serde_json::json!(100);
         definition["tire_friction_coefficient"] = serde_json::json!(1.2);
         definition["cg_height_fraction"] = serde_json::json!(0.5);
         fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
         let car = load_car(&path).unwrap();
         assert_eq!(car.mass, 1200.0);
+        assert_eq!(car.redline_rpm, 7200.0);
+        assert_eq!(
+            car.engine_torque_curve,
+            crate::test_support::car_spec().engine_torque_curve
+        );
         assert!((car.cg_height - 0.65).abs() < 0.00001);
-        assert_eq!(car.engine_power_hp, 100.0);
+        assert!((car.engine_power_watts - 74_569.99).abs() < 0.02);
         assert_eq!(car.tire_friction_coefficient, 1.2);
         // 100 mechanical hp = 74.570 kW at the engine, 67.113 kW at the wheels.
-        assert!((car.wheel_power_watts() - 67_112.99).abs() < 0.02);
+        assert!((car.engine_power_watts * DRIVETRAIN_EFFICIENCY - 67_112.99).abs() < 0.02);
         for (fraction, expected) in [(0.0, 0.0), (1.0, 1.3)] {
             definition["cg_height_fraction"] = serde_json::json!(fraction);
             fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();

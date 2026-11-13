@@ -35,6 +35,7 @@ mod loading;
 mod location;
 mod osm;
 mod particles;
+mod powertrain;
 mod prefetch;
 mod scene;
 mod scene_archive;
@@ -834,7 +835,7 @@ impl App {
                 car.heading,
                 hud::Gauges {
                     rpm: car.engine_rpm,
-                    redline_rpm: vehicle::REDLINE_RPM,
+                    redline_rpm: car.model.spec().redline_rpm,
                     speed_kmh: car.speed.abs() * 3.6,
                     gear: car.gear,
                 },
