@@ -2,20 +2,39 @@
 use crate::asset_car;
 use crate::build_collision;
 use crate::build_scene;
+use crate::build_surfaces;
 use crate::chunks;
 use crate::city_assets::CityAsset;
-use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
+use crate::geometry::{polygon, BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::osm;
 use crate::phys_car;
 use crate::scene;
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::src_files;
+use crate::street_surface;
 use crate::track;
 use crate::world;
 pub use crate::world::test_support::*;
 use crate::world::Building;
+use geo::MultiPolygon;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
+
+pub fn road_footprint(surface: &street_surface::StreetSurface) -> MultiPolygon<f64> {
+    build_surfaces::union(
+        &surface
+            .road_triangles()
+            .iter()
+            .filter(|triangle| triangle.usage.is_road())
+            .map(|triangle| {
+                MultiPolygon(vec![polygon(&triangle.points.map(|point| XZ {
+                    x: point.x as f64,
+                    z: point.z as f64,
+                }))])
+            })
+            .collect::<Vec<_>>(),
+    )
+}
 
 pub fn audio_voice() -> &'static asset_car::EngineVoice {
     static VOICE: OnceLock<asset_car::EngineVoice> = OnceLock::new();

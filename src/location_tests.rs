@@ -1676,7 +1676,14 @@ fn explicit_lane_turns_and_unpaved_materials_survive_compilation() {
     let surfaces = build_surfaces::write_streets_txt(&map, &path, Some(&source))
         .unwrap()
         .surfaces;
-    let paint = build_lane_details::paint(&source, &map, &surfaces.paths, &surfaces.asphalt);
+    let compiled = street_surface::StreetSurface::load(
+        &fs::read_to_string(&path).unwrap(),
+        map.road_lines.len(),
+    )
+    .unwrap()
+    .0;
+    let asphalt = test_support::road_footprint(&compiled);
+    let paint = build_lane_details::paint(&source, &map, &surfaces.paths, &asphalt);
     assert!(paint.unsigned_area() > 1.);
     assert!(paint
         .0

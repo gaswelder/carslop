@@ -33,8 +33,6 @@ pub struct Surfaces {
     pub paths: Vec<Vec<XZ>>,
     /// Incident ground-road indices for each SourceLocation node.
     pub adjacency: Vec<Vec<usize>>,
-    /// Ground carriageway footprint, including junctions, for raised road clipping.
-    pub asphalt: MultiPolygon<f64>,
     /// Road, junction and building exclusion polygons in local [X, Z] metres; may overlap.
     pub obstacles: MultiPolygon<f64>,
 }
@@ -871,7 +869,6 @@ pub fn write_streets_txt(
         surfaces: Surfaces {
             paths,
             adjacency,
-            asphalt,
             obstacles,
         },
     })
@@ -884,6 +881,7 @@ mod geometry_tests {
     use crate::geometry::{project, BoundingBoxXZ, LatLon};
     use crate::src_files;
     use crate::street_surface;
+    use crate::test_support;
     use crate::test_support::Temp;
     use crate::world;
     use geo::{Contains, Point};
@@ -1020,8 +1018,9 @@ mod geometry_tests {
             &[(0, 1, 8., 0), (1, 2, 8., 0), (3, 1, 6.5, 1), (1, 4, 5.5, 2)],
             &[],
         );
-        let (_temp, s, loaded) = surfaces(&m);
-        assert!(s.asphalt.contains(&point(XZ { x: 4.4, z: 3.4 })));
+        let (_temp, _, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
+        assert!(asphalt.contains(&point(XZ { x: 4.4, z: 3.4 })));
         let mut area = 0.;
         let mut styles = std::collections::BTreeSet::new();
         for t in loaded.road_triangles() {
@@ -1038,10 +1037,10 @@ mod geometry_tests {
                 area += poly.unsigned_area();
             }
             if matches!(t.usage, world::TriangleUsage::Pavement(_)) {
-                assert!(poly.intersection(&s.asphalt).unsigned_area() < 0.0001);
+                assert!(poly.intersection(&asphalt).unsigned_area() < 0.0001);
             }
         }
-        assert!((area - s.asphalt.unsigned_area()).abs() < 0.01);
+        assert!((area - asphalt.unsigned_area()).abs() < 0.01);
         for line in std::fs::read_to_string(_temp.directory.join("streets.txt"))
             .unwrap()
             .lines()
@@ -1065,9 +1064,10 @@ mod geometry_tests {
             &[(0, 1, 8., 0), (1, 2, 8., 0), (1, 3, 10., 1)],
             &[],
         );
-        let (_, s, _) = surfaces(&m);
-        assert!(!s.asphalt.intersects(&point(XZ { x: 0., z: -4.5 })));
-        assert!(s.asphalt.contains(&point(XZ { x: 0., z: -3.9 })));
+        let (_, _, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
+        assert!(!asphalt.intersects(&point(XZ { x: 0., z: -4.5 })));
+        assert!(asphalt.contains(&point(XZ { x: 0., z: -3.9 })));
         let building = vec![
             XZ { x: 4.2, z: 4.2 },
             XZ { x: 7., z: 4.2 },
@@ -1085,8 +1085,9 @@ mod geometry_tests {
             &[(0, 1, 8., 1), (1, 2, 8., 1), (3, 1, 8., 1), (1, 4, 8., 1)],
             &[building],
         );
-        let (_, s, _) = surfaces(&m);
-        assert!(!s.asphalt.intersects(&point(XZ { x: 4.5, z: 4.5 })));
+        let (_, _, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
+        assert!(!asphalt.intersects(&point(XZ { x: 4.5, z: 4.5 })));
     }
     #[test]
     fn parallel_roads_and_enclosed_blocks_keep_their_gaps() {
@@ -1100,9 +1101,10 @@ mod geometry_tests {
             &[(0, 1, 6., 1), (2, 3, 6., 1)],
             &[],
         );
-        let (_, s, _) = surfaces(&m);
-        assert_eq!(s.asphalt.0.len(), 2);
-        assert!(!s.asphalt.intersects(&point(XZ { x: 0., z: 5. })));
+        let (_, _, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
+        assert_eq!(asphalt.0.len(), 2);
+        assert!(!asphalt.intersects(&point(XZ { x: 0., z: 5. })));
         let m = map(
             &[
                 XZ { x: -20., z: -20. },
@@ -1113,8 +1115,9 @@ mod geometry_tests {
             &[(0, 1, 6., 1), (1, 2, 6., 1), (2, 3, 6., 1), (3, 0, 6., 1)],
             &[],
         );
-        let (_temp, s, loaded) = surfaces(&m);
-        assert!(!s.asphalt.intersects(&point(XZ { x: 0., z: 0. })));
+        let (_temp, _, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
+        assert!(!asphalt.intersects(&point(XZ { x: 0., z: 0. })));
         for t in loaded.road_triangles().iter().filter(|t| t.usage.is_road()) {
             let p: Vec<XZ> = t
                 .points
@@ -1146,7 +1149,8 @@ mod geometry_tests {
             &[(0, 1, 6., 1), (1, 2, 6., 1), (2, 3, 6., 1), (3, 0, 6., 1)],
             std::slice::from_ref(&building),
         );
-        let (_, s, _) = surfaces(&m);
+        let (_, s, loaded) = surfaces(&m);
+        let asphalt = test_support::road_footprint(&loaded);
         let index = build_surfaces::PolygonIndex::new(&s.obstacles);
         let footprint = polygon(&building);
         for x in (-40..=40).step_by(4) {
@@ -1158,7 +1162,7 @@ mod geometry_tests {
                 .buffer(0.18);
                 assert_eq!(
                     index.intersects(&probe),
-                    s.asphalt.intersects(&probe) || footprint.intersects(&probe),
+                    asphalt.intersects(&probe) || footprint.intersects(&probe),
                     "mismatched collision at {x},{z}"
                 );
             }
