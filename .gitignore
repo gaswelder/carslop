@@ -1,6 +1,7 @@
 /.cache/
 /.vscode/
 /data/locations/
+/settings.ini
 /src-locations
 /target/
 /tools

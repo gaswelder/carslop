@@ -46,6 +46,7 @@ mod phys_powertrain;
 mod prefetch;
 mod scene;
 mod scene_archive;
+mod settings;
 mod shadows;
 mod sound_car;
 mod source_location;
@@ -69,6 +70,7 @@ use sdl3::{
     keyboard::Keycode,
     video::Window,
 };
+use settings::Settings;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -200,6 +202,7 @@ struct App {
     selected_car: usize,
     session: Session,
     chase: camera::ChaseCamera,
+    settings: Settings,
     preview_angle: f32,
     menu_focus: usize,
     locations: Vec<city_assets::MenuLocation>,
@@ -312,7 +315,16 @@ impl App {
                 None
             }
         };
-        let chase = camera::ChaseCamera::new(&session.vehicle);
+        let settings = if cfg!(test) {
+            Settings::default()
+        } else {
+            Settings::load()
+        };
+        let mut chase = camera::ChaseCamera::new(&session.vehicle);
+        if let Some(view) = settings.camera() {
+            chase.set_view(view);
+            chase.snap(&session.vehicle);
+        }
         let mut app = Self {
             sdl_context,
             events,
@@ -330,6 +342,7 @@ impl App {
             selected_car: 0,
             session,
             chase,
+            settings,
             preview_angle: 0.0,
             menu_focus: 0,
             locations,
@@ -655,7 +668,7 @@ impl App {
         if self.session.state != GameState::FullMap {
             return;
         }
-        self.hud.zoom_full_map(
+        if let Some(zoom) = self.hud.zoom_full_map(
             hud::Map {
                 track: self.session.track(),
                 player: self.session.vehicle.position,
@@ -663,7 +676,9 @@ impl App {
             self.session.vehicle.heading,
             [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
             steps,
-        );
+        ) {
+            self.settings.set_map_zoom(zoom);
+        }
     }
 
     fn handle_key(&mut self, key: Keycode) {
@@ -685,6 +700,7 @@ impl App {
                     },
                     self.session.vehicle.heading,
                     [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
+                    self.settings.map_zoom(),
                 );
                 self.session.state = GameState::FullMap;
                 self.keys.clear();
@@ -746,6 +762,7 @@ impl App {
                 if matches!(self.session.state, GameState::Driving | GameState::Paused) =>
             {
                 self.chase.toggle_view();
+                self.settings.set_camera(self.chase.view());
                 if self.session.state == GameState::Paused {
                     self.snap_camera();
                 }

@@ -23,6 +23,20 @@ impl FollowView {
             Self::Bonnet => (0.0, 0.0),
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Wide => "wide",
+            Self::Close => "close",
+            Self::Bonnet => "bonnet",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Wide, Self::Close, Self::Bonnet]
+            .into_iter()
+            .find(|view| view.name().eq_ignore_ascii_case(name))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,6 +79,10 @@ impl ChaseCamera {
 
     pub fn view(&self) -> FollowView {
         self.view
+    }
+
+    pub fn set_view(&mut self, view: FollowView) {
+        self.view = view;
     }
 
     pub fn toggle_view(&mut self) {
@@ -242,6 +260,15 @@ mod tests {
             road.heading(),
             test_support::car(),
         )
+    }
+
+    #[test]
+    fn view_names_round_trip() {
+        for view in [FollowView::Wide, FollowView::Close, FollowView::Bonnet] {
+            assert_eq!(FollowView::from_name(view.name()), Some(view));
+        }
+        assert_eq!(FollowView::from_name("WIDE"), Some(FollowView::Wide));
+        assert_eq!(FollowView::from_name("nope"), None);
     }
 
     fn assert_close(a: XYZ, b: XYZ, tolerance: f32) {
