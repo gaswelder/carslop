@@ -3,6 +3,8 @@ use crate::vehicle_location;
 use crate::{asset_car, phys_powertrain, track};
 use std::time::Duration;
 
+mod tire;
+
 // Keep zero for reverse and 1..=N for forward ratios.
 pub const NEUTRAL_GEAR: u8 = u8::MAX;
 pub const IDLE_RPM: f32 = 900.0;
@@ -10,6 +12,9 @@ const REV_MATCH_SECONDS: f32 = 0.22;
 const SOUND_SHIFT_SECONDS: f32 = 0.36;
 
 const AIR_DENSITY_KG_M3: f32 = 1.225;
+
+// Assumes all cars have the same tires.
+const FRICTION_COEFFICIENT_ASPHALT: f32 = 1.2;
 
 fn torque_factor(curve: &[asset_car::TorquePoint], rpm: f32) -> f32 {
     let upper = curve.partition_point(|point| point.rpm < rpm);
@@ -309,16 +314,15 @@ impl Vehicle {
     }
 
     pub fn update(&mut self, dt: Duration, controls: Controls) -> f32 {
-        // The pedal switch works at rest and in reverse, independently of
-        // hydraulic pressure, engine braking, and the parking brake.
+        // Turn brake lights on/off.
         self.brake_lights = controls.brake > 0.0;
         if dt.is_zero() {
             return 0.0;
         }
+
         let steps = (dt.as_secs_f32() * 240.0).ceil().max(1.0) as u32;
         let seconds = dt.as_secs_f32() / steps as f32;
         let spec = self.spec.clone();
-        let mu = spec.tire_friction_coefficient;
         let reversing = self.direction == Direction::Reverse;
         let direction = if reversing { -1.0 } else { 1.0 };
         let brake_accel = self.brake_accel();
@@ -393,171 +397,158 @@ impl Vehicle {
                     / spec.track_width
                     * share;
                 let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
-                mu * self.track.mapped_surface_grip(self.position)
+                FRICTION_COEFFICIENT_ASPHALT
+                    * self.track.mapped_surface_grip(self.position)
                     * load
                     * (1.0 - 0.18 * imbalance * imbalance)
             });
-            let front_v = lateral + self.yaw_rate * a;
             let rear_v = lateral - self.yaw_rate * b;
-            let wheel_forward = longitudinal * cos + front_v * sin;
-            let wheel_side = front_v * cos - longitudinal * sin;
             let throttle = controls.throttle.clamp(0.0, 1.0);
             self.update_fuel_cut(self.engine_rpm);
             self.update_turbo(seconds, throttle);
+            let drive_bias = spec.drive_bias;
+            let front_speed = longitudinal * cos + (lateral + self.yaw_rate * a) * sin;
+            let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
             if !self.drivetrain_initialized {
-                self.driven_wheel_omega = longitudinal / spec.gearbox.rolling_radius;
+                self.driven_wheel_omega = driven_speed / spec.gearbox.rolling_radius;
                 if self.gear != NEUTRAL_GEAR {
                     self.engine_rpm = self
                         .engine_rpm
-                        .max(spec.gearbox.rpm(longitudinal, self.gear));
+                        .max(spec.gearbox.rpm(driven_speed, self.gear));
                 }
                 self.drivetrain_initialized = true;
             }
-            let drivetrain = self.drivetrain_step(throttle, seconds, longitudinal);
+            let drivetrain = self.drivetrain_step(throttle, seconds, driven_speed);
             let drive = drivetrain.as_ref().map_or(0.0, |step| {
                 step.road_force(
-                    longitudinal * direction,
+                    driven_speed * direction,
                     spec.weight_kg,
                     spec.gearbox.rolling_radius,
                 ) * direction
             });
             let brake = self.brake_pressure * brake_accel * spec.weight_kg;
-            let drive_bias = spec.drive_bias;
-            let requested_x = [
-                drive * drive_bias - longitudinal.signum() * (brake * spec.brake_bias),
-                drive * (1.0 - drive_bias)
-                    - longitudinal.signum()
-                        * (brake * (1.0 - spec.brake_bias)
-                            + if controls.handbrake {
-                                spec.weight_kg * 5.5
-                            } else {
-                                0.0
-                            }),
-            ];
-            let mut forces = [[0.0; 2]; 2];
-            self.wheel_spin = 0.0;
-            for axle in 0..2 {
+            let contacts = [0, 1].map(|axle| {
                 let capacity = capacities[axle];
-                let locked = axle == 1 && controls.handbrake;
-                // ABS regulates foot braking only. Driven-wheel saturation and
-                // rear-wheel handbrake lock consume the same tire force budget.
-                let limit = capacity
-                    * if self.brake_pressure > 0.0 && !locked {
-                        0.92
-                    } else {
-                        1.0
-                    };
-                // Sliding tires retain some sideways authority. Reserve enough of the
-                // friction circle for it during a powered burnout.
                 let drive_share = if axle == 0 {
                     drive_bias
                 } else {
                     1.0 - drive_bias
                 };
                 let spinning = drive.abs() * drive_share > capacity;
-                let limit = if spinning {
+                let drive_limit = if spinning {
                     let sideways = (self.slip.abs() / 2.0).clamp(0.0, 1.0);
                     if let Some([baseline, reduction, slip_angle]) =
                         spec.rear_combined_slip.filter(|_| axle == 1)
                     {
-                        // Combined slip reduces driving traction as the rear slides,
-                        // leaving lateral force for recovery and countersteering.
                         let angle = rear_v.abs().atan2(longitudinal.abs().max(2.5));
-                        limit * (baseline - reduction * (angle / slip_angle).clamp(0.0, 1.0))
+                        capacity * (baseline - reduction * (angle / slip_angle).clamp(0.0, 1.0))
                     } else {
-                        limit * (0.97 - 0.05 * sideways)
+                        capacity * (0.97 - 0.05 * sideways)
                     }
                 } else {
-                    limit
+                    capacity
                 };
-                let fx = requested_x[axle].clamp(-limit, limit);
-                let side = if axle == 0 { wheel_side } else { rear_v };
-                let along = if axle == 0 {
-                    wheel_forward
-                } else {
-                    longitudinal
-                };
-                // atan slip curve peaks, then gently falls toward sliding grip.
-                // A speed floor damps the otherwise singular parking regime.
-                let alpha = side.atan2(along.abs().max(2.5));
-                let stiffness = spec.corner_stiffness[axle];
-                let normalized = stiffness * alpha / capacity.max(1.0);
-                let fy = -capacity
-                    * normalized.tanh()
-                    * (1.0 - 0.08 * (alpha.abs() / 0.6).clamp(0.0, 1.0))
-                    * if locked { 0.18 } else { 1.0 };
-                // Longitudinal saturation consumes the contact patch's grip.
-                // Scaling an already-clamped drive force together with fy left
-                // spinning tires with substantial lateral grip at full torque.
-                let lateral_capacity = (capacity * capacity - fx * fx).max(0.0).sqrt();
-                forces[axle] = [fx, fy.clamp(-lateral_capacity, lateral_capacity)];
-            }
+                tire::Contact {
+                    offset: if axle == 0 { a } else { -b },
+                    sin: if axle == 0 { sin } else { 0.0 },
+                    cos: if axle == 0 { cos } else { 1.0 },
+                    capacity,
+                    drive_force: drive * drive_share,
+                    drive_limit,
+                    brake_force: brake
+                        * if axle == 0 {
+                            spec.brake_bias
+                        } else {
+                            1.0 - spec.brake_bias
+                        }
+                        + if axle == 1 && controls.handbrake {
+                            spec.weight_kg * 5.5
+                        } else {
+                            0.0
+                        },
+                    corner_stiffness: spec.corner_stiffness[axle],
+                    locked: axle == 1 && controls.handbrake,
+                }
+            });
+            let driven_brake_force: f32 = contacts
+                .iter()
+                .enumerate()
+                .filter(|(axle, _)| {
+                    if *axle == 0 {
+                        drive_bias > 0.0
+                    } else {
+                        drive_bias < 1.0
+                    }
+                })
+                .map(|(_, contact)| contact.brake_force)
+                .sum();
+            let motion = tire::Motion {
+                longitudinal,
+                lateral,
+                yaw_rate: self.yaw_rate,
+            };
+            let solved = tire::solve(
+                motion,
+                tire::Motion {
+                    longitudinal: longitudinal + dot(gravity, forward) * seconds,
+                    lateral: lateral + dot(gravity, right) * seconds,
+                    ..motion
+                },
+                contacts,
+                spec.weight_kg,
+                spec.yaw_inertia,
+                seconds,
+            );
             if let Some(step) = drivetrain {
-                // Remove the brake contribution from total contact force to get
-                // the reaction to drive torque, including grip lost in a slide.
+                // Tire force acts on the chassis and reacts on the wheels.
+                // Brake torque acts on the wheels separately; inferring drive
+                // reaction by subtracting requested braking invents torque
+                // whenever the combined contact force reaches its grip limit.
                 let mut reaction = 0.0;
                 for (axle, share) in [drive_bias, 1.0 - drive_bias].into_iter().enumerate() {
                     if share > 0.0 {
-                        reaction += drive * share - (requested_x[axle] - forces[axle][0]);
+                        reaction += solved.impulses[axle].longitudinal / seconds;
                     }
                 }
                 let reaction = reaction * direction;
-                let (rpm, wheel) = step.finish(reaction, spec.gearbox.rolling_radius);
-                self.engine_rpm = rpm.max(IDLE_RPM);
-                self.driven_wheel_omega = wheel * direction;
+                let front_speed = solved.motion.longitudinal * cos
+                    + (solved.motion.lateral + a * solved.motion.yaw_rate) * sin;
+                let rear_speed = if controls.handbrake {
+                    0.0
+                } else {
+                    solved.motion.longitudinal
+                };
+                let rolling_speed = front_speed * drive_bias + rear_speed * (1.0 - drive_bias);
+                let rotation = step.finish(
+                    reaction,
+                    spec.gearbox.rolling_radius,
+                    driven_brake_force,
+                    rolling_speed * direction,
+                );
+                self.engine_rpm = rotation.engine_rpm.max(IDLE_RPM);
+                self.driven_wheel_omega = rotation.wheel_omega * direction;
             } else {
                 self.update_free_engine(throttle, seconds);
-                self.driven_wheel_omega = longitudinal / spec.gearbox.rolling_radius;
+                self.driven_wheel_omega = driven_speed / spec.gearbox.rolling_radius;
             }
             self.update_fuel_cut(self.engine_rpm);
-            let slip_speed = self.driven_wheel_omega * spec.gearbox.rolling_radius - longitudinal;
+            let slip_speed = self.driven_wheel_omega * spec.gearbox.rolling_radius - driven_speed;
             self.wheel_spin = (slip_speed.abs() / 8.0).clamp(0.0, 1.0);
-            let front_x = forces[0][0] * cos - forces[0][1] * sin;
-            let front_y = forces[0][0] * sin + forces[0][1] * cos;
-            let ax = (front_x + forces[1][0]) / spec.weight_kg;
-            let ay = (front_y + forces[1][1]) / spec.weight_kg;
-            // Integrate yaw torque; no target yaw, grip clamp, or automatic
-            // faster unwinding. Countersteering must generate opposing torque.
-            self.yaw_rate += (a * front_y - b * forces[1][1]) / spec.yaw_inertia * seconds;
-            let mut new_longitudinal = longitudinal + (ax + dot(gravity, forward)) * seconds;
+            self.yaw_rate = solved.motion.yaw_rate;
             let resistance = spec.resistance_accel(longitudinal) * seconds;
-            // Static friction holds the car without making brakes propel it
-            // backwards as speed crosses zero.
-            if longitudinal * new_longitudinal < 0.0 && (brake > 0.0 || controls.handbrake) {
-                new_longitudinal = 0.0;
-            }
-            if longitudinal.abs() < 0.1
-                && throttle == 0.0
-                && (brake
-                    + if controls.handbrake {
-                        spec.weight_kg * 5.5
-                    } else {
-                        0.0
-                    })
-                    > dot(gravity, forward).abs() * spec.weight_kg
-            {
-                new_longitudinal = 0.0;
-            }
-            new_longitudinal =
-                new_longitudinal.signum() * (new_longitudinal.abs() - resistance).max(0.0);
-            if new_longitudinal == 0.0 && (brake > 0.0 || controls.handbrake) {
-                // Static brakes hold the wheels once the chassis has stopped.
-                self.driven_wheel_omega = 0.0;
-            }
-            let new_lateral = lateral + (ay + dot(gravity, right)) * seconds;
+            let new_longitudinal = solved.motion.longitudinal.signum()
+                * (solved.motion.longitudinal.abs() - resistance).max(0.0);
+            let new_lateral = solved.motion.lateral;
             self.velocity = XZ {
                 x: forward.x * new_longitudinal + right.x * new_lateral,
                 z: forward.z * new_longitudinal + right.z * new_lateral,
             };
             let blend = 1.0 - (-seconds * 12.0).exp();
-            // Use the acceleration actually applied after stopping friction has
-            // limited braking. Requested tire force can remain nonzero at rest.
-            let applied_ax = if new_longitudinal == 0.0 {
-                (new_longitudinal - longitudinal) / seconds.max(f32::EPSILON)
-            } else {
-                ax
-            };
-            self.acceleration[0] += (applied_ax - self.acceleration[0]) * blend;
+            // Body motion follows actual chassis acceleration. In particular,
+            // static contact balancing gravity must not produce brake dive.
+            let ax = (new_longitudinal - longitudinal) / seconds;
+            let ay = (new_lateral - lateral) / seconds;
+            self.acceleration[0] += (ax - self.acceleration[0]) * blend;
             self.acceleration[1] += (ay - self.acceleration[1]) * blend;
             self.update_body_motion(seconds);
             self.heading =
@@ -1197,7 +1188,7 @@ mod tests {
     #[test]
     fn tires_regain_direction_after_lifting_out_of_a_slide() {
         for model in test_support::cars() {
-            let mut car = level_route_car(test_support::scenic_id(), model.clone());
+            let mut car = level_route_car(track::LocationId::Compact, model.clone());
             let h = car.heading;
             car.velocity = XZ {
                 x: h.sin() * 15.0 + h.cos() * 6.0,
@@ -1228,7 +1219,7 @@ mod tests {
             .cloned()
             .flat_map(|m| [(m.clone(), false), (m, true)])
         {
-            let mut car = level_route_car(test_support::scenic_id(), model.clone());
+            let mut car = level_route_car(track::LocationId::Compact, model.clone());
             car.manual = true;
             car.shift(false);
             assert_eq!(car.gear, NEUTRAL_GEAR);
@@ -1276,7 +1267,7 @@ mod tests {
     #[test]
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
-            let mut car = level_route_car(test_support::scenic_id(), test_support::car());
+            let mut car = level_route_car(track::LocationId::Compact, test_support::car());
             let h = car.heading;
             car.velocity = XZ {
                 x: h.sin() * 10.0 + h.cos() * 2.0,
@@ -1301,7 +1292,7 @@ mod tests {
             run(1.0) > run(0.0),
             "drive torque must reduce available cornering force"
         );
-        let mut car = level_route_car(test_support::scenic_id(), test_support::car());
+        let mut car = level_route_car(track::LocationId::Compact, test_support::car());
         car.velocity = XZ {
             x: car.heading.sin() * 20.0,
             z: car.heading.cos() * 20.0,
@@ -1524,7 +1515,7 @@ mod tests {
     fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
         for model in test_support::cars() {
             for speed in [-5.0, -3.0, -1.0, 1.0, 3.0, 5.0] {
-                let mut car = level_route_car(test_support::scenic_id(), model.clone());
+                let mut car = level_route_car(track::LocationId::Compact, model.clone());
                 for steering in [-1.0, 1.0] {
                     steering_run(&mut car, speed, steering, 5.0, 240.0);
                     let angle = car.steering_angle().abs();
@@ -1598,7 +1589,7 @@ mod tests {
     #[test]
     fn tire_torque_turns_and_countersteering_reverses_rotation() {
         for model in test_support::cars() {
-            let mut car = route_car(test_support::scenic_id(), model.clone());
+            let mut car = level_route_car(track::LocationId::Compact, model.clone());
             steering_run(&mut car, 15.0, 0.25, 0.6, 240.0);
             assert!(car.yaw_rate < 0.0);
             assert!(car.yaw_rate.is_finite() && car.yaw_rate.abs() < 2.0);
@@ -1804,8 +1795,8 @@ mod tests {
             // cycles. Keep the tight comparison until the limiter first cuts,
             // then allow its 250 RPM band plus one substep of tire acceleration.
             let mut tolerance = 0.01;
-            let limiter_tolerance = model.gearbox.speed_at_rpm(250.0, 0)
-                + model.tire_friction_coefficient * 9.81 / 240.0;
+            let limiter_tolerance =
+                model.gearbox.speed_at_rpm(250.0, 0) + FRICTION_COEFFICIENT_ASPHALT * 9.81 / 240.0;
             for _ in 0..240 * 12 {
                 for car in [&mut compact, &mut scenic] {
                     treadmill_tick(

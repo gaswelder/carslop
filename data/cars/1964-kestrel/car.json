@@ -2,7 +2,6 @@
   "name": "1964 Kestrel",
   "weight_kg": 1000.0,
   "brake_force": 20000.0,
-  "tire_friction_coefficient": 1.223242,
   "engine_power_hp": 128.7,
   "drag_coefficient": 0.24080711,
   "front_weight": 0.39,

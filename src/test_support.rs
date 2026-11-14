@@ -102,7 +102,6 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
             weight_kg: 1200.0,
             top_speed: 50.0,
             brake_force: 22000.0,
-            tire_friction_coefficient: 1.2,
             wheelbase: 2.5,
             audio: audio_voice().clone(),
             rear_combined_slip: None,
@@ -165,7 +164,6 @@ pub fn car_definition() -> serde_json::Value {
     serde_json::json!({
         "name": s.name, "paint_color": s.paint_color,
         "weight_kg": s.weight_kg, "brake_force": s.brake_force,
-        "tire_friction_coefficient": s.tire_friction_coefficient,
         "engine_power_hp": s.engine_power_watts / asset_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / s.design.height(), "yaw_inertia": s.yaw_inertia,

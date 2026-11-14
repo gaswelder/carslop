@@ -19,7 +19,6 @@ pub struct CarSpec {
     pub design: std::sync::Arc<scene::car_glb::Design>,
     pub top_speed: f32,
     pub brake_force: f32,
-    pub tire_friction_coefficient: f32,
     pub wheelbase: f32,
     pub audio: EngineVoice,
     pub rear_combined_slip: Option<[f32; 3]>, // baseline, reduction, slip angle
@@ -111,7 +110,6 @@ struct CarDefinition {
     paint_color: [f32; 3],
     weight_kg: f32,
     brake_force: f32,
-    tire_friction_coefficient: f32,
     engine_power_hp: f32,
     drag_coefficient: f32,
     front_weight: f32,
@@ -141,7 +139,6 @@ impl CarDefinition {
         for value in [
             self.weight_kg,
             self.brake_force,
-            self.tire_friction_coefficient,
             self.engine_power_hp,
             self.drag_coefficient,
             self.yaw_inertia,
@@ -310,7 +307,6 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         design,
         top_speed: 0.0,
         brake_force: definition.brake_force,
-        tire_friction_coefficient: definition.tire_friction_coefficient,
         wheelbase,
         audio: definition.audio,
         rear_combined_slip: definition.rear_combined_slip,

@@ -2,7 +2,6 @@
   "name": "1991 Agolf GTI",
   "weight_kg": 1000,
   "brake_force": 22000,
-  "tire_friction_coefficient": 1.427115,
   "engine_power_hp": 116.2,
   "drag_coefficient": 0.36201367,
   "front_weight": 0.63,

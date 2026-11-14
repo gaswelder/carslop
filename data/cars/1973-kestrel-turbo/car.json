@@ -2,7 +2,6 @@
   "name": "1973 Kestrel Turbo",
   "weight_kg": 1140,
   "brake_force": 23940,
-  "tire_friction_coefficient": 1.296565,
   "engine_power_hp": 256.1,
   "drag_coefficient": 0.3130198,
   "front_weight": 0.39,
