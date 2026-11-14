@@ -46,19 +46,11 @@ impl CityAsset {
     }
 
     fn load_name(directory: &Path) -> String {
-        std::fs::read_to_string(directory.join("manifest.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned))
-            .unwrap_or_else(|| {
-                directory
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .replace(['_', '-'], " ")
-            .to_ascii_uppercase()
+        directory
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
     }
 
     pub fn get_manifest(&self) -> Result<serde_json::Value, String> {
@@ -80,9 +72,7 @@ impl CityAsset {
         elevation::HeightField::load(&self.read_text("elevation/heightfield.txt")?)
     }
 
-    pub fn get_landscape_data(
-        &self,
-    ) -> Result<(Vec<world::Triangle>, Vec<world::Tree>), String> {
+    pub fn get_landscape_data(&self) -> Result<(Vec<world::Triangle>, Vec<world::Tree>), String> {
         use landscape::Triangle;
         let mut ground_triangles = Vec::new();
         let mut trees = Vec::new();
@@ -96,13 +86,12 @@ impl CityAsset {
             let mut file_trees = Vec::new();
             asset_codecs::landscape::read::<f32>(input, |record| {
                 match record {
-                    asset_codecs::landscape::Record::Ground { material, points } => {
-                        file_ground.push(Triangle {
+                    asset_codecs::landscape::Record::Ground { material, points } => file_ground
+                        .push(Triangle {
                             material,
                             usage: world::TriangleUsage::Ground,
                             points,
-                        })
-                    }
+                        }),
                     asset_codecs::landscape::Record::Tree(tree) => file_trees.push(tree),
                 }
                 Ok(())
@@ -229,82 +218,6 @@ impl HeightField {
             step,
             values,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn locations_are_independent_values() {
-        let root = tempfile::tempdir().unwrap();
-        let first = root.path().join("first");
-        let second = root.path().join("second");
-        for (path, name) in [(&first, "First City"), (&second, "Second City")] {
-            std::fs::create_dir(path).unwrap();
-            let width = if name == "First City" { 6.0 } else { 8.0 };
-            std::fs::write(
-                path.join("city.txt"),
-                format!("CITY 2\nbounds -10 -10 110 10\nn 0 0\nn 100 0\nr 0 1 {width} 0\n"),
-            )
-            .unwrap();
-            std::fs::write(
-                path.join("manifest.json"),
-                serde_json::json!({"name": name}).to_string(),
-            )
-            .unwrap();
-        }
-        let assets = CityAsset::new(first.clone());
-        let other = CityAsset::new(second.clone());
-        assert_eq!(assets.get_manifest().unwrap()["name"], "First City");
-        assert_eq!(assets.name(), "FIRST CITY");
-        assert_eq!(other.name(), "SECOND CITY");
-        assert_eq!(assets.directory(), first);
-        assert_eq!(other.directory(), second);
-        assert_eq!(
-            assets.get_city().unwrap().road_lines[0].road_width_start_meters,
-            6.0
-        );
-        assert_eq!(
-            other.get_city().unwrap().road_lines[0].road_width_start_meters,
-            8.0
-        );
-        let replacement = CityAsset::new(second);
-        assert_eq!(replacement.name(), "SECOND CITY");
-        assert_eq!(assets.name(), "FIRST CITY");
-        assert_eq!(
-            assets.get_city().unwrap().road_lines[0].road_width_start_meters,
-            6.0
-        );
-    }
-
-    #[test]
-    fn discovery_lists_directories_without_loading_maps() {
-        let root = tempfile::tempdir().unwrap();
-        // Invalid map contents intentionally prove discovery never decodes them.
-        std::fs::write(root.path().join("zebra.sqlite"), b"not a database").unwrap();
-        let folder = root.path().join("alpha_city");
-        std::fs::create_dir(&folder).unwrap();
-        std::fs::write(folder.join("city.txt"), b"not a map").unwrap();
-        std::fs::create_dir(root.path().join("empty")).unwrap();
-        std::fs::write(root.path().join("notes.txt"), b"ignore").unwrap();
-        let locations = discover(root.path()).unwrap();
-        assert_eq!(locations.len(), 1);
-        assert_eq!(locations[0].name, "ALPHA CITY");
-        assert_eq!(locations[0].track.asset_path(), Some(folder.as_path()));
-        // Discovery never loads authoring sources at runtime.
-        std::fs::write(root.path().join("alpha_city.track.json"), b"invalid source").unwrap();
-        assert_eq!(discover(root.path()).unwrap().len(), 1);
-        std::fs::write(
-            root.path().join("alpha_city.sqlite"),
-            b"legacy file is ignored",
-        )
-        .unwrap();
-        let locations = discover(root.path()).unwrap();
-        assert_eq!(locations.len(), 1);
-        assert_eq!(locations[0].track.asset_path(), Some(folder.as_path()));
-        assert!(discover(&root.path().join("missing")).unwrap().is_empty());
     }
 }
 

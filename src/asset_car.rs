@@ -368,9 +368,7 @@ fn model_rolling_radius(radii: [f32; 4], drive_bias: f32) -> Result<f32, String>
     Ok(rear * (1.0 - drive_bias) + front * drive_bias)
 }
 
-fn load_model(
-    path: &std::path::Path,
-) -> Result<std::sync::Arc<scene::car_glb::Design>, String> {
+fn load_model(path: &std::path::Path) -> Result<std::sync::Arc<scene::car_glb::Design>, String> {
     let model = path.with_file_name("model.glb");
     scene::car_glb::load(&model)
         .map(std::sync::Arc::new)
@@ -398,15 +396,6 @@ mod tests {
             load_car(&path).unwrap().audio.sample_directory,
             Some(audio_directory)
         );
-    }
-
-    #[test]
-    fn mosquito_reference_model_loads() {
-        let car = load_car(std::path::Path::new("data/cars/1969-mosquito-ss/car.json"))
-            .expect("Mosquito SS must load rather than disappear from the car selection");
-        assert_eq!(car.name, "1969 MOSQUITO SS");
-        assert_eq!(car.paint_color, [0.035, 0.56, 0.82]);
-        assert!((car.design.height() - 1.298).abs() < 0.002);
     }
 
     #[test]

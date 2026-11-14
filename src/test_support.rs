@@ -276,11 +276,7 @@ pub fn generated_location(
     fs::create_dir_all(directory.join("aerial")).unwrap();
     let city = "CITY 2\nbounds -10 -10 30 30\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
     fs::write(directory.join("city.txt"), city).unwrap();
-    fs::write(
-        directory.join("manifest.json"),
-        serde_json::json!({"name": directory.file_name().unwrap().to_string_lossy()}).to_string(),
-    )
-    .unwrap();
+    fs::write(directory.join("manifest.json"), "{}").unwrap();
     fs::write(directory.join("landscape.txt"), "LANDSCAPE 1\n").unwrap();
     fs::write(directory.join("furniture.txt"), "FURNITURE 3\n").unwrap();
     fs::write(
@@ -463,7 +459,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
     let parsed = src_files::write_city_txt(&source, &directory.join("city.txt"))
         .unwrap()
         .city;
-    std::fs::write(directory.join("manifest.json"), r#"{"name":"Fixture"}"#).unwrap();
+    std::fs::write(directory.join("manifest.json"), "{}").unwrap();
     // The bent compiled path differs from the CITY endpoints.
     build_collision::build_collisions(
             &directory.join("streets.bin"), &parsed,

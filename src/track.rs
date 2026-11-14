@@ -85,7 +85,7 @@ pub fn register_file(path: &std::path::Path) -> Result<(LocationId, &'static str
         coastal,
     };
     circuit.validate()?;
-    let name = Box::leak(name.trim().to_uppercase().into_boxed_str());
+    let name = Box::leak(name.trim().to_owned().into_boxed_str());
     let index = tracks.len();
     tracks.push(std::sync::Arc::new(RuntimeTrack {
         path,

@@ -2366,7 +2366,6 @@ mod renderer_tests {
             &app.hud,
             app.program,
             "ΛΕΥΚΩΣΙΑ / NICOSIA",
-            "READING MAP AND BUILDING COLLISIONS",
             0.5,
         );
         capture_frame(&std::env::temp_dir().join("carslop-loading.ppm"));
@@ -2375,14 +2374,14 @@ mod renderer_tests {
         app.render(Duration::ZERO);
         app.capture_path = None;
         if app.cars.len() > 3 {
-            app.menu_action(hud::MenuAction::CarPage(1));
+            app.menu_action(hud::MenuAction::Car(3));
             assert_eq!(app.selected_car, 3);
             assert!(std::sync::Arc::ptr_eq(
                 &app.session.vehicle.spec,
                 &app.cars[3]
             ));
             app.render(Duration::ZERO);
-            app.menu_action(hud::MenuAction::CarPage(-1));
+            app.menu_action(hud::MenuAction::Car(0));
             assert_eq!(app.selected_car, 0);
             assert!(std::sync::Arc::ptr_eq(
                 &app.session.vehicle.spec,

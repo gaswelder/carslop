@@ -33,14 +33,7 @@ pub fn prepare(
     let name = city_assets::CityAsset::new(id.asset_path().unwrap().to_path_buf())
         .name()
         .to_owned();
-    draw(
-        window,
-        hud,
-        program,
-        &name,
-        "READING MAP AND BUILDING COLLISIONS",
-        0.0,
-    );
+    draw(window, hud, program, &name, 0.0);
     swap_window(window);
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
@@ -70,14 +63,7 @@ pub fn prepare(
         }
         let elapsed = started.elapsed().as_secs_f32();
         let _ = window.set_title(&format!("Loading {name}"));
-        draw(
-            window,
-            hud,
-            program,
-            &name,
-            "READING MAP AND BUILDING COLLISIONS",
-            elapsed,
-        );
+        draw(window, hud, program, &name, elapsed);
         swap_window(window);
         std::thread::sleep(Duration::from_millis(16));
     }
@@ -100,7 +86,7 @@ pub fn prepare(
 }
 
 /// Reuse the normal HUD geometry so startup text uses the same outline fonts.
-pub fn draw(window: &Window, hud: &hud::Hud, program: u32, name: &str, stage: &str, elapsed: f32) {
+pub fn draw(window: &Window, hud: &hud::Hud, program: u32, name: &str, elapsed: f32) {
     let (width, height) = window.size_in_pixels();
     unsafe {
         gl::Viewport(0, 0, width as i32, height as i32);
@@ -108,5 +94,5 @@ pub fn draw(window: &Window, hud: &hud::Hud, program: u32, name: &str, stage: &s
         gl::ClearColor(0.025, 0.05, 0.075, 1.0);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
-    hud.draw_loading(program, name, stage, elapsed);
+    hud.draw_loading(program, name, elapsed);
 }

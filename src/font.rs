@@ -6,6 +6,12 @@ use std::sync::OnceLock;
 
 pub const LABEL_BYTES: &[u8] = include_bytes!("../data/fonts/noto-sans/NotoSans-SemiBold.ttf");
 pub const DIGIT_BYTES: &[u8] = include_bytes!("../data/fonts/noto-sans/NotoSans-Bold.ttf");
+pub const REGULAR_BYTES: &[u8] = include_bytes!("../data/fonts/noto-sans/NotoSans-Regular.ttf");
+
+pub fn regular() -> &'static Font {
+    static FONT: OnceLock<Font> = OnceLock::new();
+    FONT.get_or_init(|| Font::new(REGULAR_BYTES))
+}
 
 pub fn labels() -> &'static Font {
     static FONT: OnceLock<Font> = OnceLock::new();

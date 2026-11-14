@@ -102,7 +102,7 @@ pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
     };
     println!("converting OSM map");
     let converted = convert_map(&paths, &acquired.boundary)?;
-    let generated = generate_assets(&data.name, &paths, &acquired, &converted)?;
+    let generated = generate_assets(&paths, &acquired, &converted)?;
     drop(converted);
     compile_imagery(&data, &paths, &generated, &acquired.boundary)?;
     println!("preparing scene assets");
@@ -149,7 +149,6 @@ struct CompileSources {
 }
 
 fn generate_assets(
-    name: &str,
     paths: &ImportPaths,
     acquired: &CompileSources,
     converted: &ConvertedMap,
@@ -250,7 +249,6 @@ fn generate_assets(
                 / origin.lat.to_radians().cos(),
     ];
     let manifest = serde_json::json!({
-        "name": name,
         "boundary": boundary.to_geojson(),
     });
     fs::write(

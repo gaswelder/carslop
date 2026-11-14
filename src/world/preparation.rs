@@ -60,7 +60,7 @@ impl Location {
     fn load_assets(assets: &city_assets::CityAsset) -> Result<Self, String> {
         let stored = location::Location::read(assets.directory())?;
         let mut city = Self::empty();
-        city.display_name = stored.name.replace(['_', '-'], " ").to_ascii_uppercase();
+        city.display_name = stored.name;
         city.origin = stored.origin;
         city.bounding_box = stored.extent;
         city.street_names = stored.labels.streets.into_iter().collect();

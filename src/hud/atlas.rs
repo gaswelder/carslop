@@ -1,5 +1,3 @@
-//! Rasterize both Noto weights once, before rendering starts. Frame generation
-//! only copies one textured quad per glyph; it never parses or tessellates text.
 use crate::font;
 use std::cmp::Reverse;
 use std::sync::OnceLock;
@@ -19,6 +17,7 @@ pub struct Atlas {
     pub pixels: Vec<u8>,
     pub labels: Font,
     pub digits: Font,
+    pub regular: Font,
 }
 
 pub struct Sprite {
@@ -102,6 +101,7 @@ impl Atlas {
         };
         let labels = packing.font(font::LABEL_BYTES, font::labels());
         let digits = packing.font(font::DIGIT_BYTES, font::digits());
+        let regular = packing.font(font::REGULAR_BYTES, font::regular());
         // Keep glyph boundaries aligned through both mip levels.
         let height = (packing.pixels.len() / WIDTH).div_ceil(4) * 4;
         packing.pixels.resize(WIDTH * height, 0);
@@ -111,6 +111,7 @@ impl Atlas {
             pixels: packing.pixels,
             labels,
             digits,
+            regular,
         }
     }
 }

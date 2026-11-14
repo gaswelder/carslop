@@ -15,14 +15,6 @@ pub enum FollowView {
 }
 
 impl FollowView {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Wide => "WIDE",
-            Self::Close => "CLOSE",
-            Self::Bonnet => "BONNET",
-        }
-    }
-
     fn dimensions(self) -> (f32, f32) {
         // Distances are from the car centre; close sits roughly 3.4 m behind the bumper.
         match self {

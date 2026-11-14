@@ -24,23 +24,21 @@ fn solid(vertices: &mut Vec<Vertex>, point: [f32; 2], color: [f32; 3]) {
     });
 }
 
-const CHOICES_PER_PAGE: usize = 3;
+const CHOICES_PER_PAGE: usize = 6;
 fn choice_box(index: usize, left: f32) -> [f32; 4] {
-    let top = -0.02 - index as f32 * 0.17;
-    [left, top - 0.145, left + 0.72, top]
+    let top = 0.80 - index as f32 * 0.10;
+    [left, top - 0.08, left + 0.72, top]
 }
 fn location_box(index: usize) -> [f32; 4] {
-    choice_box(index, -0.92)
+    choice_box(index, -0.96)
 }
 fn car_box(index: usize) -> [f32; 4] {
-    choice_box(index, 0.06)
+    choice_box(index, -0.16)
 }
-const START_BOX: [f32; 4] = [-0.92, -0.77, 0.78, -0.62];
+const START_BOX: [f32; 4] = [0.50, -0.98, 0.98, -0.86];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Choice(usize),
-    Page(i32),
-    CarPage(i32),
     Car(usize),
     Start,
 }
@@ -51,21 +49,7 @@ pub struct MainMenu<'a> {
     pub cars: &'a [std::sync::Arc<asset_car::CarSpec>],
     pub focus: usize,
 }
-fn page_hit_test(x: f32, y: f32, left: f32) -> Option<i32> {
-    if (0.09..=0.19).contains(&y) {
-        if (left + 0.34..=left + 0.43).contains(&x) {
-            return Some(-1);
-        }
-        if (left + 0.62..=left + 0.72).contains(&x) {
-            return Some(1);
-        }
-    }
-    None
-}
 fn location_menu_hit_test(x: f32, y: f32, selected: usize, count: usize) -> Option<MenuAction> {
-    if let Some(direction) = page_hit_test(x, y, -0.92) {
-        return Some(MenuAction::Page(direction));
-    }
     for slot in 0..CHOICES_PER_PAGE {
         let r = location_box(slot);
         if x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] {
@@ -86,9 +70,6 @@ pub fn selection_menu_hit_test(
     car: usize,
     car_count: usize,
 ) -> Option<MenuAction> {
-    if let Some(direction) = page_hit_test(x, y, 0.06) {
-        return Some(MenuAction::CarPage(direction));
-    }
     let page_start = car / CHOICES_PER_PAGE * CHOICES_PER_PAGE;
     for slot in 0..CHOICES_PER_PAGE {
         let r = car_box(slot);
@@ -112,13 +93,12 @@ pub struct Gauges {
     pub gear: u8,
 }
 
-const PAUSE_BOXES: [[f32; 4]; 6] = [
+const PAUSE_BOXES: [[f32; 4]; 5] = [
     [-0.68, 0.06, -0.04, 0.20],
     [0.04, 0.06, 0.68, 0.20],
     [-0.68, -0.13, -0.04, 0.01],
     [0.04, -0.13, 0.68, 0.01],
-    [-0.68, -0.32, -0.04, -0.18],
-    [0.04, -0.32, 0.68, -0.18],
+    [-0.68, -0.32, 0.68, -0.18],
 ];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PauseAction {
@@ -126,7 +106,6 @@ pub enum PauseAction {
     Restart,
     Selection,
     Audio,
-    Camera,
     Recover,
 }
 pub fn pause_hit_test(x: f32, y: f32) -> Option<PauseAction> {
@@ -139,7 +118,6 @@ pub fn pause_hit_test(x: f32, y: f32) -> Option<PauseAction> {
                 PauseAction::Restart,
                 PauseAction::Selection,
                 PauseAction::Audio,
-                PauseAction::Camera,
                 PauseAction::Recover,
             ][i]
         })
@@ -147,7 +125,6 @@ pub fn pause_hit_test(x: f32, y: f32) -> Option<PauseAction> {
 pub struct PauseMenu<'a> {
     pub city: bool,
     pub aerial_attribution: Option<&'a str>,
-    pub view: &'a str,
     pub audio: &'a str,
 }
 
@@ -394,17 +371,18 @@ impl Drop for Hud {
 }
 
 impl Hud {
-    pub fn draw_loading(&self, program: u32, name: &str, stage: &str, elapsed: f32) {
+    pub fn draw_loading(&self, program: u32, name: &str, elapsed: f32) {
         let mut vertices = Vec::new();
-        let mut label = |value: &str, y: f32, size: f32, color| {
-            let width = font::labels().width(value);
-            let size = size.min(1.8 / width.max(1.0));
-            text(&mut vertices, value, [-width * size * 0.5, y], size, color);
-        };
-        label("LOADING LOCATION", 0.35, 0.009, [0.15, 0.85, 0.95]);
-        label(name, 0.15, 0.005, [0.9, 0.95, 1.0]);
-        label(stage, -0.02, 0.004, [0.55, 0.66, 0.70]);
-        label("ESC TO CLOSE", -0.52, 0.003, [0.55, 0.66, 0.70]);
+        let title = format!("Loading {name}");
+        let width = font::labels().width(&title);
+        let size = 0.009_f32.min(1.8 / width.max(1.0));
+        text(
+            &mut vertices,
+            &title,
+            [-width * size * 0.5, 0.15],
+            size,
+            [0.15, 0.85, 0.95],
+        );
         quad(
             &mut vertices,
             [-0.55, -0.22],
@@ -538,9 +516,9 @@ impl Hud {
         let mut vertices = Vec::new();
         let hint = view.copy_status.unwrap_or_else(|| {
             if map.track.google_maps_url(map.player).is_some() {
-                "C COPY GOOGLE MAPS URL"
+                "C Copy Google Maps URL"
             } else {
-                "NO GOOGLE MAPS LOCATION"
+                "No Google Maps location"
             }
         });
         append_full_map(&mut vertices, map, heading, viewport, &view.fit);
@@ -559,60 +537,18 @@ impl Hud {
         let cyan = [0.15, 0.85, 0.95];
         let white = [0.9, 0.95, 1.0];
         let muted = [0.55, 0.66, 0.70];
-        text(&mut v, "CHOOSE YOUR DRIVE", [-0.92, 0.89], 0.006, white);
-        let name = &menu.cars[menu.car].name;
-        let size = 0.005_f32.min(1.5 / font::labels().width(name).max(1.0));
-        text(
-            &mut v,
-            name,
-            [-font::labels().width(name) * 0.5 * size, 0.82],
-            size,
-            white,
-        );
-        for left in [-0.92, 0.46] {
+        for left in [-1.0, -0.20] {
             quad(
                 &mut v,
-                [left, 0.28],
-                [left + 0.46, 0.72],
-                [0.025, 0.05, 0.075],
-            );
-        }
-        let spec = &menu.cars[menu.car];
-        let power = format!(
-            "{:.0} HP",
-            spec.engine_power_watts / asset_car::WATTS_PER_HP
-        );
-        for (x, y, label, value) in [
-            (-0.84, 0.66, "ENGINE POWER", power),
-            (
-                -0.84,
-                0.45,
-                "TORQUE",
-                format!("{:.0} NM", spec.engine_max_torque_nm),
-            ),
-            (
-                0.54,
-                0.66,
-                "TOP SPEED",
-                format!("{:.0} KM/H", spec.top_speed * 3.6),
-            ),
-            (0.54, 0.45, "WEIGHT", format!("{:.0} KG", spec.weight_kg)),
-        ] {
-            text(&mut v, label, [x, y], 0.0027, muted);
-            text(&mut v, &value, [x, y - 0.07], 0.0038, white);
-        }
-        for left in [-0.96, 0.02] {
-            quad(
-                &mut v,
-                [left, -0.55],
-                [left + 0.80, 0.21],
+                [left, 0.19],
+                [left + 0.80, 0.98],
                 [0.025, 0.05, 0.075],
             );
         }
         choice_header(
             &mut v,
-            "LOCATION",
-            -0.92,
+            "Location",
+            -0.96,
             menu.selected,
             menu.locations.len(),
         );
@@ -632,7 +568,7 @@ impl Hud {
             );
         }
         let selected_car = menu.car;
-        choice_header(&mut v, "CAR", 0.06, selected_car, menu.cars.len());
+        choice_header(&mut v, "Car", -0.16, selected_car, menu.cars.len());
         for (i, car) in menu
             .cars
             .iter()
@@ -651,25 +587,27 @@ impl Hud {
         menu_button(&mut v, START_BOX, true, menu.focus == 2);
         text(
             &mut v,
-            "START DRIVING",
+            "Stard Driving (Enter)",
             [
-                (START_BOX[0] + START_BOX[2] - font::labels().width("START DRIVING") * 0.005) * 0.5,
-                -0.66,
+                (START_BOX[0] + START_BOX[2]
+                    - font::labels().width("Stard Driving (Enter)") * 0.0034)
+                    * 0.5,
+                -0.90,
             ],
-            0.005,
+            0.0034,
             cyan,
         );
         if menu.locations[menu.selected].track.asset_path().is_some() {
             text(
                 &mut v,
-                "OPENSTREETMAP CONTRIBUTORS / ODBL",
+                "OpenStreetMap contributors / ODbL",
                 [-0.92, -0.83],
                 0.0025,
                 muted,
             );
             text(
                 &mut v,
-                "TERRAIN: MAPZEN / USGS / EU COPERNICUS",
+                "Terrain: Mapzen / USGS / EU Copernicus",
                 [-0.92, -0.87],
                 0.0025,
                 muted,
@@ -684,9 +622,9 @@ impl Hud {
         }
         text(
             &mut v,
-            "LEFT LOCATION / RIGHT CAR / UP-DOWN BROWSE / ENTER START / Q QUIT",
+            "Left location / Right car / Up-down browse / Enter start / Q quit",
             [-0.92, -0.96],
-            0.0032,
+            0.0025,
             white,
         );
         self.upload(program, &v);
@@ -796,10 +734,10 @@ fn append_full_map(
         FULL_MAP_CONTENT[1],
         [0.025, 0.05, 0.075],
     );
-    text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
+    text(v, "Full map", [-0.94, 0.92], 0.006, cyan);
     let name_size = 0.004_f32.min(0.94 / font::labels().width(&map.track.display_name).max(1.0));
     text(v, &map.track.display_name, [-0.60, 0.90], name_size, white);
-    text(v, "M / ESC BACK", [0.49, 0.90], 0.004, white);
+    text(v, "M / Esc back", [0.49, 0.90], 0.004, white);
 
     let pixel = |p: [f32; 2]| {
         [
@@ -833,9 +771,9 @@ fn append_full_map(
     let right = std::array::from_fn(|i| player[i] - forward[i] * 7.0 + right[i] * 7.0);
     canvas.triangle([tip, left, right], orange);
     canvas.disc(pixel([-0.925, -0.855]), 5.0, orange);
-    text(v, "YOUR POSITION", [-0.90, -0.83], 0.0035, white);
-    text(v, "DRIVING PAUSED", [-0.54, -0.83], 0.0035, muted);
-    text(v, "WHEEL / +/- ZOOM", [-0.14, -0.83], 0.0035, white);
+    text(v, "Your position", [-0.90, -0.83], 0.0035, white);
+    text(v, "Driving paused", [-0.54, -0.83], 0.0035, muted);
+    text(v, "Wheel / +/- zoom", [-0.14, -0.83], 0.0035, white);
     if fit.north_up {
         text(v, "N", [0.885, 0.68], 0.0045, cyan);
         line(v, [0.90, 0.54], [0.90, 0.61], 0.002, cyan);
@@ -843,7 +781,7 @@ fn append_full_map(
         line(v, [0.90, 0.61], [0.91, 0.58], 0.002, cyan);
         text(
             v,
-            "MAP DATA: OPENSTREETMAP CONTRIBUTORS / OPENSTREETMAP.ORG/COPYRIGHT / ODBL",
+            "Map data: OpenStreetMap contributors / openstreetmap.org/copyright / ODbL",
             [-0.94, -0.94],
             0.0025,
             muted,
@@ -872,7 +810,10 @@ fn append_full_map(
 
 fn choice_header(v: &mut Vec<Vertex>, label: &str, left: f32, selected: usize, count: usize) {
     let cyan = [0.15, 0.85, 0.95];
-    text(v, label, [left, 0.14], 0.0038, cyan);
+    text(v, label, [left, 0.91], 0.0038, cyan);
+    if count <= CHOICES_PER_PAGE {
+        return;
+    }
     text(
         v,
         &format!(
@@ -880,18 +821,17 @@ fn choice_header(v: &mut Vec<Vertex>, label: &str, left: f32, selected: usize, c
             selected / CHOICES_PER_PAGE + 1,
             count.div_ceil(CHOICES_PER_PAGE)
         ),
-        [left + 0.44, 0.14],
+        [left + 0.44, 0.91],
         0.0033,
         cyan,
     );
-    text(v, "<", [left + 0.36, 0.14], 0.0035, cyan);
-    text(v, ">", [left + 0.65, 0.14], 0.0035, cyan);
 }
 fn choice_button(v: &mut Vec<Vertex>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
     menu_button(v, r, selected, focused && selected);
-    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::labels().width(label).max(1.0));
-    text(
+    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::regular().width(label).max(1.0));
+    text_with_font(
         v,
+        &atlas::get().regular,
         label,
         [r[0] + 0.035, (r[1] + r[3]) * 0.5 + size * 5.0],
         size,
@@ -1157,14 +1097,13 @@ fn append_pause(v: &mut Vec<Vertex>, pause: PauseMenu<'_>) {
     let white = [0.9, 0.95, 1.0];
     let cyan = [0.15, 0.85, 0.95];
     quad(v, [-0.76, -0.55], [0.76, 0.55], [0.025, 0.05, 0.075]);
-    text(v, "PAUSED", [-0.68, 0.43], 0.009, cyan);
+    text(v, "Paused", [-0.68, 0.43], 0.009, cyan);
     let labels = [
-        "RESUME  [ESC]".to_string(),
-        "RESTART  [R]".into(),
-        "LOCATION / CAR  [L]".into(),
-        format!("AUDIO: {}  [V]", pause.audio),
-        format!("CAMERA: {}  [C]", pause.view),
-        "RECOVER  [H]".into(),
+        "Resume  [Esc]".to_string(),
+        "Restart  [R]".into(),
+        "Location / car  [L]".into(),
+        format!("Audio: {}  [V]", pause.audio),
+        "Recover  [H]".into(),
     ];
     for (r, label) in PAUSE_BOXES.into_iter().zip(labels) {
         menu_button(v, r, true, false);
@@ -1173,7 +1112,7 @@ fn append_pause(v: &mut Vec<Vertex>, pause: PauseMenu<'_>) {
     if pause.city {
         text(
             v,
-            "OPENSTREETMAP CONTRIBUTORS / ODBL",
+            "OpenStreetMap contributors / ODbL",
             [-0.68, -0.41],
             0.0025,
             [0.55, 0.66, 0.70],
@@ -1214,13 +1153,22 @@ fn line(v: &mut Vec<Vertex>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 
 }
 
 fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
-    let name = name.to_uppercase();
+    let size = 0.0025;
+    let available_width = MAP_CONTENT[1][0] - MAP_CONTENT[0][0];
     // Bound the label to two lines at a readable size, including long OSM names.
     let chars: Vec<_> = name.chars().collect();
     let mut lines = Vec::new();
     let mut start = 0;
     while start < chars.len() && lines.len() < 2 {
-        let mut end = (start + 32).min(chars.len());
+        let mut end = start;
+        let mut width = 0.0;
+        while end < chars.len() {
+            width += font::labels().width(&chars[end].to_string()) * size;
+            if width > available_width {
+                break;
+            }
+            end += 1;
+        }
         if end < chars.len() {
             if let Some(space) = chars[start..end].iter().rposition(|ch| *ch == ' ') {
                 if space > 0 {
@@ -1234,29 +1182,30 @@ fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
             start += 1;
         }
         if lines.len() == 1 && start < chars.len() {
-            line = line.chars().take(29).collect::<String>() + "...";
+            while font::labels().width(&(line.clone() + "...")) * size > available_width {
+                line.pop();
+            }
+            line.push_str("...");
         }
         lines.push(line);
     }
     if lines.is_empty() {
         return;
     }
-    let size = 0.0043;
-    let top = -0.89 + (lines.len() - 1) as f32 * 0.075;
-    let width = lines
-        .iter()
-        .map(|s| font::labels().width(s))
-        .fold(0.0_f32, f32::max)
-        * size;
+    let top = MAP_CONTENT[0][1] - 0.04;
+    let center = (MAP_CONTENT[0][0] + MAP_CONTENT[1][0]) * 0.5;
     quad(
         v,
-        [-width * 0.5 - 0.018, -0.96],
-        [width * 0.5 + 0.018, top + 0.025],
+        [
+            MAP_CONTENT[0][0] - 0.02,
+            top - (lines.len() - 1) as f32 * 0.045 - 0.045,
+        ],
+        [MAP_CONTENT[1][0] + 0.02, MAP_CONTENT[0][1] - 0.02],
         [0.025, 0.05, 0.075],
     );
     for (i, line) in lines.iter().enumerate() {
-        let x = -font::labels().width(line) * 0.5 * size;
-        text(v, line, [x, top - i as f32 * 0.075], size, [0.9, 0.95, 1.0]);
+        let x = center - font::labels().width(line) * 0.5 * size;
+        text(v, line, [x, top - i as f32 * 0.045], size, [0.9, 0.95, 1.0]);
     }
 }
 
@@ -1277,7 +1226,18 @@ fn glyph_quad(v: &mut Vec<Vertex>, positions: [[f32; 2]; 4], uv: [[f32; 2]; 2], 
 }
 
 fn text(v: &mut Vec<Vertex>, value: &str, origin: [f32; 2], size: f32, color: [f32; 3]) {
-    atlas::get().labels.draw(value, |sprite| {
+    text_with_font(v, &atlas::get().labels, value, origin, size, color);
+}
+
+fn text_with_font(
+    v: &mut Vec<Vertex>,
+    font: &atlas::Font,
+    value: &str,
+    origin: [f32; 2],
+    size: f32,
+    color: [f32; 3],
+) {
+    font.draw(value, |sprite| {
         let positions = corners(sprite.bounds)
             .map(|p| [origin[0] + p[0] * size, origin[1] - p[1] * size * 1.65]);
         glyph_quad(v, positions, sprite.uv, color);
@@ -1393,36 +1353,25 @@ mod tests {
     #[test]
     fn location_pages_hit_only_visible_entries() {
         assert_eq!(
-            location_menu_hit_test(-0.5, -0.07, 3, 4),
-            Some(MenuAction::Choice(3))
-        );
-        assert_eq!(location_menu_hit_test(-0.5, -0.195, 3, 4), None);
-        assert_eq!(
-            location_menu_hit_test(-0.55, 0.14, 0, 4),
-            Some(MenuAction::Page(-1))
+            location_menu_hit_test(-0.5, 0.76, CHOICES_PER_PAGE, CHOICES_PER_PAGE + 1),
+            Some(MenuAction::Choice(CHOICES_PER_PAGE))
         );
         assert_eq!(
-            location_menu_hit_test(-0.25, 0.14, 0, 4),
-            Some(MenuAction::Page(1))
+            location_menu_hit_test(-0.5, 0.66, CHOICES_PER_PAGE, CHOICES_PER_PAGE + 1),
+            None
         );
-        assert_eq!(location_menu_hit_test(-0.45, 0.14, 0, 4), None);
+        assert_eq!(location_menu_hit_test(-0.5, 0.71, 0, 4), None);
+        assert_eq!(location_menu_hit_test(-0.5, 0.91, 0, 4), None);
         assert_eq!(
-            location_menu_hit_test(-0.5, -0.43, 0, 4),
+            location_menu_hit_test(-0.5, 0.56, 0, 4),
             Some(MenuAction::Choice(2))
         );
-        assert_eq!(
-            location_menu_hit_test(-0.51, 0.14, 0, 4),
-            Some(MenuAction::Page(-1))
-        );
-        assert_eq!(
-            location_menu_hit_test(-0.23, 0.14, 0, 4),
-            Some(MenuAction::Page(1))
-        );
+        assert_eq!(location_menu_hit_test(-0.5, -0.07, 0, 4), None);
     }
 
     #[test]
     fn car_pages_select_visible_rows_and_ignore_empty_rows() {
-        let car_count = 5;
+        let car_count = CHOICES_PER_PAGE + 2;
         for selected in 0..car_count {
             for slot in 0..CHOICES_PER_PAGE {
                 let r = car_box(slot);
@@ -1434,12 +1383,8 @@ mod tests {
                 );
             }
             assert_eq!(
-                selection_menu_hit_test(0.43, 0.14, 0, 4, selected, car_count),
-                Some(MenuAction::CarPage(-1))
-            );
-            assert_eq!(
-                selection_menu_hit_test(0.73, 0.14, 0, 4, selected, car_count),
-                Some(MenuAction::CarPage(1))
+                selection_menu_hit_test(0.5, 0.91, 0, 4, selected, car_count),
+                None
             );
         }
     }

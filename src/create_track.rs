@@ -140,7 +140,7 @@ fn compile(source: &Path, track: &track::Location, output: &Path) -> Result<()> 
     fs::write(
         &output.join("manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
-            "name": track.display_name, "compiler": "native-track-v1", "raceways_only": true,
+            "compiler": "native-track-v1", "raceways_only": true,
             "source_file": "source.track.json",
             "bounds_metres": map.bounding_box.to_array(), "coordinates": "local metres: X east, Y up, Z south",
             "statistics": {"nodes": count, "road_segments": count, "buildings": map.buildings.len(), "trees": track.trees().len()}

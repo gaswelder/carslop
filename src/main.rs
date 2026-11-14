@@ -269,7 +269,6 @@ impl App {
                     .track
                     .asset_path()
                     .is_some_and(|p| p.file_name().is_some_and(|name| name == "scenic"))
-                    || entry.name == "COASTAL HIGHWAY"
             })
             .unwrap_or(0);
         let selected_location = selected_city.map_or(default_location, |id| {
@@ -391,7 +390,6 @@ impl App {
                     &self.hud,
                     self.program,
                     &track.display_name,
-                    "PREPARING VEHICLES AND SCENERY",
                     0.0,
                 );
                 gl::swap_window(&self.window);
@@ -525,20 +523,6 @@ impl App {
                 }
                 self.menu_focus = 0;
             }
-            hud::MenuAction::Page(direction) => {
-                let pages = self.locations.len().div_ceil(3);
-                let page = (self.selected_location as i32 / 3 + direction).rem_euclid(pages as i32)
-                    as usize;
-                self.selected_location = page * 3;
-                self.menu_focus = 0;
-            }
-            hud::MenuAction::CarPage(direction) => {
-                let pages = self.cars.len().div_ceil(3);
-                let page =
-                    (self.selected_car as i32 / 3 + direction).rem_euclid(pages as i32) as usize;
-                self.select_car(page * 3);
-                self.menu_focus = 1;
-            }
             hud::MenuAction::Car(index) => {
                 self.menu_focus = 1;
                 self.select_car(index);
@@ -565,7 +549,6 @@ impl App {
                     hud::PauseAction::Restart => Keycode::R,
                     hud::PauseAction::Selection => Keycode::L,
                     hud::PauseAction::Audio => Keycode::V,
-                    hud::PauseAction::Camera => Keycode::C,
                     hud::PauseAction::Recover => Keycode::H,
                 });
             }
@@ -648,14 +631,14 @@ impl App {
                 .video()
                 .and_then(|video| video.clipboard().set_clipboard_text(&url))
             {
-                Ok(()) => "COPIED GOOGLE MAPS URL",
+                Ok(()) => "Copied Google Maps URL",
                 Err(error) => {
                     log::warn!("Cannot copy map location: {error}");
-                    "COPY FAILED - PRESS C TO RETRY"
+                    "Copy failed - press C to retry"
                 }
             }
         } else {
-            "NO GOOGLE MAPS LOCATION"
+            "No Google Maps location"
         };
         self.hud.map_copy_status(
             hud::Map {
@@ -842,9 +825,9 @@ impl App {
         }
         let s = &self.session;
         let audio_status = match &self.audio {
-            Some(a) if a.muted => "MUTED",
-            Some(_) => "ON",
-            None => "UNAVAILABLE",
+            Some(a) if a.muted => "Muted",
+            Some(_) => "On",
+            None => "Unavailable",
         };
         if in_menu {
             self.hud.draw_menu(
@@ -874,7 +857,6 @@ impl App {
                 (s.state == GameState::Paused).then_some(hud::PauseMenu {
                     city: s.track().has_compiled_roads(),
                     aerial_attribution: s.track().assets().and_then(|a| a.aerial_attribution()),
-                    view: self.chase.view().label(),
                     audio: audio_status,
                 }),
             );

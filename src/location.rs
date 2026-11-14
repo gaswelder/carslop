@@ -174,11 +174,7 @@ impl Location {
                 .collect::<Result<_, _>>()?;
         }
         Ok(Self {
-            name: manifest
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or(assets.name())
-                .to_owned(),
+            name: assets.name().to_owned(),
             origin: source.origin,
             extent: source.bounding_box,
             road_nodes: source.road_nodes.into_iter().map(|p| p.xz()).collect(),
@@ -304,7 +300,7 @@ impl Location {
             fs::write(
                 directory.join("manifest.json"),
                 serde_json::to_vec_pretty(&serde_json::json!({
-                    "name": self.name, "pavement_height_metres": self.pavement_height_meters,
+                    "pavement_height_metres": self.pavement_height_meters,
                 }))?,
             )?;
             fs::write(
@@ -428,7 +424,6 @@ mod tests {
     use crate::world;
 
     fn assert_data_equal(a: &Location, b: &Location) {
-        assert_eq!(a.name, b.name);
         assert_eq!(a.origin, b.origin);
         assert_eq!(a.extent, b.extent);
         assert_eq!(a.road_nodes, b.road_nodes);
@@ -456,7 +451,6 @@ mod tests {
             fs::write(input.path().join("source.osm"), r#"<osm><way id="1"><tag k="name" v="Road &amp; Square"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
             fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
             let mut location = Location::read(input.path()).unwrap();
-            location.name = "Round trip — Δρόμος".into();
             location.pavement_height_meters = 0.17345679;
             location.roads[0].way_id = None;
             location.roads[0].width_meters = 8.123457;
@@ -532,13 +526,17 @@ mod tests {
             location.write(output.path()).unwrap();
             let reread = Location::read(output.path()).unwrap();
             assert_data_equal(&location, &reread);
+            assert_eq!(
+                reread.name,
+                output.path().file_name().unwrap().to_string_lossy()
+            );
             assert!(!output.path().join("source.osm").exists());
             assert!(!output.path().join("source.track.json").exists());
             assert!(!output.path().join("imagery-trees.txt").exists());
             let manifest: serde_json::Value =
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
-            assert_eq!(manifest.as_object().unwrap().len(), 2);
+            assert_eq!(manifest.as_object().unwrap().len(), 1);
             let world =
                 world::Location::load(&city_assets::CityAsset::new(output.path().to_path_buf()))
                     .unwrap();
