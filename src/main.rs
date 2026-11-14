@@ -31,6 +31,7 @@ mod engine_sample;
 mod error;
 mod feedback;
 mod file_io;
+mod font;
 mod geometry;
 mod gl;
 mod hgt;
@@ -352,6 +353,8 @@ impl App {
             &mut self.window,
             &mut self.events,
             &self.sdl_context,
+            &self.hud,
+            self.program,
         ) else {
             self.keys.clear();
             return;
@@ -387,6 +390,8 @@ impl App {
             if track.has_compiled_roads() {
                 loading::draw(
                     &self.window,
+                    &self.hud,
+                    self.program,
                     &track.display_name,
                     "PREPARING VEHICLES AND SCENERY",
                     0.0,

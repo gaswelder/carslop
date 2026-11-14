@@ -4,9 +4,9 @@ use super::{
 };
 use crate::city::Building;
 use crate::elevation;
+use crate::font;
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
-use crate::hud;
 use crate::landscape;
 use crate::map_details::{RoofShape, TreeKind};
 use crate::world;
@@ -993,7 +993,6 @@ mod tests {
     use super::*;
     use crate::elevation;
     use crate::geometry;
-    use crate::hud;
     use crate::location;
     use crate::test_support;
     use geo::Contains;
@@ -1248,22 +1247,7 @@ mod tests {
 
     #[test]
     fn storefront_glyphs_read_left_to_right_on_each_outward_wall_face() {
-        let label = ['F', 'J'];
-        let expected: std::collections::HashSet<_> = label
-            .iter()
-            .enumerate()
-            .flat_map(|(column, ch)| {
-                hud::glyph(*ch)
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(move |(row, bits)| {
-                        (0..5).filter_map(move |bit| {
-                            (bits & (1 << (4 - bit)) != 0)
-                                .then_some(((column * 6 + bit) as i32, row as i32))
-                        })
-                    })
-            })
-            .collect();
+        let label = ['F'];
         for [a, c] in [
             [XZ { x: 0.0, z: 0.0 }, XZ { x: 10.0, z: 0.0 }],
             [XZ { x: 10.0, z: 0.0 }, XZ { x: 10.0, z: 10.0 }],
@@ -1285,32 +1269,28 @@ mod tests {
                 (v.position[0] - c.x) * right.x + (v.position[2] - c.z) * right.z
             };
             let text = &b.vertices[6..];
-            let left = text.iter().map(screen_x).fold(f32::INFINITY, f32::min);
-            let top_y = text
+            let bottom = text
+                .iter()
+                .map(|v| v.position[1])
+                .fold(f32::INFINITY, f32::min);
+            let top = text
                 .iter()
                 .map(|v| v.position[1])
                 .fold(f32::NEG_INFINITY, f32::max);
-            let pixel = text[..6]
+            let upper_right = text
                 .iter()
+                .filter(|v| v.position[1] > top - (top - bottom) * 0.2)
                 .map(screen_x)
-                .fold(f32::NEG_INFINITY, f32::max)
-                - text[..6].iter().map(screen_x).fold(f32::INFINITY, f32::min);
-            let mut actual = std::collections::HashSet::new();
-            for quad in b.vertices[6..].chunks_exact(6) {
-                let min_x = quad
-                    .iter()
-                    .map(|v| (v.position[0] - c.x) * right.x + (v.position[2] - c.z) * right.z)
-                    .fold(f32::INFINITY, f32::min);
-                let top = quad
-                    .iter()
-                    .map(|v| v.position[1])
-                    .fold(f32::NEG_INFINITY, f32::max);
-                actual.insert((
-                    ((min_x - left) / pixel).round() as i32,
-                    ((top_y - top) / pixel).round() as i32,
-                ));
-            }
-            assert_eq!(actual, expected);
+                .fold(f32::NEG_INFINITY, f32::max);
+            let lower_right = text
+                .iter()
+                .filter(|v| v.position[1] < bottom + (top - bottom) * 0.2)
+                .map(screen_x)
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                upper_right > lower_right,
+                "F must extend toward the viewer's right at the top"
+            );
             for v in b.vertices {
                 assert_eq!(v.material[0], -3.0);
                 assert!(v.normal[0] * normal.x + v.normal[2] * normal.z > 0.999);
@@ -1418,7 +1398,11 @@ fn storefront_sign(
     };
     let (lines, pixel) = storefront_layout(label, length, height);
     let pixel = pixel * (0.78 + variation(seed, 42) * 0.22);
-    let width = lines.iter().map(Vec::len).max().unwrap_or(0) as f32 * 6.0 * pixel;
+    let width = lines
+        .iter()
+        .map(|line| font::labels().width(&line.iter().collect::<String>()))
+        .fold(0.0_f32, f32::max)
+        * pixel;
     let alignment = [0.0, 0.5, 1.0][visual_seed(seed, 43) as usize % 3];
     let panel_width = if visual_seed(seed, 44) % 2 == 0 {
         width + 2.0 * pixel
@@ -1429,12 +1413,13 @@ fn storefront_sign(
     let panel_height = lines.len() as f32 * 9.0 * pixel;
     let top = base_y
         + (panel_height + 0.8 + variation(seed, 45) * 0.9).min(height - (height * 0.1).min(0.3));
+    let panel_point = |x: f32, y: f32, depth: f32| XYZ {
+        x: c.x + (a.x - c.x) * x / length + normal.x * depth,
+        y,
+        z: c.z + (a.z - c.z) * x / length + normal.z * depth,
+    };
     let mut panel = |x0: f32, x1: f32, y0: f32, y1: f32, depth: f32, color| {
-        let point = |x: f32, y: f32| XYZ {
-            x: c.x + (a.x - c.x) * x / length + normal.x * depth,
-            y: y,
-            z: c.z + (a.z - c.z) * x / length + normal.z * depth,
-        };
+        let point = |x, y| panel_point(x, y, depth);
         b.quad(
             [
                 (point(x0, y0)),
@@ -1457,19 +1442,24 @@ fn storefront_sign(
         background,
     );
     for (line, chars) in lines.iter().enumerate() {
-        let line_width = chars.len() as f32 * 6.0 * pixel;
+        let label: String = chars.iter().collect();
+        let line_width = font::labels().width(&label) * pixel;
         let line_left = panel_left + pixel + (panel_width - 2.0 * pixel - line_width) * alignment;
-        for (column, ch) in chars.iter().copied().enumerate() {
-            for (row, bits) in hud::glyph(ch).iter().enumerate() {
-                for bit in 0..5 {
-                    if bits & (1 << (4 - bit)) != 0 {
-                        let x = line_left + (column * 6 + bit) as f32 * pixel;
-                        let y = top - (1 + line * 9 + row) as f32 * pixel;
-                        panel(x, x + pixel, y - pixel, y, 0.15, lettering);
-                    }
-                }
-            }
-        }
+        font::labels().draw(&label, |triangle| {
+            b.triangle(
+                triangle.map(|p| {
+                    panel_point(
+                        line_left + p[0] * pixel,
+                        top - (1.0 + line as f32 * 9.0 + p[1]) * pixel,
+                        0.15,
+                    )
+                }),
+                Surface {
+                    color: lettering,
+                    material: [-3.0, 0.0],
+                },
+            );
+        });
     }
 }
 
@@ -1503,9 +1493,12 @@ fn storefront_layout(label: &[char], length: f32, height: f32) -> (Vec<Vec<char>
         columns += 1;
         lines = wrap(columns);
     }
-    let widest = lines.iter().map(Vec::len).max().unwrap_or(1) as f32;
+    let widest = lines
+        .iter()
+        .map(|line| font::labels().width(&line.iter().collect::<String>()))
+        .fold(1.0_f32, f32::max);
     let pixel = 0.25_f32
-        .min((length - 0.6) / (widest * 6.0 + 2.0))
+        .min((length - 0.6) / (widest + 2.0))
         .min((height - 0.6).max(height * 0.5).min(3.8) / (lines.len().max(1) as f32 * 9.0));
     (lines, pixel)
 }

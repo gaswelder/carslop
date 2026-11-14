@@ -4,6 +4,7 @@
 /data/*
 !/data/cars/
 !/data/buildings/
+!/data/fonts/
 !/data/locations/
 /data/locations/*
 !/data/locations/scenic.track.json

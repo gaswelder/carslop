@@ -65,6 +65,10 @@ instructions. Rebuild edited artwork with `cargo run -- bake-scene --location ni
 
 ## Credits and distribution
 
+- **UI and sign font:** Noto Sans SemiBold and Bold, © 2018 The Noto Project Authors,
+  from [Noto Fonts](https://github.com/notofonts/noto-fonts), under the
+  [SIL Open Font License 1.1](data/fonts/noto-sans/OFL.txt).
+  Include its copyright notice and license when distributing the game.
 - **Maps:** © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright),
   ODbL 1.0; extracts from Geofabrik ([Cyprus](https://download.geofabrik.de/europe/cyprus.html),
   [Rheinland-Pfalz](https://download.geofabrik.de/europe/germany/rheinland-pfalz.html)).

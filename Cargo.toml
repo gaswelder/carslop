@@ -22,6 +22,9 @@ jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 ureq = { version = "3", features = ["json"] }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras"] }
 glam = "0.30"
+ttf-parser = "0.25"
+lyon_tessellation = "1"
+fontdue = "0.9"
 
 # Keep development builds practical for city-scale geometry and spatial queries.
 [profile.dev]

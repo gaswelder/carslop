@@ -22,15 +22,22 @@ use std::ffi::CString;
 pub const VS_SRC: &str = "#version 330 core
 layout (location = 0) in vec3 position;
 layout (location = 1) in vec3 color;
+layout (location = 2) in vec2 uv;
 uniform mat4 u_mvp;
 out vec3 v_color;
-void main() { gl_Position = u_mvp * vec4(position, 1.0); v_color = color; }";
+out vec2 v_uv;
+void main() { gl_Position = u_mvp * vec4(position, 1.0); v_color = color; v_uv = uv; }";
 
 pub const FS_SRC: &str = "#version 330 core
 out vec4 o;
 in vec3 v_color;
+in vec2 v_uv;
 uniform vec3 u_tint;
-void main() { o = vec4(v_color * u_tint, 1.0); }";
+uniform sampler2D u_glyphs;
+void main() {
+    float coverage = v_uv.x < 0.0 ? 1.0 : texture(u_glyphs, v_uv).r;
+    o = vec4(v_color * u_tint, coverage);
+}";
 
 pub const SCENE_VS: &str = "#version 330 core
 layout (location = 0) in vec3 position;
@@ -1876,6 +1883,50 @@ mod renderer_tests {
     use crate::*;
 
     #[test]
+    #[ignore = "requires SDL/OpenGL; profiles a warm HUD including GPU completion"]
+    fn hud_renderer_profile() {
+        let app = App::with_location(false);
+        gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+        let draw = |frame: u32| {
+            gl::clear_screen();
+            app.hud.draw(
+                app.program,
+                hud::Map {
+                    track: app.session.track(),
+                    player: app.session.vehicle.position,
+                },
+                0.0,
+                hud::Gauges {
+                    rpm: 3000.0 + frame as f32,
+                    redline_rpm: 6500.0,
+                    speed_kmh: 90.0,
+                    gear: 3,
+                },
+                None,
+            );
+            unsafe {
+                ::gl::Finish();
+            }
+        };
+        for frame in 0..10 {
+            draw(frame);
+        }
+        let mut samples = Vec::new();
+        for frame in 0..120 {
+            let started = std::time::Instant::now();
+            draw(frame);
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "HUD CPU + GPU: median {:.3} ms, p95 {:.3} ms, max {:.3} ms",
+            samples[60], samples[114], samples[119]
+        );
+        capture_frame(&std::env::temp_dir().join("carslop-hud-atlas.ppm"));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    }
+
+    #[test]
     #[ignore = "requires SDL3/OpenGL; compares rear lamp pixels with the pedal up/down"]
     fn stop_lights_renderer() {
         let app = App::new();
@@ -2310,6 +2361,16 @@ mod renderer_tests {
     fn no_city_startup_renderer_smoke() {
         let mut app = App::with_location(false);
         assert!(app.locations.len() >= 2);
+        loading::draw(
+            &app.window,
+            &app.hud,
+            app.program,
+            "ΛΕΥΚΩΣΙΑ / NICOSIA",
+            "READING MAP AND BUILDING COLLISIONS",
+            0.5,
+        );
+        capture_frame(&std::env::temp_dir().join("carslop-loading.ppm"));
+        assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         app.capture_path = Some(std::env::temp_dir().join("carslop-menu.ppm"));
         app.render(Duration::ZERO);
         app.capture_path = None;

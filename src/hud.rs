@@ -1,10 +1,28 @@
 use crate::city_assets;
+use crate::font;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::phys_car;
 #[cfg(test)]
 use crate::track::LocationId;
 use crate::{asset_car, track::Location};
 use std::ffi::CString;
+
+mod atlas;
+
+#[repr(C)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+    uv: [f32; 2],
+}
+
+fn solid(vertices: &mut Vec<Vertex>, point: [f32; 2], color: [f32; 3]) {
+    vertices.push(Vertex {
+        position: [point[0], point[1], 0.0],
+        color,
+        uv: [-1.0; 2],
+    });
+}
 
 const CHOICES_PER_PAGE: usize = 3;
 fn choice_box(index: usize, left: f32) -> [f32; 4] {
@@ -278,7 +296,7 @@ fn clip_line(
         std::array::from_fn(|i| a[i] + delta[i] * end),
     ])
 }
-fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, aspect: f32, color: [f32; 3]) {
+fn map_marker(v: &mut Vec<Vertex>, point: [f32; 2], size: f32, aspect: f32, color: [f32; 3]) {
     if (0..2).any(|i| point[i] < MAP_CONTENT[0][i] || point[i] > MAP_CONTENT[1][i]) {
         return;
     }
@@ -298,7 +316,7 @@ fn map_marker(v: &mut Vec<f32>, point: [f32; 2], size: f32, aspect: f32, color: 
         });
         for i in [1, 2] {
             for p in [points[0], points[i], points[i + 1]] {
-                v.extend_from_slice(&[p[0], p[1], 0.0, ink[0], ink[1], ink[2]]);
+                solid(v, p, ink);
             }
         }
     }
@@ -358,6 +376,7 @@ impl MapZoomMemory {
 }
 
 pub struct Hud {
+    font_texture: atlas::Texture,
     vao: u32,
     vbo: u32,
     full_map_vertices: i32,
@@ -375,7 +394,35 @@ impl Drop for Hud {
 }
 
 impl Hud {
+    pub fn draw_loading(&self, program: u32, name: &str, stage: &str, elapsed: f32) {
+        let mut vertices = Vec::new();
+        let mut label = |value: &str, y: f32, size: f32, color| {
+            let width = font::labels().width(value);
+            let size = size.min(1.8 / width.max(1.0));
+            text(&mut vertices, value, [-width * size * 0.5, y], size, color);
+        };
+        label("LOADING LOCATION", 0.35, 0.009, [0.15, 0.85, 0.95]);
+        label(name, 0.15, 0.005, [0.9, 0.95, 1.0]);
+        label(stage, -0.02, 0.004, [0.55, 0.66, 0.70]);
+        label("ESC TO CLOSE", -0.52, 0.003, [0.55, 0.66, 0.70]);
+        quad(
+            &mut vertices,
+            [-0.55, -0.22],
+            [0.55, -0.19],
+            [0.12, 0.20, 0.25],
+        );
+        let x = -0.55 + (elapsed * 1.5).sin().mul_add(0.5, 0.5) * 0.9;
+        quad(
+            &mut vertices,
+            [x, -0.22],
+            [x + 0.2, -0.19],
+            [0.15, 0.85, 0.95],
+        );
+        self.upload(program, &vertices);
+    }
+
     pub fn new() -> Self {
+        let font_texture = atlas::Texture::new();
         unsafe {
             let (mut vao, mut vbo) = (0, 0);
             gl::GenVertexArrays(1, &mut vao);
@@ -383,10 +430,14 @@ impl Hud {
             gl::BindVertexArray(vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
             gl::EnableVertexAttribArray(0);
-            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 24, std::ptr::null());
+            let stride = std::mem::size_of::<Vertex>() as i32;
+            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
             gl::EnableVertexAttribArray(1);
-            gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, 24, 12usize as *const _);
+            gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride, 12usize as *const _);
+            gl::EnableVertexAttribArray(2);
+            gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride, 24usize as *const _);
             Self {
+                font_texture,
                 vao,
                 vbo,
                 full_map_vertices: 0,
@@ -496,7 +547,7 @@ impl Hud {
         text(&mut vertices, hint, [-0.90, -0.89], 0.003, [0.9, 0.95, 1.0]);
         // Reuse the uploaded map until it opens again or the zoom changes.
         self.set_vertices(&vertices);
-        self.full_map_vertices = (vertices.len() / 6) as i32;
+        self.full_map_vertices = vertices.len() as i32;
     }
 
     pub fn draw_full_map(&self, program: u32) {
@@ -510,11 +561,11 @@ impl Hud {
         let muted = [0.55, 0.66, 0.70];
         text(&mut v, "CHOOSE YOUR DRIVE", [-0.92, 0.89], 0.006, white);
         let name = &menu.cars[menu.car].name;
-        let size = 0.005_f32.min(1.5 / (name.chars().count().max(1) as f32 * 6.0));
+        let size = 0.005_f32.min(1.5 / font::labels().width(name).max(1.0));
         text(
             &mut v,
             name,
-            [-(name.chars().count() as f32) * 3.0 * size, 0.82],
+            [-font::labels().width(name) * 0.5 * size, 0.82],
             size,
             white,
         );
@@ -598,7 +649,16 @@ impl Hud {
             );
         }
         menu_button(&mut v, START_BOX, true, menu.focus == 2);
-        text(&mut v, "START DRIVING", [-0.27, -0.66], 0.005, cyan);
+        text(
+            &mut v,
+            "START DRIVING",
+            [
+                (START_BOX[0] + START_BOX[2] - font::labels().width("START DRIVING") * 0.005) * 0.5,
+                -0.66,
+            ],
+            0.005,
+            cyan,
+        );
         if menu.locations[menu.selected].track.asset_path().is_some() {
             text(
                 &mut v,
@@ -632,12 +692,12 @@ impl Hud {
         self.upload(program, &v);
     }
 
-    fn upload(&self, program: u32, v: &[f32]) {
+    fn upload(&self, program: u32, v: &[Vertex]) {
         self.set_vertices(v);
-        self.draw_vertices(program, (v.len() / 6) as i32);
+        self.draw_vertices(program, v.len() as i32);
     }
 
-    fn set_vertices(&self, v: &[f32]) {
+    fn set_vertices(&self, v: &[Vertex]) {
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::BufferData(
@@ -654,10 +714,38 @@ impl Hud {
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
         unsafe {
+            let blending = gl::IsEnabled(gl::BLEND);
+            let mut blend = [0; 6];
+            for (value, parameter) in blend.iter_mut().zip([
+                gl::BLEND_SRC_RGB,
+                gl::BLEND_DST_RGB,
+                gl::BLEND_SRC_ALPHA,
+                gl::BLEND_DST_ALPHA,
+                gl::BLEND_EQUATION_RGB,
+                gl::BLEND_EQUATION_ALPHA,
+            ]) {
+                gl::GetIntegerv(parameter, value);
+            }
+            let mut active_texture = 0;
+            gl::GetIntegerv(gl::ACTIVE_TEXTURE, &mut active_texture);
+            gl::ActiveTexture(gl::TEXTURE0);
+            let mut binding = 0;
+            gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut binding);
+            self.font_texture.bind();
+            gl::Enable(gl::BLEND);
+            gl::BlendEquation(gl::FUNC_ADD);
+            gl::BlendFuncSeparate(
+                gl::SRC_ALPHA,
+                gl::ONE_MINUS_SRC_ALPHA,
+                gl::ONE,
+                gl::ONE_MINUS_SRC_ALPHA,
+            );
             gl::Disable(gl::DEPTH_TEST);
             gl::BindVertexArray(self.vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::UseProgram(program);
+            let name = CString::new("u_glyphs").unwrap();
+            gl::Uniform1i(gl::GetUniformLocation(program, name.as_ptr()), 0);
             let name = CString::new("u_mvp").unwrap();
             gl::UniformMatrix4fv(
                 gl::GetUniformLocation(program, name.as_ptr()),
@@ -674,11 +762,29 @@ impl Hud {
             );
             gl::DrawArrays(gl::TRIANGLES, 0, count);
             gl::Enable(gl::DEPTH_TEST);
+            gl::BindTexture(gl::TEXTURE_2D, binding as u32);
+            gl::ActiveTexture(active_texture as u32);
+            gl::BlendFuncSeparate(
+                blend[0] as u32,
+                blend[1] as u32,
+                blend[2] as u32,
+                blend[3] as u32,
+            );
+            gl::BlendEquationSeparate(blend[4] as u32, blend[5] as u32);
+            if blending == gl::FALSE {
+                gl::Disable(gl::BLEND);
+            }
         }
     }
 }
 
-fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32; 2], fit: &MapFit) {
+fn append_full_map(
+    v: &mut Vec<Vertex>,
+    map: Map<'_>,
+    heading: f32,
+    viewport: [f32; 2],
+    fit: &MapFit,
+) {
     let white = [0.9, 0.95, 1.0];
     let muted = [0.55, 0.66, 0.70];
     let cyan = [0.15, 0.85, 0.95];
@@ -691,8 +797,7 @@ fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32;
         [0.025, 0.05, 0.075],
     );
     text(v, "FULL MAP", [-0.94, 0.92], 0.006, cyan);
-    let name_size =
-        0.004_f32.min(0.94 / (map.track.display_name.chars().count().max(1) as f32 * 6.0));
+    let name_size = 0.004_f32.min(0.94 / font::labels().width(&map.track.display_name).max(1.0));
     text(v, &map.track.display_name, [-0.60, 0.90], name_size, white);
     text(v, "M / ESC BACK", [0.49, 0.90], 0.004, white);
 
@@ -765,7 +870,7 @@ fn append_full_map(v: &mut Vec<f32>, map: Map<'_>, heading: f32, viewport: [f32;
     text(v, &distance, [0.94 - width, -0.82], 0.003, white);
 }
 
-fn choice_header(v: &mut Vec<f32>, label: &str, left: f32, selected: usize, count: usize) {
+fn choice_header(v: &mut Vec<Vertex>, label: &str, left: f32, selected: usize, count: usize) {
     let cyan = [0.15, 0.85, 0.95];
     text(v, label, [left, 0.14], 0.0038, cyan);
     text(
@@ -782,9 +887,9 @@ fn choice_header(v: &mut Vec<f32>, label: &str, left: f32, selected: usize, coun
     text(v, "<", [left + 0.36, 0.14], 0.0035, cyan);
     text(v, ">", [left + 0.65, 0.14], 0.0035, cyan);
 }
-fn choice_button(v: &mut Vec<f32>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
+fn choice_button(v: &mut Vec<Vertex>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
     menu_button(v, r, selected, focused && selected);
-    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / (label.chars().count().max(1) as f32 * 6.0));
+    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::labels().width(label).max(1.0));
     text(
         v,
         label,
@@ -798,7 +903,7 @@ fn choice_button(v: &mut Vec<f32>, r: [f32; 4], label: &str, selected: bool, foc
     );
 }
 
-fn menu_button(v: &mut Vec<f32>, r: [f32; 4], selected: bool, focused: bool) {
+fn menu_button(v: &mut Vec<Vertex>, r: [f32; 4], selected: bool, focused: bool) {
     let fill = if focused {
         [0.07, 0.18, 0.23]
     } else if selected {
@@ -824,7 +929,7 @@ fn menu_button(v: &mut Vec<f32>, r: [f32; 4], selected: bool, focused: bool) {
 // Instruments use a pixel coordinate canvas so round dials and constant-width
 // needles stay round when the window's aspect ratio changes.
 struct InstrumentCanvas<'a> {
-    vertices: &'a mut Vec<f32>,
+    vertices: &'a mut Vec<Vertex>,
     viewport: [f32; 2],
     scale: f32,
     origin: [f32; 2],
@@ -839,8 +944,7 @@ impl InstrumentCanvas<'_> {
     fn triangle(&mut self, p: [[f32; 2]; 3], color: [f32; 3]) {
         for p in p {
             let p = self.point(p);
-            self.vertices
-                .extend_from_slice(&[p[0], p[1], 0.0, color[0], color[1], color[2]]);
+            solid(self.vertices, p, color);
         }
     }
     fn rect(&mut self, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
@@ -871,19 +975,23 @@ impl InstrumentCanvas<'_> {
         }
     }
     fn label(&mut self, value: &str, center: [f32; 2], size: f32, color: [f32; 3]) {
-        let width = (value.chars().count() as f32 * 6.0 - 1.0) * size;
+        self.font_label(&atlas::get().labels, value, center, size, color);
+    }
+    fn font_label(
+        &mut self,
+        font: &atlas::Font,
+        value: &str,
+        center: [f32; 2],
+        size: f32,
+        color: [f32; 3],
+    ) {
+        let width = font.width(value) * size;
         let origin = [center[0] - width * 0.5, center[1] - 3.5 * size];
-        for (i, ch) in value.chars().enumerate() {
-            for (row, bits) in glyph(ch).iter().enumerate() {
-                for col in 0..5 {
-                    if bits & (1 << (4 - col)) != 0 {
-                        let x = origin[0] + (i * 6 + col) as f32 * size;
-                        let y = origin[1] + row as f32 * size;
-                        self.rect([x, y], [x + size * 0.88, y + size * 0.88], color);
-                    }
-                }
-            }
-        }
+        font.draw(value, |sprite| {
+            let positions = corners(sprite.bounds)
+                .map(|p| self.point([origin[0] + p[0] * size, origin[1] + p[1] * size]));
+            glyph_quad(self.vertices, positions, sprite.uv, color);
+        });
     }
 }
 fn dial_point(center: [f32; 2], radius: f32, fraction: f32) -> [f32; 2] {
@@ -954,7 +1062,8 @@ fn dial_face(
             } else {
                 value.to_string()
             };
-            c.label(
+            c.font_label(
+                &atlas::get().digits,
                 &label,
                 dial_point(center, radius - 26.0, fraction),
                 1.4,
@@ -985,7 +1094,7 @@ fn dial_needle(
     c.disc(center, 6.0, [0.12, 0.15, 0.17]);
     c.disc(center, 3.0, [0.65, 0.69, 0.69]);
 }
-fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
+fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
     let scale = (viewport[0] / 1280.0).min(viewport[1] / 720.0);
     let mut c = InstrumentCanvas {
         vertices: v,
@@ -1029,7 +1138,8 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
     );
     c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
     c.label("GEAR", [166.0, 129.0], 0.95, muted);
-    c.label(
+    c.font_label(
+        &atlas::get().digits,
         &if gauges.gear == phys_car::NEUTRAL_GEAR {
             "N".into()
         } else if gauges.gear == 0 {
@@ -1043,7 +1153,7 @@ fn append_instruments(v: &mut Vec<f32>, gauges: Gauges, viewport: [f32; 2]) {
     );
 }
 
-fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
+fn append_pause(v: &mut Vec<Vertex>, pause: PauseMenu<'_>) {
     let white = [0.9, 0.95, 1.0];
     let cyan = [0.15, 0.85, 0.95];
     quad(v, [-0.76, -0.55], [0.76, 0.55], [0.025, 0.05, 0.075]);
@@ -1074,7 +1184,7 @@ fn append_pause(v: &mut Vec<f32>, pause: PauseMenu<'_>) {
     }
 }
 
-fn quad(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
+fn quad(v: &mut Vec<Vertex>, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
     for [x, y] in [
         [a[0], a[1]],
         [b[0], a[1]],
@@ -1083,11 +1193,11 @@ fn quad(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
         [b[0], b[1]],
         [a[0], b[1]],
     ] {
-        v.extend_from_slice(&[x, y, 0.0, color[0], color[1], color[2]]);
+        solid(v, [x, y], color);
     }
 }
 
-fn line(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 3]) {
+fn line(v: &mut Vec<Vertex>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 3]) {
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
     let len = dx.hypot(dy).max(0.0001);
@@ -1099,18 +1209,11 @@ fn line(v: &mut Vec<f32>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 3])
         [b[0] + n[0], b[1] + n[1]],
     ];
     for i in [0, 1, 2, 0, 2, 3] {
-        v.extend_from_slice(&[
-            points[i][0],
-            points[i][1],
-            0.0,
-            color[0],
-            color[1],
-            color[2],
-        ]);
+        solid(v, points[i], color);
     }
 }
 
-fn append_street_name(v: &mut Vec<f32>, name: &str) {
+fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
     let name = name.to_uppercase();
     // Bound the label to two lines at a readable size, including long OSM names.
     let chars: Vec<_> = name.chars().collect();
@@ -1140,7 +1243,11 @@ fn append_street_name(v: &mut Vec<f32>, name: &str) {
     }
     let size = 0.0043;
     let top = -0.89 + (lines.len() - 1) as f32 * 0.075;
-    let width = lines.iter().map(|s| s.chars().count()).max().unwrap_or(0) as f32 * 6.0 * size;
+    let width = lines
+        .iter()
+        .map(|s| font::labels().width(s))
+        .fold(0.0_f32, f32::max)
+        * size;
     quad(
         v,
         [-width * 0.5 - 0.018, -0.96],
@@ -1148,104 +1255,33 @@ fn append_street_name(v: &mut Vec<f32>, name: &str) {
         [0.025, 0.05, 0.075],
     );
     for (i, line) in lines.iter().enumerate() {
-        let x = -(line.chars().count() as f32) * 3.0 * size;
+        let x = -font::labels().width(line) * 0.5 * size;
         text(v, line, [x, top - i as f32 * 0.075], size, [0.9, 0.95, 1.0]);
     }
 }
 
-fn text(v: &mut Vec<f32>, value: &str, origin: [f32; 2], size: f32, color: [f32; 3]) {
-    for (index, ch) in value.chars().enumerate() {
-        for (row, bits) in glyph(ch).iter().enumerate() {
-            for column in 0..5 {
-                if bits & (1 << (4 - column)) != 0 {
-                    let x = origin[0] + (index * 6 + column) as f32 * size;
-                    let y = origin[1] - row as f32 * size * 1.65;
-                    quad(v, [x, y - size * 1.5], [x + size * 0.9, y], color);
-                }
-            }
-        }
+fn corners(bounds: [[f32; 2]; 2]) -> [[f32; 2]; 4] {
+    let [a, b] = bounds;
+    [a, [b[0], a[1]], b, [a[0], b[1]]]
+}
+
+fn glyph_quad(v: &mut Vec<Vertex>, positions: [[f32; 2]; 4], uv: [[f32; 2]; 2], color: [f32; 3]) {
+    let uv = corners(uv);
+    for i in [0, 1, 2, 0, 2, 3] {
+        v.push(Vertex {
+            position: [positions[i][0], positions[i][1], 0.0],
+            color,
+            uv: uv[i],
+        });
     }
 }
 
-pub fn glyph(ch: char) -> [u8; 7] {
-    let ch = match ch {
-        'Α' | 'Ά' | 'Á' | 'À' | 'Â' | 'Ä' => 'A',
-        'Β' => 'B',
-        'Ε' | 'Έ' | 'É' | 'È' | 'Ê' => 'E',
-        'Ζ' => 'Z',
-        'Η' | 'Ή' => 'H',
-        'Ι' | 'Ί' | 'Ϊ' | 'İ' | 'Í' => 'I',
-        'Κ' => 'K',
-        'Μ' => 'M',
-        'Ν' => 'N',
-        'Ο' | 'Ό' | 'Ó' | 'Ö' => 'O',
-        'Ρ' => 'P',
-        'Τ' => 'T',
-        'Υ' | 'Ύ' | 'Ϋ' => 'Y',
-        'Χ' => 'X',
-        'Ü' | 'Ú' => 'U',
-        'Ç' => 'C',
-        'Ş' => 'S',
-        'Ğ' => 'G',
-        _ => ch,
-    };
-    match ch {
-        'Γ' => [31, 16, 16, 16, 16, 16, 16],
-        'Δ' => [4, 10, 10, 17, 17, 17, 31],
-        'Θ' => [14, 17, 17, 31, 17, 17, 14],
-        'Λ' => [4, 10, 10, 17, 17, 17, 17],
-        'Ξ' => [31, 0, 0, 14, 0, 0, 31],
-        'Π' => [31, 17, 17, 17, 17, 17, 17],
-        'Σ' => [31, 16, 8, 4, 8, 16, 31],
-        'Φ' => [4, 14, 21, 21, 21, 14, 4],
-        'Ψ' => [21, 21, 21, 14, 4, 4, 4],
-        'Ω' | 'Ώ' => [14, 17, 17, 17, 10, 10, 27],
-        '\'' => [4, 4, 0, 0, 0, 0, 0],
-        'A' => [14, 17, 17, 31, 17, 17, 17],
-        'B' => [30, 17, 17, 30, 17, 17, 30],
-        'C' => [14, 17, 16, 16, 16, 17, 14],
-        'D' => [30, 17, 17, 17, 17, 17, 30],
-        'E' => [31, 16, 16, 30, 16, 16, 31],
-        'F' => [31, 16, 16, 30, 16, 16, 16],
-        'G' => [14, 17, 16, 23, 17, 17, 15],
-        'H' => [17, 17, 17, 31, 17, 17, 17],
-        'I' => [14, 4, 4, 4, 4, 4, 14],
-        'J' => [7, 2, 2, 2, 2, 18, 12],
-        'K' => [17, 18, 20, 24, 20, 18, 17],
-        'L' => [16, 16, 16, 16, 16, 16, 31],
-        'M' => [17, 27, 21, 21, 17, 17, 17],
-        'N' => [17, 25, 21, 19, 17, 17, 17],
-        'O' => [14, 17, 17, 17, 17, 17, 14],
-        'P' => [30, 17, 17, 30, 16, 16, 16],
-        'Q' => [14, 17, 17, 17, 21, 18, 13],
-        'R' => [30, 17, 17, 30, 20, 18, 17],
-        'S' => [15, 16, 16, 14, 1, 1, 30],
-        'T' => [31, 4, 4, 4, 4, 4, 4],
-        'U' => [17, 17, 17, 17, 17, 17, 14],
-        'V' => [17, 17, 17, 17, 17, 10, 4],
-        'W' => [17, 17, 17, 21, 21, 21, 10],
-        'X' => [17, 17, 10, 4, 10, 17, 17],
-        'Y' => [17, 17, 10, 4, 4, 4, 4],
-        'Z' => [31, 1, 2, 4, 8, 16, 31],
-        '0' => [14, 17, 19, 21, 25, 17, 14],
-        '1' => [4, 12, 4, 4, 4, 4, 14],
-        '2' => [14, 17, 1, 2, 4, 8, 31],
-        '3' => [30, 1, 1, 14, 1, 1, 30],
-        '4' => [2, 6, 10, 18, 31, 2, 2],
-        '5' => [31, 16, 16, 30, 1, 1, 30],
-        '6' => [14, 16, 16, 30, 17, 17, 14],
-        '7' => [31, 1, 2, 4, 8, 8, 8],
-        '8' => [14, 17, 17, 14, 17, 17, 14],
-        '9' => [14, 17, 17, 15, 1, 1, 14],
-        ':' => [0, 4, 4, 0, 4, 4, 0],
-        '.' => [0, 0, 0, 0, 0, 6, 6],
-        '/' => [1, 2, 2, 4, 8, 8, 16],
-        '-' => [0, 0, 0, 31, 0, 0, 0],
-        '+' => [0, 4, 4, 31, 4, 4, 0],
-        '<' => [1, 2, 4, 8, 4, 2, 1],
-        '>' => [16, 8, 4, 2, 4, 8, 16],
-        _ => [0; 7],
-    }
+fn text(v: &mut Vec<Vertex>, value: &str, origin: [f32; 2], size: f32, color: [f32; 3]) {
+    atlas::get().labels.draw(value, |sprite| {
+        let positions = corners(sprite.bounds)
+            .map(|p| [origin[0] + p[0] * size, origin[1] - p[1] * size * 1.65]);
+        glyph_quad(v, positions, sprite.uv, color);
+    });
 }
 
 impl Location {
@@ -1291,6 +1327,43 @@ impl Location {
 mod tests {
     use super::*;
     use crate::test_support;
+
+    #[test]
+    #[ignore = "reports HUD generation time and geometry size"]
+    fn hud_geometry_profile() {
+        let mut vertices = Vec::new();
+        let mut triangles = 0;
+        let cold = std::time::Instant::now();
+        let atlas = atlas::get();
+        eprintln!(
+            "Atlas: {}x{}, {:.3} s to initialize",
+            atlas.width,
+            atlas.height,
+            cold.elapsed().as_secs_f64()
+        );
+        let started = std::time::Instant::now();
+        for frame in 0..1000 {
+            vertices.clear();
+            append_instruments(
+                &mut vertices,
+                Gauges {
+                    rpm: 3000.0 + frame as f32,
+                    redline_rpm: 6500.0,
+                    speed_kmh: 90.0,
+                    gear: 3,
+                },
+                [1280.0, 720.0],
+            );
+            append_street_name(&mut vertices, "ΛΕΩΦΟΡΟΣ ΑΡΧΙΕΠΙΣΚΟΠΟΥ ΜΑΚΑΡΙΟΥ III");
+            std::hint::black_box(&vertices);
+            triangles = vertices.len() / 3;
+        }
+        eprintln!(
+            "HUD: {triangles} triangles, {} bytes, {:.3} ms/frame",
+            std::mem::size_of_val(vertices.as_slice()),
+            started.elapsed().as_secs_f64()
+        );
+    }
 
     #[test]
     fn map_zoom_is_remembered_per_location_after_reopening_and_reloading() {
@@ -1514,8 +1587,9 @@ mod tests {
                     &view.fit,
                 );
                 let roads: Vec<_> = vertices
-                    .chunks_exact(6)
-                    .filter(|p| p[3..] == [0.40, 0.55, 0.60])
+                    .iter()
+                    .filter(|p| p.color == [0.40, 0.55, 0.60])
+                    .map(|p| p.position)
                     .collect();
                 assert!(!roads.is_empty());
                 for p in roads {

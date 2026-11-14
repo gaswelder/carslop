@@ -1,7 +1,7 @@
 //! Original procedural signal heads and sign faces, placed from mapped controls.
 use super::{Builder, Surface};
+use crate::font;
 use crate::geometry::{XYZ, XZ};
-use crate::hud;
 use crate::traffic::{Furniture, FurnitureKind};
 use std::f32::consts::{PI, TAU};
 
@@ -61,27 +61,23 @@ fn disc(
     }
 }
 fn lettering(b: &mut Builder, f: &Furniture, label: &str, y: f32, size: f32, surface: Surface) {
-    let width = (label.len() * 6 - 1) as f32 * size;
-    for (i, ch) in label.chars().enumerate() {
-        for (row, bits) in hud::glyph(ch).iter().enumerate() {
-            for column in 0..5 {
-                if bits & (1 << (4 - column)) != 0 {
-                    let x = -width * 0.5 + (i * 6 + column) as f32 * size;
-                    let top = y + 3.5 * size - row as f32 * size;
-                    b.quad(
-                        [
-                            point(f, x, top - size * 0.9, 0.065),
-                            point(f, x + size * 0.9, top - size * 0.9, 0.065),
-                            point(f, x + size * 0.9, top, 0.065),
-                            point(f, x, top, 0.065),
-                        ],
-                        surface,
-                    );
-                }
-            }
-        }
-    }
+    let font = font::labels();
+    let width = font.width(label) * size;
+    font.draw(label, |triangle| {
+        b.triangle(
+            triangle.map(|p| {
+                point(
+                    f,
+                    -width * 0.5 + p[0] * size,
+                    y + (3.5 - p[1]) * size,
+                    0.065,
+                )
+            }),
+            surface,
+        );
+    });
 }
+
 pub(super) fn build(b: &mut Builder, f: &Furniture) {
     let metal = Surface {
         color: [0.29, 0.32, 0.32],
@@ -208,7 +204,7 @@ pub(super) fn build(b: &mut Builder, f: &Furniture) {
             disc(b, f, 2.12, 0.365, 0.015, 32, red);
             disc(b, f, 2.12, 0.29, 0.035, 32, white);
             let label = f.value.to_string();
-            let size = 0.033_f32.min(0.48 / (label.len() * 6) as f32);
+            let size = 0.033_f32.min(0.48 / font::labels().width(&label).max(1.0));
             lettering(b, f, &label, 2.12, size, dark);
         }
         FurnitureKind::Yield => {
