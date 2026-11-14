@@ -431,6 +431,8 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
             height_meters: 5.0,
             base_y: 0.0,
             tagged: true,
+            holes: Vec::new(),
+            min_height_meters: 0.0,
             ground_outline: vec![
                 XZ { x: 10.0, z: 10.0 },
                 XZ { x: 15.0, z: 10.0 },

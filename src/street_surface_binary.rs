@@ -61,7 +61,7 @@ impl<R: io::Read> Decoder<R> {
                 grid.insert((x, z), ids);
             }
         }
-        if n == 0 {
+        if n == 0 && limit != 0 {
             return Err(invalid("empty collision grid"));
         }
         Ok(grid)
@@ -102,10 +102,7 @@ fn load(directory: &Path, roads: usize) -> io::Result<Loaded> {
     ))
 }
 
-pub fn load_geometry(
-    directory: &Path,
-    roads: usize,
-) -> io::Result<location::Streets> {
+pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<location::Streets> {
     decode(directory, roads, false).map(|(data, _, _, _)| data)
 }
 
@@ -177,7 +174,7 @@ fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Deco
             inward: XZ { x: p[4], z: p[5] },
         });
     }
-    if triangles.is_empty() || curbs.is_empty() {
+    if triangles.is_empty() != curbs.is_empty() {
         return Err(invalid("incomplete collision cache"));
     }
     let triangles_grid = r.grid(triangles.len(), retain_grids)?;
@@ -230,8 +227,7 @@ mod tests {
     use crate::source_location;
     use crate::test_support;
     fn bake(city: &Path, streets: &Path, output: &Path) -> error::Result<()> {
-        let city =
-            source_location::SourceLocation::<f32>::parse(&std::fs::read_to_string(city)?)?;
+        let city = source_location::SourceLocation::<f32>::parse(&std::fs::read_to_string(city)?)?;
         build_collision::build_collisions(output, &city, std::fs::read_to_string(streets)?)
     }
     fn fixture(root: &Path) -> String {

@@ -1,9 +1,9 @@
 use crate::add_location_compile::create_location_map;
 use crate::asset_codecs;
 use crate::build_collision;
-use crate::build_traffic_calming;
 use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
+use crate::build_traffic_calming;
 use crate::error::Result;
 use crate::geometry::{cross, polygon, sub, unit};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
@@ -298,6 +298,8 @@ fn map(
                 height_meters: 6.0,
                 base_y: 0.0,
                 tagged: false,
+                holes: Vec::new(),
+                min_height_meters: 0.0,
                 ground_outline: p.clone(),
             })
             .collect(),
@@ -1297,4 +1299,464 @@ fn entrance_nodes_stay_with_their_buildings_when_footprint_winding_changes() {
         .city;
     assert_eq!(parsed.entrances.len(), 2);
     assert_eq!(parsed.entrances[0].building_id, 100);
+}
+
+#[test]
+fn mapped_building_parts_replace_parent_roofs_and_keep_partial_coverage() {
+    struct Outline {
+        id: i64,
+        min_x: f64,
+        max_x: f64,
+        min_z: f64,
+        max_z: f64,
+        tags: Vec<(&'static str, &'static str)>,
+    }
+    for inset in [false, true] {
+        let mut source = source();
+        node(&mut source, 1, XZ { x: -40., z: -20. }, &[]);
+        node(&mut source, 2, XZ { x: 40., z: -20. }, &[]);
+        way(&mut source, 300, &[1, 2], &[("highway", "residential")]);
+        let mut outlines = vec![Outline {
+            id: 100,
+            min_x: 0.,
+            max_x: 20.,
+            min_z: 0.,
+            max_z: 10.,
+            tags: vec![("building", "yes"), ("height", "18")],
+        }];
+        if inset {
+            outlines.push(Outline {
+                id: 101,
+                min_x: 5.,
+                max_x: 15.,
+                min_z: 2.,
+                max_z: 8.,
+                tags: vec![
+                    ("building:part", "yes"),
+                    ("height", "24"),
+                    ("building:min_level", "2"),
+                ],
+            });
+        } else {
+            outlines.extend([
+                Outline {
+                    id: 101,
+                    min_x: 0.,
+                    max_x: 10.,
+                    min_z: 0.,
+                    max_z: 10.,
+                    tags: vec![("building:part", "yes"), ("building:levels", "1")],
+                },
+                Outline {
+                    id: 102,
+                    min_x: 10.,
+                    max_x: 20.,
+                    min_z: 0.,
+                    max_z: 10.,
+                    tags: vec![("building:part", "yes"), ("building:levels", "3")],
+                },
+            ]);
+        }
+        let mut next = 10;
+        for outline in outlines {
+            let mut nodes = Vec::new();
+            for point in [
+                XZ {
+                    x: outline.min_x,
+                    z: outline.min_z,
+                },
+                XZ {
+                    x: outline.max_x,
+                    z: outline.min_z,
+                },
+                XZ {
+                    x: outline.max_x,
+                    z: outline.max_z,
+                },
+                XZ {
+                    x: outline.min_x,
+                    z: outline.max_z,
+                },
+            ] {
+                node(&mut source, next, point, &[]);
+                nodes.push(next);
+                next += 1;
+            }
+            nodes.push(nodes[0]);
+            way(&mut source, outline.id, &nodes, &outline.tags);
+        }
+        let map = fixture_map(&source, None).unwrap();
+        assert_eq!(map.buildings.len(), 2);
+        assert!(map.buildings.iter().all(|building| building.id == 100));
+        assert!(
+            (map.buildings
+                .iter()
+                .map(|building| building.footprint().unsigned_area())
+                .sum::<f64>()
+                - 200.)
+                .abs()
+                < 0.001
+        );
+        if inset {
+            assert!(map
+                .buildings
+                .iter()
+                .any(|building| (building.min_height_meters - 6.2).abs() < 0.001));
+            assert!(map
+                .buildings
+                .iter()
+                .any(|building| building.holes.len() == 1 && building.height_meters == 18.));
+        } else {
+            assert!(map
+                .buildings
+                .iter()
+                .all(|building| building.height_meters < 10.));
+        }
+        let temp = Temp::new();
+        let parsed = src_files::write_city_txt(&map, &temp.directory.join("city.txt"))
+            .unwrap()
+            .city;
+        assert_eq!(
+            parsed
+                .buildings
+                .iter()
+                .map(|building| building.holes.len())
+                .sum::<usize>(),
+            usize::from(inset)
+        );
+    }
+}
+
+#[test]
+fn separated_roads_keep_source_topology_and_join_graded_approaches() {
+    use crate::build_details;
+    use crate::build_transport;
+    use crate::map_details;
+    for tags in [vec![("bridge", "yes")], vec![("tunnel", "yes")]] {
+        let mut source = source();
+        for (id, p) in [
+            (1, XZ { x: -100., z: 0. }),
+            (2, XZ { x: -20., z: 0. }),
+            (3, XZ { x: 20., z: 0. }),
+            (4, XZ { x: 100., z: 0. }),
+            (5, XZ { x: 0., z: -80. }),
+            (6, XZ { x: 0., z: 0. }),
+            (7, XZ { x: 0., z: 80. }),
+            (8, XZ { x: 0., z: 0. }),
+        ] {
+            node(&mut source, id, p, &[]);
+        }
+        way(&mut source, 100, &[1, 2], &[("highway", "residential")]);
+        let mut road_tags = tags;
+        road_tags.push(("highway", "residential"));
+        way(&mut source, 101, &[2, 8, 3], &road_tags);
+        way(&mut source, 102, &[3, 4], &[("highway", "residential")]);
+        way(&mut source, 103, &[5, 6, 7], &[("highway", "residential")]);
+        let map = fixture_map(&source, None).unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let surfaces = build_surfaces::write_streets_txt(
+            &map,
+            &folder.path().join("streets.txt"),
+            Some(&source),
+        )
+        .unwrap()
+        .surfaces;
+        let path = folder.path().join("road-rises.txt");
+        build_traffic_calming::build_traffic_calming(&source, &map, &surfaces, &path).unwrap();
+        let field = world::HeightField::generate(
+            BoundingBoxXZ {
+                min: map.bounding_box.min.map(|v| v as f32),
+                max: map.bounding_box.max.map(|v| v as f32),
+            },
+            |_| 0.,
+        );
+        let mut data = build_details::build(&source, &map, &surfaces);
+        build_transport::build(&source, &map, &surfaces, &field, 0., &mut data, &path).unwrap();
+        data.validate(map.buildings.len(), map.road_lines.len())
+            .unwrap();
+        assert_eq!(data.decks.len(), 2);
+        let height = data.decks[0].path[0][1];
+        assert!((height.abs() - 5.).abs() < 0.001);
+        let prepared = map_details::Prepared::new(data);
+        assert!(
+            (prepared.deck_height(XZ { x: 0., z: 0. }, height).unwrap() - height).abs() < 0.001
+        );
+        let rises = asset_codecs::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+        let lift = |p| {
+            rises
+                .iter()
+                .filter_map(|r| r.offset(p))
+                .max_by(f32::total_cmp)
+                .unwrap_or(0.)
+        };
+        assert!((lift(XZ { x: -20.01, z: 0. }) - height).abs() < 0.01);
+        assert!(lift(XZ { x: -65., z: 0. }).abs() > 1.);
+        assert!(
+            lift(XZ { x: 0., z: 30. }).abs() < 0.001,
+            "crossing road acquired the bridge's elevation"
+        );
+        assert!(lift(XZ { x: -99., z: 0. }).abs() < 0.001);
+        let bridge_nodes: std::collections::BTreeSet<_> = map
+            .road_lines
+            .iter()
+            .filter(|road| road.osm_way_id == Some(101))
+            .flat_map(|r| r.ends)
+            .collect();
+        let ground_nodes: std::collections::BTreeSet<_> = map
+            .road_lines
+            .iter()
+            .filter(|road| road.osm_way_id == Some(103))
+            .flat_map(|r| r.ends)
+            .collect();
+        assert!(bridge_nodes.is_disjoint(&ground_nodes));
+    }
+}
+
+#[test]
+fn building_passages_preserve_upper_floors_and_relation_courtyards() {
+    let mut source = source();
+    for (id, p) in [
+        (1, XZ { x: -40., z: 0. }),
+        (2, XZ { x: 40., z: 0. }),
+        (10, XZ { x: -10., z: -10. }),
+        (11, XZ { x: 10., z: -10. }),
+        (12, XZ { x: 10., z: 10. }),
+        (13, XZ { x: -10., z: 10. }),
+    ] {
+        node(&mut source, id, p, &[]);
+    }
+    way(
+        &mut source,
+        100,
+        &[1, 2],
+        &[
+            ("highway", "service"),
+            ("tunnel", "building_passage"),
+            ("maxheight", "3.5"),
+        ],
+    );
+    way(
+        &mut source,
+        200,
+        &[10, 11, 12, 13, 10],
+        &[("building", "yes"), ("height", "9")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let p = XZ { x: 0., z: 0. };
+    let contains = |height: f64| {
+        map.buildings.iter().any(|b| {
+            b.footprint().contains(&Point::new(p.x, p.z))
+                && b.min_height_meters <= height
+                && b.height_meters >= height
+        })
+    };
+    assert!(!contains(2.));
+    assert!(contains(4.));
+    assert!(map.buildings.iter().all(|building| building.id == 200));
+    // The same outline imported as a relation retains an actual inner ring.
+    for (id, p) in [
+        (20, XZ { x: -3., z: -3. }),
+        (21, XZ { x: 3., z: -3. }),
+        (22, XZ { x: 3., z: 3. }),
+        (23, XZ { x: -3., z: 3. }),
+    ] {
+        node(&mut source, id, p, &[]);
+    }
+    test_support::set_osm_tags(source.ways.get_mut(&200).unwrap(), &[]);
+    way(&mut source, 201, &[20, 21, 22, 23, 20], &[]);
+    let mut relation = element(
+        300,
+        &[
+            ("type", "multipolygon"),
+            ("building", "yes"),
+            ("height", "12"),
+            ("name", "Courtyard"),
+        ],
+    );
+    relation.members = vec![
+        ("way".into(), 200, "outer".into()),
+        ("way".into(), 201, "inner".into()),
+    ];
+    source.relations.push(relation);
+    test_support::set_osm_tags(
+        source.ways.get_mut(&100).unwrap(),
+        &[("highway", "residential")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    assert_eq!(map.buildings.len(), 1);
+    assert_eq!(map.buildings[0].holes.len(), 1);
+    assert!(!map.buildings[0].footprint().contains(&Point::new(0., 0.)));
+    assert_eq!(map.buildings[0].id, osm::relation_feature_id(300));
+}
+
+#[test]
+fn vegetation_uses_rows_species_and_waterway_exclusions_deterministically() {
+    use crate::map_details::TreeKind;
+    let mut source = source();
+    for (id, p) in [
+        (1, XZ { x: -100., z: 0. }),
+        (2, XZ { x: 100., z: 0. }),
+        (10, XZ { x: -60., z: -60. }),
+        (11, XZ { x: 60., z: -60. }),
+        (12, XZ { x: 60., z: 60. }),
+        (13, XZ { x: -60., z: 60. }),
+        (20, XZ { x: -60., z: 80. }),
+        (21, XZ { x: 60., z: 80. }),
+        (30, XZ { x: 0., z: -80. }),
+        (31, XZ { x: 0., z: 80. }),
+    ] {
+        node(&mut source, id, p, &[]);
+    }
+    way(&mut source, 100, &[1, 2], &[("highway", "residential")]);
+    way(
+        &mut source,
+        200,
+        &[10, 11, 12, 13, 10],
+        &[
+            ("landuse", "forest"),
+            ("genus", "Pinus"),
+            ("leaf_cycle", "evergreen"),
+        ],
+    );
+    way(
+        &mut source,
+        201,
+        &[20, 21],
+        &[
+            ("natural", "tree_row"),
+            ("genus", "Phoenix"),
+            ("tree_row:spacing", "6"),
+        ],
+    );
+    way(
+        &mut source,
+        202,
+        &[30, 31],
+        &[("waterway", "stream"), ("width", "6")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let surfaces =
+        build_surfaces::write_streets_txt(&map, &folder.path().join("streets.txt"), Some(&source))
+            .unwrap()
+            .surfaces;
+    let path = folder.path().join("landscape.txt");
+    let styles = build_landscape(&source, &map, &surfaces, &path).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let cover = test_support::landscape(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert!(cover.trees().len() > 80);
+    assert!(styles.iter().any(|style| style.kind == TreeKind::Palm));
+    assert!(styles
+        .iter()
+        .any(|style| style.kind == TreeKind::Conifer && style.evergreen));
+    assert!(cover
+        .trees()
+        .iter()
+        .all(|tree| tree.coords.z.abs() > 4. && tree.coords.x.abs() > 3.));
+    assert!(cover
+        .ground_triangles()
+        .iter()
+        .any(|triangle| triangle.material == world::Material::Water));
+    build_landscape(&source, &map, &surfaces, &path).unwrap();
+    assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+#[test]
+fn explicit_lane_turns_and_unpaved_materials_survive_compilation() {
+    use crate::build_lane_details;
+    let mut source = source();
+    node(&mut source, 1, XZ { x: -80., z: 0. }, &[]);
+    node(&mut source, 2, XZ { x: 80., z: 0. }, &[]);
+    way(
+        &mut source,
+        100,
+        &[1, 2],
+        &[
+            ("highway", "primary"),
+            ("width", "10"),
+            ("lanes", "3"),
+            ("lanes:forward", "2"),
+            ("lanes:backward", "1"),
+            ("turn:lanes:forward", "through|right"),
+        ],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("streets.txt");
+    let surfaces = build_surfaces::write_streets_txt(&map, &path, Some(&source))
+        .unwrap()
+        .surfaces;
+    let paint = build_lane_details::paint(&source, &map, &surfaces.paths, &surfaces.asphalt);
+    assert!(paint.unsigned_area() > 1.);
+    assert!(paint
+        .0
+        .iter()
+        .all(|p| p.exterior().0.iter().all(|p| p.x > 65.)));
+    test_support::set_osm_tags(
+        source.ways.get_mut(&100).unwrap(),
+        &[("highway", "residential"), ("surface", "gravel")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
+    let (surface, _) =
+        street_surface::StreetSurface::load(&fs::read_to_string(path).unwrap(), 1).unwrap();
+    assert!(surface.road_triangles().iter().any(|triangle| matches!(
+        triangle.usage,
+        world::TriangleUsage::Road(_)
+    ) && triangle.material
+        == world::Material::BareGround));
+    assert!(surface
+        .road_triangles()
+        .iter()
+        .all(|triangle| triangle.usage != world::TriangleUsage::Marking));
+}
+
+#[test]
+fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
+    use crate::build_details;
+    use crate::build_transport;
+    use crate::city_assets;
+    use crate::location;
+    let folder = tempfile::tempdir().unwrap();
+    let assets = test_support::stored_location(folder.path(), false);
+    let mut source = source();
+    node(&mut source, 1, XZ { x: 0., z: 0. }, &[]);
+    node(&mut source, 2, XZ { x: 20., z: 0. }, &[]);
+    way(
+        &mut source,
+        100,
+        &[1, 2],
+        &[("highway", "residential"), ("bridge", "yes")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let city = src_files::write_city_txt(&map, &folder.path().join("city.txt"))
+        .unwrap()
+        .city;
+    let path = folder.path().join("streets.txt");
+    let surfaces = build_surfaces::write_streets_txt(&map, &path, Some(&source))
+        .unwrap()
+        .surfaces;
+    let rises = folder.path().join("road-rises.txt");
+    build_traffic_calming::build_traffic_calming(&source, &map, &surfaces, &rises).unwrap();
+    let field = assets.get_heightfield().unwrap();
+    let mut details = build_details::build(&source, &map, &surfaces);
+    build_transport::build(&source, &map, &surfaces, &field, 0., &mut details, &rises).unwrap();
+    details.write(folder.path()).unwrap();
+    build_collision::build_collisions(
+        &folder.path().join("streets.bin"),
+        &city,
+        fs::read_to_string(path).unwrap(),
+    )
+    .unwrap();
+    let prepared = world::Location::load(&assets).unwrap();
+    assert!(prepared.road_triangles().is_empty());
+    assert!((prepared.spawn().point.y - 12.).abs() < 0.001);
+    let output = tempfile::tempdir().unwrap();
+    location::Location::read(folder.path())
+        .unwrap()
+        .write(output.path())
+        .unwrap();
+    let reread =
+        world::Location::load(&city_assets::CityAsset::new(output.path().to_owned())).unwrap();
+    assert!((reread.spawn().point.y - 12.).abs() < 0.001);
 }

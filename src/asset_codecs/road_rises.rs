@@ -1,10 +1,19 @@
-//! ROAD_RISES 1: triangles whose Y values are offsets above the normal road.
+//! ROAD_RISES: normal-road offsets. Version 1 covers humps; version 2 adds signed approach ramps.
 use crate::geometry::XYZ;
 use crate::world::RoadRise;
 use std::io;
 
 pub fn write(writer: &mut impl io::Write, rises: &[RoadRise]) -> io::Result<()> {
-    writeln!(writer, "ROAD_RISES 1")?;
+    let version = if rises
+        .iter()
+        .flat_map(|r| r.points)
+        .all(|p| (0.0..=0.3).contains(&p.y))
+    {
+        1
+    } else {
+        2
+    };
+    writeln!(writer, "ROAD_RISES {version}")?;
     for rise in rises {
         write!(writer, "t")?;
         for point in rise.points {
@@ -16,9 +25,11 @@ pub fn write(writer: &mut impl io::Write, rises: &[RoadRise]) -> io::Result<()> 
 }
 pub fn parse(text: &str) -> Result<Vec<RoadRise>, String> {
     let mut lines = text.lines();
-    if lines.next() != Some("ROAD_RISES 1") {
-        return Err("unsupported road rises header".into());
-    }
+    let range = match lines.next() {
+        Some("ROAD_RISES 1") => 0.0..=0.3,
+        Some("ROAD_RISES 2") => -100.0..=100.0,
+        _ => return Err("unsupported road rises header".into()),
+    };
     let mut result = Vec::new();
     for line in lines {
         let fields: Vec<_> = line.split_whitespace().collect();
@@ -39,10 +50,7 @@ pub fn parse(text: &str) -> Result<Vec<RoadRise>, String> {
                 y: number(2 + i * 3)?,
                 z: number(3 + i * 3)?,
             };
-            if point.x.abs() > 100_000.
-                || point.z.abs() > 100_000.
-                || !(0.0..=0.3).contains(&point.y)
-            {
+            if point.x.abs() > 100_000. || point.z.abs() > 100_000. || !range.contains(&point.y) {
                 return Err("invalid road rise dimensions".into());
             }
         }

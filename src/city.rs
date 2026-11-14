@@ -1,4 +1,5 @@
 //! Offline OSM street network. Geometry, collision, recovery and minimap share it.
+use crate::build_buildings;
 use crate::geometry;
 #[cfg(test)]
 use crate::geometry::BoundingBoxXZ;
@@ -23,6 +24,12 @@ pub struct OsmLabels {
 pub fn read_osm_labels(source: impl std::io::BufRead) -> Result<OsmLabels, String> {
     let map = osm::read_xml(source).map_err(|e| e.to_string())?;
     Ok(osm_labels(&map))
+}
+
+struct LabelFootprint {
+    id: u64,
+    polygon: geo::Polygon<f64>,
+    bounds: geo::Rect<f64>,
 }
 
 fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
@@ -63,17 +70,38 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
         let points: Option<Vec<_>> = way
             .nodes
             .iter()
-            .map(|id| {
-                map.nodes
-                    .get(id)?
-                    .coord
-                    .map(|p| XZ { x: p.lon, z: p.lat })
-            })
+            .map(|id| map.nodes.get(id)?.coord.map(|p| XZ { x: p.lon, z: p.lat }))
             .collect();
         if let Some(points) = points {
             let polygon = geometry::polygon(&points);
             if let Some(bounds) = polygon.bounding_rect() {
-                footprints.push((way.id as u64, polygon, bounds));
+                footprints.push(LabelFootprint {
+                    id: way.id as u64,
+                    polygon,
+                    bounds,
+                });
+            }
+        }
+    }
+    for relation in map.relations.iter().filter(|relation| {
+        relation.tag("type") == "multipolygon" && !matches!(relation.tag("building"), "" | "no")
+    }) {
+        let id = osm::relation_feature_id(relation.id);
+        let label = name(relation);
+        if !label.is_empty() {
+            labels.buildings.insert(id, label);
+        }
+        if let Some(geometry) =
+            build_buildings::relation_geometry(map, relation, |p| XZ { x: p.lon, z: p.lat })
+        {
+            for polygon in geometry.0 {
+                if let Some(bounds) = polygon.bounding_rect() {
+                    footprints.push(LabelFootprint {
+                        id,
+                        polygon,
+                        bounds,
+                    });
+                }
             }
         }
     }
@@ -81,7 +109,8 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
         footprints
             .iter()
             .enumerate()
-            .map(|(i, (_, _, bounds))| {
+            .map(|(i, footprint)| {
+                let bounds = footprint.bounds;
                 rstar::primitives::GeomWithData::new(
                     rstar::primitives::Rectangle::from_corners(
                         [bounds.min().x, bounds.min().y],
@@ -126,14 +155,15 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
         let owner = index
             .locate_in_envelope_intersecting(&envelope)
             .map(|entry| &footprints[entry.data])
-            .filter(|(_, polygon, _)| polygon.intersects(&point))
+            .filter(|footprint| footprint.polygon.intersects(&point))
             .min_by(|a, b| {
-                a.1.unsigned_area()
-                    .total_cmp(&b.1.unsigned_area())
-                    .then(a.0.cmp(&b.0))
+                a.polygon
+                    .unsigned_area()
+                    .total_cmp(&b.polygon.unsigned_area())
+                    .then(a.id.cmp(&b.id))
             });
-        if let Some((id, _, _)) = owner {
-            labels.storefronts.push((*id, label));
+        if let Some(owner) = owner {
+            labels.storefronts.push((owner.id, label));
         }
     }
     labels.storefronts.sort();
@@ -231,9 +261,8 @@ mod tests {
         let tangent = XZ { x: -0.8, z: 0.6 };
         let mut speed = 20.0;
         for _ in 0..120 {
-            let mut velocity = XZ::from_fn(|i| {
-                tangent.component(i) * speed + normal.component(i) * 0.01
-            });
+            let mut velocity =
+                XZ::from_fn(|i| tangent.component(i) * speed + normal.component(i) * 0.01);
             let impact = deflect(&mut velocity, normal);
             assert!((impact - 0.01).abs() < 0.00001);
             assert!(velocity.x * normal.x + velocity.z * normal.z <= 0.0);
@@ -245,17 +274,11 @@ mod tests {
     #[test]
     fn barrier_response_rebounds_head_on_and_leaves_departing_cars_alone() {
         let mut velocity = XZ { x: 10.0, z: 0.0 };
-        assert_eq!(
-            deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }),
-            10.0
-        );
+        assert_eq!(deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }), 10.0);
         assert!((velocity.x + 0.8).abs() < 0.00001);
         assert_eq!(velocity.z, 0.0);
         let departing = velocity;
-        assert_eq!(
-            deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }),
-            0.0
-        );
+        assert_eq!(deflect(&mut velocity, XZ { x: 1.0, z: 0.0 }), 0.0);
         assert_eq!(velocity, departing);
     }
 
@@ -269,7 +292,7 @@ mod tests {
                 let s = city.sample(i, t);
                 let mut p = s.vehicle_position(0.0);
                 let before = p;
-                city.constrain(&mut p, &mut XZ::default());
+                city.constrain(&mut p, &mut XZ::default(), 1.7);
                 assert_eq!(p, before);
             }
         }
@@ -285,22 +308,21 @@ mod tests {
             y: 0.48,
             z: 45.0,
         };
-        city.constrain(&mut p, &mut XZ { x: 0.0, z: 10.0 });
+        city.constrain(&mut p, &mut XZ { x: 0.0, z: 10.0 }, 1.7);
         assert!(p.z <= 42.61);
     }
     #[test]
     fn building_contacts_and_camera_respect_actual_footprints() {
-        let collision = test_support::parse_world(
-            &CROSS.replace("8 8 18 8 18 18 8 18", "8 -4 18 -4 18 4 8 4"),
-        )
-        .unwrap();
+        let collision =
+            test_support::parse_world(&CROSS.replace("8 8 18 8 18 18 8 18", "8 -4 18 -4 18 4 8 4"))
+                .unwrap();
         let mut position = geometry::XYZ {
             x: 10.0,
             y: 0.48,
             z: 0.0,
         };
         let mut velocity = XZ { x: 10.0, z: 0.0 };
-        assert!(collision.constrain(&mut position, &mut velocity) > 0.0);
+        assert!(collision.constrain(&mut position, &mut velocity, 1.7) > 0.0);
         assert!(!collision.buildings()[0].contains(XZ {
             x: position.x,
             z: position.z
@@ -363,11 +385,8 @@ mod tests {
                         < 0.001
                 );
                 let mut p = sample.vehicle_position(0.7);
-                city.constrain(&mut p, &mut XZ::default());
-                assert!(
-                    (p.y - city.drive_height(XZ { x: p.x, z: p.z }) - 0.48).abs()
-                        < 0.001
-                );
+                city.constrain(&mut p, &mut XZ::default(), 1.7);
+                assert!((p.y - city.drive_height(XZ { x: p.x, z: p.z }) - 0.48).abs() < 0.001);
             }
         }
         assert!(max - min > 20.0 && max - min < 1000.0);
@@ -427,7 +446,7 @@ mod tests {
                 z: q.z,
             };
             let mut velocity = XZ { x: 0.0, z: 0.0 };
-            assert_eq!(city.constrain(&mut p, &mut velocity), 0.0);
+            assert_eq!(city.constrain(&mut p, &mut velocity, 1.7), 0.0);
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(
                 (p.y - city.height(q) - (0.48 + city.pavement_height_meters() - 0.05)).abs()
@@ -461,7 +480,7 @@ mod tests {
                 y: 0.0,
                 z: q.z,
             };
-            city.constrain(&mut p, &mut XZ::default());
+            city.constrain(&mut p, &mut XZ::default(), 1.7);
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(city.paved(q));
             parking += 1;
@@ -476,7 +495,7 @@ mod tests {
             z: 0.0,
         };
         let mut velocity = XZ { x: 10.0, z: 0.0 };
-        assert!(city.constrain(&mut p, &mut velocity) > 0.0);
+        assert!(city.constrain(&mut p, &mut velocity, 1.7) > 0.0);
         assert!(p.x <= city.bounding_box().max.x - CAR_RADIUS && velocity.x <= 0.0);
     }
 

@@ -324,6 +324,20 @@ fn flush(current: &mut Option<(String, OSMElement)>, source: &mut OSMMap) {
         }
     }
 }
+pub fn relation_feature_id(id: i64) -> u64 {
+    (1_u64 << 62) | id as u64
+}
+pub fn building_source(source: &OSMMap, id: u64) -> Option<&OSMElement> {
+    if id & (1_u64 << 62) != 0 {
+        source
+            .relations
+            .iter()
+            .find(|relation| relation_feature_id(relation.id) == id)
+    } else {
+        source.ways.get(&(id as i64))
+    }
+}
+
 pub fn number(s: &str) -> Option<f64> {
     let s = s.trim().strip_suffix('m').unwrap_or(s.trim()).trim();
     if s.is_empty() || s.chars().any(|c| !c.is_ascii_digit() && c != '.') {
@@ -410,4 +424,12 @@ mod tests {
             ]
         );
     }
+}
+
+/// Roof storeys are separate from building:levels. Explicit height already includes them.
+pub fn roof_height(element: &OSMElement) -> f64 {
+    number(element.tag("roof:height"))
+        .or_else(|| number(element.tag("roof:levels")).map(|n| n * 3.1))
+        .unwrap_or(0.)
+        .clamp(0., 30.)
 }

@@ -53,6 +53,11 @@ impl Location {
     pub fn constrain_barriers(&self, position: &mut XYZ, velocity: &mut XZ<f32>) -> f32 {
         let mut impact: f32 = 0.0;
         for barrier in self.barriers.nearby(position.xz()) {
+            let base = self.height(position.xz());
+            let bottom = position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+            if bottom > base + barrier.height_meters || position.y + 1. < base {
+                continue;
+            }
             let p = position.xz();
             let q = spatial::nearest_edge(p, barrier.ends[0], barrier.ends[1]);
             let distance = (p.x - q.x).hypot(p.z - q.z);

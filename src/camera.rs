@@ -141,7 +141,7 @@ impl ChaseCamera {
         // Conservative road-height clearance, not full scenery collision.
         eye.y = eye
             .y
-            .max(self.track.height(XZ { x: eye.x, z: eye.z }) + 1.5);
+            .max(self.track.drive_height_near(eye.xz(), self.anchor.y - 0.5) + 1.5);
         let target = XYZ::from_fn(|i| {
             self.anchor.component(i) + self.look_ahead.component(i) + if i == 1 { 0.4 } else { 0.0 }
         });
@@ -217,11 +217,18 @@ impl track::Location {
                 anchor.component(i) + (eye.component(i) - anchor.component(i)) * t
             });
             let blocked = self.nearby_buildings(XZ { x: p.x, z: p.z }).any(|b| {
-                p.y < b.base_y + b.height_meters + 0.5
+                p.y >= self.height(p.xz()) - 0.5
+                    && p.y < b.base_y + b.height_meters + 0.5
+                    && (b.min_height_meters == 0.0 || p.y >= b.base_y + b.min_height_meters - 0.5)
                     && (b.contains(XZ { x: p.x, z: p.z })
                         || b.nearest(XZ { x: p.x, z: p.z }).2 < 0.5)
             });
-            if blocked || p.y < self.height(XZ { x: p.x, z: p.z }) + 0.4 {
+            if blocked
+                || p.y < self.drive_height_near(p.xz(), anchor.y - 0.5) + 0.4
+                || self
+                    .tunnel_ceiling(p.xz(), anchor.y - 0.5)
+                    .is_some_and(|ceiling| p.y > ceiling - 0.3)
+            {
                 return safe;
             }
             safe = p;
@@ -356,12 +363,10 @@ mod tests {
                     .all(|x| x.is_finite()));
                 assert!(
                     pose.eye.y
-                        >= track::LocationId::Compact.try_track().unwrap().height(
-                            XZ {
-                                x: pose.eye.x,
-                                z: pose.eye.z
-                            }
-                        ) + 1.499
+                        >= track::LocationId::Compact.try_track().unwrap().height(XZ {
+                            x: pose.eye.x,
+                            z: pose.eye.z
+                        }) + 1.499
                 );
                 let gap = (0..3)
                     .map(|i| (pose.eye.component(i) - pose.target.component(i)).powi(2))

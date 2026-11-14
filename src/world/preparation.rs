@@ -5,6 +5,7 @@ use crate::city_assets;
 use crate::elevation;
 use crate::landscape;
 use crate::location;
+use crate::map_details;
 use crate::scene;
 use crate::street_surface;
 use crate::track;
@@ -84,6 +85,8 @@ impl Location {
                     height_meters: b.height_meters,
                     base_y: 0.0,
                     tagged: false,
+                    holes: b.holes,
+                    min_height_meters: b.min_height_meters,
                 })
                 .collect(),
         )
@@ -106,6 +109,7 @@ impl Location {
                 phase: f.phase,
             })
             .collect();
+        city.details = map_details::Prepared::new(stored.details);
         city.barriers = Barriers::new(stored.barriers);
         city.raised_roads = RaisedRoads::new(stored.road_rises);
         city.ground = landscape::GroundCover::new(stored.ground, stored.trees);
@@ -129,10 +133,8 @@ impl Location {
                 y: 0.0,
                 z: position.z,
             });
-            let beyond =
-                (road.offset.abs() - road.width * 0.5 - track::OFFROAD_MARGIN).max(0.0);
-            let t = (beyond / (track::TERRAIN_PADDING - track::OFFROAD_MARGIN))
-                .clamp(0.0, 1.0);
+            let beyond = (road.offset.abs() - road.width * 0.5 - track::OFFROAD_MARGIN).max(0.0);
+            let t = (beyond / (track::TERRAIN_PADDING - track::OFFROAD_MARGIN)).clamp(0.0, 1.0);
             let blend = t * t * (3.0 - 2.0 * t);
             let outer = if circuit.coastal {
                 elevation::SEA_LEVEL - 0.4

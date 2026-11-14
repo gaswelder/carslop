@@ -5,6 +5,7 @@ use crate::asset_codecs;
 use crate::city_assets;
 use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XZ};
+use crate::map_details;
 use crate::source_location;
 use crate::street_surface;
 use crate::world;
@@ -34,6 +35,7 @@ pub struct Location {
     pub barriers: Vec<world::Barrier>,
     pub road_rises: Vec<world::RoadRise>,
     pub labels: Labels,
+    pub details: map_details::Data,
     /// Large render payloads stay on disk and are streamed when writing.
     media: Media,
 }
@@ -50,6 +52,8 @@ pub struct Road {
 pub struct Building {
     pub id: u64,
     pub outline: Vec<XZ<f32>>,
+    pub holes: Vec<Vec<XZ<f32>>>,
+    pub min_height_meters: f32,
     pub height_meters: f32,
 }
 
@@ -128,9 +132,8 @@ impl Location {
     fn read_inner(directory: &Path) -> Result<Self, String> {
         let assets = city_assets::CityAsset::new(directory.to_path_buf());
         let source = assets.get_city().map_err(|e| format!("city.txt: {e}"))?;
-        let streets =
-            street_surface::binary::load_geometry(directory, source.road_lines.len())
-                .map_err(|e| format!("streets.bin: {e}"))?;
+        let streets = street_surface::binary::load_geometry(directory, source.road_lines.len())
+            .map_err(|e| format!("streets.bin: {e}"))?;
         let manifest = assets
             .get_manifest()
             .map_err(|e| format!("manifest.json: {e}"))?;
@@ -143,6 +146,8 @@ impl Location {
             None => street_surface::DEFAULT_PAVEMENT_HEIGHT,
         };
         let (ground, trees) = assets.get_landscape_data()?;
+        let details =
+            map_details::Data::read(directory, source.buildings.len(), source.road_lines.len())?;
         let mut media = Media::default();
         if directory.join("scene.pack").exists() {
             media.scene = Some(Payload::read(directory, "scene.pack".into())?);
@@ -193,6 +198,8 @@ impl Location {
                 .map(|b| Building {
                     id: b.id,
                     outline: b.ground_outline,
+                    holes: b.holes,
+                    min_height_meters: b.min_height_meters,
                     height_meters: b.height_meters,
                 })
                 .collect(),
@@ -230,12 +237,15 @@ impl Location {
                 Err(e) => return Err(format!("road-rises.txt: {e}")),
             },
             labels: read_labels(directory)?,
+            details,
             media,
         })
     }
 
     pub fn write(&self, dirpath: impl AsRef<Path>) -> Result<(), String> {
         let directory = dirpath.as_ref();
+        self.details
+            .validate(self.buildings.len(), self.roads.len())?;
         self.write_inner(directory)
             .map_err(|e| format!("location {}: {e}", directory.display()))
     }
@@ -269,16 +279,24 @@ impl Location {
                         .unwrap_or_else(|| "-".into())
                 )?;
             }
-            for b in &self.buildings {
+            for (index, b) in self.buildings.iter().enumerate() {
                 write!(city, "b {} {} 0 {}", b.id, b.height_meters, b.outline.len())?;
                 for p in &b.outline {
                     write!(city, " {} {}", p.x, p.z)?;
                 }
                 writeln!(city)?;
+                asset_codecs::city::write_volume(
+                    &mut city,
+                    index,
+                    b.min_height_meters,
+                    &b.holes,
+                    asset_codecs::city::Precision::Authored,
+                )?;
             }
             for entrance in &self.entrances {
                 writeln!(
-                    city, "e {} {} {}",
+                    city,
+                    "e {} {} {}",
                     entrance.building_id, entrance.position.x, entrance.position.z,
                 )?;
             }
@@ -316,9 +334,7 @@ impl Location {
             )?;
             for t in &self.ground {
                 if t.usage != world::TriangleUsage::Ground {
-                    return Err(error::invalid(
-                        "ground layer contains street geometry",
-                    ));
+                    return Err(error::invalid("ground layer contains street geometry"));
                 }
                 landscape.ground(t.material, t.points)?;
             }
@@ -350,10 +366,7 @@ impl Location {
                 &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
                 &self.road_rises,
             )?;
-            street_surface::binary::write_geometry(
-                &directory.join("streets.bin"),
-                &self.streets,
-            )?;
+            street_surface::binary::write_geometry(&directory.join("streets.bin"), &self.streets)?;
             Ok(())
         };
         write().map_err(|e| e.to_string())?;
@@ -381,6 +394,7 @@ impl Location {
                 remove_optional(&directory.join(relative))?;
             }
         }
+        self.details.write(directory)?;
         for payload in &self.media.aerial {
             payload.write(directory)?;
         }
@@ -430,6 +444,7 @@ mod tests {
         assert_eq!(a.barriers, b.barriers);
         assert_eq!(a.road_rises, b.road_rises);
         assert_eq!(a.labels, b.labels);
+        assert_eq!(a.details, b.details);
     }
 
     #[test]
@@ -446,10 +461,42 @@ mod tests {
             location.roads[0].way_id = None;
             location.roads[0].width_meters = 8.123457;
             location.elevation.values[0] = 7.1234565;
+            location.details.trees.push(map_details::TreeStyle {
+                id: 9,
+                kind: map_details::TreeKind::Olive,
+                evergreen: true,
+            });
+            location.details.objects.push(map_details::MapObject {
+                kind: map_details::ObjectKind::Bench,
+                position: [4.1234565, 6.],
+                angle: 1.2,
+                height: 0.9,
+                width: 1.8,
+                text: "Πάρκο".into(),
+                locked: false,
+            });
+            location.details.decks.push(map_details::Deck {
+                road: 0,
+                grade: 1,
+                width: 8.,
+                path: vec![[0., 5.1234565, 0.], [20., 6., 0.]],
+                surface: map_details::RoadSurface::Concrete,
+            });
             if populated {
+                location.details.buildings.push(map_details::BuildingStyle {
+                    volume: 0,
+                    shape: map_details::RoofShape::Gabled,
+                    roof_height: 1.5,
+                    angle: 0.3,
+                    wall_color: Some([0.2, 0.3, 0.4]),
+                    roof_color: None,
+                });
                 location.entrances.push(world::Entrance {
                     building_id: 1,
-                    position: XZ { x: 10., z: 12.123457 },
+                    position: XZ {
+                        x: 10.,
+                        z: 12.123457,
+                    },
                 });
                 location.road_rises.push(world::RoadRise {
                     points: [
@@ -461,10 +508,23 @@ mod tests {
                 location.barriers.push(world::Barrier {
                     source_id: 17,
                     kind: world::BarrierKind::ChainLink,
-                    ends: [XZ { x: -5.1234565, z: 10. }, XZ { x: 5., z: 10. }],
+                    ends: [
+                        XZ {
+                            x: -5.1234565,
+                            z: 10.,
+                        },
+                        XZ { x: 5., z: 10. },
+                    ],
                     height_meters: 1.8765432,
                     width_meters: 0.1234567,
                 });
+                location.buildings[0].min_height_meters = 1.234567;
+                location.buildings[0].holes = vec![vec![
+                    XZ { x: 11., z: 11. },
+                    XZ { x: 11., z: 12. },
+                    XZ { x: 12., z: 12. },
+                    XZ { x: 12., z: 11. },
+                ]];
                 location.buildings[0].height_meters = 5.1234565;
                 location.furniture[0].position.x = 5.1234565;
                 location.trees[0].coords.x = -5.1234565;
@@ -479,10 +539,9 @@ mod tests {
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
             assert_eq!(manifest.as_object().unwrap().len(), 2);
-            let world = world::Location::load(&city_assets::CityAsset::new(
-                output.path().to_path_buf(),
-            ))
-            .unwrap();
+            let world =
+                world::Location::load(&city_assets::CityAsset::new(output.path().to_path_buf()))
+                    .unwrap();
             assert!(world.has_compiled_roads());
             assert!(reread.labels.streets.contains(&(1, "Road & Square".into())));
             assert!(reread

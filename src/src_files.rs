@@ -8,6 +8,7 @@ use std::{fs, path::PathBuf};
 
 /// Tree centre read from a `t` record in landscape.txt for placement checks.
 pub struct LandscapeItem {
+    pub id: u64,
     pub coords: XZ,
 }
 
@@ -18,6 +19,7 @@ pub fn read_landscape_file(path: PathBuf) -> Result<Vec<LandscapeItem>> {
         |record| {
             if let asset_codecs::landscape::Record::Tree(tree) = record {
                 items.push(LandscapeItem {
+                    id: tree.id,
                     coords: tree.coords,
                 });
             }

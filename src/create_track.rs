@@ -99,6 +99,8 @@ fn compile(source: &Path, track: &track::Location, output: &Path) -> Result<()> 
                 height_meters: b.height_meters as f64,
                 base_y: 0.0,
                 tagged: true,
+                holes: Vec::new(),
+                min_height_meters: 0.0,
                 ground_outline: b
                     .ground_outline
                     .iter()

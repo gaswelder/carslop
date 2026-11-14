@@ -5,6 +5,7 @@ use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::world::{Building, Entrance};
 use std::collections::BTreeSet;
+use std::fmt::Display;
 use std::io::Write;
 
 #[derive(Clone, Copy)]
@@ -13,6 +14,42 @@ pub enum Precision {
     Imported,
     /// Authored tracks retain their original shortest f64 text, without rounding.
     Authored,
+}
+
+/// Optional volume metadata follows its owning b record; old records remain valid.
+pub fn write_volume<T: Copy + Into<f64> + Display>(
+    writer: &mut impl Write,
+    index: usize,
+    min_height: T,
+    holes: &[Vec<XZ<T>>],
+    precision: Precision,
+) -> error::Result<()> {
+    if min_height.into() == 0.0 && holes.is_empty() {
+        return Ok(());
+    }
+    let coords = match precision {
+        Precision::Imported => Some(3),
+        Precision::Authored => None,
+    };
+    let sizes = match precision {
+        Precision::Imported => Some(2),
+        Precision::Authored => None,
+    };
+    write!(
+        writer,
+        "v {} {} {}",
+        index,
+        Number(min_height, sizes),
+        holes.len()
+    )?;
+    for hole in holes {
+        write!(writer, " {}", hole.len())?;
+        for p in hole {
+            write!(writer, " {} {}", Number(p.x, coords), Number(p.z, coords))?;
+        }
+    }
+    writeln!(writer)?;
+    Ok(())
 }
 
 pub fn write(
@@ -62,7 +99,7 @@ pub fn write(
         }
         writeln!(writer)?;
     }
-    for b in &map.buildings {
+    for (index, b) in map.buildings.iter().enumerate() {
         write!(
             writer,
             "b {} {} {} {}",
@@ -75,6 +112,7 @@ pub fn write(
             write!(writer, " {} {}", Number(p.x, coords), Number(p.z, coords))?;
         }
         writeln!(writer)?;
+        write_volume(writer, index, b.min_height_meters, &b.holes, precision)?;
     }
     for entrance in &map.entrances {
         writeln!(
@@ -186,6 +224,44 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                     },
                 });
             }
+            Some("v") => {
+                if fields.len() < 4 {
+                    return Err("invalid building volume".into());
+                }
+                let index = n(1)?;
+                let min_height = f(2)?;
+                let count = n(3)?;
+                let building = city
+                    .buildings
+                    .get_mut(index)
+                    .ok_or("unknown building volume index")?;
+                if min_height < 0.0 || min_height >= building.height_meters {
+                    return Err("invalid building minimum height".into());
+                }
+                let mut cursor = 4;
+                let mut holes = Vec::new();
+                for _ in 0..count {
+                    let count = n(cursor)?;
+                    cursor += 1;
+                    if count < 3 || count > fields.len().saturating_sub(cursor) / 2 {
+                        return Err("invalid building interior ring".into());
+                    }
+                    let mut hole = Vec::new();
+                    for _ in 0..count {
+                        hole.push(XZ {
+                            x: f(cursor)?,
+                            z: f(cursor + 1)?,
+                        });
+                        cursor += 2;
+                    }
+                    holes.push(hole);
+                }
+                if cursor != fields.len() {
+                    return Err("invalid building volume fields".into());
+                }
+                building.min_height_meters = min_height;
+                building.holes = holes;
+            }
             Some("e") => {
                 if fields.len() != 4 {
                     return Err("invalid entrance record".into());
@@ -221,6 +297,8 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                     height_meters: height,
                     base_y: 0.0,
                     tagged: fields[3] == "1",
+                    holes: Vec::new(),
+                    min_height_meters: 0.0,
                     ground_outline: polygon,
                 });
             }
@@ -286,6 +364,8 @@ mod tests {
             id: 7,
             height_meters: 7.987654,
             tagged: false,
+            holes: Vec::new(),
+            min_height_meters: 0.0,
             base_y: 0.,
             ground_outline: vec![
                 XZ { x: 1.123456, z: 2. },
@@ -294,6 +374,23 @@ mod tests {
             ],
         });
         map
+    }
+
+    #[test]
+    fn invalid_building_volume_metadata_is_rejected() {
+        let mut bytes = Vec::new();
+        write(&mut bytes, &fixture(), Precision::Imported).unwrap();
+        let city = std::str::from_utf8(&bytes).unwrap();
+        for record in [
+            "v 999 0 0",
+            "v 0 -1 0",
+            "v 0 100 0",
+            "v 0 NaN 0",
+            "v 0 0 1 2 0 0 1 1",
+            "v 0 0 0 extra",
+        ] {
+            assert!(parse(&format!("{city}{record}\n")).is_err(), "{record}");
+        }
     }
 
     #[test]

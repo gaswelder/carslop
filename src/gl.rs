@@ -4,7 +4,9 @@ use crate::asset_car;
 use crate::camera;
 use crate::chunks;
 use crate::feedback;
-use crate::geometry::{XYZ, XZ};
+use crate::geometry::XYZ;
+#[cfg(test)]
+use crate::geometry::XZ;
 use crate::particles;
 use crate::phys_car;
 use crate::prefetch;
@@ -12,6 +14,7 @@ use crate::scene;
 use crate::scene_archive;
 use crate::shadows;
 use crate::track;
+use crate::vehicle_location;
 use crate::world;
 use sdl3::video::Window;
 use std::ffi::CString;
@@ -735,12 +738,7 @@ impl Mesh {
             .read_layer(index, layer)
             .expect("read city geometry")
     }
-    pub fn draw_ground(
-        &self,
-        program: u32,
-        camera: &Camera,
-        contacts: &[shadows::ContactShadow],
-    ) {
+    pub fn draw_ground(&self, program: u32, camera: &Camera, contacts: &[shadows::ContactShadow]) {
         self.plan_prefetch(camera);
         unsafe {
             gl::BindVertexArray(self.vao);
@@ -1160,11 +1158,7 @@ pub fn chase_camera(aspect: f32, pose: camera::Pose) -> Camera {
     camera_at(aspect, pose.eye, pose.target, 0.0)
 }
 
-pub fn bonnet_camera(
-    aspect: f32,
-    pose: camera::Pose,
-    car: &phys_car::Vehicle,
-) -> Camera {
+pub fn bonnet_camera(aspect: f32, pose: camera::Pose, car: &phys_car::Vehicle) -> Camera {
     let body = vehicle_body_matrix(car);
     camera_at_up(
         aspect,
@@ -1333,27 +1327,19 @@ fn body_model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32, roll: 
 }
 
 #[cfg(test)]
-fn vehicle_wheel_matrix(
-    car: &phys_car::Vehicle,
-    body: [f32; 16],
-    index: usize,
-) -> [f32; 16] {
+fn vehicle_wheel_matrix(car: &phys_car::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
     multiply(body, vehicle_wheel_local_matrix(car, body, index))
 }
 
-fn vehicle_wheel_local_matrix(
-    car: &phys_car::Vehicle,
-    body: [f32; 16],
-    index: usize,
-) -> [f32; 16] {
+fn vehicle_wheel_local_matrix(car: &phys_car::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
     let mut center = car.spec.design.mounts[index];
     let mounted: XYZ = XYZ::from_fn(|i| {
         body[i] * center.x + body[4 + i] * center.y + body[8 + i] * center.z + body[12 + i]
     });
-    let ground = car.track.drive_height(XZ {
-        x: mounted.x,
-        z: mounted.z,
-    });
+    let ground = car.track.drive_height_near(
+        mounted.xz(),
+        car.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+    );
     let radius = car.spec.design.wheel_radii[index];
     // Bounded compression/droop keeps tires following bumps while the body
     // heaves and tilts on its springs. Airborne wheels stop at full extension.
@@ -1668,9 +1654,7 @@ mod tests {
 
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
-        let track = std::sync::Arc::new(test_support::bumpy_track(
-            &test_support::track(),
-        ));
+        let track = std::sync::Arc::new(test_support::bumpy_track(&test_support::track()));
         let road = track.at_distance(54.0);
         let mut car = phys_car::Vehicle::on_track(
             road.vehicle_position(0.0),
@@ -1896,8 +1880,7 @@ mod renderer_tests {
     fn stop_lights_renderer() {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
-            let mut car =
-                test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+            let mut car = test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -2021,8 +2004,7 @@ mod renderer_tests {
     fn reverse_lights_renderer() {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
-            let mut car =
-                test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+            let mut car = test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -2299,10 +2281,7 @@ mod renderer_tests {
 
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
-        let mut s = Session::on_track(
-            test_support::car(),
-            test_support::nicosia_id(),
-        );
+        let mut s = Session::on_track(test_support::car(), test_support::nicosia_id());
         let start = s.vehicle.position;
         for _ in 0..40 {
             s.tick(Controls {

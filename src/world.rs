@@ -1,14 +1,19 @@
 use crate::city_assets;
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::landscape;
+use crate::map_details;
 use crate::track;
+use crate::vehicle_location;
 
 mod barriers;
 mod buildings;
+mod mapped_objects;
 mod preparation;
 mod raised_roads;
 mod roads;
 pub mod spatial;
+mod transport;
 use barriers::Barriers;
 use buildings::Buildings;
 pub use preparation::CompiledLocation;
@@ -22,6 +27,9 @@ pub enum BarrierKind {
     Fence,
     ChainLink,
     WoodFence,
+    Hedge,
+    GuardRail,
+    RetainingWall,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +72,7 @@ pub struct Location {
     roads: RoadNetwork,
     ground: landscape::GroundCover,
     buildings: Buildings,
+    details: map_details::Prepared,
     entrances: HashMap<u64, Vec<XZ<f32>>>,
     barriers: Barriers,
     raised_roads: RaisedRoads,
@@ -168,12 +177,16 @@ pub struct Tree<T = f32> {
 }
 
 /// Building geometry: f64 during compilation, f32 at runtime by default.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Building<T = f32> {
-    /// Source building ID, or a generated ID for authored scenery.
+    /// Source building/group ID; its mapped volumes share this ID.
     pub id: u64,
     /// Footprint vertices in local [X, Z] metres, with an implicit closing edge.
     pub ground_outline: Vec<XZ<T>>,
+    /// Interior rings, oriented opposite to the exterior.
+    pub holes: Vec<Vec<XZ<T>>>,
+    /// Bottom of this volume above the shared building ground datum.
+    pub min_height_meters: T,
     /// Building height above base_y in metres.
     pub height_meters: T,
     /// World Y elevation of the base; zero until fitted to terrain at load time.
@@ -261,35 +274,72 @@ impl TriangleUsage {
     }
 }
 
+impl<T> Building<T> {
+    pub fn rings(&self) -> impl Iterator<Item = &[XZ<T>]> {
+        std::iter::once(self.ground_outline.as_slice()).chain(self.holes.iter().map(Vec::as_slice))
+    }
+}
+impl<T: Copy + Into<f64>> Building<T> {
+    pub fn footprint(&self) -> geo::Polygon<f64> {
+        geo::Polygon::new(
+            geometry::line(
+                &self
+                    .ground_outline
+                    .iter()
+                    .map(|p| p.map(Into::into))
+                    .collect::<Vec<_>>(),
+            ),
+            self.holes
+                .iter()
+                .map(|ring| {
+                    geometry::line(&ring.iter().map(|p| p.map(Into::into)).collect::<Vec<_>>())
+                })
+                .collect(),
+        )
+    }
+}
+
 impl Building {
     pub fn contains(&self, p: XZ<f32>) -> bool {
-        let mut inside = false;
-        for i in 0..self.ground_outline.len() {
-            let a = self.ground_outline[i];
-            let b = self.ground_outline[(i + 1) % self.ground_outline.len()];
-            if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x {
-                inside = !inside;
+        fn inside(ring: &[XZ<f32>], p: XZ<f32>) -> bool {
+            let mut inside = false;
+            for i in 0..ring.len() {
+                let a = ring[i];
+                let b = ring[(i + 1) % ring.len()];
+                if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x
+                {
+                    inside = !inside;
+                }
             }
+            inside
         }
-        inside
+        inside(&self.ground_outline, p) && !self.holes.iter().any(|hole| inside(hole, p))
+    }
+    pub fn overlaps_vehicle(&self, position: XYZ, height: f32) -> bool {
+        let bottom = position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT + 0.05;
+        bottom <= self.base_y + self.height_meters
+            && (self.min_height_meters == 0.0
+                || bottom + height >= self.base_y + self.min_height_meters)
     }
     pub fn nearest(&self, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
         let mut best = (XZ::<f32>::default(), XZ::<f32>::default(), f32::INFINITY);
-        for i in 0..self.ground_outline.len() {
-            let a = self.ground_outline[i];
-            let b = self.ground_outline[(i + 1) % self.ground_outline.len()];
-            let q = spatial::nearest_edge(p, a, b);
-            let distance = (p.x - q.x).hypot(p.z - q.z);
-            if distance < best.2 {
-                let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
-                best = (
-                    (q),
-                    XZ {
-                        x: (b.z - a.z) / len,
-                        z: -(b.x - a.x) / len,
-                    },
-                    distance,
-                );
+        for ring in self.rings() {
+            for i in 0..ring.len() {
+                let a = ring[i];
+                let b = ring[(i + 1) % ring.len()];
+                let q = spatial::nearest_edge(p, a, b);
+                let distance = (p.x - q.x).hypot(p.z - q.z);
+                if distance < best.2 {
+                    let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
+                    best = (
+                        (q),
+                        XZ {
+                            x: (b.z - a.z) / len,
+                            z: -(b.x - a.x) / len,
+                        },
+                        distance,
+                    );
+                }
             }
         }
         best
@@ -305,6 +355,7 @@ impl Location {
             display_name: String::new(),
             origin: None,
             buildings: Buildings::new(Vec::new()),
+            details: map_details::Prepared::new(map_details::Data::default()),
             entrances: HashMap::new(),
             barriers: Barriers::new(Vec::new()),
             raised_roads: RaisedRoads::new(Vec::new()),
@@ -320,6 +371,15 @@ impl Location {
 }
 
 impl Location {
+    pub fn map_details(&self) -> &map_details::Data {
+        self.details.data()
+    }
+    pub fn tree_kind(&self, id: u64) -> Option<map_details::TreeKind> {
+        self.details.tree(id).map(|style| style.kind)
+    }
+    pub fn tree_evergreen(&self, id: u64) -> bool {
+        self.details.tree(id).is_some_and(|style| style.evergreen)
+    }
     pub fn height(&self, p: XZ<f32>) -> f32 {
         self.elevation.as_ref().map_or_else(
             || {
@@ -346,6 +406,12 @@ impl Location {
     }
     /// Distance to the union of street capsules, including shared junction nodes.
     pub fn road_clearance(&self, p: XYZ) -> f32 {
+        if let Some(height) = self.deck_height(p.xz(), p.y) {
+            if (height - p.y).abs() < 1. {
+                let road = self.project(p);
+                return road.offset.abs() - road.width / 2.;
+            }
+        }
         if self.has_compiled_roads() {
             return self.surface_clearance(XZ { x: p.x, z: p.z });
         }
@@ -405,7 +471,12 @@ impl Location {
 
     /// Ground rise per horizontal metre, excluding discrete curb impacts.
     pub fn ground_gradient(&self, position: XYZ) -> XZ<f32> {
-        let height = |x, z| self.height(XZ { x, z }) + self.road_rise(XZ { x, z });
+        let height = |x, z| {
+            self.drive_height_near(
+                XZ { x, z },
+                position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+            )
+        };
         let XYZ { x, z, .. } = position;
         XZ {
             x: height(x + 0.5, z) - height(x - 0.5, z),

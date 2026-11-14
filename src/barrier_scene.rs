@@ -54,17 +54,21 @@ pub(super) fn build(b: &mut Builder, city: &Location, detailed: bool) {
         let height = barrier.height_meters;
         let width = barrier.width_meters;
         let surface = Surface::matte(match barrier.kind {
-            BarrierKind::Wall => [0.72, 0.70, 0.62],
+            BarrierKind::Wall | BarrierKind::RetainingWall => [0.72, 0.70, 0.62],
+            BarrierKind::Hedge => [0.25, 0.36, 0.20],
             BarrierKind::WoodFence => [0.43, 0.34, 0.23],
             _ => [0.35, 0.39, 0.36],
         });
         let [a, c] = barrier.ends;
-        if barrier.kind == BarrierKind::Wall {
+        if matches!(
+            barrier.kind,
+            BarrierKind::Wall | BarrierKind::RetainingWall | BarrierKind::Hedge
+        ) {
             for pair in city.ground_segment(a, c).windows(2) {
                 let a = support(city, pair[0].xz());
                 let c = support(city, pair[1].xz());
                 prism(b, a, c, width, height, surface);
-                if detailed {
+                if detailed && barrier.kind != BarrierKind::Hedge {
                     prism(
                         b,
                         XYZ {
@@ -144,7 +148,7 @@ pub(super) fn build(b: &mut Builder, city: &Location, detailed: bool) {
                     surface,
                 );
             }
-            if !detailed {
+            if !detailed || barrier.kind == BarrierKind::GuardRail {
                 continue;
             }
             let panel_length = length / panels as f32;

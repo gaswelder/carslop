@@ -11,6 +11,22 @@ pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(
     {
         return Err("invalid or duplicate imagery tree id".into());
     }
+    // Imagery crowns take precedence over procedural fills from wooded areas.
+    let crowns = rstar::RTree::bulk_load(
+        extra
+            .iter()
+            .map(|tree| tree.coords.map(f64::from))
+            .collect(),
+    );
+    trees.retain(|tree| {
+        tree.id & (1_u64 << 63) != 0
+            || tree.id & (1_u64 << 62) == 0
+            || crowns
+                .nearest_neighbor(&tree.coords.map(f64::from))
+                .is_none_or(|crown| {
+                    (crown.x - tree.coords.x as f64).hypot(crown.z - tree.coords.z as f64) >= 3.0
+                })
+    });
     trees.extend(extra);
     Ok(())
 }
@@ -143,6 +159,26 @@ mod index_tests {
     use crate::world;
     use geo::{Intersects, Point};
 
+    #[test]
+    fn imagery_crowns_replace_procedural_fill_but_keep_mapped_tree_nodes() {
+        let tree = |id, x| Tree {
+            id,
+            coords: XZ { x, z: 0. },
+            height_meters: 6.,
+            crown_radius_meters: 1.,
+        };
+        let mut trees = vec![
+            tree(42, 0.),
+            tree((1 << 62) | 1, 0.5),
+            tree((1 << 62) | 2, 10.),
+        ];
+        append_imagery_trees(&mut trees, vec![tree((1 << 63) | 3, 1.)]).unwrap();
+        assert_eq!(
+            trees.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![42, (1 << 62) | 2, (1 << 63) | 3]
+        );
+        assert!(append_imagery_trees(&mut trees, vec![tree((1 << 63) | 3, 1.)]).is_err());
+    }
     #[test]
     fn ground_owner_matches_full_triangle_queries_across_negative_and_positive_cells() {
         let triangles = vec![

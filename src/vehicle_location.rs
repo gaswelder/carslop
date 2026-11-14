@@ -41,8 +41,10 @@ impl Location {
         if self.has_compiled_roads() && self.road_clearance(p) > -track::CAR_RADIUS - 0.15 {
             return false;
         }
-        self.building_clearance(p.xz()) > track::CAR_RADIUS + 0.15
+        self.building_clearance_at(p.xz().at_height(p.y + VEHICLE_ORIGIN_HEIGHT))
+            > track::CAR_RADIUS + 0.15
             && self.barrier_clearance(p.xz()) > track::CAR_RADIUS + 0.15
+            && self.mapped_object_clearance(p.xz()) > track::CAR_RADIUS + 0.15
     }
     pub fn recovery(&self, p: XYZ) -> RoadSample {
         // Service roads may lead into garages. Never recover inside a footprint.
@@ -61,7 +63,14 @@ impl Location {
             })
             .filter(|s| self.clear_for_car(s.point))
             .min_by(|a, b| {
-                let distance = |s: &RoadSample| (s.point.x - p.x).hypot(s.point.z - p.z);
+                let distance = |s: &RoadSample| {
+                    let horizontal = (s.point.x - p.x).hypot(s.point.z - p.z);
+                    if self.map_details().decks.is_empty() {
+                        horizontal
+                    } else {
+                        horizontal.hypot(s.point.y - (p.y - VEHICLE_ORIGIN_HEIGHT))
+                    }
+                };
                 distance(a).total_cmp(&distance(b))
             })
             .unwrap_or_else(|| self.spawn())
@@ -100,7 +109,12 @@ impl Location {
         }
         panic!("city contains no safe spawn");
     }
-    pub fn constrain(&self, position: &mut XYZ, velocity: &mut XZ<f32>) -> f32 {
+    pub fn constrain(
+        &self,
+        position: &mut XYZ,
+        velocity: &mut XZ<f32>,
+        vehicle_height: f32,
+    ) -> f32 {
         let mut impact: f32 = 0.0;
         if !self.has_compiled_roads() {
             let best = self
@@ -127,6 +141,12 @@ impl Location {
             x: position.x,
             z: position.z,
         }) {
+            if position.y - VEHICLE_ORIGIN_HEIGHT + vehicle_height
+                < self.height(position.xz()) - 0.2
+                || !b.overlaps_vehicle(*position, vehicle_height)
+            {
+                continue;
+            }
             let p = XZ {
                 x: position.x,
                 z: position.z,
@@ -148,6 +168,8 @@ impl Location {
             }
         }
         impact = impact.max(self.constrain_barriers(position, velocity));
+        impact = impact.max(self.constrain_mapped_objects(position, velocity));
+        impact = impact.max(self.constrain_transport(position, velocity));
         // The saved extract is a finite driving area. Low curbs are crossable;
         // the crop boundary remains solid so the car cannot leave terrain data.
         for (axis, (world_axis, min, max)) in [
@@ -158,20 +180,16 @@ impl Location {
         .enumerate()
         {
             let value = position.component(world_axis);
-            *position.component_mut(world_axis) = value.clamp(
-                min + track::CAR_RADIUS,
-                max - track::CAR_RADIUS,
-            );
+            *position.component_mut(world_axis) =
+                value.clamp(min + track::CAR_RADIUS, max - track::CAR_RADIUS);
             if position.component(world_axis) != value {
                 let mut normal = XZ { x: 0.0, z: 0.0 };
                 *normal.component_mut(axis) = (value - position.component(world_axis)).signum();
                 impact = impact.max(deflect(velocity, normal));
             }
         }
-        position.y = self.drive_height(XZ {
-            x: position.x,
-            z: position.z,
-        }) + VEHICLE_ORIGIN_HEIGHT;
+        position.y = self.drive_height_near(position.xz(), position.y - VEHICLE_ORIGIN_HEIGHT)
+            + VEHICLE_ORIGIN_HEIGHT;
         impact
     }
 

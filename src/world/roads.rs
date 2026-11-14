@@ -79,10 +79,7 @@ impl RoadNetwork {
             distance += length;
             world::spatial::insert(
                 &mut grid,
-                world::spatial::bounds(
-                    lines[i].ends.iter().map(|&node| nodes[node].xz()),
-                    32.0,
-                ),
+                world::spatial::bounds(lines[i].ends.iter().map(|&node| nodes[node].xz()), 32.0),
                 i,
             );
         }
@@ -197,6 +194,7 @@ impl Location {
     }
 
     pub fn sample_distance(&self, index: usize, distance: f32) -> RoadSample {
+        let deck = self.details.road_deck(index);
         let r = &self.roads.lines[index];
         let distance = distance.clamp(0.0, r.length);
         let index = r
@@ -210,7 +208,11 @@ impl Location {
         let t = ((distance - r.path_distances[index]) / length).clamp(0.0, 1.0);
         let mut point = XYZ::from_fn(|i| a.component(i) + (b.component(i) - a.component(i)) * t);
         // Compiled road surfaces are draped over the heightfield between path knots.
-        if self.has_compiled_roads() {
+        if let Some(deck) = deck {
+            if let Some(height) = self.details.height_on(deck, point.xz()) {
+                point.y = height;
+            }
+        } else if self.has_compiled_roads() {
             if let Some(field) = &self.elevation {
                 point.y = field.height(point.xz()) + self.road_rise(point.xz());
             }
@@ -334,7 +336,10 @@ impl Location {
                     if let Some(ids) = self.roads.grid.get(&(origin.0 + dx, origin.1 + dz)) {
                         for &i in ids {
                             if seen.insert(i) {
-                                let candidate = self.projected(i, p);
+                                let mut candidate = self.projected(i, p);
+                                if !self.map_details().decks.is_empty() {
+                                    candidate.0 = candidate.0.hypot(candidate.1.point.y - p.y);
+                                }
                                 if best.is_none_or(|b| {
                                     candidate.0.total_cmp(&b.0).then(i.cmp(&b.1)).is_lt()
                                 }) {

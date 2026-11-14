@@ -173,7 +173,9 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
     })?;
     scan(source, |e| {
         if let osmpbf::Element::Relation(r) = e {
-            if r.tags().any(|(k, v)| k == "type" && v == "multipolygon") {
+            if r.tags().any(|(k, v)| {
+                k == "type" && matches!(v, "multipolygon" | "building" | "restriction")
+            }) {
                 let o = pbf_object(osmpbf::Element::Relation(r))?;
                 if o.members.iter().all(|(k, _)| k != "relation")
                     && o.members

@@ -102,6 +102,9 @@ pub fn build_crossings(
     let mut roads: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, road) in map.road_lines.iter().enumerate() {
         if let Some(id) = road.osm_way_id {
+            if source.ways.get(&id).is_some_and(|way| !ground_level(way)) {
+                continue;
+            }
             roads.entry(id).or_default().push(i);
         }
     }

@@ -1,9 +1,13 @@
 use crate::build_crossings;
+use crate::build_details;
+use crate::build_lane_details;
+use crate::build_transport;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::geometry::{
     add, cross, dist, dot, empty, length, line, mul, path_length, polygon, sub, substring, unit,
 };
+use crate::map_details::RoadSurface;
 use crate::osm;
 use crate::{
     error::{invalid, Result},
@@ -27,9 +31,9 @@ use std::{fmt, io};
 pub struct Surfaces {
     /// Smoothed centrelines in local [X, Z] metres, indexed like SourceLocation::road_lines.
     pub paths: Vec<Vec<XZ>>,
-    /// Incident road indices for each SourceLocation node.
+    /// Incident ground-road indices for each SourceLocation node.
     pub adjacency: Vec<Vec<usize>>,
-    /// Exact carriageway footprint, including junctions, for raised road clipping.
+    /// Ground carriageway footprint, including junctions, for raised road clipping.
     pub asphalt: MultiPolygon<f64>,
     /// Road, junction and building exclusion polygons in local [X, Z] metres; may overlap.
     pub obstacles: MultiPolygon<f64>,
@@ -368,17 +372,34 @@ pub fn write_streets_txt(
     path_streets_txt: &Path,
     source: Option<&osm::OSMMap>,
 ) -> Result<WriteStreetsResult> {
+    let elevated: Vec<_> = map
+        .road_lines
+        .iter()
+        .map(|road| build_transport::road_grade(source, road) != 0)
+        .collect();
     let mut adjacency = vec![vec![]; map.road_nodes.len()];
     for (i, r) in map.road_lines.iter().enumerate() {
+        if elevated[i] {
+            continue;
+        }
         for n in r.ends {
             adjacency[n].push(i);
         }
     }
-    let paths = paths(map, &adjacency);
+    let mut paths = paths(map, &adjacency);
+    for (i, path) in paths.iter_mut().enumerate() {
+        if elevated[i] {
+            *path = map.road_lines[i]
+                .ends
+                .map(|n| map.road_nodes[n].xz())
+                .to_vec();
+        }
+    }
     let buildings = union(
         &map.buildings
             .iter()
-            .map(|b| polygon(&b.ground_outline).buffer(0.1))
+            .filter(|b| b.min_height_meters < 1.7)
+            .map(|b| b.footprint().buffer(0.1))
             .collect::<Vec<_>>(),
     );
     let building_index = PolygonIndex::new(&buildings);
@@ -471,7 +492,14 @@ pub fn write_streets_txt(
         .road_lines
         .iter()
         .zip(&paths)
-        .map(|(r, p)| ribbon(p, r, &adjacency, 0.0))
+        .enumerate()
+        .map(|(i, (r, p))| {
+            if elevated[i] {
+                empty()
+            } else {
+                ribbon(p, r, &adjacency, 0.)
+            }
+        })
         .collect();
     let mut cores = vec![];
     let mut core_kinds = vec![];
@@ -498,6 +526,35 @@ pub fn write_streets_txt(
         .map_or_else(|| asphalt.clone(), |b| asphalt.intersection(b));
     let inner = asphalt.buffer(-0.16);
     let gutter = asphalt.difference(&inner);
+    struct MaterialZone {
+        material: RoadSurface,
+        geometry: MultiPolygon<f64>,
+    }
+    let mut material_zones = Vec::new();
+    if let Some(source) = source {
+        for material in [
+            RoadSurface::Concrete,
+            RoadSurface::Paving,
+            RoadSurface::Unpaved,
+        ] {
+            let pieces: Vec<_> = buffers
+                .iter()
+                .zip(&map.road_lines)
+                .filter(|(_, road)| {
+                    road.osm_way_id
+                        .and_then(|id| source.ways.get(&id))
+                        .is_some_and(|way| {
+                            build_details::road_surface(way.tag("surface")) == material
+                        })
+                })
+                .map(|(geometry, _)| geometry.clone())
+                .collect();
+            material_zones.push(MaterialZone {
+                material,
+                geometry: union(&pieces),
+            });
+        }
+    }
     let mut remaining = inner.clone();
     let mut groups = vec![];
     for kind in 0..3 {
@@ -524,7 +581,22 @@ pub fn write_streets_txt(
                 .map(|(g, _)| g.clone()),
         );
         let zone = union(&pieces);
-        groups.push((kind, remaining.intersection(&zone)));
+        let mut geometry = remaining.intersection(&zone);
+        for MaterialZone {
+            material,
+            geometry: zone,
+        } in &material_zones
+        {
+            let base = match material {
+                RoadSurface::Concrete => 8,
+                RoadSurface::Paving => 11,
+                RoadSurface::Unpaved => 14,
+                RoadSurface::Asphalt => unreachable!(),
+            };
+            groups.push((base + kind, geometry.intersection(zone)));
+            geometry = geometry.difference(zone);
+        }
+        groups.push((kind, geometry));
         remaining = remaining.difference(&zone);
     }
     groups.push((1, remaining));
@@ -535,8 +607,32 @@ pub fn write_streets_txt(
         let mut pieces: Vec<_> = paths
             .iter()
             .zip(&map.road_lines)
-            .filter(|(_, r)| r.kind == kind)
-            .map(|(p, r)| pavement_ribbon(p, r, &adjacency, width))
+            .enumerate()
+            .filter(|(i, (_, r))| r.kind == kind && !elevated[*i])
+            .map(|(_, entry)| entry)
+            .map(|(p, r)| {
+                let way =
+                    source.and_then(|source| r.osm_way_id.and_then(|id| source.ways.get(&id)));
+                let sides = [true, false].map(|left| {
+                    let mut road = r.clone();
+                    road.sidewalks.left = left && r.sidewalks.left;
+                    road.sidewalks.right = !left && r.sidewalks.right;
+                    let tagged = way
+                        .and_then(|way| {
+                            osm::number(way.tag(if left {
+                                "sidewalk:left:width"
+                            } else {
+                                "sidewalk:right:width"
+                            }))
+                            .or_else(|| osm::number(way.tag("sidewalk:both:width")))
+                            .or_else(|| osm::number(way.tag("sidewalk:width")))
+                        })
+                        .unwrap_or(width)
+                        .clamp(0.2, 10.);
+                    pavement_ribbon(p, &road, &adjacency, tagged)
+                });
+                union(&sides)
+            })
             .collect();
         pieces.extend(
             patches
@@ -620,6 +716,17 @@ pub fn write_streets_txt(
     };
     let mut marks = vec![];
     for (i, (path, r)) in paths.iter().zip(&map.road_lines).enumerate() {
+        if elevated[i] {
+            continue;
+        }
+        if source
+            .and_then(|source| r.osm_way_id.and_then(|id| source.ways.get(&id)))
+            .is_some_and(|way| {
+                build_details::road_surface(way.tag("surface")) == RoadSurface::Unpaved
+            })
+        {
+            continue;
+        }
         if r.kind == 0 {
             for side in [-1.0, 1.0] {
                 marks.push(flat_buffer(
@@ -629,7 +736,30 @@ pub fn write_streets_txt(
             }
         }
         let mut dashed = vec![];
-        if r.direction == 0 && (r.kind == 0 || (r.kind == 1 && r.road_width_start_meters >= 7.5)) {
+        let way = source.and_then(|source| r.osm_way_id.and_then(|id| source.ways.get(&id)));
+        let forward = way
+            .and_then(|w| osm::number(w.tag("lanes:forward")))
+            .map(|v| v as usize);
+        let backward = way
+            .and_then(|w| osm::number(w.tag("lanes:backward")))
+            .map(|v| v as usize);
+        if r.direction == 0 && (forward.is_some() || backward.is_some()) {
+            let forward = forward
+                .unwrap_or_else(|| r.lanes.saturating_sub(backward.unwrap_or(1)))
+                .clamp(1, 6);
+            let backward = backward
+                .unwrap_or_else(|| r.lanes.saturating_sub(forward))
+                .clamp(1, 6);
+            let width = (r.road_width_start_meters - 0.9) / (forward + backward) as f64;
+            for lane in 1..forward + backward {
+                dashed.push(offset(
+                    path,
+                    -(r.road_width_start_meters - 0.9) / 2. + lane as f64 * width,
+                ));
+            }
+        } else if r.direction == 0
+            && (r.kind == 0 || (r.kind == 1 && r.road_width_start_meters >= 7.5))
+        {
             dashed.push(path.clone());
         } else if r.kind == 0 && r.direction != 0 && r.lanes > 1 {
             for lane in 1..r.lanes {
@@ -657,6 +787,7 @@ pub fn write_streets_txt(
     let paint = if let Some(source) = source {
         let crossings = build_crossings::build_crossings(source, map, &paths, &inner);
         lane_marks
+            .union(&build_lane_details::paint(source, map, &paths, &inner).difference(&junctions))
             .difference(&crossings.clearance)
             .union(&crossings.paint)
     } else {
@@ -725,12 +856,7 @@ pub fn write_streets_txt(
 
     // Index the small input pieces, rather than a city-wide connected polygon.
     // A probe intersects their union exactly when it intersects any one piece.
-    let original_footprints = MultiPolygon(
-        map.buildings
-            .iter()
-            .map(|b| polygon(&b.ground_outline))
-            .collect(),
-    );
+    let original_footprints = MultiPolygon(map.buildings.iter().map(|b| b.footprint()).collect());
     let obstacles = MultiPolygon(
         buffers
             .into_iter()
@@ -796,6 +922,8 @@ mod geometry_tests {
                     height_meters: 6.0,
                     base_y: 0.0,
                     tagged: false,
+                    holes: Vec::new(),
+                    min_height_meters: 0.0,
                     ground_outline: p.clone(),
                 })
                 .collect(),
@@ -811,8 +939,8 @@ mod geometry_tests {
     ) {
         let temp = Temp::new();
         src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
-        let s =
-            build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None).unwrap();
+        let s = build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None)
+            .unwrap();
         let loaded = street_surface::StreetSurface::load(
             &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
             map.road_lines.len(),

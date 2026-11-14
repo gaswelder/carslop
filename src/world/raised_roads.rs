@@ -36,7 +36,7 @@ impl RoadRise {
         let u = cross(delta(p, a), delta(c, a)) / denominator;
         let v = cross(delta(b, a), delta(p, a)) / denominator;
         if u >= -0.0001 && v >= -0.0001 && u + v <= 1.0001 {
-            Some((a.y as f64 + u * (b.y - a.y) as f64 + v * (c.y - a.y) as f64).max(0.0) as f32)
+            Some((a.y as f64 + u * (b.y - a.y) as f64 + v * (c.y - a.y) as f64) as f32)
         } else {
             None
         }
@@ -63,6 +63,13 @@ fn polygon(points: [XZ<f32>; 3]) -> MultiPolygon<f64> {
     MultiPolygon(vec![geometry::polygon(&points.map(|p| p.map(f64::from)))])
 }
 impl RaisedRoads {
+    pub(super) fn lowered_footprints(&self) -> impl Iterator<Item = geo::Polygon<f64>> + '_ {
+        self.triangles
+            .iter()
+            .filter(|rise| rise.points.iter().any(|p| p.y < -0.03))
+            .map(|rise| geometry::polygon(&rise.points.map(|p| p.xz().map(f64::from))))
+    }
+
     pub fn new(triangles: Vec<RoadRise>) -> Self {
         let index = RTree::bulk_load(
             triangles
@@ -80,7 +87,8 @@ impl RaisedRoads {
         self.index
             .locate_in_envelope_intersecting(&AABB::from_point(p.map(f64::from)))
             .filter_map(|item| self.triangles[item.index].offset(p))
-            .fold(0.0, f32::max)
+            .max_by(f32::total_cmp)
+            .unwrap_or(0.0)
     }
     fn drape(&self, field: &HeightField, points: [XZ<f32>; 3], mut emit: impl FnMut([XYZ; 3])) {
         let mut candidates = self

@@ -53,6 +53,9 @@ fn extract(
     for way in source.ways.values() {
         let kind = match way.tag("barrier") {
             "wall" => BarrierKind::Wall,
+            "hedge" => BarrierKind::Hedge,
+            "guard_rail" => BarrierKind::GuardRail,
+            "retaining_wall" => BarrierKind::RetainingWall,
             "fence" => match way.tag("fence_type") {
                 "chain_link" => BarrierKind::ChainLink,
                 "wood" | "wooden" => BarrierKind::WoodFence,
@@ -70,11 +73,18 @@ fn extract(
         }
         let height = osm::number(way.tag("height"))
             .filter(|height| *height > 0.0)
-            .unwrap_or(if kind == BarrierKind::Wall { 1.6 } else { 1.8 })
+            .unwrap_or(match kind {
+                BarrierKind::GuardRail => 0.75,
+                BarrierKind::Hedge => 1.5,
+                BarrierKind::Wall => 1.6,
+                _ => 1.8,
+            })
             .clamp(0.2, 8.0);
         let width = osm::number(way.tag("width"))
             .filter(|width| *width > 0.0)
-            .unwrap_or(if kind == BarrierKind::Wall {
+            .unwrap_or(if kind == BarrierKind::Hedge {
+                0.6
+            } else if kind == BarrierKind::Wall {
                 0.25
             } else {
                 0.08
@@ -215,6 +225,8 @@ mod tests {
             height_meters: 3.0,
             base_y: 0.0,
             tagged: true,
+            holes: Vec::new(),
+            min_height_meters: 0.0,
             ground_outline: vec![
                 XZ { x: 30., z: 15. },
                 XZ { x: 35., z: 15. },
@@ -223,9 +235,10 @@ mod tests {
             ],
         });
         let folder = tempfile::tempdir().unwrap();
-        let surfaces = build_surfaces::write_streets_txt(&map, &folder.path().join("streets.txt"), None)
-            .unwrap()
-            .surfaces;
+        let surfaces =
+            build_surfaces::write_streets_txt(&map, &folder.path().join("streets.txt"), None)
+                .unwrap()
+                .surfaces;
         let barriers = extract(&source, &map, &surfaces);
         assert_eq!(barriers.len(), 5);
         for barrier in &barriers {

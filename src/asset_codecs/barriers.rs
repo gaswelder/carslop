@@ -8,6 +8,9 @@ pub fn write(writer: &mut impl io::Write, records: &[Barrier]) -> io::Result<()>
     for barrier in records {
         let kind = match barrier.kind {
             BarrierKind::Wall => "wall",
+            BarrierKind::Hedge => "hedge",
+            BarrierKind::GuardRail => "guard_rail",
+            BarrierKind::RetainingWall => "retaining_wall",
             BarrierKind::Fence => "fence",
             BarrierKind::ChainLink => "chain_link",
             BarrierKind::WoodFence => "wood_fence",
@@ -48,6 +51,9 @@ pub fn parse(text: &str) -> Result<Vec<Barrier>, String> {
         };
         let kind = match fields[1] {
             "wall" => BarrierKind::Wall,
+            "hedge" => BarrierKind::Hedge,
+            "guard_rail" => BarrierKind::GuardRail,
+            "retaining_wall" => BarrierKind::RetainingWall,
             "fence" => BarrierKind::Fence,
             "chain_link" => BarrierKind::ChainLink,
             "wood_fence" => BarrierKind::WoodFence,

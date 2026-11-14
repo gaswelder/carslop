@@ -393,7 +393,9 @@ impl Vehicle {
                     / spec.track_width
                     * share;
                 let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
-                mu * load * (1.0 - 0.18 * imbalance * imbalance)
+                mu * self.track.mapped_surface_grip(self.position)
+                    * load
+                    * (1.0 - 0.18 * imbalance * imbalance)
             });
             let front_v = lateral + self.yaw_rate * a;
             let rear_v = lateral - self.yaw_rate * b;
@@ -588,7 +590,17 @@ impl Vehicle {
             impact = impact.max(self.resolve_road());
             self.position.y = chassis_height;
             self.curb_bump *= (-seconds * 12.0).exp();
-            if self.track.has_compiled_roads() {
+            if self.track.has_compiled_roads()
+                && self
+                    .track
+                    .deck_height(
+                        self.position.xz(),
+                        self.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                    )
+                    .is_none_or(|h| {
+                        (h - (self.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT)).abs() > 1.
+                    })
+            {
                 let city = &self.track;
                 if let Some((normal, rise)) = city.crossed_curb(
                     XZ {
@@ -622,10 +634,10 @@ impl Vehicle {
     }
 
     fn ride_height(&self) -> f32 {
-        self.track.drive_height(XZ {
-            x: self.position.x,
-            z: self.position.z,
-        }) + vehicle_location::VEHICLE_ORIGIN_HEIGHT
+        self.track.drive_height_near(
+            self.position.xz(),
+            self.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+        ) + vehicle_location::VEHICLE_ORIGIN_HEIGHT
     }
 
     fn engine_inertia(&self) -> f32 {
@@ -717,7 +729,10 @@ impl Vehicle {
                 y: self.position.y,
                 z: self.position.z + dz,
             };
-            self.track.drive_height(XZ { x: p.x, z: p.z })
+            self.track.drive_height_near(
+                p.xz(),
+                self.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+            )
         };
         let length = self.spec.wheelbase;
         let width = self.spec.track_width;
@@ -868,10 +883,10 @@ impl Vehicle {
                 impact = impact.max(vehicle_location::deflect(&mut self.velocity, normal));
             }
         }
-        self.position.y = self.track.drive_height(XZ {
-            x: self.position.x,
-            z: self.position.z,
-        }) + vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+        self.position.y = self.track.drive_height_near(
+            self.position.xz(),
+            self.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+        ) + vehicle_location::VEHICLE_ORIGIN_HEIGHT;
         impact
     }
 

@@ -3,6 +3,7 @@
 use crate::geometry::{XYZ, XZ};
 #[cfg(test)]
 use crate::track;
+use crate::vehicle_location;
 use crate::{phys_car::Vehicle, scene::Vertex};
 use std::{collections::VecDeque, time::Duration};
 
@@ -51,12 +52,19 @@ impl SkidMarks {
             (
                 XYZ {
                     x,
-                    y: car.track.drive_height(XZ { x, z }) + 0.078,
+                    y: car.track.drive_height_near(
+                        XZ { x, z },
+                        car.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                    ) + 0.078,
                     z,
                 },
                 (if car.track.has_compiled_roads() {
                     let city = &car.track;
-                    city.paved(XZ { x, z })
+                    city.paved_near(XYZ {
+                        x,
+                        y: car.position.y,
+                        z,
+                    })
                 } else {
                     road.offset.abs() < road.width * 0.5 - 0.15
                 }),
@@ -155,8 +163,7 @@ mod tests {
             .try_track()
             .unwrap()
             .at_distance(distance);
-        let mut car =
-            test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
+        let mut car = test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
         car.tire_scrub = 0.9;
         car
     }

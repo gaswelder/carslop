@@ -213,8 +213,8 @@ impl StreetSurface {
                 _ => return Err("unknown surface record".into()),
             }
         }
-        if result.curbs.is_empty()
-            || result.road_triangles.is_empty()
+        // An entirely grade-separated location has paths and no ground mesh.
+        if result.curbs.is_empty() != result.road_triangles.is_empty()
             || paths.iter().any(Vec::is_empty)
         {
             return Err("incomplete street surfaces".into());
@@ -263,6 +263,7 @@ impl TriangleUsage {
             5 => Ok(Self::Pavement(CurbStyle::MajorRoad)),
             6 => Ok(Self::Pavement(CurbStyle::Road)),
             7 => Ok(Self::Pavement(CurbStyle::ServiceRoad)),
+            8..=16 => Ok(Self::Road(CurbStyle::try_from((id - 8) % 3)?)),
             _ => Err("unknown street triangle category"),
         }
     }
@@ -298,13 +299,29 @@ impl Triangle {
     fn from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Self, &'static str> {
         let usage = TriangleUsage::from_street_id(id)?;
         Ok(Self {
-            material: usage.street_material()?,
+            material: match id {
+                8..=10 => Material::Concrete,
+                11..=13 => Material::Paving,
+                14..=16 => Material::BareGround,
+                _ => usage.street_material()?,
+            },
             usage,
             points,
         })
     }
 
     fn street_id(&self) -> Result<usize, &'static str> {
+        if let TriangleUsage::Road(style) = self.usage {
+            let base = match self.material {
+                Material::Concrete => Some(8),
+                Material::Paving => Some(11),
+                Material::BareGround => Some(14),
+                _ => None,
+            };
+            if let Some(base) = base {
+                return Ok(base + style as usize);
+            }
+        }
         if self.material != self.usage.street_material()? {
             return Err("street format cannot encode this material for the triangle category");
         }
@@ -314,6 +331,12 @@ impl Triangle {
 
 impl Location {
     pub fn paved(&self, p: XZ<f32>) -> bool {
+        if self
+            .triangle_at(p, true)
+            .is_some_and(|triangle| triangle.material == Material::BareGround)
+        {
+            return false;
+        }
         if let Some(h) = self.paving_height(p) {
             return h != 0.08;
         }
@@ -350,40 +373,37 @@ impl Location {
 
 impl StreetSurface {
     fn triangle_at(&self, p: XZ<f32>, road_only: bool) -> Option<&Triangle> {
-        self.triangles_grid
-            .get(&cell(p))
-            .and_then(|ids| {
-                ids.iter()
-                    .map(|&i| &self.road_triangles[i])
-                    .find(|triangle| {
-                        if road_only && !triangle.usage.is_road() {
-                            return false;
-                        }
-                        let t = triangle.points;
-                        // A distance tolerance can extend a very thin triangle far
-                        // beyond its acute tip. Bound it before testing its edges.
-                        if (0..2).any(|axis| {
-                            p.component(axis)
-                                < t.iter()
+        self.triangles_grid.get(&cell(p)).and_then(|ids| {
+            ids.iter()
+                .map(|&i| &self.road_triangles[i])
+                .find(|triangle| {
+                    if road_only && !triangle.usage.is_road() {
+                        return false;
+                    }
+                    let t = triangle.points;
+                    // A distance tolerance can extend a very thin triangle far
+                    // beyond its acute tip. Bound it before testing its edges.
+                    if (0..2).any(|axis| {
+                        p.component(axis)
+                            < t.iter()
+                                .map(|v| v.component(axis))
+                                .fold(f32::INFINITY, f32::min)
+                                - 0.002
+                            || p.component(axis)
+                                > t.iter()
                                     .map(|v| v.component(axis))
-                                    .fold(f32::INFINITY, f32::min)
-                                    - 0.002
-                                || p.component(axis)
-                                    > t.iter()
-                                        .map(|v| v.component(axis))
-                                        .fold(f32::NEG_INFINITY, f32::max)
-                                        + 0.002
-                        }) {
-                            return false;
-                        }
-                        (0..3).all(|i| {
-                            let a = t[i];
-                            let b = t[(i + 1) % 3];
-                            cross(a, b, p)
-                                >= -0.002 * (b.x - a.x).hypot(b.z - a.z)
-                        })
+                                    .fold(f32::NEG_INFINITY, f32::max)
+                                    + 0.002
+                    }) {
+                        return false;
+                    }
+                    (0..3).all(|i| {
+                        let a = t[i];
+                        let b = t[(i + 1) % 3];
+                        cross(a, b, p) >= -0.002 * (b.x - a.x).hypot(b.z - a.z)
                     })
-            })
+                })
+        })
     }
     fn nearest_curb_in(
         &self,
@@ -407,7 +427,7 @@ impl StreetSurface {
             (q, c.inward, (q.x - p.x).hypot(q.z - p.z))
         })
         .min_by(|a, b| a.2.total_cmp(&b.2))
-        .unwrap()
+        .unwrap_or((p, XZ { x: 0., z: 0. }, f32::INFINITY))
     }
     fn nearest_curb(&self, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
         if let Some(ids) = self.curbs_grid.get(&cell(p)) {
@@ -427,6 +447,25 @@ mod index_tests {
     use crate::world;
     use geo::{Intersects, Point};
 
+    #[test]
+    fn mapped_road_materials_round_trip_through_the_binary_surface_cache() {
+        let folder = tempfile::tempdir().unwrap();
+        for id in 8..=16 {
+            let text = format!(
+                "STREETS 1 1\np 0 2 0 0 20 0\nt {id} 0 -4 20 -4 20 4\nc 1 0 -4 20 -4 0 1\n"
+            );
+            let (surface, paths) = StreetSurface::load(&text, 1).unwrap();
+            binary::write_binary_street_surface(
+                &folder.path().join("streets.bin"),
+                &surface,
+                &paths,
+            )
+            .unwrap();
+            let stored = binary::load_geometry(folder.path(), 1).unwrap();
+            assert_eq!(stored.triangles, surface.road_triangles());
+            assert_eq!(stored.triangles[0].street_id().unwrap(), id);
+        }
+    }
     #[test]
     fn surface_owner_matches_full_triangle_and_curb_scans_at_grid_boundaries() {
         let text = concat!(

@@ -17,10 +17,16 @@ mod building_assets;
 pub mod car_glb;
 #[path = "city_scene.rs"]
 mod city_scene;
+#[path = "detail_scene.rs"]
+mod detail_scene;
 #[path = "mesh_glb.rs"]
 mod mesh_glb;
 #[path = "road_furniture.rs"]
 mod road_furniture;
+#[path = "roof_scene.rs"]
+mod roof_scene;
+#[path = "transport_scene.rs"]
+mod transport_scene;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,9 +202,11 @@ pub fn city_layer_spooled(
     };
     if layer == 0 {
         city_scene::ground_mesh(&mut b, city, boundary);
+        transport_scene::build(&mut b, city);
     } else {
         city_scene::buildings(&mut b, city, layer == 1)?;
         barrier_scene::build(&mut b, city, layer == 1);
+        detail_scene::build(&mut b, city, layer == 1);
     }
     b.chunks.unwrap().finish_spooled()
 }
@@ -734,6 +742,8 @@ pub fn authored_scenery(track: &track::Location, coastal: bool) -> AuthoredScene
                     height_meters: 5.0,
                     base_y: 0.0,
                     tagged: true,
+                    holes: Vec::new(),
+                    min_height_meters: 0.0,
                     ground_outline: vec![
                         XZ {
                             x: x - 2.0,
@@ -804,10 +814,7 @@ fn rocks(b: &mut Builder) {
     }
 }
 
-pub fn bake_authored_landscape(
-    track: &track::Location,
-    coastal: bool,
-) -> Vec<world::Triangle> {
+pub fn bake_authored_landscape(track: &track::Location, coastal: bool) -> Vec<world::Triangle> {
     let field = track.elevation().expect("authored track terrain");
     let mut ground = Vec::new();
     for row in 0..field.rows - 1 {
@@ -848,10 +855,7 @@ fn decorations(b: &mut Builder, track: &track::Location, coastal: bool) {
     }
 }
 
-pub fn authored_decorations(
-    track: &track::Location,
-    coastal: bool,
-) -> [Vec<chunks::Chunk>; 3] {
+pub fn authored_decorations(track: &track::Location, coastal: bool) -> [Vec<chunks::Chunk>; 3] {
     let mut builder = Builder::default();
     decorations(&mut builder, track, coastal);
     let mut chunks = chunks::ChunkBuilder::default();
@@ -897,7 +901,6 @@ impl track::Location {
 mod tests {
     use crate::chunks;
     use crate::test_support;
-
 
     #[test]
     fn rendered_road_edges_follow_the_local_width() {

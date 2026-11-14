@@ -4,6 +4,7 @@ use crate::geometry::{XYZ, XZ};
 use crate::phys_car::Vehicle;
 #[cfg(test)]
 use crate::track;
+use crate::vehicle_location;
 use std::time::Duration;
 
 const MAX_PARTICLES: usize = 160;
@@ -102,7 +103,11 @@ impl TireParticles {
             let road = car.track.project(XYZ { x, y: 0.0, z });
             let dusty = if car.track.has_compiled_roads() {
                 let city = &car.track;
-                !city.paved(XZ { x, z })
+                !city.paved_near(XYZ {
+                    x,
+                    y: car.position.y,
+                    z,
+                })
             } else {
                 road.offset.abs() > road.width * 0.5 - 0.6
             };
@@ -133,7 +138,10 @@ impl TireParticles {
                     kind,
                     position: XYZ {
                         x,
-                        y: car.track.drive_height(XZ { x, z }) + 0.18,
+                        y: car.track.drive_height_near(
+                            XZ { x, z },
+                            car.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                        ) + 0.18,
                         z,
                     },
                     velocity: XYZ {

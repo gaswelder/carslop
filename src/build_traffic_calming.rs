@@ -15,6 +15,8 @@ enum Kind {
     Hump,
     Bump,
     Table,
+    Cushion,
+    Rumble,
 }
 impl Kind {
     fn from_element(element: &osm::OSMElement) -> Option<Self> {
@@ -22,6 +24,8 @@ impl Kind {
             "hump" => Some(Self::Hump),
             "bump" => Some(Self::Bump),
             "table" => Some(Self::Table),
+            "cushion" => Some(Self::Cushion),
+            "rumble_strip" | "mini_bumps" => Some(Self::Rumble),
             _ => None,
         }
     }
@@ -30,6 +34,8 @@ impl Kind {
             Self::Hump => 3.6,
             Self::Bump => 0.8,
             Self::Table => 6.0,
+            Self::Cushion => 3.0,
+            Self::Rumble => 5.4,
         }
     }
     fn height(self) -> f64 {
@@ -37,10 +43,16 @@ impl Kind {
             Self::Hump => 0.08,
             Self::Bump => 0.06,
             Self::Table => 0.10,
+            Self::Cushion => 0.07,
+            Self::Rumble => 0.025,
         }
     }
     fn profile(self, station: f64, length: f64) -> f64 {
-        if self == Self::Table {
+        if self == Self::Rumble {
+            let phase = (station / 0.6).fract();
+            (1. - (2. * phase - 1.).powi(2)).max(0.)
+                * (station / 0.2).min((length - station) / 0.2).clamp(0., 1.)
+        } else if self == Self::Table {
             let ramp = 1.2_f64.min(length * 0.25);
             (station / ramp)
                 .min((length - station) / ramp)
@@ -69,6 +81,45 @@ fn append(
     covered: &mut MultiPolygon<f64>,
     result: &mut Vec<RoadRise>,
 ) -> Result<()> {
+    if feature.kind == Kind::Cushion {
+        let lanes = (feature.width / 3.1).round().clamp(1., 6.) as usize;
+        for lane in 0..lanes {
+            let offset = -feature.width / 2. + feature.width * (lane as f64 + 0.5) / lanes as f64;
+            let path = feature
+                .path
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let tangent = geometry::unit(geometry::sub(
+                        feature.path[(i + 1).min(feature.path.len() - 1)],
+                        feature.path[i.saturating_sub(1)],
+                    ));
+                    geometry::add(
+                        *p,
+                        geometry::mul(
+                            XZ {
+                                x: -tangent.z,
+                                z: tangent.x,
+                            },
+                            offset,
+                        ),
+                    )
+                })
+                .collect();
+            append(
+                Feature {
+                    path,
+                    width: 1.8_f64.min(feature.width / lanes as f64 - 0.4).max(0.8),
+                    height: feature.height,
+                    kind: Kind::Hump,
+                },
+                road,
+                covered,
+                result,
+            )?;
+        }
+        return Ok(());
+    }
     let length = geometry::path_length(&feature.path);
     if length < 0.2 {
         return Ok(());
@@ -77,6 +128,9 @@ fn append(
     if feature.kind == Kind::Table {
         let ramp = 1.2_f64.min(length * 0.25);
         stations.extend([ramp, length - ramp]);
+    } else if feature.kind == Kind::Rumble {
+        let count = (length / 0.1).ceil() as usize;
+        stations.extend((1..count).map(|i| length * i as f64 / count as f64));
     } else {
         stations.extend((1..12).map(|i| length * i as f64 / 12.0));
     }
@@ -165,6 +219,9 @@ fn extract(
     let mut roads: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, road) in map.road_lines.iter().enumerate() {
         if let Some(id) = road.osm_way_id {
+            if source.ways.get(&id).is_some_and(|way| !ground_level(way)) {
+                continue;
+            }
             roads.entry(id).or_default().push(i);
         }
     }
@@ -179,7 +236,8 @@ fn extract(
     let excluded = build_surfaces::union(
         &map.buildings
             .iter()
-            .map(|building| MultiPolygon(vec![geometry::polygon(&building.ground_outline)]))
+            .filter(|building| building.min_height_meters < 1.7)
+            .map(|building| MultiPolygon(vec![building.footprint()]))
             .collect::<Vec<_>>(),
     );
     let road = surfaces.asphalt.difference(&excluded);
@@ -353,6 +411,59 @@ mod tests {
     use crate::test_support;
     use geo::Area;
 
+    #[test]
+    fn cushions_keep_lane_gaps_and_rumble_strips_share_the_contact_profile() {
+        let road = MultiPolygon(vec![geometry::polygon(&[
+            XZ { x: -10., z: -5. },
+            XZ { x: 10., z: -5. },
+            XZ { x: 10., z: 5. },
+            XZ { x: -10., z: 5. },
+        ])]);
+        let height = |rises: &[RoadRise], p| {
+            rises
+                .iter()
+                .filter_map(|rise| rise.offset(p))
+                .max_by(f32::total_cmp)
+                .unwrap_or(0.)
+        };
+        let mut rises = Vec::new();
+        let mut covered = geometry::empty();
+        append(
+            Feature {
+                path: vec![XZ { x: -1.5, z: 0. }, XZ { x: 1.5, z: 0. }],
+                width: 7.,
+                height: 0.07,
+                kind: Kind::Cushion,
+            },
+            &road,
+            &mut covered,
+            &mut rises,
+        )
+        .unwrap();
+        assert!(height(&rises, XZ { x: 0., z: 1.75 }) > 0.069);
+        assert_eq!(height(&rises, XZ { x: 0., z: 0. }), 0.);
+        assert_eq!(height(&rises, XZ { x: 0., z: 3.4 }), 0.);
+        rises.clear();
+        covered = geometry::empty();
+        append(
+            Feature {
+                path: vec![XZ { x: 0., z: 0. }, XZ { x: 5.4, z: 0. }],
+                width: 7.,
+                height: 0.025,
+                kind: Kind::Rumble,
+            },
+            &road,
+            &mut covered,
+            &mut rises,
+        )
+        .unwrap();
+        for x in [0.3, 0.9, 1.5, 2.1] {
+            assert!(height(&rises, XZ { x, z: 0. }) > 0.024);
+        }
+        for x in [0., 0.6, 1.2, 5.4] {
+            assert!(height(&rises, XZ { x, z: 0. }) < 0.001);
+        }
+    }
     #[test]
     fn calming_profiles_preserve_mapped_dimensions_and_skip_nearby_bridges() {
         let mut map = SourceLocation::empty();
