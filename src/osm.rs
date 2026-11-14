@@ -15,58 +15,96 @@ use std::fs;
 use std::io::BufReader;
 use std::path::Path;
 
-pub(super) fn relation_id(url: &str) -> Result<i64> {
-    let rest = url
-        .trim()
-        .strip_prefix("https://")
-        .or_else(|| url.trim().strip_prefix("http://"))
-        .ok_or_else(|| invalid("expected an OpenStreetMap relation URL"))?;
-    let (host, path) = rest
-        .split_once('/')
-        .ok_or_else(|| invalid("expected an OpenStreetMap relation URL"))?;
-    if host != "www.openstreetmap.org" && host != "openstreetmap.org" {
-        return Err(invalid("expected an openstreetmap.org URL"));
-    }
-    let path = path.split(['?', '#']).next().unwrap().trim_end_matches('/');
-    let id = path
-        .strip_prefix("relation/")
-        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-        .and_then(|s| s.parse::<i64>().ok())
-        .filter(|id| *id > 0)
-        .ok_or_else(|| invalid("expected /relation/<positive ID> in the OSM URL"))?;
-    Ok(id)
+/// A rectangle centered on the map coordinates, with dimensions in kilometers.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct ImportArea {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub width_km: f64,
+    pub height_km: f64,
 }
 
-pub(super) fn import_name(relation: &OSMElement) -> String {
-    let name = [relation.tag("name:en"), relation.tag("name")]
-        .into_iter()
-        .find(|name| !name.trim().is_empty())
-        .unwrap_or("");
-    let slug: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
+impl ImportArea {
+    pub fn from_url(url: &str, width_km: f64, height_km: f64) -> Result<Self> {
+        let fragment = url
+            .trim()
+            .split_once('#')
+            .map(|(_, fragment)| fragment)
+            .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
+        let map = fragment
+            .split('&')
+            .find_map(|part| part.strip_prefix("map="))
+            .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
+        let parts: Vec<_> = map.split('/').collect();
+        if parts.len() != 3 {
+            return Err(invalid("expected #map=zoom/latitude/longitude in the URL"));
+        }
+        let area = Self {
+            latitude: parts[1].parse()?,
+            longitude: parts[2].parse()?,
+            width_km,
+            height_km,
+        };
+        area.geometry()?;
+        Ok(area)
+    }
+
+    pub fn name(&self) -> String {
+        format!(
+            "location-{}-{}-{}x{}km",
+            self.latitude, self.longitude, self.width_km, self.height_km
+        )
+    }
+
+    pub fn geometry(&self) -> Result<OSMArea> {
+        if !self.latitude.is_finite()
+            || !self.longitude.is_finite()
+            || self.latitude.abs() > 85.0
+            || self.longitude.abs() > 180.0
+        {
+            return Err(invalid(
+                "invalid center coordinates; latitude must be within 85 degrees of the equator",
+            ));
+        }
+        if !self.width_km.is_finite()
+            || !self.height_km.is_finite()
+            || self.width_km <= 0.0
+            || self.height_km <= 0.0
+            || self.width_km > 80.0
+            || self.height_km > 80.0
+        {
+            return Err(invalid(
+                "width and height must be positive and at most 80 km",
+            ));
+        }
+        let half_lat = (self.height_km * 500.0 / 6371000.0).to_degrees();
+        let half_lon =
+            (self.width_km * 500.0 / (6371000.0 * self.latitude.to_radians().cos())).to_degrees();
+        let bounds = BoundingBox {
+            min_lat: self.latitude - half_lat,
+            max_lat: self.latitude + half_lat,
+            min_lon: self.longitude - half_lon,
+            max_lon: self.longitude + half_lon,
+        };
+        if !bounds.is_valid_for_imagery() {
+            return Err(invalid(
+                "requested rectangle crosses the antimeridian or the supported latitude limits",
+            ));
+        }
+        Ok(OSMArea {
+            geometry: MultiPolygon(vec![geo::Rect::new(
+                Coord {
+                    x: bounds.min_lon,
+                    y: bounds.min_lat,
+                },
+                Coord {
+                    x: bounds.max_lon,
+                    y: bounds.max_lat,
+                },
+            )
+            .to_polygon()]),
         })
-        .collect();
-    let slug = slug
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    let slug = slug
-        .get(..slug.len().min(40))
-        .unwrap()
-        .trim_end_matches('-');
-    // IDs keep equal names distinct and provide a fallback for non-ASCII names.
-    format!(
-        "{}-{}",
-        if slug.is_empty() { "relation" } else { slug },
-        relation.id
-    )
+    }
 }
 
 /// Source OSM node, way or relation; applicable fields depend on the element kind.
@@ -102,15 +140,13 @@ pub struct OSMMap {
     pub bounds: Option<[f64; 4]>,
 }
 
-/// Administrative boundary resolved from an OSM relation, including holes and islands.
-pub struct OSMBoundary {
-    /// OSM relation ID identifying this boundary.
-    pub relation: i64,
+/// Geographic area used to crop imported map data.
+pub struct OSMArea {
     /// Boundary polygons in geographic [longitude, latitude] degrees.
     pub geometry: MultiPolygon<f64>,
 }
 
-impl OSMBoundary {
+impl OSMArea {
     pub fn bbox(&self) -> BoundingBox {
         let b = self.geometry.bounding_rect().unwrap();
         BoundingBox {
@@ -138,20 +174,7 @@ impl OSMBoundary {
                     .collect()
             })
             .collect();
-        json!({"type":"Feature","properties":{"osm_relation":self.relation},"geometry":{"type":"MultiPolygon","coordinates":coordinates}})
-    }
-    // Offline fixture tools read persisted boundaries; live imports pass typed geometry.
-
-    // Returns the boundary's width and height in meters.
-    pub fn size(&self) -> (f64, f64) {
-        let width = (self.bbox().max_lon - self.bbox().min_lon).to_radians()
-            * 6371000.
-            * ((self.bbox().min_lat + self.bbox().max_lat) / 2.)
-                .to_radians()
-                .cos();
-        let height = (self.bbox().max_lat - self.bbox().min_lat).to_radians() * 6371000.;
-
-        return (width, height);
+        json!({"type":"Feature","properties":{},"geometry":{"type":"MultiPolygon","coordinates":coordinates}})
     }
 }
 
@@ -375,53 +398,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn relation_urls_ignore_viewport_and_query() {
-        for url in [
-            "https://www.openstreetmap.org/relation/2087230#map=11/34.7977/32.9562",
-            "http://openstreetmap.org/relation/2087230/?foo=bar#map=1/0/0",
+    fn import_uses_viewport_center_and_requested_dimensions() {
+        for prefix in [
+            "https://www.openstreetmap.org/way/535666548",
+            "https://www.openstreetmap.org/relation/1?foo=bar",
+            "https://www.openstreetmap.org/",
         ] {
-            assert_eq!(relation_id(url).unwrap(), 2087230);
-        }
-        for url in [
-            "https://openstreetmap.org.evil.test/relation/1",
-            "https://openstreetmap.org@evil.test/relation/1",
-            "https://openstreetmap.org/way/1",
-            "https://openstreetmap.org/relation/0",
-            "https://openstreetmap.org/relation/-1",
-            "https://openstreetmap.org/relation/1/full",
-            "https://openstreetmap.org/relation/99999999999999999999999",
-        ] {
-            assert!(relation_id(url).is_err(), "{url}");
+            let area = ImportArea::from_url(
+                &format!("{prefix}#map=19/35.165236/33.318712&layers=N"),
+                10.0,
+                5.0,
+            )
+            .unwrap();
+            assert_eq!(area.latitude, 35.165236);
+            assert_eq!(area.longitude, 33.318712);
+            let geometry = area.geometry().unwrap();
+            let bounds = geometry.bbox();
+            assert!(((bounds.min_lat + bounds.max_lat) / 2.0 - area.latitude).abs() < 1e-12);
+            assert!(((bounds.min_lon + bounds.max_lon) / 2.0 - area.longitude).abs() < 1e-12);
+            let local = geometry.local(LatLon::new(area.latitude, area.longitude));
+            let rect = local.bounding_rect().unwrap();
+            assert!((rect.width() - 10000.0).abs() < 1e-6);
+            assert!((rect.height() - 5000.0).abs() < 1e-6);
+            assert!((rect.min().x + 5000.0).abs() < 1e-6);
+            assert!((rect.min().y + 2500.0).abs() < 1e-6);
         }
     }
 
     #[test]
-    fn names_use_requested_relation_tags_and_have_safe_fallbacks() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("boundary.osm");
-        fs::write(
-            &path,
-            r#"<osm version="0.6">
-<node id="1" lat="34.7" lon="33.0"/>
-<relation id="1"><tag k="name" v="Λεμεσός"/><tag k="name:en" v="Limassol District"/></relation>
-<relation id="2"><tag k="name" v="../Some / Place"/></relation>
-<relation id="3"><tag k="name" v="Λεμεσός"/></relation>
-<relation id="4"/>
-<relation id="5"><tag k="name:en" v=" "/><tag k="name" v="Local Name"/></relation>
-</osm>"#,
-        )
-        .unwrap();
-        let map = read(&path).unwrap();
-        let names: Vec<_> = map.relations.iter().map(import_name).collect();
-        assert_eq!(
-            names,
-            [
-                "limassol-district-1",
-                "some-place-2",
-                "relation-3",
-                "relation-4",
-                "local-name-5"
-            ]
+    fn invalid_import_areas_are_rejected() {
+        for fragment in [
+            "",
+            "#map=19",
+            "#map=19/35/33/1",
+            "#map=19/no/33",
+            "#map=19/NaN/33",
+            "#map=19/35/inf",
+            "#map=19/86/33",
+            "#map=19/35/181",
+            "#map=19/85/33",
+            "#map=19/35/180",
+        ] {
+            assert!(
+                ImportArea::from_url(
+                    &format!("https://www.openstreetmap.org/{fragment}"),
+                    10.0,
+                    5.0,
+                )
+                .is_err(),
+                "{fragment}"
+            );
+        }
+        for invalid in [0.0, -1.0, 80.01, f64::NAN, f64::INFINITY] {
+            let url = "https://www.openstreetmap.org/#map=19/35/33";
+            assert!(ImportArea::from_url(url, invalid, 5.0).is_err());
+            assert!(ImportArea::from_url(url, 10.0, invalid).is_err());
+        }
+        assert!(
+            ImportArea::from_url("https://www.openstreetmap.org/#map=1/-35/-33", 80.0, 80.0,)
+                .is_ok()
         );
     }
 }

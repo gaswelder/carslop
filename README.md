@@ -38,7 +38,7 @@ Run:
 
 Subcommands:
 
-- add-location <openstreetmap-url> - download and compile a location
+- add-location <openstreetmap-url> <width-km> <height-km> - download and compile a rectangular location
 - create-track track.json - compile a track from waypoints and add it to the location directory
 
 ## GLB models of the cars

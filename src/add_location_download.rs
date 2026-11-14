@@ -1,5 +1,5 @@
 use crate::{
-    boundary, download,
+    download,
     error::{invalid, Result},
     geometry::BoundingBox,
     imagery, osm, sources,
@@ -13,7 +13,6 @@ const REGIONAL_INDEX: &str = "https://download.geofabrik.de/index-v1.json";
 const ELEVATION_SERVICE: &str = "https://s3.amazonaws.com/elevation-tiles-prod/skadi";
 const MAX_IMAGERY_BLOCKS: usize = 2000;
 
-pub const BOUNDARY_FILE: &str = "boundary.osm";
 pub const LOCATION_OSM_FILE: &str = "source.osm";
 pub const ELEVATION_DATA_DIR: &str = "elevation_data";
 pub const SATELLITE_IMAGES_DIR: &str = "satellite_images";
@@ -22,7 +21,7 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
-    pub boundary_relation: i64,
+    pub area: osm::ImportArea,
     pub height_tiles: Vec<String>,
     pub imagery_blocks: Vec<imagery::Block>,
 }
@@ -40,37 +39,15 @@ fn write_manifest(directory: &Path, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
-    let relation = osm::relation_id(relation_url)?;
-    let download_dir = std::path::PathBuf::from(format!("src-locations/relation-{relation}"));
+pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
+    let boundary = area.geometry()?;
+    let name = area.name();
+    let download_dir = std::path::PathBuf::from(format!("src-locations/{name}"));
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(900)))
         .build()
         .into();
-
-    // Download the location boundary.
     let options = download::DownloadOptions::default();
-    download::download(
-        &agent,
-        &format!("https://api.openstreetmap.org/api/0.6/relation/{relation}/full"),
-        &download_dir.join(BOUNDARY_FILE),
-        &options,
-    )?;
-
-    // Parse and validate the boundary.
-    let boundary_map = osm::read(&download_dir.join(BOUNDARY_FILE))?;
-    let name = osm::import_name(
-        boundary_map
-            .relations
-            .iter()
-            .find(|r| r.id == relation)
-            .ok_or_else(|| invalid("requested relation missing from boundary response"))?,
-    );
-    let boundary = boundary::resolve_boundary(&boundary_map, relation)?;
-    let (width, height) = boundary.size();
-    if width > 80000. || height > 80000. {
-        return Err(invalid("the boundary exceeds compiler's 80 km limit"));
-    }
 
     let imagery_blocks = imagery_blocks(&boundary, MAX_IMAGERY_BLOCKS)?;
 
@@ -90,8 +67,7 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
 
     println!(
         "extracting requested area ({}x{} km)",
-        (width / 100.0).round() / 10.0,
-        (height / 100.0).round() / 10.0
+        area.width_km, area.height_km
     );
     sources::extract_osm_boundary(
         &download_dir.join(REGIONAL_OSM),
@@ -147,7 +123,7 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
     }
     let data = Manifest {
         name,
-        boundary_relation: relation,
+        area,
         height_tiles,
         imagery_blocks,
     };
@@ -155,7 +131,7 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
     Ok(download_dir)
 }
 
-fn imagery_blocks(boundary: &osm::OSMBoundary, limit: usize) -> Result<Vec<imagery::Block>> {
+fn imagery_blocks(boundary: &osm::OSMArea, limit: usize) -> Result<Vec<imagery::Block>> {
     let bbox = boundary.bbox();
     if !bbox.is_valid_for_imagery() {
         return Err(invalid("invalid city geographic bounds"));
@@ -238,7 +214,7 @@ impl RegionalGeometry {
 }
 
 impl RegionalIndex {
-    fn covering_extract(&self, boundary: &osm::OSMBoundary) -> Result<&str> {
+    fn covering_extract(&self, boundary: &osm::OSMArea) -> Result<&str> {
         self.features
             .iter()
             .filter_map(|extract| {
@@ -251,7 +227,7 @@ impl RegionalIndex {
             })
             .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)))
             .map(|(_, url)| url)
-            .ok_or_else(|| invalid("no Geofabrik extract covers the complete boundary"))
+            .ok_or_else(|| invalid("no Geofabrik extract covers the complete requested rectangle"))
     }
 }
 
@@ -298,8 +274,7 @@ mod import_tests {
                     "type": "Polygon", "coordinates": [[[1,1],[6,1],[6,6],[1,6],[1,1]]]}}
             ]
         })).unwrap();
-        let boundary = osm::OSMBoundary {
-            relation: 1,
+        let boundary = osm::OSMArea {
             geometry: geo::MultiPolygon(vec![geo::Rect::new(
                 geo::Coord { x: 2., y: 2. },
                 geo::Coord { x: 4., y: 4. },
@@ -307,8 +282,7 @@ mod import_tests {
             .to_polygon()]),
         };
         assert_eq!(index.covering_extract(&boundary).unwrap(), "smallest-cover");
-        let boundary = osm::OSMBoundary {
-            relation: 2,
+        let boundary = osm::OSMArea {
             geometry: geo::MultiPolygon(vec![geo::Rect::new(
                 geo::Coord { x: 9., y: 9. },
                 geo::Coord { x: 11., y: 11. },
@@ -351,10 +325,7 @@ mod stage_tests {
     use crate::city_assets;
     use crate::location;
     use crate::world;
-    use crate::{
-        add_location_compile::compile_location, add_location_trees, boundary::resolve_boundary,
-        imagery, osm,
-    };
+    use crate::{add_location_compile::compile_location, add_location_trees, imagery, osm};
     use std::io::Write;
 
     fn downloaded_fixture() -> tempfile::TempDir {
@@ -363,16 +334,6 @@ mod stage_tests {
         fs::create_dir(&download_dir.join(SATELLITE_IMAGES_DIR)).unwrap();
         fs::create_dir(&download_dir.join(ELEVATION_DATA_DIR)).unwrap();
         fs::write(
-            &download_dir.join(BOUNDARY_FILE),
-            r#"<osm version="0.6">
-<node id="1" lat="35.160" lon="33.320"/><node id="2" lat="35.160" lon="33.324"/>
-<node id="3" lat="35.164" lon="33.324"/><node id="4" lat="35.164" lon="33.320"/>
-<way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="1"/></way>
-<relation id="2087230"><member type="way" ref="10" role="outer"/>
-<tag k="type" v="boundary"/><tag k="boundary" v="administrative"/></relation></osm>"#,
-        )
-        .unwrap();
-        fs::write(
             &download_dir.join(LOCATION_OSM_FILE),
             r#"<osm version="0.6">
 <node id="11" lat="35.161" lon="33.3205"/><node id="12" lat="35.161" lon="33.3235"/>
@@ -380,14 +341,16 @@ mod stage_tests {
 <tag k="name" v="Fixture Road"/></way></osm>"#,
         )
         .unwrap();
-        let boundary = resolve_boundary(
-            &osm::read(&download_dir.join(BOUNDARY_FILE)).unwrap(),
-            2087230,
-        )
-        .unwrap();
+        let area = osm::ImportArea {
+            latitude: 35.162,
+            longitude: 33.322,
+            width_km: 0.364,
+            height_km: 0.445,
+        };
+        let boundary = area.geometry().unwrap();
         let data = Manifest {
             name: "Fixture".into(),
-            boundary_relation: 2087230,
+            area,
             height_tiles: elevation_tiles(boundary.bbox()),
             imagery_blocks: imagery_blocks(&boundary, 2000).unwrap(),
         };

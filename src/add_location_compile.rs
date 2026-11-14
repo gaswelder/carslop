@@ -2,7 +2,6 @@ use crate::asset_codecs;
 use crate::build_barriers;
 use crate::build_buildings;
 use crate::build_details;
-use crate::build_traffic_calming;
 use crate::build_transport;
 use crate::city_assets;
 use crate::geometry::{add, cross, dist, dot, length, line, mul, polygon, sub};
@@ -15,7 +14,6 @@ use crate::tree_obstacles;
 use crate::world;
 use crate::{
     add_location_download, add_location_trees,
-    boundary::resolve_boundary,
     build_collision::build_collisions,
     build_furniture::build_furniture,
     build_landscape::build_landscape,
@@ -99,20 +97,21 @@ pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
         ));
     }
     let acquired = CompileSources {
-        boundary: resolve_boundary(
-            &osm::read(&paths.downloads.join(add_location_download::BOUNDARY_FILE))?,
-            data.boundary_relation,
-        )?,
+        boundary: data.area.geometry()?,
         height_tiles: data.height_tiles.clone(),
     };
+    println!("converting OSM map");
     let converted = convert_map(&paths, &acquired.boundary)?;
     let generated = generate_assets(&data.name, &paths, &acquired, &converted)?;
     drop(converted);
     compile_imagery(&data, &paths, &generated, &acquired.boundary)?;
+    println!("preparing scene assets");
     let prepared = prepare(&paths)?;
+    println!("baking scene");
     bake(&paths, &prepared, Some(&acquired.boundary))?;
     drop(prepared);
     scene_archive::Archive::open(&paths.scene)?;
+    println!("loading compiled location");
     location::Location::from_compilation(workspace).map_err(invalid)
 }
 
@@ -120,7 +119,7 @@ struct ConvertedMap {
     osm: osm::OSMMap,
     location: SourceLocation<f64>,
 }
-fn convert_map(paths: &ImportPaths, boundary: &osm::OSMBoundary) -> Result<ConvertedMap> {
+fn convert_map(paths: &ImportPaths, boundary: &osm::OSMArea) -> Result<ConvertedMap> {
     fs::copy(
         &paths
             .downloads
@@ -145,7 +144,7 @@ struct GeneratedAssets {
     bbox: BoundingBox,
 }
 struct CompileSources {
-    boundary: osm::OSMBoundary,
+    boundary: osm::OSMArea,
     height_tiles: Vec<String>,
 }
 
@@ -168,14 +167,6 @@ fn generate_assets(
         location_map.road_lines.len()
     );
     let streets_result = write_streets_txt(location_map, &paths.streets, Some(source_osm_map))?;
-
-    println!("building traffic calming");
-    build_traffic_calming::build_traffic_calming(
-        source_osm_map,
-        location_map,
-        &streets_result.surfaces,
-        &paths.output.join("road-rises.txt"),
-    )?;
 
     println!("building barriers");
     build_barriers::build_barriers(
@@ -212,8 +203,10 @@ fn generate_assets(
         &paths.elevation,
     )?;
 
+    println!("building mapped details");
     let mut details = build_details::build(source_osm_map, location_map, &streets_result.surfaces);
     details.trees.extend(tree_styles);
+    println!("loading elevation grid");
     let assets = city_assets::CityAsset::new(paths.output.clone());
     let field = assets.get_heightfield().map_err(invalid)?;
     let header = fs::read_to_string(&paths.heightfield)?;
@@ -223,6 +216,7 @@ fn generate_assets(
         .and_then(|line| line.split_whitespace().last())
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(0.);
+    println!("building bridges, tunnels and approach ramps");
     build_transport::build(
         source_osm_map,
         location_map,
@@ -232,6 +226,7 @@ fn generate_assets(
         &mut details,
         &paths.output.join("road-rises.txt"),
     )?;
+    println!("validating and writing mapped details");
     details
         .validate(location_map.buildings.len(), location_map.road_lines.len())
         .map_err(invalid)?;
@@ -263,12 +258,11 @@ fn generate_assets(
         serde_json::to_string_pretty(&manifest)? + "\n",
     )?;
 
+    println!("building labels");
     source_location::write_labels(paths.manifest.parent().unwrap())?;
 
-    // Read it back again...
-    let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
-
     println!("building collision data");
+    let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
 
     build_collisions(&paths.collisions, &city_result.city, streets_txt_source)?;
 
@@ -287,7 +281,7 @@ fn compile_imagery(
     data: &add_location_download::Manifest,
     paths: &ImportPaths,
     generated: &GeneratedAssets,
-    boundary: &osm::OSMBoundary,
+    boundary: &osm::OSMArea,
 ) -> Result<()> {
     println!("Compiling satellite textures and inferred trees...");
 
@@ -434,7 +428,7 @@ fn prepare(paths: &ImportPaths) -> Result<world::CompiledLocation> {
 fn bake(
     paths: &ImportPaths,
     city: &world::CompiledLocation,
-    boundary: Option<&osm::OSMBoundary>,
+    boundary: Option<&osm::OSMArea>,
 ) -> Result<()> {
     build_scene(
         city,
@@ -472,7 +466,7 @@ fn sidewalks(way: &osm::OSMElement) -> Sidewalks {
 
 fn create_location_map(
     source: &osm::OSMMap,
-    boundary: &osm::OSMBoundary,
+    boundary: &osm::OSMArea,
 ) -> Result<SourceLocation<f64>> {
     let bbox = Some(boundary.bbox().to_array());
     let bbox = bbox.or(source.bounds).unwrap_or_else(|| {
@@ -515,9 +509,9 @@ fn create_location_map(
     };
     map.boundary = boundary.map(|b| b.local(origin));
     // Bound geometry and height-field allocations before processing an accidental country extract.
-    if b.x - a.x > 80000.0 || a.z - b.z > 80000.0 {
+    if b.x - a.x > 80000.0 + 1e-6 || a.z - b.z > 80000.0 + 1e-6 {
         return Err(invalid(
-            "crop exceeds 80 km; supply a smaller --bbox SOUTH WEST NORTH EAST",
+            "crop exceeds 80 km; supply smaller width and height",
         ));
     }
     let coords: BTreeMap<_, _> = source

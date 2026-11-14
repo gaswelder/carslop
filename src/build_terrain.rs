@@ -31,6 +31,7 @@ pub fn build_terrain(
             "terrain grid exceeds runtime limit of 4096 posts per axis",
         ));
     }
+    println!("  Sampling {} x {} elevation posts...", size[0], size[1]);
     let mut file = BufWriter::new(fs::File::create(heightfield_path)?);
     writeln!(
         file,

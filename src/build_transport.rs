@@ -2,15 +2,21 @@
 use crate::asset_codecs;
 use crate::build_details;
 use crate::build_surfaces;
-use crate::error::{invalid, Result};
+use crate::error::Result;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::map_details::{Data, Deck};
 use crate::osm;
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::world::{HeightField, RoadRise};
-use geo::{BooleanOps, MultiPolygon};
-use std::{collections::BTreeMap, fs, path::Path};
+use geo::algorithm::orient::Direction;
+use geo::{BooleanOps, BoundingRect, MultiPolygon, Orient, Polygon};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 struct SurveyNode<'a> {
     node: &'a osm::OSMElement,
     position: XZ,
@@ -55,6 +61,7 @@ pub fn build(
         .iter()
         .map(|road| road_grade(Some(source), road))
         .collect();
+    println!("  Resolving bridge and tunnel heights...");
     let mut lifts = vec![0f32; map.road_nodes.len()];
     let mut fixed = vec![false; map.road_nodes.len()];
     // Interpolate each surveyed source way between its endpoints rather than following river-bed DEM posts.
@@ -169,6 +176,7 @@ pub fn build(
             }
         }
     }
+    println!("  Building bridge decks and approach ramps...");
     let mut ramps = Vec::new();
     for (i, road) in map.road_lines.iter().enumerate() {
         let path = &surfaces.paths[i];
@@ -248,49 +256,117 @@ pub fn build(
             }
         }
     }
-    // Ramp triangles may overlap at joins. Partition them first, then add existing humps to the resulting planes.
-    let existing =
-        asset_codecs::road_rises::parse(&fs::read_to_string(rises_path)?).map_err(invalid)?;
-    let mut covered = geometry::empty();
-    let mut result = Vec::new();
-    for ramp in ramps {
-        let footprint = MultiPolygon(vec![geometry::polygon(
-            &ramp.points.map(|p| p.xz().map(f64::from)),
-        )]);
-        let available =
-            footprint.difference(&build_surfaces::PolygonIndex::new(&covered).nearby(&footprint));
-        let mut remaining = available.clone();
-        for hump in &existing {
-            let shape = MultiPolygon(vec![geometry::polygon(
-                &hump.points.map(|p| p.xz().map(f64::from)),
-            )]);
-            let overlap = remaining.intersection(&shape);
-            emit(&overlap, &ramp, Some(hump), &mut result)?;
-            remaining = remaining.difference(&shape);
-        }
-        emit(&remaining, &ramp, None, &mut result)?;
-        covered.0.extend(available.0);
-    }
-    for hump in existing {
-        let shape = MultiPolygon(vec![geometry::polygon(
-            &hump.points.map(|p| p.xz().map(f64::from)),
-        )]);
-        emit(
-            &shape.difference(&build_surfaces::PolygonIndex::new(&covered).nearby(&shape)),
-            &hump,
-            None,
-            &mut result,
-        )?;
-    }
+    // Partition overlapping approach ramps so joins have a single height plane.
+    let result = partition_ramps(&ramps)?;
+    println!("  Writing {} approach ramp triangles...", result.len());
     asset_codecs::road_rises::write(&mut fs::File::create(rises_path)?, &result)?;
     Ok(())
 }
-fn emit(
-    geometry: &MultiPolygon<f64>,
-    plane: &RoadRise,
-    extra: Option<&RoadRise>,
-    result: &mut Vec<RoadRise>,
-) -> Result<()> {
+
+struct IndexedFootprint {
+    index: usize,
+    bounds: rstar::AABB<XZ>,
+}
+impl rstar::RTreeObject for IndexedFootprint {
+    type Envelope = rstar::AABB<XZ>;
+
+    fn envelope(&self) -> Self::Envelope {
+        self.bounds
+    }
+}
+
+// Keep source indices stable so overlapping ramps retain their original precedence.
+struct Footprints {
+    polygons: Vec<Polygon<f64>>,
+    tree: rstar::RTree<IndexedFootprint>,
+}
+impl Footprints {
+    fn new() -> Self {
+        Self {
+            polygons: vec![],
+            tree: rstar::RTree::new(),
+        }
+    }
+
+    fn bounds(polygon: &Polygon<f64>) -> Option<rstar::AABB<XZ>> {
+        let bounds = polygon.bounding_rect()?;
+        Some(rstar::AABB::from_corners(
+            XZ {
+                x: bounds.min().x,
+                z: bounds.min().y,
+            },
+            XZ {
+                x: bounds.max().x,
+                z: bounds.max().y,
+            },
+        ))
+    }
+
+    fn insert(&mut self, polygon: Polygon<f64>) {
+        if let Some(bounds) = Self::bounds(&polygon) {
+            self.tree.insert(IndexedFootprint {
+                index: self.polygons.len(),
+                bounds,
+            });
+            self.polygons.push(polygon);
+        }
+    }
+
+    fn candidates(&self, polygon: &Polygon<f64>) -> Vec<usize> {
+        let Some(bounds) = Self::bounds(polygon) else {
+            return vec![];
+        };
+        let mut indices: Vec<_> = self
+            .tree
+            .locate_in_envelope_intersecting(&bounds)
+            .map(|item| item.index)
+            .collect();
+        indices.sort_unstable();
+        indices
+    }
+
+    fn subtract(&self, polygon: &Polygon<f64>) -> MultiPolygon<f64> {
+        let indices = self.candidates(polygon);
+        if indices.is_empty() {
+            return MultiPolygon(vec![polygon.clone()]);
+        }
+        // Input ramp triangles overlap; union them before using them as a clip.
+        let nearby = MultiPolygon(
+            indices
+                .into_iter()
+                .map(|index| self.polygons[index].clone())
+                .collect(),
+        );
+        polygon.difference(&build_surfaces::union(&[nearby.orient(Direction::Default)]))
+    }
+}
+
+fn footprint(rise: &RoadRise) -> Polygon<f64> {
+    geometry::polygon(&rise.points.map(|p| p.xz().map(f64::from)))
+}
+
+fn partition_ramps(ramps: &[RoadRise]) -> Result<Vec<RoadRise>> {
+    println!("  Partitioning {} approach ramp triangles...", ramps.len());
+    let mut covered = Footprints::new();
+    let mut result = Vec::new();
+    let mut last_progress = Instant::now();
+    for (index, ramp) in ramps.iter().enumerate() {
+        let shape = footprint(ramp);
+        let available = covered.subtract(&shape);
+        emit(&available, ramp, &mut result)?;
+        // The union of previous ramps and this entire input footprint is the
+        // same coverage as adding only its available pieces. Keep the original
+        // triangle so clipping round-off and tiny fragments cannot accumulate.
+        covered.insert(shape);
+        if index + 1 == ramps.len() || last_progress.elapsed() >= Duration::from_secs(5) {
+            println!("  Ramp triangles: {}/{}", index + 1, ramps.len());
+            last_progress = Instant::now();
+        }
+    }
+    Ok(result)
+}
+
+fn emit(geometry: &MultiPolygon<f64>, plane: &RoadRise, result: &mut Vec<RoadRise>) -> Result<()> {
     build_surfaces::triangulate(geometry, |points| {
         let points = points.map(|p| p.map(|v| v as f32));
         let [a, b, c] = points;
@@ -301,11 +377,7 @@ fn emit(
             return Ok(());
         }
         result.push(RoadRise {
-            points: points.map(|p| {
-                p.at_height(
-                    plane.offset(p).unwrap_or(0.) + extra.and_then(|e| e.offset(p)).unwrap_or(0.),
-                )
-            }),
+            points: points.map(|p| p.at_height(plane.offset(p).unwrap_or(0.))),
         });
         Ok(())
     })?;
@@ -315,6 +387,130 @@ fn emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::Area;
+
+    fn square(min: XZ<f32>, side: f32, height: f32, slope: f32) -> Vec<RoadRise> {
+        let a = min.at_height(height);
+        let b = XZ {
+            x: min.x + side,
+            z: min.z,
+        }
+        .at_height(height + slope * side);
+        let c = XZ {
+            x: min.x + side,
+            z: min.z + side,
+        }
+        .at_height(height + slope * side);
+        let d = XZ {
+            x: min.x,
+            z: min.z + side,
+        }
+        .at_height(height);
+        vec![
+            RoadRise { points: [a, b, c] },
+            RoadRise { points: [a, c, d] },
+        ]
+    }
+
+    // Check ramp height and precedence independently of spatial queries.
+    fn exhaustive(ramps: &[RoadRise]) -> Vec<RoadRise> {
+        let mut covered = geometry::empty();
+        let mut result = vec![];
+        for ramp in ramps {
+            let shape = MultiPolygon(vec![footprint(ramp)]);
+            let available = shape.difference(&covered);
+            emit(&available, ramp, &mut result).unwrap();
+            covered.0.extend(available.0);
+        }
+        result
+    }
+
+    #[test]
+    fn overlapping_ramps_do_not_reuse_clipped_fragments() {
+        let mut ramps = vec![];
+        for i in 0..30 {
+            let center = XZ {
+                x: 4500. + (i % 30) as f64 * 1.3,
+                z: -4500. + (i / 30) as f64 * 1.3,
+            };
+            let angle = i as f64 * 0.37;
+            let direction = XZ {
+                x: angle.cos() * 4.,
+                z: angle.sin() * 4.,
+            };
+            let normal = XZ {
+                x: -direction.z * 0.3,
+                z: direction.x * 0.3,
+            };
+            let points = [
+                geometry::add(geometry::sub(center, direction), normal),
+                geometry::add(geometry::add(center, direction), normal),
+                geometry::sub(geometry::add(center, direction), normal),
+                geometry::sub(geometry::sub(center, direction), normal),
+            ]
+            .map(|p| p.map(|v| v as f32).at_height(1.));
+            ramps.extend([
+                RoadRise {
+                    points: [points[0], points[1], points[2]],
+                },
+                RoadRise {
+                    points: [points[0], points[2], points[3]],
+                },
+            ]);
+        }
+        let result = partition_ramps(&ramps).unwrap();
+        let expected =
+            build_surfaces::union(&[
+                MultiPolygon(ramps.iter().map(footprint).collect()).orient(Direction::Default)
+            ])
+            .unsigned_area();
+        let actual: f64 = result
+            .iter()
+            .map(|rise| footprint(rise).unsigned_area())
+            .sum();
+        assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
+        let mut bytes = vec![];
+        asset_codecs::road_rises::write(&mut bytes, &result).unwrap();
+        asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn indexed_partition_preserves_overlaps_slopes_and_source_precedence() {
+        let mut ramps = square(XZ { x: -8., z: -8. }, 12., -2., 0.125);
+        ramps.extend(square(XZ { x: -2., z: -4. }, 12., 3., -0.25));
+        for active_ramps in [&ramps[..], &ramps[..0]] {
+            let expected = exhaustive(active_ramps);
+            let actual = partition_ramps(active_ramps).unwrap();
+            let area = |rises: &[RoadRise]| {
+                rises
+                    .iter()
+                    .map(|rise| footprint(rise).unsigned_area())
+                    .sum::<f64>()
+            };
+            assert!((area(&expected) - area(&actual)).abs() < 0.001);
+            for row in -40..100 {
+                for col in -40..100 {
+                    let point = XZ {
+                        x: col as f32 * 0.3 + 0.137,
+                        z: row as f32 * 0.3 + 0.193,
+                    };
+                    let height =
+                        |rises: &[RoadRise]| rises.iter().find_map(|rise| rise.offset(point));
+                    match (height(&expected), height(&actual)) {
+                        (Some(expected), Some(actual)) => {
+                            assert!((expected - actual).abs() < 0.0001)
+                        }
+                        (None, None) => {}
+                        other => panic!("coverage differs at {point:?}: {other:?}"),
+                    }
+                }
+            }
+            let mut bytes = vec![];
+            asset_codecs::road_rises::write(&mut bytes, &actual).unwrap();
+            asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn clipped_ramps_remain_readable_after_large_coordinate_quantization() {
         let plane = RoadRise {
@@ -351,7 +547,7 @@ mod tests {
             },
         ])]);
         let mut rises = Vec::new();
-        emit(&sliver, &plane, None, &mut rises).unwrap();
+        emit(&sliver, &plane, &mut rises).unwrap();
         let mut bytes = Vec::new();
         asset_codecs::road_rises::write(&mut bytes, &rises).unwrap();
         assert!(asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).is_ok());

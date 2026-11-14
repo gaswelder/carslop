@@ -271,7 +271,7 @@ pub fn build_landscape(
                         .line_join(buffer::LineJoin::Round(std::f64::consts::PI / 16.0)),
                 )
                 .intersection(&crop);
-            let geometry = geometry.difference(&obstacles.nearby(&geometry));
+            let geometry = exclude_obstacles(&geometry, &obstacles);
             paths[path_style(way.tag("surface"))].push(geometry);
         } else if points.len() >= 4 && way.nodes.first() == way.nodes.last() {
             let geometry = polygon(&points).intersection(&crop);
@@ -446,4 +446,69 @@ pub fn build_landscape(
     }
     file.flush()?;
     Ok(tree_styles)
+}
+
+fn exclude_obstacles(
+    geometry: &MultiPolygon<f64>,
+    obstacles: &build_surfaces::PolygonIndex<'_>,
+) -> MultiPolygon<f64> {
+    // The index stores overlapping road and building pieces. Boolean difference
+    // requires a valid MultiPolygon: merge those pieces before subtracting them.
+    // Normalize winding first because building footprints may use either direction.
+    let nearby = obstacles.nearby(geometry).orient(Direction::Default);
+    geometry.difference(&union(&[nearby]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::{Area, Coord, Rect};
+
+    #[test]
+    fn overlapping_exclusions_do_not_leave_path_patches_inside_obstacles() {
+        let path = MultiPolygon(vec![Rect::new(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 10.0, y: 2.0 },
+        )
+        .to_polygon()]);
+        let obstacles = MultiPolygon(vec![
+            Rect::new(Coord { x: 2.0, y: -1.0 }, Coord { x: 6.0, y: 3.0 })
+                .to_polygon()
+                .orient(Direction::Reversed),
+            Rect::new(Coord { x: 4.0, y: -1.0 }, Coord { x: 8.0, y: 3.0 }).to_polygon(),
+        ]);
+        let result = exclude_obstacles(&path, &build_surfaces::PolygonIndex::new(&obstacles));
+        assert!((result.unsigned_area() - 8.0).abs() < 1e-8);
+        for obstacle in &obstacles.0 {
+            assert!(result.intersection(obstacle).unsigned_area() < 1e-8);
+        }
+    }
+
+    #[test]
+    fn exclusions_preserve_courtyards_except_where_another_obstacle_covers_them() {
+        let path = MultiPolygon(vec![Rect::new(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 10.0, y: 2.0 },
+        )
+        .to_polygon()]);
+        let building = geo::Polygon::new(
+            Rect::new(Coord { x: 2.0, y: -1.0 }, Coord { x: 8.0, y: 3.0 })
+                .to_polygon()
+                .exterior()
+                .clone(),
+            vec![
+                Rect::new(Coord { x: 3.0, y: 0.5 }, Coord { x: 7.0, y: 1.5 })
+                    .to_polygon()
+                    .exterior()
+                    .clone(),
+            ],
+        );
+        let road = Rect::new(Coord { x: 5.0, y: -1.0 }, Coord { x: 6.0, y: 3.0 }).to_polygon();
+        let obstacles = MultiPolygon(vec![building, road]);
+        let result = exclude_obstacles(&path, &build_surfaces::PolygonIndex::new(&obstacles));
+        assert!((result.unsigned_area() - 11.0).abs() < 1e-8);
+        assert!(result.contains(&Point::new(4.0, 1.0)));
+        assert!(!result.contains(&Point::new(5.5, 1.0)));
+        assert!(!result.contains(&Point::new(2.5, 1.0)));
+    }
 }

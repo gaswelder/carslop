@@ -6,7 +6,6 @@ mod aerial;
 mod asset_car;
 mod asset_codecs;
 mod authoring;
-mod boundary;
 mod build_barriers;
 mod build_buildings;
 mod build_collision;
@@ -18,7 +17,6 @@ mod build_lane_details;
 mod build_scene;
 mod build_surfaces;
 mod build_terrain;
-mod build_traffic_calming;
 mod build_transport;
 mod camera;
 mod chunks;
@@ -82,7 +80,7 @@ const HELP: &str = "Arguments: <command>
 Commands:
 
     play
-    add-location <OpenStreetMap relation URL>
+    add-location <OpenStreetMap URL> <width-km> <height-km>
     create-track <track.json>
 ";
 
@@ -893,19 +891,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| invalid("expected UTF-8 command"))?;
         match command.as_str() {
             "add-location" => {
+                let usage =
+                    "add-location requires an OpenStreetMap URL, width in km, and height in km";
                 let url = args
                     .next()
-                    .ok_or_else(|| {
-                        invalid("add-location requires exactly one OpenStreetMap relation URL")
-                    })?
+                    .ok_or_else(|| invalid(usage))?
                     .into_string()
-                    .map_err(|_| invalid("expected a UTF-8 relation URL"))?;
+                    .map_err(|_| invalid("expected a UTF-8 URL"))?;
+                let width = args
+                    .next()
+                    .ok_or_else(|| invalid(usage))?
+                    .into_string()
+                    .map_err(|_| invalid("expected a numeric width"))?
+                    .parse::<f64>()?;
+                let height = args
+                    .next()
+                    .ok_or_else(|| invalid(usage))?
+                    .into_string()
+                    .map_err(|_| invalid("expected a numeric height"))?
+                    .parse::<f64>()?;
                 if args.next().is_some() {
-                    return Err(invalid(
-                        "add-location requires exactly one OpenStreetMap relation URL",
-                    ));
+                    return Err(invalid(usage));
                 }
-                add_location::add_location(&url)?;
+                let area = osm::ImportArea::from_url(&url, width, height)?;
+                add_location::add_location(area)?;
                 return Ok(());
             }
             "create-track" => {

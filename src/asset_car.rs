@@ -410,6 +410,17 @@ mod tests {
     }
 
     #[test]
+    fn pitsunda_reference_model_loads() {
+        let car = load_car(std::path::Path::new("data/cars/2016-pitsunda-2/car.json"))
+            .expect("Pitsunda must load with its traced body and separate wheel pivots");
+        assert_eq!(car.paint_color, [0.36, 0.355, 0.35]);
+        assert!((car.design.height() - 1.495).abs() < 0.002);
+        for radius in car.design.wheel_radii {
+            assert!((radius - 0.318).abs() < 0.002);
+        }
+    }
+
+    #[test]
     fn wheelbase_comes_from_axle_midpoints() {
         // Different left/right Z positions exercise axle averaging.
         let mounts = [

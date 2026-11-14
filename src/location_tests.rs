@@ -3,12 +3,11 @@ use crate::asset_codecs;
 use crate::build_collision;
 use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
-use crate::build_traffic_calming;
 use crate::error::Result;
 use crate::geometry::{cross, polygon, sub, unit};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
 use crate::hgt;
-use crate::osm::{OSMBoundary, OSMElement, OSMMap};
+use crate::osm::{OSMArea, OSMElement, OSMMap};
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::sources::extract_osm_boundary;
 use crate::src_files;
@@ -31,12 +30,10 @@ struct TestOptions<'a> {
     elevation: &'a Path,
 }
 
-// Small rectangular administrative boundaries keep the synthetic OSM fixtures
-// on the same boundary-based import path as real locations.
-fn fixture_boundary(source: &OSMMap, bbox: Option<[f64; 4]>) -> OSMBoundary {
+// Rectangular crops keep synthetic fixtures on the same import path as real locations.
+fn fixture_boundary(source: &OSMMap, bbox: Option<[f64; 4]>) -> OSMArea {
     let [south, west, north, east] = bbox.or(source.bounds).expect("fixture bounds");
-    OSMBoundary {
-        relation: 1,
+    OSMArea {
         geometry: MultiPolygon(vec![Polygon::new(
             vec![
                 (west, south),
@@ -65,12 +62,6 @@ fn compile(options: TestOptions<'_>) -> Result<()> {
     let surfaces =
         build_surfaces::write_streets_txt(&map, &output.join("streets.txt"), Some(&source))?
             .surfaces;
-    build_traffic_calming::build_traffic_calming(
-        &source,
-        &map,
-        &surfaces,
-        &output.join("road-rises.txt"),
-    )?;
     build_landscape(&source, &map, &surfaces, &output.join("landscape.txt"))?;
     build_furniture(&source, &map, &surfaces, &output.join("furniture.txt"))?;
     build_terrain::build_terrain(
@@ -1462,7 +1453,6 @@ fn separated_roads_keep_source_topology_and_join_graded_approaches() {
         .unwrap()
         .surfaces;
         let path = folder.path().join("road-rises.txt");
-        build_traffic_calming::build_traffic_calming(&source, &map, &surfaces, &path).unwrap();
         let field = world::HeightField::generate(
             BoundingBoxXZ {
                 min: map.bounding_box.min.map(|v| v as f32),
@@ -1737,7 +1727,6 @@ fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
         .unwrap()
         .surfaces;
     let rises = folder.path().join("road-rises.txt");
-    build_traffic_calming::build_traffic_calming(&source, &map, &surfaces, &rises).unwrap();
     let field = assets.get_heightfield().unwrap();
     let mut details = build_details::build(&source, &map, &surfaces);
     build_transport::build(&source, &map, &surfaces, &field, 0., &mut details, &rises).unwrap();
@@ -1759,4 +1748,49 @@ fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
     let reread =
         world::Location::load(&city_assets::CityAsset::new(output.path().to_owned())).unwrap();
     assert!((reread.spawn().point.y - 12.).abs() < 0.001);
+}
+
+#[test]
+fn traffic_calming_tags_do_not_generate_or_preserve_raised_roads() {
+    use crate::build_transport;
+    use crate::map_details;
+    let mut source = source();
+    node(&mut source, 1, XZ { x: -40., z: 0. }, &[]);
+    node(
+        &mut source,
+        2,
+        XZ { x: 0., z: 0. },
+        &[("traffic_calming", "hump"), ("crossing", "raised")],
+    );
+    node(&mut source, 3, XZ { x: 40., z: 0. }, &[]);
+    way(
+        &mut source,
+        100,
+        &[1, 2, 3],
+        &[("highway", "residential"), ("traffic_calming", "table")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let (temp, surfaces, _) = surfaces(&map);
+    let field = world::HeightField::generate(
+        BoundingBoxXZ {
+            min: map.bounding_box.min.map(|v| v as f32),
+            max: map.bounding_box.max.map(|v| v as f32),
+        },
+        |_| 0.,
+    );
+    let path = temp.directory.join("road-rises.txt");
+    // A stale file must not reintroduce traffic calming into a new compilation.
+    fs::write(&path, "ROAD_RISES 1\nt 0 0.2 0 1 0.2 0 0 0.2 1\n").unwrap();
+    build_transport::build(
+        &source,
+        &map,
+        &surfaces,
+        &field,
+        0.,
+        &mut map_details::Data::default(),
+        &path,
+    )
+    .unwrap();
+    let rises = asset_codecs::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+    assert!(rises.is_empty());
 }

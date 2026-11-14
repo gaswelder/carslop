@@ -3,14 +3,14 @@ use crate::chunks;
 use crate::scene;
 use crate::world;
 use crate::{
-    osm::OSMBoundary,
+    osm::OSMArea,
     scene_archive::{write_spooled, Archive},
 };
 use std::path::Path;
 
 pub fn build_scene(
     city: &world::CompiledLocation,
-    boundary: Option<&OSMBoundary>,
+    boundary: Option<&OSMArea>,
     decorations_path: &Path,
     output_path: &Path,
     temporary_directory: &Path,

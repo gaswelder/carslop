@@ -196,6 +196,8 @@ def wheel(radius, width, side, style):
         (radius-.035+.035*math.cos(v*2*PI))*math.cos(u*2*PI),
         (radius-.035+.035*math.cos(v*2*PI))*math.sin(u*2*PI)),RUBBER,(.025,.029,.032))
     face = side*(width*.5+.002)
+    if style == 'pitsunda':
+        return pitsunda_wheel(b, radius, side, face)
     if style == 'wire':
         return wire_wheel(b, radius, width, side, face)
     b.disc((face,0,0),radius*.83,METAL,CHROME,'x',radius*.76)
@@ -215,6 +217,28 @@ def wheel(radius, width, side, style):
     for i in range(5):
         a=i*2*PI/5
         b.disc((face+side*.006,math.cos(a)*radius*.12,math.sin(a)*radius*.12),.012,METAL,(.8,.82,.83),'x')
+    return b
+
+
+def pitsunda_wheel(b, radius, side, face):
+    # Reference: eight slim paired gunmetal spokes and substantial tire sidewalls.
+    b.disc((face,0,0),radius*.91,RUBBER,(.026,.028,.029),'x',radius*.66,facing=side)
+    b.disc((face+side*.002,0,0),radius*.70,METAL,(.32,.34,.34),'x',radius*.66,facing=side)
+    b.disc((face,0,0),radius*.66,RUBBER,(.045,.048,.048),'x',facing=side)
+    for i in range(8):
+        for offset in [-.07,.07]:
+            angle=i*2*PI/8
+            def point(r,a):
+                return (face+side*.006,r*math.cos(a),r*math.sin(a))
+            points=[point(radius*.18,angle+offset-.055),point(radius*.665,angle+offset*.65-.030),
+                    point(radius*.665,angle+offset*.65+.030),point(radius*.18,angle+offset+.055)]
+            b.quad(points if side>0 else points[::-1],METAL,(.36,.38,.38))
+    b.disc((face+side*.009,0,0),radius*.19,METAL,(.25,.27,.27),'x',facing=side)
+    b.disc((face+side*.011,0,0),radius*.075,METAL,CHROME,'x',radius*.055,facing=side)
+    for i in range(4):
+        a=i*2*PI/4
+        b.disc((face+side*.012,radius*.135*math.cos(a),radius*.135*math.sin(a)),
+               .010,METAL,CHROME,'x',facing=side)
     return b
 
 
@@ -434,7 +458,10 @@ class MosquitoTrace:
             vertices = [surface(side, p, offset) for p in corners]
             self.mesh.quad(vertices if side > 0 else vertices[::-1], material, color)
 
-    def shell(self):
+    def roof_half_width(self, x):
+        return .715
+
+    def shell(self, close_front=True):
         b = self.mesh
         # Split at every contour landmark so the cutouts follow the trace exactly.
         cuts = sorted({p.x for points in [self.top,self.lower,*self.arches]
@@ -471,13 +498,13 @@ class MosquitoTrace:
                 x=left.x+(right.x-left.x)*u
                 q=1-v*2
                 # The centre of the roof reaches the traced highest point.
-                return (q*.715,self.height(self.at(self.roof,x))-.018*q*q,self.length(x))
+                return (q*self.roof_half_width(x),self.height(self.at(self.roof,x))-.018*q*q,self.length(x))
             b.patch(max(1,int((right.x-left.x)/3)),24,roof,PAINT,WHITE)
-        for x in [269]:
+        for x in ([self.top[0].x] if close_front else []):
             b.quad([self.side(-1,TracePoint(x,self.at(self.lower,x))),
                     self.side(1,TracePoint(x,self.at(self.lower,x))),
                     self.side(1,TracePoint(x,self.at(self.top,x))),
-                    self.side(-1,TracePoint(x,self.at(self.top,x)))][::1 if x==269 else -1],PAINT,WHITE)
+                    self.side(-1,TracePoint(x,self.at(self.top,x)))],PAINT,WHITE)
 
     def windows(self):
         # Hardtop opening and the slim divider in front of the triangular quarter glass.
@@ -757,63 +784,263 @@ def mosquito():
     return b,axles,fit,.70,'wire'
 
 
-def pitsunda():
-    b = Mesh()
-    stations=[(-2.03,.68,.30,.33),(-1.70,.80,.38,.44),(-1.27,.85,.36,.49),
-              (-.65,.81,.32,.40),(.45,.80,.27,.37),(1.30,.85,.23,.43),
-              (1.78,.78,.17,.30),(2.03,.57,.15,.23)]
-    axles=[-1.27,1.30]
-    cabin=[(-1.82,.67,.42),(-1.00,.68,1.02),(-.15,.65,1.03),(.28,.65,.94),(.90,.70,.30)]
-    shell=Coachwork(b,stations,axles,.295,cabin)
-    shell.skin(rub_strip=False,doors=5)
-    # Swept lamps, chrome wings and a deep shield grille distinguish the nose.
-    grille=[(-.43,.20,2.034),(.43,.20,2.034),(.39,-.02,2.055),(.20,-.22,2.065),(-.20,-.22,2.065),(-.39,-.02,2.055)]
-    center=(0,-.01,2.07)
-    for i in range(len(grille)):
-        b.triangle([center,grille[i],grille[(i+1)%len(grille)]],METAL,CHROME)
-    inner=[(x*.94,y*.92,z+.005) for x,y,z in grille]
-    for i in range(len(inner)):
-        b.triangle([(0,-.01,2.077),inner[i],inner[(i+1)%len(inner)]],RUBBER,DARK)
-    for i in range(9):
-        y=-.17+i*.039
-        w=.23+(y+.17)*.48
-        b.box((-w,y,2.078),(w,y+.004,2.082),RUBBER,(.065,.075,.08))
-    b.disc((0,.07,2.086),.056,METAL,CHROME,ring=.045)
-    badge(b,'P',(0,.07,2.089),.009)
-    for side in [-1,1]:
-        outline=[]
-        for x,z in [(side*.43,2.055),(side*.76,1.90),(side*.78,1.74),(side*.49,1.96)]:
-            y=shell.deck(x/profile(stations,z)[0],z)[1]+.012
-            outline.append((x,y,z))
-        b.quad(outline,METAL,CHROME)
-        c=tuple(sum(p[k] for p in outline)/4 for k in range(3))
-        light=[tuple(c[k]+(p[k]-c[k])*.91+(0.005 if k==2 else 0) for k in range(3)) for p in outline]
-        b.quad(light,LENS,(.65,.73,.77))
-        b.box((side*.52-.075,-.22,2.041),(side*.52+.075,-.10,2.057),RUBBER,DARK)
-        b.disc((side*.52,-.158,2.065),.034,LENS,(.74,.78,.74))
-        # A narrow painted crease follows the side surface rather than a rub strip.
-        def crease(u,v):
-            z=-1.15+2.35*u
-            w,_,top=profile(stations,z)
-            y=.18+.06*u+v*.006
-            fraction=(y+.31)/(top+.31)
-            x=side*(w-.045*(1-fraction)**2+.003)
-            return (x,y,z)
-        b.patch(64,1,crease,PAINT,(.97,.97,.97))
-        # High wraparound rear lamps and an inset clear reversing section.
-        rear=[(side*.45,.33,-2.05),(side*.78,.40,-1.83),(side*.80,.28,-1.90),(side*.50,.25,-2.055)]
-        b.quad(rear,BRAKE,(.76,.025,.025))
-        x=side*.56
-        b.box((x-.045,.31,-2.062),(x+.045,.345,-2.055),REVERSE,(.45,.48,.48))
-    b.box((-.60,-.24,-2.055),(.60,-.16,-2.02),RUBBER,DARK)
-    b.box((-.20,-.12,-2.078),(.20,-.025,-2.055),METAL,(.67,.68,.62))
-    badge(b,'PITSUNDA',(0,-.075,-2.081),.0067)
-    badge(b,'2',(.40,.20,-2.056),.010)
-    # Rear hatch spoiler and a separate high-level stop strip.
-    b.box((-.59,.90,-1.30),(.59,.95,-1.14),PAINT,WHITE)
-    b.box((-.26,.901,-1.307),(.26,.914,-1.302),BRAKE,(.65,.025,.025))
-    return b,axles,.295,.735,'modern'
+class PitsundaTrace(MosquitoTrace):
+    """Landmarks from the supplied side, front and rear photographs.
 
+    Side bumper tips 364..1400 = 4.065 m, body width = 1.695 m.
+    Ground 524 / roof 120 = 1.455 m; shark fin adds .040 m.
+    Coordinates stay in reference pixels so future edits can follow the photos.
+    """
+    def __init__(self, mesh):
+        self.mesh = mesh
+        def points(values):
+            return [TracePoint(x, y) for x, y in values]
+        self.top = points([(364,338),(388,322),(430,301),(500,278),(590,257),
+                           (659,244),(740,252),(890,249),(1050,239),(1195,226),
+                           (1280,239),(1349,273),(1395,320),(1400,348)])
+        self.lower = points([(364,440),(372,453),(419,466),(650,466),
+                             (950,463),(1145,460),(1345,442),(1384,433),(1400,400)])
+        self.roof = points([(650,246),(710,207),(777,166),(830,141),(896,126),
+                            (967,120),(1080,121),(1179,129),(1226,146),
+                            (1280,188),(1328,221),(1368,258),(1380,289)])
+        self.arches = [points([(422,466),(430,421),(445,382),(465,355),(490,339),
+                              (521,329),(549,328),(580,336),(610,352),(633,381),
+                              (646,424),(650,466)]),
+                       points([(1145,460),(1155,415),(1170,373),(1194,344),
+                               (1226,326),(1258,321),(1288,326),(1317,342),
+                               (1337,369),(1347,406),(1345,442)])]
+
+    @staticmethod
+    def height(pixel_y):
+        return (524-pixel_y)*1.455/404-.48
+
+    @staticmethod
+    def length(pixel_x):
+        return (882-pixel_x)*4.065/1036
+
+    def width(self, x):
+        return self.at([TracePoint(364,.62),TracePoint(400,.77),TracePoint(490,.837),
+                        TracePoint(650,.815),TracePoint(950,.817),TracePoint(1140,.83),
+                        TracePoint(1255,.8475),TracePoint(1340,.80),TracePoint(1400,.70)],x)
+
+    def roof_half_width(self, x):
+        return self.at([TracePoint(650,.69),TracePoint(800,.675),
+                        TracePoint(1100,.67),TracePoint(1225,.64),TracePoint(1350,.68)],x)
+
+    def cabin_side(self, side, point, offset=0):
+        top = self.at(self.roof,point.x)
+        base = self.at(self.top,point.x)
+        t = max(0,min(1,(point.y-top)/max(1,base-top)))
+        roof_width = self.roof_half_width(point.x)
+        return (side*(roof_width+(self.width(point.x)-roof_width)*t+offset),
+                self.height(point.y),self.length(point.x))
+
+    def shell(self):
+        # The shared tracing machinery builds curved flanks with actual arch holes.
+        super().shell(close_front=False)
+        # Close the hatch end below the rear glazing.
+        for side in [-1,1]:
+            for arch in self.arches:
+                self.line(side,arch,PAINT,WHITE,width=3.4,offset=.010)
+        for side in [-1,1]:
+            for pixel in [539,1255]:
+                center=(side*(self.width(pixel)-.16),-.162,self.length(pixel))
+                self.mesh.disc(center,.46,RUBBER,(.018,.02,.021),'x',floor_y=-.27,facing=side)
+            # Side projection of the swept headlamp, independent of the front face.
+            lamp=[TracePoint(366,338),TracePoint(413,318),TracePoint(478,305),
+                  TracePoint(459,325),TracePoint(410,351),TracePoint(373,358)]
+            center=TracePoint(417,332)
+            for a,c in zip(lamp,lamp[1:]+lamp[:1]):
+                self.mesh.triangle([self.side(side,p,.009) for p in
+                                    ([center,a,c] if side>0 else [center,c,a])],LENS,(.62,.68,.69))
+            self.line(side,lamp+[lamp[0]],RUBBER,DARK,width=1.7,offset=.012)
+            # Red side faces wrap forward from the hatch onto the rear quarters.
+            outline=[TracePoint(1280,228),TracePoint(1317,225),TracePoint(1354,232),
+                     TracePoint(1368,255),TracePoint(1352,271),TracePoint(1327,267)]
+            center=TracePoint(1333,246)
+            for a,c in zip(outline,outline[1:]+outline[:1]):
+                self.mesh.triangle([self.cabin_side(side,p,.014) for p in
+                                    ([center,a,c] if side>0 else [center,c,a])],BRAKE,(.64,.028,.04))
+
+    def windows(self):
+        outlines = [
+            [(702,253),(735,224),(788,187),(839,163),(899,148),(964,146),
+             (971,153),(951,236),(819,248)],
+            [(991,145),(1075,147),(1146,157),(1198,176),(1213,190),
+             (1193,211),(1155,224),(981,237)]]
+        for side in [-1,1]:
+            for outline in outlines:
+                points=[TracePoint(x,y) for x,y in outline]
+                center=TracePoint(sum(p.x for p in points)/len(points),sum(p.y for p in points)/len(points))
+                # Tessellate each fan on the curved surface, avoiding a flat pane
+                # intersecting the crowned greenhouse.
+                for a,c in zip(points,points[1:]+points[:1]):
+                    def pane(u,v):
+                        edge=TracePoint(a.x+(c.x-a.x)*u,a.y+(c.y-a.y)*u)
+                        point=TracePoint(center.x+(edge.x-center.x)*v,center.y+(edge.y-center.y)*v)
+                        return self.cabin_side(side,point,.007)
+                    self.mesh.patch(10,10,lambda u,v:pane(u if side>0 else 1-u,v),GLASS,(.105,.135,.14))
+                self.line(side,points+[points[0]],RUBBER,(.018,.021,.023),width=4,cabin=True,offset=.009)
+            self.line(side,[TracePoint(979,140),TracePoint(961,244)],RUBBER,(.035,.038,.04),width=18,cabin=True,offset=.006)
+        # Curved windscreen and hatch glass fit the roof and belt contours.
+        for rear in [False,True]:
+            start,end=(1207,1320) if rear else (673,833)
+            def glass(u,v):
+                x=start+(end-start)*v+12*(abs(2*u-1)**4)*(1-2*v)
+                q=(2*u-1)*(.89 if rear else .92)
+                roof_width=self.roof_half_width(x)*(1 if rear else 1-.18*v)
+                y=self.height(self.at(self.roof,x))-.018*q*q+.008
+                return (q*roof_width,y,self.length(x))
+            self.mesh.patch(36,32,glass,GLASS,(.085,.115,.12))
+            for edge in [0,1]:
+                self.mesh.patch(2,32,lambda u,v:glass(edge+(u-.5)*.018,v),RUBBER,DARK)
+
+    def details(self):
+        b=self.mesh
+        for side in [-1,1]:
+            self.line(side,[TracePoint(688,254),TracePoint(674,294),TracePoint(672,369),
+                           TracePoint(680,431),TracePoint(688,446),TracePoint(954,445),
+                           TracePoint(978,246),TracePoint(992,139)],RUBBER,(.045,.045,.043),width=1.5,cabin=False)
+            self.line(side,[TracePoint(1220,164),TracePoint(1241,202),TracePoint(1246,240),
+                           TracePoint(1234,285),TracePoint(1215,324),TracePoint(1179,365),
+                           TracePoint(1132,430),TracePoint(1110,444),TracePoint(954,445)],RUBBER,(.045,.045,.043),width=1.5)
+            self.line(side,[TracePoint(693,427),TracePoint(825,414),TracePoint(955,402),
+                           TracePoint(1107,386)],PAINT,(.72,.73,.72),width=5,offset=.003)
+            self.line(side,[TracePoint(648,455),TracePoint(956,451),TracePoint(1144,450)],RUBBER,DARK,width=5)
+            for x,y in [(920,292),(1185,267)]:
+                handle=[TracePoint(x-27,y+1),TracePoint(x-20,y-6),TracePoint(x+11,y-8),TracePoint(x+27,y-3),TracePoint(x+23,y+4),TracePoint(x-15,y+8)]
+                self.line(side,handle+[handle[0]],RUBBER,(.025,.027,.027),width=7,offset=.006)
+                self.line(side,[TracePoint(x-21,y+2),TracePoint(x+23,y-1)],PAINT,(.72,.73,.72),width=5,offset=.012)
+            # Mirror with a tapered shell and separate stalk, matched to x=737..812.
+            mount=self.cabin_side(side,TracePoint(747,251),.01)
+            b.box((side*.86-.035,mount[1]-.02,mount[2]-.02),(side*.86+.035,mount[1]+.045,mount[2]+.045),RUBBER,DARK)
+            def mirror(u,v):
+                az=u*2*PI; el=v*PI
+                return (side*(.898+.074*math.sin(el)*math.cos(az)),
+                        self.height(242)+.073*math.cos(el),
+                        self.length(773)+.145*math.sin(el)*math.sin(az))
+            b.patch(28,16,mirror,PAINT,(.53,.54,.53))
+            b.box((side*.898-.055,self.height(256),self.length(807)),
+                  (side*.898+.055,self.height(230),self.length(805)),GLASS,(.24,.28,.28))
+        # Small rear roof spoiler, high stop lamp, shark fin, and rear wiper.
+        z=self.length(1222)
+        b.box((-.61,self.height(151),z-.05),(.61,self.height(140),z+.08),PAINT,WHITE)
+        b.box((-.17,self.height(153),z-.052),(.17,self.height(148),z-.05),BRAKE,(.45,.012,.018))
+        b.triangle([(-.012,self.height(124),self.length(1110)),(-.012,self.height(108.894),self.length(1163)),(-.012,self.height(124),self.length(1161))],PAINT,WHITE)
+        b.triangle([(.012,self.height(124),self.length(1161)),(.012,self.height(108.894),self.length(1163)),(.012,self.height(124),self.length(1110))],PAINT,WHITE)
+
+    @staticmethod
+    def elevation(point, rear=False, offset=0):
+        # Front reference: body x=360..852, ground 558, roof 151.
+        # Rear reference: body x=350..850, ground 569, roof 149.
+        if rear:
+            x=(point.x-600)*1.695/500
+            y=(569-point.y)*1.455/420-.48
+            z=MosquitoTrace.at([TracePoint(150,-1.20),TracePoint(260,-1.80),
+                                TracePoint(300,-1.94),TracePoint(380,-2.015),
+                                TracePoint(450,-2.0325),TracePoint(505,-1.96)],point.y)+.11*(abs(x)/.8475)**3
+            return (x,y,max(z,-2.0075)-offset)
+        x=(point.x-606)*1.695/492
+        y=(558-point.y)*1.455/407-.48
+        z=2.0005-.07*(abs(x)/.8475)**3-.20*max(0,(365-point.y)/60)-.055*max(0,(point.y-440)/100)
+        return (x,y,z+offset)
+
+    def panel(self, outline, material, color, rear=False, offset=.005):
+        points=[TracePoint(x,y) for x,y in outline]
+        center=TracePoint(sum(p.x for p in points)/len(points),sum(p.y for p in points)/len(points))
+        area=sum(a.x*c.y-c.x*a.y for a,c in zip(points,points[1:]+points[:1]))
+        reverse=(area<0) != rear
+        for a,c in zip(points,points[1:]+points[:1]):
+            def surface(u,v):
+                edge=TracePoint(a.x+(c.x-a.x)*u,a.y+(c.y-a.y)*u)
+                return self.elevation(TracePoint(center.x+(edge.x-center.x)*v,center.y+(edge.y-center.y)*v),rear,offset)
+            self.mesh.patch(4,4,lambda u,v:surface(1-u if reverse else u,v),material,color)
+
+    def face_line(self, outline, material, color, rear=False, width=2, offset=.01):
+        points=[TracePoint(x,y) for x,y in outline]
+        for a,c in zip(points,points[1:]):
+            d=math.hypot(c.x-a.x,c.y-a.y)
+            dx,dy=-(c.y-a.y)*width/(2*d),(c.x-a.x)*width/(2*d)
+            def ribbon(u,v):
+                t=u if rear else 1-u
+                point=TracePoint(a.x+(c.x-a.x)*t+dx*(2*v-1),
+                                 a.y+(c.y-a.y)*t+dy*(2*v-1))
+                return self.elevation(point,rear,offset)
+            self.mesh.patch(max(2,int(d/12)),1,ribbon,material,color)
+
+    def faces(self):
+        b=self.mesh
+        front=[(383,334),(422,360),(471,365),(739,365),(789,360),(831,334),
+               (848,391),(849,491),(836,528),(786,535),(429,535),(373,521),(363,490),(362,391)]
+        self.panel(front,PAINT,WHITE,offset=0)
+        grille=[(471,395),(499,388),(712,388),(739,397),(730,435),(711,465),
+                (677,482),(608,495),(541,482),(506,467),(485,440),(471,395)]
+        self.panel(grille[:-1],RUBBER,(.012,.016,.018),offset=.008)
+        self.face_line(grille,METAL,(.66,.68,.67),width=4,offset=.014)
+        self.face_line([(477,395),(504,413),(608,425),(711,413),(736,395)],METAL,(.42,.45,.45),width=2,offset=.018)
+        for y in [407,417,430,442,454,465]:
+            half=119-abs(y-415)*.49
+            self.face_line([(606-half,y),(606+half,y)],RUBBER,(.065,.07,.073),width=1.4,offset=.013)
+        self.panel([(496,478),(539,489),(607,501),(677,489),(715,478),(772,519),(441,519)],RUBBER,(.014,.017,.018),offset=.012)
+        self.panel([(560,435),(655,435),(655,459),(560,459)],RUBBER,DARK,offset=.03)
+        self.panel([(563,437),(652,437),(652,456),(563,456)],RUBBER,(.92,.93,.91),offset=.033)
+        for side in [-1,1]:
+            def reflect(outline):
+                return [(606+side*(x-606),y) for x,y in outline]
+            lamp=[(383,334),(398,340),(439,368),(453,382),(443,399),(420,404),(393,398),(377,382),(377,357)]
+            self.panel(reflect(lamp),RUBBER,DARK,offset=.012)
+            self.panel(reflect([(385,340),(400,346),(437,372),(447,383),(439,395),(418,399),(395,392),(382,378)]),LENS,(.61,.68,.70),offset=.017)
+            center=self.elevation(TracePoint(606+side*(410-606),378),offset=.024)
+            b.disc(center,.052,METAL,(.62,.65,.65),facing=1)
+            b.disc((center[0],center[1],center[2]+.002),.038,LENS,(.35,.43,.45))
+            self.face_line(reflect([(385,342),(401,350),(436,374)]),LENS,(.82,.86,.85),width=3,offset=.022)
+            self.panel(reflect([(383,371),(390,388),(397,391),(394,377)]),LENS,(.65,.29,.075),offset=.024)
+            fog=[(415,450),(400,457),(386,474),(382,494),(409,503),(417,490)]
+            self.panel(reflect(fog),RUBBER,DARK,offset=.018)
+            self.face_line(reflect([(414,451),(395,463),(384,483),(383,495),(409,501)]),METAL,CHROME,width=3,offset=.023)
+            center=self.elevation(TracePoint(606+side*(402-606),486),offset=.03)
+            b.disc(center,.028,METAL,CHROME)
+            b.disc((center[0],center[1],center[2]+.002),.020,LENS,(.48,.54,.53))
+        center=self.elevation(TracePoint(608,411),offset=.029)
+        b.disc(center,.061,METAL,CHROME,ring=.049)
+        badge(b,'P',(center[0],center[1],center[2]+.002),.009)
+        rear=[(380,262),(422,254),(600,267),(778,254),(820,262),(836,335),
+              (848,407),(838,486),(819,503),(381,503),(361,483),(351,408),(363,335)]
+        self.panel(rear,PAINT,WHITE,rear=True,offset=0)
+        self.face_line([(428,302),(433,340),(450,366),(477,377),(721,377),(749,365),(766,338),(772,302)],RUBBER,(.03,.032,.032),rear=True,width=2,offset=.007)
+        self.panel([(402,443),(484,430),(504,408),(695,408),(719,430),(798,443),(827,476),(814,500),(386,500),(371,476)],RUBBER,(.018,.021,.023),rear=True,offset=.009)
+        self.panel([(520,413),(680,413),(680,450),(520,450)],RUBBER,DARK,rear=True,offset=.017)
+        self.panel([(523,416),(677,416),(677,446),(523,446)],RUBBER,(.93,.94,.92),rear=True,offset=.019)
+        for side in [-1,1]:
+            def reflect(outline):
+                return [(600+side*(x-600),y) for x,y in outline]
+            lamp=[(384,262),(427,268),(489,280),(482,296),(456,308),(414,314),(384,306),(378,289)]
+            self.panel(reflect(lamp),RUBBER,DARK,True,.012)
+            self.panel(reflect([(386,266),(426,272),(482,283),(476,293),(453,303),(413,308),(386,302),(382,289)]),BRAKE,(.64,.028,.04),True,.017)
+            self.panel(reflect([(439,279),(476,285),(468,294),(441,300)]),REVERSE,(.67,.71,.71),True,.022)
+            self.face_line(reflect([(384,293),(393,303),(423,305),(428,275)]),LENS,(.65,.68,.67),True,width=3,offset=.024)
+            self.panel(reflect([(392,477),(410,475),(426,491),(384,491)]),BRAKE,(.56,.018,.024),True,.023)
+        center=self.elevation(TracePoint(600,295),True,.016)
+        b.disc(center,.053,METAL,CHROME,ring=.041,facing=-1)
+        badge(b,'P',(center[0],center[1],center[2]-.002),.008,facing=-1)
+        label=self.elevation(TracePoint(472,322),True,.014)
+        badge(b,'PITSUNDA',label,.0045,facing=-1)
+        label=self.elevation(TracePoint(742,321),True,.014)
+        badge(b,'2',label,.006,facing=-1)
+        b.disc((.42,-.345,-2.025),.034,METAL,CHROME,ring=.027,facing=-1)
+        b.disc((.42,-.345,-2.022),.027,RUBBER,DARK,facing=-1)
+        self.face_line([(495,245),(566,250),(653,267)],RUBBER,DARK,True,width=6,offset=.04)
+
+
+def pitsunda():
+    b=Mesh()
+    trace=PitsundaTrace(b)
+    trace.shell()
+    trace.windows()
+    trace.details()
+    trace.faces()
+    fit=WheelFit(rear_radius=.318,front_radius=.318,rear_width=.185,front_width=.185)
+    return b,[trace.length(1255),trace.length(539)],fit,.735,'pitsunda'
 
 def export(path, body, axles, radius, track, style):
     blob=bytearray()
