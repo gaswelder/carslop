@@ -190,6 +190,14 @@ pub fn build(track: &track::Location, cars: &[std::sync::Arc<asset_car::CarSpec>
     finish(b, cars)
 }
 
+fn generation_stage<T>(name: &str, generate: impl FnOnce() -> T) -> T {
+    println!("  Generating {name}...");
+    let started = std::time::Instant::now();
+    let result = generate();
+    println!("  Finished {name} in {:.2?}", started.elapsed());
+    result
+}
+
 pub fn city_layer_spooled(
     city: &world::Location,
     layer: usize,
@@ -202,7 +210,9 @@ pub fn city_layer_spooled(
     };
     if layer == 0 {
         city_scene::ground_mesh(&mut b, city, boundary);
-        transport_scene::build(&mut b, city);
+        generation_stage("bridges and tunnels", || {
+            transport_scene::build(&mut b, city)
+        });
     } else {
         city_scene::buildings(&mut b, city, layer == 1)?;
         barrier_scene::build(&mut b, city, layer == 1);

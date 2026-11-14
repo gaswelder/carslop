@@ -12,8 +12,8 @@ pub fn add_location(area: osm::ImportArea) -> Result<()> {
     let location = add_location_compile::compile_location(&download_dir)?;
 
     // Write the location to disk.
-    let timestamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S-%f");
-    let location_dir = PathBuf::from(format!("{}-{timestamp}", location.name));
+    let timestamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S");
+    let location_dir = PathBuf::from(format!("location-{timestamp}"));
     fs::create_dir(&location_dir)?;
     println!("Writing location to {}...", location_dir.display());
     location.write(&location_dir).map_err(invalid)?;

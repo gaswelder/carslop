@@ -2,6 +2,7 @@ use super::{
     building_assets::{Catalog, Tints},
     Builder, Surface,
 };
+use crate::build_surfaces;
 use crate::city::Building;
 use crate::elevation;
 use crate::font;
@@ -78,6 +79,7 @@ fn terrain_mesh(
     b: &mut Builder,
     field: &elevation::HeightField,
     boundary: Option<&geo::MultiPolygon<f64>>,
+    openings: Option<&build_surfaces::PolygonIndex<'_>>,
 ) {
     use geo::{BooleanOps, Contains, Intersects, TriangulateEarcut};
     for row in 0..field.rows - 1 {
@@ -91,22 +93,33 @@ fn terrain_mesh(
             for v in &mut p {
                 v.y -= 0.02;
             }
-            if let Some(boundary) = boundary {
-                let cell = geometry::polygon(&p.map(|v| XZ {
+            if boundary.is_some() || openings.is_some() {
+                let cell = geo::MultiPolygon(vec![geometry::polygon(&p.map(|v| XZ {
                     x: v.x as f64,
                     z: v.z as f64,
-                }));
-                if !boundary.intersects(&cell) {
+                }))]);
+                if boundary.is_some_and(|boundary| !boundary.intersects(&cell)) {
                     continue;
                 }
-                if !boundary.contains(&cell) {
+                let contained = boundary.is_none_or(|boundary| boundary.contains(&cell));
+                let nearby = openings.map(|openings| openings.nearby(&cell));
+                let nearby = nearby.as_ref().filter(|nearby| !nearby.0.is_empty());
+                if !contained || nearby.is_some() {
                     // Preserve the height field's diagonal and its two planar faces.
                     for indices in [[0, 1, 2], [0, 2, 3]] {
                         let face = geometry::polygon(&indices.map(|i| XZ {
                             x: p[i].x as f64,
                             z: p[i].z as f64,
                         }));
-                        for polygon in boundary.intersection(&face) {
+                        let mut clipped = if contained {
+                            geo::MultiPolygon(vec![face])
+                        } else {
+                            boundary.unwrap().intersection(&face)
+                        };
+                        if let Some(nearby) = nearby {
+                            clipped = clipped.difference(nearby);
+                        }
+                        for polygon in clipped {
                             for triangle in polygon.earcut_triangles() {
                                 let points =
                                     [triangle.v1(), triangle.v2(), triangle.v3()].map(|c| {
@@ -137,133 +150,162 @@ fn terrain_mesh(
         }
     }
 }
+// Distant tunnel openings must not trigger boolean clipping or retriangulation.
+fn drape_ground_cover(
+    field: &elevation::HeightField,
+    points: [XZ<f32>; 3],
+    openings: Option<&build_surfaces::PolygonIndex<'_>>,
+    mut emit: impl FnMut([XYZ; 3]),
+) {
+    let Some(openings) = openings else {
+        field.drape(points, emit);
+        return;
+    };
+    let footprint = geo::MultiPolygon(vec![geometry::polygon(&points.map(|p| p.map(f64::from)))]);
+    let nearby = openings.nearby(&footprint);
+    if nearby.0.is_empty() {
+        field.drape(points, emit);
+        return;
+    }
+    use geo::BooleanOps;
+    for face in footprint
+        .difference(&nearby)
+        .0
+        .iter()
+        .flat_map(|p| p.earcut_triangles())
+    {
+        field.drape(
+            face.to_array().map(|p| XZ {
+                x: p.x as f32,
+                z: p.y as f32,
+            }),
+            &mut emit,
+        );
+    }
+}
+
 pub(super) fn ground_mesh(
     b: &mut Builder,
     city: &Location,
     boundary: Option<&geo::MultiPolygon<f64>>,
 ) {
     let field = city.elevation().expect("city rendering requires elevation");
-    let openings = city.tunnel_openings();
-    let terrain_boundary = if openings.0.is_empty() {
-        None
-    } else {
-        use geo::BooleanOps;
-        let full = boundary.cloned().unwrap_or_else(|| {
-            let bounds = city.terrain_bounds();
-            geo::MultiPolygon(vec![geometry::polygon(&[
-                bounds.min.map(f64::from),
-                XZ {
-                    x: bounds.max.x as f64,
-                    z: bounds.min.z as f64,
-                },
-                bounds.max.map(f64::from),
-                XZ {
-                    x: bounds.min.x as f64,
-                    z: bounds.max.z as f64,
-                },
-            ])])
-        });
-        Some(full.difference(&openings))
-    };
-    terrain_mesh(b, field, terrain_boundary.as_ref().or(boundary));
-    for triangle in city.ground_triangles() {
-        let mut emit = |mut p: [XYZ; 3]| {
-            for v in &mut p {
-                v.y += 0.005;
+    let openings = super::generation_stage("tunnel openings", || city.tunnel_openings());
+    let opening_index = build_surfaces::PolygonIndex::new(&openings);
+    let opening_index = (!openings.0.is_empty()).then_some(&opening_index);
+    // Retain the terrain extent used for imports without an explicit area boundary.
+    let terrain_boundary = (boundary.is_none() && opening_index.is_some()).then(|| {
+        let bounds = city.terrain_bounds();
+        geo::MultiPolygon(vec![geometry::polygon(&[
+            bounds.min.map(f64::from),
+            XZ {
+                x: bounds.max.x as f64,
+                z: bounds.min.z as f64,
+            },
+            bounds.max.map(f64::from),
+            XZ {
+                x: bounds.min.x as f64,
+                z: bounds.max.z as f64,
+            },
+        ])])
+    });
+    super::generation_stage("terrain", || {
+        terrain_mesh(
+            b,
+            field,
+            boundary.or(terrain_boundary.as_ref()),
+            opening_index,
+        );
+    });
+    super::generation_stage("ground cover", || {
+        for triangle in city.ground_triangles() {
+            let mut emit = |mut p: [XYZ; 3]| {
+                for v in &mut p {
+                    v.y += 0.005;
+                }
+                b.upward_quad(
+                    [p[0], p[1], p[2], p[0]],
+                    Surface::road(triangle.material.color()),
+                );
+            };
+            drape_ground_cover(field, triangle.points, opening_index, &mut emit);
+        }
+    });
+    super::generation_stage("trees", || {
+        for tree in city.trees() {
+            mapped_tree(b, city, tree);
+        }
+    });
+    let pavement = city.pavement_height_meters();
+    super::generation_stage("roads and pavement", || {
+        assert!(
+            city.has_compiled_roads(),
+            "city rendering requires compiled street surfaces"
+        );
+        // The compiler partitions these surfaces, so gutters and street classes
+        // meet along shared edges rather than overlapping coplanar strips.
+        for triangle in city.road_triangles() {
+            let height = triangle.usage.render_height(pavement);
+            let mut emit = |mut p: [XYZ; 3]| {
+                for v in &mut p {
+                    v.y += height;
+                }
+                b.upward_quad(
+                    [p[0], p[1], p[2], p[0]],
+                    Surface::road(triangle.material.color()),
+                );
+            };
+            if matches!(triangle.usage, world::TriangleUsage::Pavement(_)) {
+                city.drape_road_triangle(triangle.points.map(Into::into), &mut emit);
+            } else {
+                city.drape_road_triangle(triangle.points.map(Into::into), &mut emit);
             }
-            b.upward_quad(
-                [p[0], p[1], p[2], p[0]],
-                Surface::road(triangle.material.color()),
-            );
-        };
-        if openings.0.is_empty() {
-            field.drape(triangle.points, &mut emit);
-        } else {
-            use geo::BooleanOps;
-            let footprint = geometry::polygon(&triangle.points.map(|p| p.map(f64::from)));
-            for face in geo::MultiPolygon(vec![footprint])
-                .difference(&openings)
-                .0
-                .iter()
-                .flat_map(|p| p.earcut_triangles())
-            {
-                field.drape(
-                    face.to_array().map(|p| XZ {
-                        x: p.x as f32,
-                        z: p.y as f32,
-                    }),
-                    &mut emit,
+        }
+    });
+    super::generation_stage("curbs", || {
+        for curb in city.curbs() {
+            let [a, c] = curb.ends;
+            let top = if curb.style == world::CurbStyle::ServiceRoad {
+                0.08
+            } else {
+                pavement
+            };
+            for pair in city.raised_road_segment(a, c).windows(2) {
+                let a = pair[0];
+                let c = pair[1];
+                b.quad(
+                    [
+                        XYZ {
+                            x: a.x,
+                            y: a.y + 0.05,
+                            z: a.z,
+                        },
+                        XYZ {
+                            x: c.x,
+                            y: c.y + 0.05,
+                            z: c.z,
+                        },
+                        XYZ {
+                            x: c.x,
+                            y: (city.height(c.xz()) + top).max(c.y + 0.05),
+                            z: c.z,
+                        },
+                        XYZ {
+                            x: a.x,
+                            y: (city.height(a.xz()) + top).max(a.y + 0.05),
+                            z: a.z,
+                        },
+                    ],
+                    Surface::matte([0.77, 0.75, 0.66]),
                 );
             }
         }
-    }
-    for tree in city.trees() {
-        mapped_tree(b, city, tree);
-    }
-    assert!(
-        city.has_compiled_roads(),
-        "city rendering requires compiled street surfaces"
-    );
-    // The compiler partitions these surfaces, so gutters and street classes
-    // meet along shared edges rather than overlapping coplanar strips.
-    let pavement = city.pavement_height_meters();
-    for triangle in city.road_triangles() {
-        let height = triangle.usage.render_height(pavement);
-        let mut emit = |mut p: [XYZ; 3]| {
-            for v in &mut p {
-                v.y += height;
-            }
-            b.upward_quad(
-                [p[0], p[1], p[2], p[0]],
-                Surface::road(triangle.material.color()),
-            );
-        };
-        if matches!(triangle.usage, world::TriangleUsage::Pavement(_)) {
-            city.drape_road_triangle(triangle.points.map(Into::into), &mut emit);
-        } else {
-            city.drape_road_triangle(triangle.points.map(Into::into), &mut emit);
+    });
+    super::generation_stage("street furniture", || {
+        for feature in &city.furniture {
+            super::road_furniture::build(b, feature);
         }
-    }
-    for curb in city.curbs() {
-        let [a, c] = curb.ends;
-        let top = if curb.style == world::CurbStyle::ServiceRoad {
-            0.08
-        } else {
-            pavement
-        };
-        for pair in city.raised_road_segment(a, c).windows(2) {
-            let a = pair[0];
-            let c = pair[1];
-            b.quad(
-                [
-                    XYZ {
-                        x: a.x,
-                        y: a.y + 0.05,
-                        z: a.z,
-                    },
-                    XYZ {
-                        x: c.x,
-                        y: c.y + 0.05,
-                        z: c.z,
-                    },
-                    XYZ {
-                        x: c.x,
-                        y: (city.height(c.xz()) + top).max(c.y + 0.05),
-                        z: c.z,
-                    },
-                    XYZ {
-                        x: a.x,
-                        y: (city.height(a.xz()) + top).max(a.y + 0.05),
-                        z: a.z,
-                    },
-                ],
-                Surface::matte([0.77, 0.75, 0.66]),
-            );
-        }
-    }
-    for feature in &city.furniture {
-        super::road_furniture::build(b, feature);
-    }
+    });
 }
 
 // Stable independent samples keep neighbouring OSM IDs from repeating a pattern.
@@ -1179,7 +1221,12 @@ mod tests {
         );
         let boundary = shell.difference(&hole);
         let mut builder = Builder::default();
-        terrain_mesh(&mut builder, city.elevation().unwrap(), Some(&boundary));
+        terrain_mesh(
+            &mut builder,
+            city.elevation().unwrap(),
+            Some(&boundary),
+            None,
+        );
         let mut area = 0.;
         for vertices in builder.vertices.as_chunks::<3>().0 {
             let triangle = geometry::polygon(&vertices.map(|v| XZ {
@@ -1207,6 +1254,102 @@ mod tests {
             }
         }
         assert!((area - boundary.unsigned_area()).abs() < 0.0001);
+    }
+
+    #[test]
+    fn indexed_tunnel_clipping_preserves_terrain_and_ground_cover() {
+        use geo::BooleanOps;
+        let field = elevation::HeightField::generate(
+            geometry::BoundingBoxXZ {
+                min: XZ { x: -8., z: -8. },
+                max: XZ { x: 8., z: 8. },
+            },
+            |p| p.x * p.z * 0.1,
+        );
+        let shell = geometry::polygon(
+            &[[-7., -6.], [7., -6.], [7., 6.], [-7., 6.]].map(|[x, z]| XZ { x, z }),
+        );
+        let hole = geometry::polygon(
+            &[[-6., -1.], [-5., -1.], [-5., 1.], [-6., 1.]].map(|[x, z]| XZ { x, z }),
+        );
+        let boundary = shell.difference(&hole);
+        // A hole inside a cell, an opening crossing cell/area edges, and distant openings.
+        let openings = geo::MultiPolygon(vec![
+            geometry::polygon(
+                &[[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]].map(|[x, z]| XZ { x, z }),
+            ),
+            geometry::polygon(
+                &[[3., -8.], [5., -8.], [5., 8.], [3., 8.]].map(|[x, z]| XZ { x, z }),
+            ),
+            geometry::polygon(
+                &[[50., 50.], [60., 50.], [60., 60.], [50., 60.]].map(|[x, z]| XZ { x, z }),
+            ),
+        ]);
+        let index = build_surfaces::PolygonIndex::new(&openings);
+        for boundary in [None, Some(&boundary)] {
+            let mut builder = Builder::default();
+            terrain_mesh(&mut builder, &field, boundary, Some(&index));
+            let full = geo::MultiPolygon(vec![geometry::polygon(
+                &[[-8., -8.], [8., -8.], [8., 8.], [-8., 8.]].map(|[x, z]| XZ { x, z }),
+            )]);
+            let expected = boundary.unwrap_or(&full).difference(&openings);
+            assert_ground_coverage(
+                &field,
+                builder.vertices.as_chunks::<3>().0.iter().map(|triangle| {
+                    triangle.map(|vertex| XYZ {
+                        x: vertex.position[0],
+                        y: vertex.position[1] + 0.02,
+                        z: vertex.position[2],
+                    })
+                }),
+                &expected,
+            );
+        }
+        for points in [
+            [[-8., -8.], [8., -8.], [8., 8.]],
+            [[-7., 2.], [-3., 2.], [-3., 6.]],
+        ] {
+            let points = points.map(|[x, z]| XZ { x, z });
+            let footprint =
+                geo::MultiPolygon(vec![geometry::polygon(&points.map(|p| p.map(f64::from)))]);
+            let mut triangles = Vec::new();
+            drape_ground_cover(&field, points, Some(&index), |triangle| {
+                triangles.push(triangle)
+            });
+            assert_ground_coverage(
+                &field,
+                triangles.iter().copied(),
+                &footprint.difference(&openings),
+            );
+            if index.nearby(&footprint).0.is_empty() {
+                let mut unclipped = Vec::new();
+                field.drape(points, |triangle| unclipped.push(triangle));
+                assert_eq!(
+                    triangles, unclipped,
+                    "distant openings must preserve original triangles"
+                );
+            }
+        }
+    }
+
+    fn assert_ground_coverage(
+        field: &elevation::HeightField,
+        triangles: impl Iterator<Item = [XYZ; 3]>,
+        expected: &geo::MultiPolygon<f64>,
+    ) {
+        use geo::{Area, BooleanOps};
+        let mut area = 0.;
+        for points in triangles {
+            let triangle = geo::MultiPolygon(vec![geometry::polygon(
+                &points.map(|p| p.xz().map(f64::from)),
+            )]);
+            area += triangle.unsigned_area();
+            assert!(triangle.difference(expected).unsigned_area() < 0.0001);
+            for point in points {
+                assert!((point.y - field.height(point.xz())).abs() < 0.0001);
+            }
+        }
+        assert!((area - expected.unsigned_area()).abs() < 0.0001);
     }
 
     #[test]

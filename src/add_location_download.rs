@@ -1,12 +1,17 @@
 use crate::{
-    download,
+    download::Downloader,
     error::{invalid, Result},
     geometry::BoundingBox,
     imagery, osm, sources,
 };
 use geo::{Area, Intersects, MapCoords, Relate};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 const REGIONAL_OSM: &str = "region.osm.pbf";
 const REGIONAL_INDEX: &str = "https://download.geofabrik.de/index-v1.json";
@@ -39,31 +44,28 @@ fn write_manifest(directory: &Path, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
+pub fn download_map_data(area: osm::ImportArea) -> Result<PathBuf> {
     let boundary = area.geometry()?;
     let name = area.name();
-    let download_dir = std::path::PathBuf::from(format!("src-locations/{name}"));
+    let download_dir = PathBuf::from(format!("src-locations/{name}"));
+    let cache_dir = Path::new(".cache");
+    fs::create_dir_all(&download_dir)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(900)))
         .build()
         .into();
-    let options = download::DownloadOptions::default();
 
+    let downloader = Downloader::new(agent, cache_dir);
     let imagery_blocks = imagery_blocks(&boundary, MAX_IMAGERY_BLOCKS)?;
 
     // Persist the index alongside the sources so resuming selects the same extract.
     let index_path = download_dir.join("geofabrik-index.json");
-    download::download(&agent, REGIONAL_INDEX, &index_path, &options)?;
+    downloader.copy_download(REGIONAL_INDEX, &index_path)?;
     let index: RegionalIndex = serde_json::from_slice(&fs::read(index_path)?)?;
     let regional_osm_url = index.covering_extract(&boundary)?;
 
     // Download the region map.
-    download::download(
-        &agent,
-        regional_osm_url,
-        &download_dir.join(REGIONAL_OSM),
-        &options,
-    )?;
+    downloader.copy_download(regional_osm_url, &download_dir.join(REGIONAL_OSM))?;
 
     println!(
         "extracting requested area ({}x{} km)",
@@ -78,13 +80,11 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
     // Download relevant Mapzen/Skadi HGT tiles.
     let height_tiles = elevation_tiles(boundary.bbox());
     for tile in &height_tiles {
-        download::download(
-            &agent,
+        downloader.copy_download(
             &format!("{}/{}/{tile}.hgt.gz", ELEVATION_SERVICE, &tile[..3]),
             &download_dir
                 .join(ELEVATION_DATA_DIR)
                 .join(format!("{tile}.hgt.gz")),
-            &options,
         )?;
     }
 
@@ -94,18 +94,7 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into();
-    let imagery_options = download::DownloadOptions {
-        attempts: 3,
-        max_bytes: Some(32 * 1024 * 1024),
-        validate: |path| {
-            let bytes = fs::read(path)?;
-            Ok(image::load_from_memory(&bytes).is_ok_and(|image| {
-                image.width() == imagery::CORE + 2 * imagery::PAD
-                    && image.height() == imagery::CORE + 2 * imagery::PAD
-            }))
-        },
-        replace_invalid: true,
-    };
+    let imagery_downloader = Downloader::new(imagery_agent, cache_dir);
     for block in &imagery_blocks {
         let extent = block.extent;
         let side = imagery::CORE + 2 * imagery::PAD;
@@ -113,11 +102,10 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
             "{}/export?bbox={:.9},{:.9},{:.9},{:.9}&bboxSR=3857&imageSR=3857&size={side},{side}&format=jpg&f=image",
             imagery::SERVICE, extent[0], extent[1], extent[2], extent[3],
         );
-        download::download(
-            &imagery_agent,
+        download_imagery(
+            &imagery_downloader,
             &url,
             &imagery::image_path(&images_dir, block),
-            &imagery_options,
         )
         .map_err(|error| invalid(format!("block {},{}: {error}", block.x, block.y)))?;
     }
@@ -129,6 +117,33 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<std::path::PathBuf> {
     };
     write_manifest(&download_dir, &data)?;
     Ok(download_dir)
+}
+
+fn download_imagery(downloader: &Downloader, url: &str, path: &Path) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    const MAX_BYTES: u64 = 32 * 1024 * 1024;
+    for attempt in 0..ATTEMPTS {
+        let result = (|| -> Result<()> {
+            downloader.copy_download(url, path)?;
+            let valid = fs::metadata(path)?.len() <= MAX_BYTES
+                && image::load_from_memory(&fs::read(path)?).is_ok_and(|image| {
+                    image.width() == imagery::CORE + 2 * imagery::PAD
+                        && image.height() == imagery::CORE + 2 * imagery::PAD
+                });
+            if !valid {
+                downloader.invalidate(url)?;
+                fs::remove_file(path)?;
+                return Err(invalid(format!("invalid downloaded image: {url}")));
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt + 1 == ATTEMPTS => return Err(error),
+            Err(_) => thread::sleep(Duration::from_secs(1 << attempt)),
+        }
+    }
+    unreachable!("imagery download attempts are nonzero")
 }
 
 fn imagery_blocks(boundary: &osm::OSMArea, limit: usize) -> Result<Vec<imagery::Block>> {
