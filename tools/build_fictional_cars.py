@@ -83,7 +83,7 @@ class Mesh:
             a, b = i*2*PI/48, (i+1)*2*PI/48
             def p(t, r):
                 if axis == 'z':
-                    return (center[0]+r*math.cos(t), center[1]+r*math.sin(t), center[2])
+                    return (center[0]+r*math.cos(t), center[1]+facing*r*math.sin(t), center[2])
                 y = center[1]+r*math.cos(t)
                 return (center[0], max(y, floor_y) if floor_y is not None else y, center[2]+facing*r*math.sin(t))
             if ring:
@@ -256,7 +256,7 @@ FONT = {
 }
 
 
-def badge(b, text, center, size, color=CHROME):
+def badge(b, text, center, size, color=CHROME, facing=1):
     z = center[2]
     for i,ch in enumerate(text):
         for row,bits in enumerate(FONT[ch]):
@@ -264,7 +264,8 @@ def badge(b, text, center, size, color=CHROME):
                 if bits & (1 << (4-col)):
                     x=center[0]+(i*6+col-len(text)*3)*size
                     y=center[1]+(3-row)*size
-                    b.quad([(x,y,z),(x+size*.85,y,z),(x+size*.85,y+size*.85,z),(x,y+size*.85,z)],METAL,color)
+                    points=[(x,y,z),(x+size*.85,y,z),(x+size*.85,y+size*.85,z),(x,y+size*.85,z)]
+                    b.quad(points if facing > 0 else points[::-1],METAL,color)
 
 
 def tail_pair(b, z, outer, inner, ylo, yhi):
@@ -329,6 +330,8 @@ class TracePoint:
 class WheelFit:
     rear_radius: float
     front_radius: float
+    rear_width: float = .18
+    front_width: float = .18
 
 
 @dataclass(frozen=True)
@@ -460,17 +463,17 @@ class MosquitoTrace:
         for left,right in zip(self.top,self.top[1:]):
             def deck(u,v):
                 x=left.x+(right.x-left.x)*u
-                q=v*2-1
+                q=1-v*2
                 return (q*self.width(x), self.height(self.at(self.top,x))+.022*(1-q*q), self.length(x))
             b.patch(max(1,int((right.x-left.x)/4)),24,deck,PAINT,WHITE)
         for left,right in zip(self.roof,self.roof[1:]):
             def roof(u,v):
                 x=left.x+(right.x-left.x)*u
-                q=v*2-1
+                q=1-v*2
                 # The centre of the roof reaches the traced highest point.
                 return (q*.715,self.height(self.at(self.roof,x))-.018*q*q,self.length(x))
             b.patch(max(1,int((right.x-left.x)/3)),24,roof,PAINT,WHITE)
-        for x in [269,1512]:
+        for x in [269]:
             b.quad([self.side(-1,TracePoint(x,self.at(self.lower,x))),
                     self.side(1,TracePoint(x,self.at(self.lower,x))),
                     self.side(1,TracePoint(x,self.at(self.top,x))),
@@ -509,12 +512,205 @@ class MosquitoTrace:
             self.line(side,[TracePoint(747,295),TracePoint(1028,296)],METAL,CHROME,
                       width=2,cabin=True,offset=.011)
         # Windshield and backlight lie on the transverse sloping roof surface.
-        for start,end in [(706,803),(1182,1278)]:
+        for start,end in [(706,803)]:
             def glass(u,v):
                 x=start+(end-start)*u
-                q=(v*2-1)*.88
+                q=(1-v*2)*.88
                 return (q*.715,self.height(self.at(self.roof,x))-.018*q*q+.009,self.length(x))
             self.mesh.patch(end-start,32,glass,GLASS,(.12,.17,.20))
+
+
+class MosquitoRear:
+    """Rear reference landmarks: bumper x=291..857, roof/ground y=134..501.
+
+    The reference's 1.88 m width and 1.298 m height set the elevation scale.
+    Rearward layers follow the curved tail; lens faces retain the brake and
+    reverse material codes used by the game's working lights.
+    """
+    def __init__(self, mesh, side_trace):
+        self.mesh = mesh
+        self.side_trace = side_trace
+        self.rear = side_trace.length(1512)
+
+    @staticmethod
+    def height(pixel_y):
+        return (501-pixel_y)*1.298/367-.48
+
+    def point(self, point, offset=0):
+        x=(point.x-574)*1.88/566
+        y=self.height(point.y)
+        # Rounded quarters tuck forward; the bumper is the rearmost surface.
+        z=self.rear-.020+.020*(abs(x)/.94)**4+.005*(y-.1)**2-offset
+        return (x,y,z)
+
+    def panel(self, outline, material, color, offset=0):
+        # Small strips conform decals to the tail's transverse curvature.
+        cuts=sorted({p.x for p in outline})
+        for left,right in zip(cuts,cuts[1:]):
+            def bounds(x):
+                x=max(min(p.x for p in outline),min(max(p.x for p in outline),x))
+                crossings=[]
+                for a,c in zip(outline,outline[1:]+outline[:1]):
+                    if a.x != c.x and min(a.x,c.x) <= x <= max(a.x,c.x):
+                        crossings.append(a.y+(c.y-a.y)*(x-a.x)/(c.x-a.x))
+                return WindowSpan(top=min(crossings),bottom=max(crossings))
+            def surface(u,v):
+                x=left+(right-left)*u
+                span=bounds(x)
+                return self.point(TracePoint(x,span.top+(span.bottom-span.top)*v),offset)
+            self.mesh.patch(max(1,math.ceil((right-left)/3)),6,surface,material,color)
+
+    def line(self, points, material, color, width=1.5, offset=.006):
+        for a,c in zip(points,points[1:]):
+            steps=max(1,math.ceil(math.hypot(c.x-a.x,c.y-a.y)/3))
+            for i in range(steps):
+                start=TracePoint(a.x+(c.x-a.x)*i/steps,a.y+(c.y-a.y)*i/steps)
+                end=TracePoint(a.x+(c.x-a.x)*(i+1)/steps,a.y+(c.y-a.y)*(i+1)/steps)
+                d=math.hypot(end.x-start.x,end.y-start.y)
+                dx=-(end.y-start.y)*width/(2*d)
+                dy=(end.x-start.x)*width/(2*d)
+                self.mesh.quad([self.point(p,offset) for p in
+                    [TracePoint(start.x+dx,start.y+dy),TracePoint(end.x+dx,end.y+dy),
+                     TracePoint(end.x-dx,end.y-dy),TracePoint(start.x-dx,start.y-dy)]][::-1],
+                    material,color)
+
+    def rectangle(self, left, top, right, bottom, material, color, offset=0):
+        self.panel([TracePoint(left,top),TracePoint(right,top),
+                    TracePoint(right,bottom),TracePoint(left,bottom)],material,color,offset)
+
+    def shell(self):
+        # The upper tail panel and rounded lower valance share a continuous skin.
+        contour=[TracePoint(280,246),TracePoint(287,253),TracePoint(312,262),
+                 TracePoint(332,270),TracePoint(345,274),TracePoint(362,262),
+                 TracePoint(390,250),TracePoint(409,232),TracePoint(420,210),
+                 TracePoint(425,180)]
+        for top,bottom in zip(contour,contour[1:]):
+            def skin(u,v):
+                y=top.x+(bottom.x-top.x)*v
+                half=self.side_trace.at(contour,y)
+                return self.point(TracePoint(574+(u*2-1)*half,y))
+            self.mesh.patch(80,6,skin,PAINT,WHITE)
+        panel=[TracePoint(333,286),TracePoint(815,286),TracePoint(828,295),
+               TracePoint(842,333),TracePoint(306,333),TracePoint(320,297)]
+        self.panel(panel,PAINT,(.31,.40,.40),.003)
+        self.line(panel+[panel[0]],RUBBER,DARK,width=2.5,offset=.005)
+        # Deck shut line sits above the inset lamp panel.
+        self.line([TracePoint(330,280),TracePoint(450,278),TracePoint(700,278),
+                   TracePoint(818,280)],RUBBER,DARK,width=1.5)
+
+    def lamps(self):
+        for side in [-1,1]:
+            def reflect(point):
+                return TracePoint(574+side*(point.x-574),point.y)
+            outline=[TracePoint(338,298),TracePoint(478,298),TracePoint(484,302),
+                     TracePoint(484,322),TracePoint(480,326),TracePoint(328,326),
+                     TracePoint(330,309)]
+            outline=[reflect(p) for p in outline]
+            self.panel(outline,RUBBER,(.018,.022,.025),.009)
+            self.line(outline+outline[:1],METAL,CHROME,width=1.8,offset=.012)
+            # Three smoked red cells, each divided into upper and lower lenses.
+            for left,right in [(336,382),(385,431),(434,480)]:
+                for top,bottom in [(301,310),(314,322)]:
+                    a=reflect(TracePoint(left,top));c=reflect(TracePoint(right,bottom))
+                    self.rectangle(min(a.x,c.x),a.y,max(a.x,c.x),c.y,BRAKE,
+                                   (.56,.025,.02) if left==385 else (.25,.016,.015),.014)
+            self.line([reflect(TracePoint(331,312)),reflect(TracePoint(483,312))],
+                      METAL,(.35,.38,.39),width=1,offset=.016)
+            # Low rectangular reversing lamps have their own chrome bezels.
+            reverse=[TracePoint(384,380),TracePoint(429,380),TracePoint(433,383),
+                     TracePoint(433,394),TracePoint(429,398),TracePoint(384,398),
+                     TracePoint(380,394),TracePoint(380,384)]
+            reverse=[reflect(p) for p in reverse]
+            self.panel(reverse,RUBBER,DARK,.006)
+            self.line(reverse+reverse[:1],METAL,CHROME,width=1.8,offset=.009)
+            a=reflect(TracePoint(385,383));c=reflect(TracePoint(429,395))
+            self.rectangle(min(a.x,c.x),a.y,max(a.x,c.x),c.y,REVERSE,(.60,.63,.60),.012)
+            for x in range(388,429,5):
+                self.line([reflect(TracePoint(x,384)),reflect(TracePoint(x,394))],
+                          METAL,(.32,.35,.36),width=.8,offset=.014)
+
+    def bumper(self):
+        # Rounded rail, including upper/lower returns, follows the full 1.88 m width.
+        def rail(u,v):
+            q=u*2-1
+            angle=v*2*PI
+            x=q*.94
+            y=self.height(345)+.040*math.cos(angle)+.008*q*q
+            z=self.rear-.021-.027*math.sin(angle)+.11*abs(q)**6
+            return (x,y,z)
+        self.mesh.patch(112,24,rail,METAL,CHROME)
+        self.line([TracePoint(321,364),TracePoint(400,367),TracePoint(748,367),
+                   TracePoint(827,364)],METAL,(.46,.50,.51),width=3,offset=.012)
+        for center in [493,655]:
+            # Slim vertical over-riders extend below the main rail.
+            def guard(u,v):
+                angle=-u*2*PI
+                y=self.height(353)+(self.height(407)-self.height(353))*v
+                return ((center-574)*1.88/566+.015*math.cos(angle),y,
+                        self.rear-.019-.024*math.sin(angle))
+            self.mesh.patch(20,16,guard,METAL,CHROME)
+        for x in [389,761]:
+            center=self.point(TracePoint(x,345),.018)
+            self.mesh.disc((center[0],center[1],self.rear-.046),.009,METAL,(.44,.48,.49),facing=-1)
+
+    def badges_and_plate(self):
+        self.rectangle(514,356,636,424,RUBBER,DARK,.010)
+        self.rectangle(522,370,626,424,METAL,(.19,.22,.23),.014)
+        self.rectangle(528,377,621,421,RUBBER,(.91,.92,.88),.017)
+        # Blank plate matches the supplied image; its rim remains visible.
+        plate=[TracePoint(528,377),TracePoint(621,377),TracePoint(621,421),
+               TracePoint(528,421),TracePoint(528,377)]
+        self.line(plate,METAL,(.56,.59,.57),width=1,offset=.019)
+        for left in [554,576]:
+            letter=[TracePoint(left+16,305),TracePoint(left+5,304),TracePoint(left+1,307),
+                    TracePoint(left+3,311),TracePoint(left+14,312),TracePoint(left+16,315),
+                    TracePoint(left+12,318),TracePoint(left+1,317)]
+            self.line(letter,RUBBER,DARK,width=4.5,offset=.011)
+            self.line(letter,METAL,CHROME,width=2.1,offset=.014)
+        lock=self.point(TracePoint(574,291),.014)
+        self.mesh.disc(lock,.018,METAL,CHROME,ring=.012,facing=-1)
+        self.line([TracePoint(573,289),TracePoint(575,293)],RUBBER,DARK,width=1,offset=.016)
+        # Keep the fictional model's own name on the deck badge.
+        lettering=Mesh()
+        badge(lettering,'MOSQUITO',(.53,0,0),.0028,facing=-1)
+        for start in range(0,len(lettering.vertices),3):
+            points=[]
+            for vertex in lettering.vertices[start:start+3]:
+                pixel=1488-vertex[1]*2000
+                points.append((vertex[0],
+                    self.side_trace.height(self.side_trace.at(self.side_trace.top,pixel))+.004,
+                    self.side_trace.length(pixel)))
+            self.mesh.triangle(points,METAL,CHROME)
+
+    def rear_window(self):
+        def surface(u,v,lift):
+            x=1178+104*u
+            q=1-v*2
+            return (q*(.60+.065*u),
+                    self.side_trace.height(self.side_trace.at(self.side_trace.roof,x))-.018*q*q+lift,
+                    self.side_trace.length(x))
+        self.mesh.patch(104,36,lambda u,v:surface(u,v,.012),RUBBER,DARK)
+        self.mesh.patch(100,32,lambda u,v:surface(.035+.93*u,.025+.95*v,.016),
+                        GLASS,(.12,.17,.20))
+        for edge in [0,1]:
+            self.mesh.patch(104,2,lambda u,v:surface(u,edge+(v-.5)*.008,.019),METAL,CHROME)
+            self.mesh.patch(2,36,lambda u,v:surface(edge+(u-.5)*.012,v,.019),METAL,CHROME)
+
+    def build(self):
+        self.shell()
+        self.lamps()
+        self.bumper()
+        self.badges_and_plate()
+        self.rear_window()
+        axle=self.side_trace.length(1248)
+        self.mesh.box((-.60,-.25,axle-.05),(.60,-.20,axle+.05),RUBBER,DARK)
+        def differential(u,v):
+            azimuth=u*2*PI
+            elevation=v*PI
+            return (.10*math.sin(elevation)*math.cos(azimuth),
+                    -.22+.09*math.cos(elevation),
+                    axle+.10*math.sin(elevation)*math.sin(azimuth))
+        self.mesh.patch(32,16,differential,RUBBER,(.035,.04,.04))
 
 
 def mosquito():
@@ -549,22 +745,16 @@ def mosquito():
         b.box((side*.99-.045,mount[1]+.06,mount[2]-.055),
               (side*.99+.045,mount[1]+.135,mount[2]+.025),METAL,CHROME)
     front=trace.length(269)-.014
-    rear=trace.length(1512)
     b.box((-.78,trace.height(410),front),(.78,trace.height(355),front+.004),RUBBER,DARK)
     for side in [-1,1]:
         b.disc((side*.64,trace.height(382),front+.009),.094,METAL,CHROME)
         b.disc((side*.64,trace.height(382),front+.014),.082,LENS,(.72,.77,.74))
     b.box((-.80,trace.height(429),front-.015),(.80,trace.height(411),front+.008),METAL,CHROME)
-    b.box((-.84,trace.height(382),rear-.048),(.84,trace.height(359),rear+.012),METAL,CHROME)
-    tail_pair(b,rear-.014,.73,.36,trace.height(346),trace.height(321))
-    badge(b,'SS',(0,trace.height(340),rear-.026),.012)
-    # Rear valance trim follows the short upswept tail visible in the reference.
-    b.box((-.79,trace.height(443),trace.length(1482)),
-          (.79,trace.height(435),trace.length(1452)),METAL,CHROME)
+    MosquitoRear(b,trace).build()
     # Match the slightly taller rear tire in the supplied side elevation.
-    fit=WheelFit(rear_radius=.334,front_radius=.306)
+    fit=WheelFit(rear_radius=.334,front_radius=.306,rear_width=.255,front_width=.225)
     axles=[trace.length(1248),trace.length(491)]
-    return b,axles,fit,.79,'wire'
+    return b,axles,fit,.70,'wire'
 
 
 def pitsunda():
@@ -642,7 +832,8 @@ def export(path, body, axles, radius, track, style):
     fit=radius if isinstance(radius,WheelFit) else WheelFit(rear_radius=radius,front_radius=radius)
     for i,(axle,side) in enumerate([(axles[0],-1),(axles[0],1),(axles[1],-1),(axles[1],1)]):
         wheel_radius=fit.rear_radius if i < 2 else fit.front_radius
-        parts.append((['wheel_rl','wheel_rr','wheel_fl','wheel_fr'][i],wheel(wheel_radius,.18,side,style),(side*track,wheel_radius-.48,axle)))
+        wheel_width=fit.rear_width if i < 2 else fit.front_width
+        parts.append((['wheel_rl','wheel_rr','wheel_fl','wheel_fr'][i],wheel(wheel_radius,wheel_width,side,style),(side*track,wheel_radius-.48,axle)))
     for name,mesh,translation in parts:
         data=b''.join(struct.pack('<9f',*v) for v in mesh.vertices)
         view=add(data,34962);doc['bufferViews'][view]['byteStride']=36
