@@ -29,6 +29,78 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Extract mono 48 kHz signed 16-bit PCM, skipping padded RIFF metadata chunks.
+fn wav_pcm(bytes: &[u8]) -> io::Result<&[u8]> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(invalid("expected RIFF/WAVE audio"));
+    }
+    let riff_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let end = riff_size
+        .checked_add(8)
+        .ok_or_else(|| invalid("invalid RIFF length"))?;
+    let mut chunks = bytes
+        .get(12..end)
+        .ok_or_else(|| invalid("truncated RIFF/WAVE"))?;
+    let mut format_found = false;
+    let mut pcm = None;
+    while !chunks.is_empty() {
+        let header = chunks
+            .get(..8)
+            .ok_or_else(|| invalid("truncated WAV chunk header"))?;
+        let size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        chunks = &chunks[8..];
+        let payload = chunks
+            .get(..size)
+            .ok_or_else(|| invalid("truncated WAV chunk"))?;
+        match &header[..4] {
+            b"fmt " => {
+                if format_found || payload.len() < 16 {
+                    return Err(invalid("invalid WAV format chunk"));
+                }
+                let encoding = u16::from_le_bytes(payload[..2].try_into().unwrap());
+                let channels = u16::from_le_bytes(payload[2..4].try_into().unwrap());
+                let rate = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+                let byte_rate = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+                let frame_bytes = u16::from_le_bytes(payload[12..14].try_into().unwrap());
+                let bits = u16::from_le_bytes(payload[14..16].try_into().unwrap());
+                // WAVE_FORMAT_EXTENSIBLE can also describe ordinary PCM.
+                let extensible_pcm = encoding == 0xfffe
+                    && payload.len() >= 40
+                    && u16::from_le_bytes(payload[16..18].try_into().unwrap()) >= 22
+                    && u16::from_le_bytes(payload[18..20].try_into().unwrap()) == 16
+                    && payload[24..40]
+                        == [1, 0, 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
+                if !(encoding == 1 || extensible_pcm)
+                    || channels != 1
+                    || rate != SAMPLE_RATE as u32
+                    || bits != 16
+                    || frame_bytes != 2
+                    || byte_rate != rate * 2
+                {
+                    return Err(invalid("engine WAV must be mono 48 kHz signed 16-bit PCM"));
+                }
+                format_found = true;
+            }
+            b"data" => {
+                if pcm.replace(payload).is_some() {
+                    return Err(invalid("multiple WAV data chunks are unsupported"));
+                }
+            }
+            _ => {}
+        }
+        let padded_size = size
+            .checked_add(size % 2)
+            .ok_or_else(|| invalid("invalid WAV chunk length"))?;
+        chunks = chunks
+            .get(padded_size..)
+            .ok_or_else(|| invalid("missing WAV chunk padding"))?;
+    }
+    if !format_found {
+        return Err(invalid("missing WAV format chunk"));
+    }
+    pcm.ok_or_else(|| invalid("missing WAV data chunk"))
+}
+
 impl EngineSamples {
     fn load(directory: &Path) -> io::Result<Self> {
         fn read(directory: &Path, value: &serde_json::Value) -> io::Result<EngineLoop> {
@@ -37,9 +109,9 @@ impl EngineSamples {
                 .filter(|name| {
                     !name.contains(['/', '\\'])
                         && Path::new(name).components().count() == 1
-                        && Path::new(name).extension().is_some_and(|e| e == "pcm")
+                        && Path::new(name).extension().is_some_and(|e| e == "wav")
                 })
-                .ok_or_else(|| invalid("engine loop must name a local .pcm file"))?;
+                .ok_or_else(|| invalid("engine loop must name a local .wav file"))?;
             let pulse_hz = value["pulse_hz"]
                 .as_f64()
                 .filter(|v| v.is_finite() && (10.0..=1500.0).contains(v))
@@ -51,16 +123,25 @@ impl EngineSamples {
                 .ok_or_else(|| invalid("invalid engine loop overlap"))?
                 as usize;
             let path = directory.join(name);
-            // Raw mono 48 kHz s16le, at most ten seconds per loop.
+            // At most ten seconds of mono 48 kHz s16le plus 64 KiB of WAV
+            // headers/metadata. The WAV reader handles editor RIFF chunks.
             let mut bytes = Vec::new();
             std::fs::File::open(&path)?
-                .take(960_001)
+                .take(1_025_537)
                 .read_to_end(&mut bytes)?;
-            if bytes.len() % 2 != 0 || bytes.len() / 2 <= overlap * 2 || bytes.len() > 960_000 {
-                return Err(invalid(format!("invalid PCM loop: {}", path.display())));
+            if bytes.len() > 1_025_536 {
+                return Err(invalid("engine WAV exceeds file size limit"));
+            }
+            let pcm =
+                wav_pcm(&bytes).map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+            if pcm.len() % 2 != 0 || pcm.len() / 2 <= overlap * 2 || pcm.len() > 960_000 {
+                return Err(invalid(format!(
+                    "invalid WAV loop length: {}",
+                    path.display()
+                )));
             }
             Ok(EngineLoop {
-                pcm: bytes,
+                pcm: pcm.to_vec(),
                 pulse_hz,
                 overlap,
             })
@@ -228,6 +309,7 @@ impl RecordedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
     fn audio_dir() -> &'static Path {
         static BANK: OnceLock<tempfile::TempDir> = OnceLock::new();
         BANK.get_or_init(|| {
@@ -237,7 +319,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, rpm)| {
                     let pulse_hz = rpm / 20.0;
-                    let filename = format!("band-{i}.pcm");
+                    let filename = format!("band-{i}.wav");
                     let pcm: Vec<u8> = (0..4800)
                         .flat_map(|frame| {
                             let phase =
@@ -245,7 +327,11 @@ mod tests {
                             ((phase.sin() * 0.30 * i16::MAX as f32) as i16).to_le_bytes()
                         })
                         .collect();
-                    std::fs::write(directory.path().join(&filename), pcm).unwrap();
+                    std::fs::write(
+                        directory.path().join(&filename),
+                        test_support::engine_wav(&pcm),
+                    )
+                    .unwrap();
                     let clip =
                         serde_json::json!({"file":filename, "pulse_hz":pulse_hz, "overlap":480});
                     serde_json::json!({"rpm":rpm, "load":clip, "coast":clip})
@@ -334,7 +420,7 @@ mod tests {
         // Manifest validation cannot depend on the presence of loop assets.
         for entry in std::fs::read_dir(audio_dir()).unwrap() {
             let entry = entry.unwrap();
-            if entry.path().extension().is_some_and(|e| e == "pcm") {
+            if entry.path().extension().is_some_and(|e| e == "wav") {
                 std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
             }
         }
@@ -345,9 +431,10 @@ mod tests {
             ("/bands/1/rpm", original["bands"][0]["rpm"].clone()),
             ("/bands/0/load/pulse_hz", serde_json::json!(0)),
             ("/bands/0/coast/overlap", serde_json::json!(0)),
-            ("/bands/0/load/file", serde_json::json!("../outside.pcm")),
-            ("/bands/0/load/file", serde_json::json!("/outside.pcm")),
-            ("/bands/0/load/file", serde_json::json!("..\\outside.pcm")),
+            ("/bands/0/load/file", serde_json::json!("../outside.wav")),
+            ("/bands/0/load/file", serde_json::json!("/outside.wav")),
+            ("/bands/0/load/file", serde_json::json!("..\\outside.wav")),
+            ("/bands/0/load/file", serde_json::json!("outside.pcm")),
             ("/bands", serde_json::json!([])),
         ] {
             let mut manifest = original.clone();
@@ -361,6 +448,122 @@ mod tests {
         for bytes in [vec![b' '; 65_537], b"{invalid".to_vec()] {
             std::fs::write(directory.path().join("engine.json"), bytes).unwrap();
             assert!(EngineSamples::load(directory.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn wav_metadata_chunks_do_not_change_decoded_samples() {
+        let directory = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(audio_dir()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
+        }
+        let path = directory.path().join("band-0.wav");
+        let mut wav = std::fs::read(&path).unwrap();
+        let expected_pcm = wav[44..].to_vec();
+        // Editors may insert ancillary chunks, including odd-length payloads
+        // followed by a padding byte. Audio does not always start at byte 44.
+        wav.splice(12..12, b"JUNK\x03\0\0\0abc\0".iter().copied());
+        let size = (wav.len() as u32 - 8).to_le_bytes();
+        wav[4..8].copy_from_slice(&size);
+        std::fs::write(path, wav).unwrap();
+        let samples = EngineSamples::load(directory.path()).unwrap();
+        assert_eq!(samples.bands[0].load.pcm, expected_pcm);
+    }
+
+    #[test]
+    fn extensible_pcm_wav_preserves_samples() {
+        let pcm = [0x12, 0x34, 0xab, 0x7f];
+        let mut wav = test_support::engine_wav(&pcm);
+        let mut extension = Vec::new();
+        extension.extend_from_slice(&22_u16.to_le_bytes());
+        extension.extend_from_slice(&16_u16.to_le_bytes());
+        extension.extend_from_slice(&4_u32.to_le_bytes()); // Front-center mono
+        extension.extend_from_slice(&[1, 0, 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113]);
+        wav.splice(36..36, extension);
+        let size = (wav.len() as u32 - 8).to_le_bytes();
+        wav[4..8].copy_from_slice(&size);
+        wav[16..20].copy_from_slice(&40_u32.to_le_bytes());
+        wav[20..22].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        assert_eq!(wav_pcm(&wav).unwrap(), pcm);
+        wav[44] = 3; // IEEE float subformat is not PCM.
+        assert!(wav_pcm(&wav).is_err());
+    }
+
+    #[test]
+    fn truncated_and_misreported_wav_chunks_are_rejected() {
+        let wav = test_support::engine_wav(&[0x12, 0x34, 0xab, 0x7f]);
+        for length in 0..wav.len() {
+            assert!(wav_pcm(&wav[..length]).is_err(), "accepted {length} bytes");
+        }
+        for offset in [4, 16, 40] {
+            let mut invalid = wav.clone();
+            invalid[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(wav_pcm(&invalid).is_err());
+        }
+        let mut invalid = wav.clone();
+        invalid[4..8].copy_from_slice(&3_u32.to_le_bytes());
+        assert!(wav_pcm(&invalid).is_err());
+        for offset in [12, 36] {
+            let mut invalid = wav.clone();
+            invalid[offset..offset + 4].copy_from_slice(b"JUNK");
+            assert!(wav_pcm(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn unsupported_wav_formats_and_invalid_lengths_are_rejected() {
+        struct Format {
+            channels: u16,
+            sample_rate: u32,
+            bits_per_sample: u16,
+        }
+        let directory = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(audio_dir()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
+        }
+        let path = directory.path().join("band-0.wav");
+        for format in [
+            Format {
+                channels: 2,
+                sample_rate: 48_000,
+                bits_per_sample: 16,
+            },
+            Format {
+                channels: 1,
+                sample_rate: 44_100,
+                bits_per_sample: 16,
+            },
+            Format {
+                channels: 1,
+                sample_rate: 48_000,
+                bits_per_sample: 8,
+            },
+        ] {
+            let mut wav = test_support::engine_wav(&vec![0; 9600]);
+            let frame_bytes = format.channels * format.bits_per_sample / 8;
+            wav[22..24].copy_from_slice(&format.channels.to_le_bytes());
+            wav[24..28].copy_from_slice(&format.sample_rate.to_le_bytes());
+            wav[28..32]
+                .copy_from_slice(&(format.sample_rate * u32::from(frame_bytes)).to_le_bytes());
+            wav[32..34].copy_from_slice(&frame_bytes.to_le_bytes());
+            wav[34..36].copy_from_slice(&format.bits_per_sample.to_le_bytes());
+            std::fs::write(&path, wav).unwrap();
+            assert!(EngineSamples::load(directory.path()).is_err());
+        }
+        for length in [0, 100, 1920, 960_002, 1_025_538] {
+            std::fs::write(&path, test_support::engine_wav(&vec![0; length])).unwrap();
+            assert!(EngineSamples::load(directory.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn shipped_wav_banks_load() {
+        for name in ["1964-kestrel", "1973-kestrel-turbo", "2016-pitsunda-2"] {
+            let samples = EngineSamples::load(&Path::new("data/cars").join(name).join("audio"))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(samples.bands.len() >= 2);
         }
     }
 

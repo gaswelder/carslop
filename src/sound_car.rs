@@ -95,7 +95,7 @@ impl Synth {
         let procedural = (p.sin() * (1.0 - self.load) + harmonics * self.load)
             * (0.065 + self.load * 0.065)
             + self.filtered_noise * self.load * 0.025;
-        self.recorded.select(tuning.samples.as_deref());
+        self.recorded.select(tuning.sample_directory.as_deref());
         let engine = if self.recorded.available() {
             self.recorded.sample(
                 self.frequency * 30.0,

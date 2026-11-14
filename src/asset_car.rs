@@ -2,6 +2,7 @@ use crate::geometry::XYZ;
 use crate::phys_car;
 use crate::scene;
 use std::fs;
+use std::path::PathBuf;
 
 pub const WATTS_PER_HP: f32 = 745.6999;
 
@@ -75,7 +76,8 @@ pub struct EngineVoice {
     pub coast_gain: f32,
     pub soft_limit: Option<[f32; 2]>, // knee, headroom
     pub pulses_per_revolution: f32,
-    pub samples: Option<std::path::PathBuf>,
+    #[serde(skip)]
+    pub sample_directory: Option<PathBuf>,
 }
 
 // Loads cars from the given directory.
@@ -229,11 +231,6 @@ impl CarDefinition {
             positive(knee)?;
             positive(headroom)?;
         }
-        if let Some(samples) = &self.audio.samples {
-            if samples.to_string_lossy().trim().is_empty() {
-                return Err("expected nonempty asset path".into());
-            }
-        }
         if let Some(turbo) = &self.turbo {
             for value in [
                 turbo.spool_start_rpm,
@@ -296,9 +293,11 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     let track_width = model_track_width(&design.mounts)?;
     definition.gearbox.rolling_radius =
         model_rolling_radius(design.wheel_radii, definition.drive_bias)?;
-    if let Some(samples) = &mut definition.audio.samples {
-        *samples = path.parent().unwrap().join(&samples);
-    }
+    let audio_directory = path.parent().unwrap().join("audio");
+    definition.audio.sample_directory = audio_directory
+        .join("engine.json")
+        .is_file()
+        .then_some(audio_directory);
 
     let mut spec = CarSpec {
         name: definition.name,
@@ -381,6 +380,25 @@ fn load_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
+
+    #[test]
+    fn engine_bank_is_discovered_without_a_json_path() {
+        let directory = tempfile::tempdir().unwrap();
+        test_support::write_car(directory.path());
+        let path = directory.path().join("car.json");
+        assert!(load_car(&path).unwrap().audio.sample_directory.is_none());
+        let audio_directory = directory.path().join("audio");
+        fs::create_dir(&audio_directory).unwrap();
+        // An unrelated WAV does not opt the car into a recording bank.
+        fs::write(audio_directory.join("unused.wav"), []).unwrap();
+        assert!(load_car(&path).unwrap().audio.sample_directory.is_none());
+        fs::write(audio_directory.join("engine.json"), b"{}").unwrap();
+        assert_eq!(
+            load_car(&path).unwrap().audio.sample_directory,
+            Some(audio_directory)
+        );
+    }
 
     #[test]
     fn mosquito_reference_model_loads() {

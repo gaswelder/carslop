@@ -1,0 +1,178 @@
+{
+  "version": 1,
+  "sample_rate": 48000,
+  "bands": [
+    {
+      "rpm": 900,
+      "load": {
+        "pulse_hz": 30,
+        "overlap": 1680,
+        "repeat_seconds": 0.22829166666666667,
+        "source_gain": 45.22245153220032,
+        "source_start_seconds": 34.55,
+        "source_duration_seconds": 0.3,
+        "pitch_stabilized": false,
+        "file": "inline4-900.wav"
+      },
+      "coast": {
+        "pulse_hz": 30,
+        "overlap": 1680,
+        "repeat_seconds": 0.22829166666666667,
+        "source_gain": 45.22245153220032,
+        "source_start_seconds": 34.55,
+        "source_duration_seconds": 0.3,
+        "pitch_stabilized": false,
+        "file": "inline4-900.wav"
+      }
+    },
+    {
+      "rpm": 2400,
+      "load": {
+        "pulse_hz": 80.0,
+        "overlap": 2400,
+        "repeat_seconds": 1.0,
+        "source_gain": 5.655344316849039,
+        "source_start_seconds": 21.0,
+        "source_duration_seconds": 1.2,
+        "pitch_stabilized": true,
+        "firing_cycles": 80,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 115
+          },
+          {
+            "seconds": 1.2,
+            "hz": 72
+          }
+        ],
+        "file": "inline4-2400.wav"
+      },
+      "coast": {
+        "pulse_hz": 80.0,
+        "overlap": 2400,
+        "repeat_seconds": 1.0,
+        "source_gain": 5.655344316849039,
+        "source_start_seconds": 21.0,
+        "source_duration_seconds": 1.2,
+        "pitch_stabilized": true,
+        "firing_cycles": 80,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 115
+          },
+          {
+            "seconds": 1.2,
+            "hz": 72
+          }
+        ],
+        "file": "inline4-2400.wav"
+      }
+    },
+    {
+      "rpm": 3600,
+      "load": {
+        "pulse_hz": 120.0,
+        "overlap": 1600,
+        "repeat_seconds": 0.8,
+        "source_gain": 2.7250403932107408,
+        "source_start_seconds": 19.4,
+        "source_duration_seconds": 1.1,
+        "pitch_stabilized": true,
+        "firing_cycles": 96,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 146
+          },
+          {
+            "seconds": 1.1,
+            "hz": 100
+          }
+        ],
+        "file": "inline4-3600.wav"
+      },
+      "coast": {
+        "pulse_hz": 120.0,
+        "overlap": 1600,
+        "repeat_seconds": 0.8,
+        "source_gain": 2.7250403932107408,
+        "source_start_seconds": 19.4,
+        "source_duration_seconds": 1.1,
+        "pitch_stabilized": true,
+        "firing_cycles": 96,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 146
+          },
+          {
+            "seconds": 1.1,
+            "hz": 100
+          }
+        ],
+        "file": "inline4-3600.wav"
+      }
+    },
+    {
+      "rpm": 5250,
+      "load": {
+        "pulse_hz": 174.99944423448858,
+        "overlap": 1097,
+        "repeat_seconds": 0.9371458333333333,
+        "source_gain": 1.5658318382222232,
+        "source_start_seconds": 26.15,
+        "source_duration_seconds": 1.25,
+        "pitch_stabilized": true,
+        "firing_cycles": 164,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 145
+          },
+          {
+            "seconds": 0.5,
+            "hz": 185
+          },
+          {
+            "seconds": 1.25,
+            "hz": 150
+          }
+        ],
+        "file": "inline4-5250.wav"
+      },
+      "coast": {
+        "pulse_hz": 174.99944423448858,
+        "overlap": 1097,
+        "repeat_seconds": 0.9371458333333333,
+        "source_gain": 1.5658318382222232,
+        "source_start_seconds": 26.15,
+        "source_duration_seconds": 1.25,
+        "pitch_stabilized": true,
+        "firing_cycles": 164,
+        "spectral_leveling": true,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 145
+          },
+          {
+            "seconds": 0.5,
+            "hz": 185
+          },
+          {
+            "seconds": 1.25,
+            "hz": 150
+          }
+        ],
+        "file": "inline4-5250.wav"
+      }
+    }
+  ]
+}

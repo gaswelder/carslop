@@ -25,8 +25,27 @@ pub fn audio_voice() -> &'static asset_car::EngineVoice {
         coast_gain: 0.4,
         soft_limit: None,
         pulses_per_revolution: 2.0,
-        samples: None,
+        sample_directory: None,
     })
+}
+
+/// Mono 48 kHz signed 16-bit PCM in a minimal RIFF/WAVE container.
+pub fn engine_wav(pcm: &[u8]) -> Vec<u8> {
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // Mono
+    wav.extend_from_slice(&48_000_u32.to_le_bytes());
+    wav.extend_from_slice(&96_000_u32.to_le_bytes()); // Bytes per second
+    wav.extend_from_slice(&2_u16.to_le_bytes()); // Bytes per frame
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+    wav.extend_from_slice(pcm);
+    wav
 }
 
 pub fn car_spec() -> &'static asset_car::CarSpec {

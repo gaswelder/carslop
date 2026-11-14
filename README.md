@@ -54,6 +54,20 @@ Material extras `{"carslop_material": [CODE, GLOSS]}` use gloss 0–1 and codes:
 0 fixed colour, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens,
 6 reverse lens. Normals and winding must face outward.
 
+## Engine audio
+
+Cars automatically use `audio/engine.json` beside their `car.json` when present;
+otherwise they use synthesized engine audio. No sample path is needed in the car
+JSON. Cars can share a bank through an `audio` directory symlink.
+
+Each bank lists RPM bands with load/coast WAV filenames, firing frequency and
+crossfade overlap in frames. Export mono 48 kHz signed 16-bit PCM WAV files;
+the loader validates their headers. WAV metadata chunks are supported. The
+existing loops were converted without changing their audio samples.
+
+Rebuild banks with `tools/build_engine_audio.py` (use `--pitsunda` for the Mazda
+recording). See the audio attribution below for recording sources and licenses.
+
 ## Building models
 
 Reusable window, entrance, and balcony GLBs live in `data/buildings/`.
@@ -87,3 +101,8 @@ instructions. Rebuild edited artwork with `cargo run -- bake-scene --location ni
   Modified load/coast excerpts are licensed game content, separate from the
   code license; distribute within the game, never as standalone recordings,
   sample packs, sound libraries or project templates.
+- **Pitsunda engine audio:** Erwin Lindsen's [Mazda 2 1.3 Bifuel recording](https://commons.wikimedia.org/wiki/File:Mazda_2_-_engine_and_exhaust_sound_%28YouTube_3AZSUqSdUBI%29.opus),
+  under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+  Modified into mono, filtered, pitch-stabilized, level-adjusted RPM loops. The source is an older
+  1.3 Bifuel Mazda 2, used as an approximation for the 2016 Pitsunda;
+  Commons marks the original YouTube license as awaiting verification.

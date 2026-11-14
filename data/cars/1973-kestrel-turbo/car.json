@@ -105,8 +105,7 @@
       0.22,
       0.06
     ],
-    "pulses_per_revolution": 3,
-    "samples": "../1964-kestrel/audio"
+    "pulses_per_revolution": 3
   },
   "turbo": {
     "spool_start_rpm": 2000,
