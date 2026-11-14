@@ -2370,9 +2370,11 @@ mod renderer_tests {
         );
         capture_frame(&std::env::temp_dir().join("carslop-loading.ppm"));
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-        app.capture_path = Some(std::env::temp_dir().join("carslop-menu.ppm"));
+        gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+        gl::clear_screen();
+        app.render_scene(Duration::ZERO);
+        capture_frame(&std::env::temp_dir().join("carslop-menu.ppm"));
         app.render(Duration::ZERO);
-        app.capture_path = None;
         if app.cars.len() > 3 {
             app.menu_action(hud::MenuAction::Car(3));
             assert_eq!(app.selected_car, 3);

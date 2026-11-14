@@ -36,12 +36,9 @@ impl<R: io::Read> Decoder<R> {
         }
         Ok(n)
     }
-    fn grid(&mut self, limit: usize, retain: bool) -> io::Result<Grid> {
+    fn grid(&mut self, limit: usize) -> io::Result<()> {
         let n = self.count(12)?;
-        let mut grid = HashMap::new();
         let mut seen = std::collections::HashSet::new();
-        grid.try_reserve(if retain { n } else { 0 })
-            .map_err(|_| invalid("collision grid too large"))?;
         for _ in 0..n {
             let x = i32::from_le_bytes(self.bytes()?);
             let z = i32::from_le_bytes(self.bytes()?);
@@ -57,14 +54,11 @@ impl<R: io::Read> Decoder<R> {
             if count == 0 || !seen.insert((x, z)) {
                 return Err(invalid("invalid collision grid cell"));
             }
-            if retain {
-                grid.insert((x, z), ids);
-            }
         }
         if n == 0 && limit != 0 {
             return Err(invalid("empty collision grid"));
         }
-        Ok(grid)
+        Ok(())
     }
 }
 fn reserve<T>(n: usize) -> io::Result<Vec<T>> {
@@ -84,30 +78,14 @@ fn floats<const N: usize>(bytes: &[u8]) -> io::Result<[f32; N]> {
 
 #[cfg(test)]
 fn load(directory: &Path, roads: usize) -> io::Result<Loaded> {
-    let (data, triangles_grid, curbs_grid, _junction) = decode(directory, roads, true)?;
-    Ok((
-        StreetSurface {
-            pavement_height_meters: street_surface::DEFAULT_PAVEMENT_HEIGHT,
-            road_triangles: data.triangles,
-            curbs: data.curbs,
-            triangles_grid,
-            curbs_grid,
-            #[cfg(test)]
-            preview_junction: (_junction != u32::MAX).then_some(_junction as usize),
-        },
-        data.paths
-            .into_iter()
-            .map(|p| p.into_iter().map(|p| p.at_height(0.0)).collect())
-            .collect(),
-    ))
+    StreetSurface::from_geometry(
+        load_geometry(directory, roads)?,
+        street_surface::DEFAULT_PAVEMENT_HEIGHT,
+    )
+    .map_err(|message| invalid(&message))
 }
 
 pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<location::Streets> {
-    decode(directory, roads, false).map(|(data, _, _, _)| data)
-}
-
-type Decoded = (location::Streets, Grid, Grid, u32);
-fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Decoded> {
     let file = std::fs::File::open(&directory.join("streets.bin"))?;
     let body_len = file
         .metadata()?
@@ -126,7 +104,8 @@ fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Deco
     if r.count(4)? != roads {
         return Err(invalid("collision road count mismatch"));
     }
-    let junction = u32::from_le_bytes(r.bytes()?);
+    // Reserved junction marker from older caches.
+    let _ = r.bytes::<4>()?;
     let mut paths = reserve(roads)?;
     for _ in 0..roads {
         let n = r.count(8)?;
@@ -177,24 +156,19 @@ fn decode(directory: &Path, roads: usize, retain_grids: bool) -> io::Result<Deco
     if triangles.is_empty() != curbs.is_empty() {
         return Err(invalid("incomplete collision cache"));
     }
-    let triangles_grid = r.grid(triangles.len(), retain_grids)?;
-    let curbs_grid = r.grid(curbs.len(), retain_grids)?;
+    r.grid(triangles.len())?;
+    r.grid(curbs.len())?;
     if r.remaining != 0 {
         return Err(invalid("trailing collision cache bytes"));
     }
-    Ok((
-        location::Streets {
-            triangles,
-            curbs,
-            paths: paths
-                .into_iter()
-                .map(|p| p.into_iter().map(|p| p.xz()).collect())
-                .collect(),
-        },
-        triangles_grid,
-        curbs_grid,
-        junction,
-    ))
+    Ok(location::Streets {
+        triangles,
+        curbs,
+        paths: paths
+            .into_iter()
+            .map(|p| p.into_iter().map(|p| p.xz()).collect())
+            .collect(),
+    })
 }
 
 fn number(out: &mut impl io::Write, n: usize) -> io::Result<()> {
@@ -245,7 +219,6 @@ mod tests {
         assert_eq!(expected.curbs.len(), actual.curbs.len());
         assert_eq!(expected.triangles_grid, actual.triangles_grid);
         assert_eq!(expected.curbs_grid, actual.curbs_grid);
-        assert_eq!(expected.preview_junction, actual.preview_junction);
         for (a, b) in expected.road_triangles.iter().zip(&actual.road_triangles) {
             assert_eq!(a.material, b.material);
             assert_eq!(a.usage, b.usage);
@@ -376,9 +349,6 @@ mod tests {
         let (expected, expected_paths) =
             StreetSurface::load(&streets, city.road_lines.len()).unwrap();
         let (actual, actual_paths) = load(root, city.road_lines.len()).unwrap();
-        // A release bake omits the preview-only junction marker.
-        let mut expected = expected;
-        expected.preview_junction = actual.preview_junction;
         assert_eq!(expected_paths, actual_paths);
         eprintln!(
             "Binary cache exactly matches {} source triangles and {} curbs",
@@ -398,11 +368,8 @@ pub fn write_binary_street_surface(
     io::Write::write_all(&mut out, MAGIC)?;
     io::Write::write_all(&mut out, &[0; 72])?;
     number(&mut out, paths.len())?;
-    #[cfg(test)]
-    let junction = surfaces.preview_junction.map_or(u32::MAX, |n| n as u32);
-    #[cfg(not(test))]
-    let junction = u32::MAX;
-    io::Write::write_all(&mut out, &junction.to_le_bytes())?;
+    // Reserved junction marker retained for compatibility with existing caches.
+    io::Write::write_all(&mut out, &u32::MAX.to_le_bytes())?;
     for path in paths {
         number(&mut out, path.len())?;
         for p in path {

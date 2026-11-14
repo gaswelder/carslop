@@ -55,9 +55,6 @@ pub struct StreetSurface {
     road_triangles: Vec<Triangle>,
     /// Road-edge segments used for clearance and crossing queries.
     curbs: Vec<Curb>,
-    /// Optional node index selected for junction previews in test builds.
-    #[cfg(test)]
-    preview_junction: Option<usize>,
     /// 32 m [X, Z] grid cells mapped to candidate triangle indices.
     triangles_grid: HashMap<(i32, i32), Vec<usize>>,
     /// 32 m [X, Z] grid cells mapped to candidate curb indices.
@@ -75,8 +72,6 @@ impl StreetSurface {
             curbs: data.curbs,
             triangles_grid: HashMap::new(),
             curbs_grid: HashMap::new(),
-            #[cfg(test)]
-            preview_junction: None,
         };
         result.set_pavement_height(height)?;
         for (i, t) in result.road_triangles.iter().enumerate() {
@@ -127,8 +122,6 @@ impl StreetSurface {
             pavement_height_meters: DEFAULT_PAVEMENT_HEIGHT,
             road_triangles: Vec::new(),
             curbs: Vec::new(),
-            #[cfg(test)]
-            preview_junction: None,
             triangles_grid: HashMap::new(),
             curbs_grid: HashMap::new(),
         };
@@ -161,11 +154,7 @@ impl StreetSurface {
             };
             match f.first().copied() {
                 Some("j") => {
-                    let _node = n(1)?;
-                    #[cfg(test)]
-                    {
-                        result.preview_junction = Some(_node);
-                    }
+                    n(1)?;
                 }
                 Some("p") => {
                     let id = n(1)?;

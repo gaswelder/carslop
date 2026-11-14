@@ -165,16 +165,6 @@ pub struct Vehicle {
 }
 
 impl Vehicle {
-    #[cfg(test)]
-    fn new(position: XYZ, heading: f32, spec: std::sync::Arc<asset_car::CarSpec>) -> Self {
-        Self::on_track(
-            position,
-            heading,
-            spec,
-            track::LocationId::Compact.try_track().unwrap(),
-        )
-    }
-
     pub fn on_track(
         position: XYZ,
         heading: f32,
@@ -989,6 +979,12 @@ mod tests {
     use crate::asset_codecs;
     use crate::test_support;
     use crate::world;
+
+    impl Vehicle {
+        fn new(position: XYZ, heading: f32, spec: std::sync::Arc<asset_car::CarSpec>) -> Self {
+            Self::on_track(position, heading, spec, test_support::compact_track())
+        }
+    }
 
     #[test]
     fn mapped_speed_table_moves_the_suspension_and_settles() {
@@ -1954,10 +1950,11 @@ mod tests {
             sample.heading(),
             std::sync::Arc::new(heavy_spec),
         );
-        let mut light = Vehicle::new(
+        let mut light = Vehicle::on_track(
             sample.vehicle_position(-0.8),
             sample.heading(),
             test_support::car(),
+            heavy.track.clone(),
         );
         let n = sample.normal();
         heavy.velocity = n.map(|x| -x * 3.0);

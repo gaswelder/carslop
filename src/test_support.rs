@@ -351,6 +351,13 @@ pub fn angle(value: f32) -> f32 {
     (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
+pub fn compact_track() -> Arc<track::Location> {
+    static TRACK: OnceLock<Arc<track::Location>> = OnceLock::new();
+    TRACK
+        .get_or_init(|| track::LocationId::Compact.try_track().unwrap())
+        .clone()
+}
+
 pub fn vehicle(
     position: XYZ,
     heading: f32,
@@ -360,7 +367,7 @@ pub fn vehicle(
         position,
         heading,
         model,
-        track::LocationId::Compact.try_track().unwrap(),
+        compact_track(),
     )
 }
 

@@ -207,8 +207,6 @@ struct App {
     menu_focus: usize,
     locations: Vec<city_assets::MenuLocation>,
     selected_location: usize,
-    #[cfg(test)]
-    capture_path: Option<std::path::PathBuf>,
     keys: HashSet<Keycode>,
 }
 
@@ -347,8 +345,6 @@ impl App {
             menu_focus: 0,
             locations,
             selected_location,
-            #[cfg(test)]
-            capture_path: None,
             keys: HashSet::new(),
         };
         app.ensure_mesh();
@@ -778,10 +774,6 @@ impl App {
             self.hud.draw_full_map(self.program);
         } else {
             self.render_scene(frame_time);
-        }
-        #[cfg(test)]
-        if let Some(path) = &self.capture_path {
-            capture_frame(path);
         }
         gl::swap_window(&self.window);
         let _ = self.window.set_title(&format!(

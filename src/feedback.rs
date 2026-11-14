@@ -1,8 +1,6 @@
 //! Fixed-step cosmetic tire trails. Bounded storage; no influence on vehicle physics.
 
 use crate::geometry::{XYZ, XZ};
-#[cfg(test)]
-use crate::track;
 use crate::vehicle_location;
 use crate::{phys_car::Vehicle, scene::Vertex};
 use std::{collections::VecDeque, time::Duration};
@@ -159,10 +157,7 @@ mod tests {
     use crate::test_support;
 
     fn sliding(model: std::sync::Arc<asset_car::CarSpec>, distance: f32) -> Vehicle {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(distance);
+        let road = test_support::compact_track().at_distance(distance);
         let mut car = test_support::vehicle(road.vehicle_position(0.0), road.heading(), model);
         car.tire_scrub = 0.9;
         car

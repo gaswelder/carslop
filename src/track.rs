@@ -37,8 +37,6 @@ struct RuntimeTrack {
     path: std::path::PathBuf,
     name: &'static str,
     circuit: authoring::Circuit,
-    #[cfg(test)]
-    track: OnceLock<Result<std::sync::Arc<Location>, String>>,
 }
 fn runtime_tracks() -> &'static std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>> {
     static TRACKS: OnceLock<std::sync::RwLock<Vec<std::sync::Arc<RuntimeTrack>>>> = OnceLock::new();
@@ -91,8 +89,6 @@ pub fn register_file(path: &std::path::Path) -> Result<(LocationId, &'static str
         path,
         name,
         circuit,
-        #[cfg(test)]
-        track: OnceLock::new(),
     }));
     Ok((LocationId::File(index), name))
 }
@@ -176,8 +172,6 @@ impl LocationId {
 
     pub fn try_track(&self) -> Result<std::sync::Arc<Location>, String> {
         use std::sync::Arc;
-        #[cfg(test)]
-        static COMPACT: OnceLock<Arc<Location>> = OnceLock::new();
         Ok(match self {
             Self::File(index) => {
                 let definition = runtime_tracks()
@@ -186,29 +180,15 @@ impl LocationId {
                     .get(*index)
                     .cloned()
                     .ok_or("unknown runtime track")?;
-                let build = || -> Result<Arc<Location>, String> {
-                    let mut track = definition.circuit.build(self.clone())?;
-                    track.display_name = definition.name.to_owned();
-                    Ok(Arc::new(track))
-                };
-                #[cfg(test)]
-                let world = definition.track.get_or_init(build).clone();
-                #[cfg(not(test))]
-                let world = build();
-                world?
+                let mut track = definition.circuit.build(self.clone())?;
+                track.display_name = definition.name.to_owned();
+                Arc::new(track)
             }
 
-            Self::Compact => {
-                let build = || Arc::new(Location::build(self.clone(), &ROAD_POINTS));
-                #[cfg(test)]
-                let world = COMPACT.get_or_init(build).clone();
-                #[cfg(not(test))]
-                let world = build();
-                world
+            Self::Compact => Arc::new(Location::build(self.clone(), &ROAD_POINTS)),
+            Self::Asset(path) => {
+                Arc::new(Location::load(&city_assets::CityAsset::new(path.clone()))?)
             }
-            Self::Asset(path) => Arc::new(Location::load(&city_assets::CityAsset::new(
-                path.clone(),
-            ))?),
         })
     }
 }

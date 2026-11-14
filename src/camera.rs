@@ -251,10 +251,7 @@ mod tests {
     use crate::test_support;
 
     fn car() -> Vehicle {
-        let road = track::LocationId::Compact
-            .try_track()
-            .unwrap()
-            .at_distance(50.0);
+        let road = test_support::compact_track().at_distance(50.0);
         test_support::vehicle(
             road.vehicle_position(0.0),
             road.heading(),
@@ -359,13 +356,8 @@ mod tests {
                 c.toggle_view();
             }
             for i in 0..600 {
-                let road = track::LocationId::Compact.try_track().unwrap().at_distance(
-                    i as f32
-                        * track::LocationId::Compact
-                            .try_track()
-                            .unwrap()
-                            .sampling_length()
-                        / 600.0,
+                let road = test_support::compact_track().at_distance(
+                    i as f32 * test_support::compact_track().sampling_length() / 600.0,
                 );
                 v.position = road.vehicle_position(1.4);
                 v.heading = road.heading();
@@ -380,7 +372,7 @@ mod tests {
                     .all(|x| x.is_finite()));
                 assert!(
                     pose.eye.y
-                        >= track::LocationId::Compact.try_track().unwrap().height(XZ {
+                        >= test_support::compact_track().height(XZ {
                             x: pose.eye.x,
                             z: pose.eye.z
                         }) + 1.499
