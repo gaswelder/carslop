@@ -8,9 +8,11 @@
 //! Imagery-only trees still use LANDSCAPE 1; supplement/ID rules belong to asset
 //! assembly. Street/elevation codecs and binary scene spools retain their existing
 //! implementations. No writer here materializes a whole city mesh or output file.
+pub mod barriers;
 pub mod city;
 pub mod furniture;
 pub mod landscape;
+pub mod road_rises;
 
 use std::fmt;
 

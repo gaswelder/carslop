@@ -34,14 +34,15 @@ impl Location {
                 -0.02
             }
         });
-        self.height(p) + lift - 0.05
+        self.height(p) + lift - 0.05 + self.road_rise(p)
     }
 
     fn clear_for_car(&self, p: XYZ) -> bool {
         if self.has_compiled_roads() && self.road_clearance(p) > -track::CAR_RADIUS - 0.15 {
             return false;
         }
-        self.building_clearance(XZ { x: p.x, z: p.z }) > track::CAR_RADIUS + 0.15
+        self.building_clearance(p.xz()) > track::CAR_RADIUS + 0.15
+            && self.barrier_clearance(p.xz()) > track::CAR_RADIUS + 0.15
     }
     pub fn recovery(&self, p: XYZ) -> RoadSample {
         // Service roads may lead into garages. Never recover inside a footprint.
@@ -88,6 +89,7 @@ impl Location {
                     x: sample.point.x,
                     z: sample.point.z,
                 }) > track::CAR_RADIUS + 0.15
+                    && self.barrier_clearance(sample.point.xz()) > track::CAR_RADIUS + 0.15
                 {
                     if self.road_lines()[i].direction == -1 {
                         sample.tangent = sample.tangent.map(|v| -v);
@@ -145,6 +147,7 @@ impl Location {
                 impact = impact.max(deflect(velocity, XZ { x: -n.x, z: -n.z }));
             }
         }
+        impact = impact.max(self.constrain_barriers(position, velocity));
         // The saved extract is a finite driving area. Low curbs are crossable;
         // the crop boundary remains solid so the car cannot leave terrain data.
         for (axis, (world_axis, min, max)) in [

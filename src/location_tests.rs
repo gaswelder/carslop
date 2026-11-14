@@ -1,10 +1,11 @@
 use crate::add_location_compile::create_location_map;
 use crate::asset_codecs;
 use crate::build_collision;
+use crate::build_traffic_calming;
 use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
 use crate::error::Result;
-use crate::geometry::{cross, polygon, sub};
+use crate::geometry::{cross, polygon, sub, unit};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
 use crate::hgt;
 use crate::osm::{OSMBoundary, OSMElement, OSMMap};
@@ -16,7 +17,7 @@ use crate::test_support;
 use crate::traffic;
 use crate::world;
 use crate::{build_surfaces, build_terrain, osm};
-use geo::{Area, Contains, MultiPolygon, Point, Polygon};
+use geo::{Area, BooleanOps, Contains, MultiPolygon, Point, Polygon};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
@@ -61,7 +62,15 @@ fn compile(options: TestOptions<'_>) -> Result<()> {
     let output = options.output;
     fs::create_dir_all(output.join("elevation"))?;
     let city = src_files::write_city_txt(&map, &output.join("city.txt"))?.city;
-    let surfaces = build_surfaces::write_streets_txt(&map, &output.join("streets.txt"))?.surfaces;
+    let surfaces =
+        build_surfaces::write_streets_txt(&map, &output.join("streets.txt"), Some(&source))?
+            .surfaces;
+    build_traffic_calming::build_traffic_calming(
+        &source,
+        &map,
+        &surfaces,
+        &output.join("road-rises.txt"),
+    )?;
     build_landscape(&source, &map, &surfaces, &output.join("landscape.txt"))?;
     build_furniture(&source, &map, &surfaces, &output.join("furniture.txt"))?;
     build_terrain::build_terrain(
@@ -304,7 +313,8 @@ fn surfaces(
 ) {
     let temp = Temp::new();
     src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
-    let s = build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt")).unwrap();
+    let s =
+        build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None).unwrap();
     let loaded = street_surface::StreetSurface::load(
         &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
         map.road_lines.len(),
@@ -691,4 +701,497 @@ fn controls(oneway: bool, enabled: bool) -> Vec<traffic::Furniture> {
         &std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn sidewalk_tags_reach_compiled_pavement_on_the_original_way_side() {
+    struct Case {
+        tags: Vec<(&'static str, &'static str)>,
+        left: bool,
+        right: bool,
+    }
+    let cases = [
+        Case {
+            tags: vec![],
+            left: true,
+            right: true,
+        },
+        Case {
+            tags: vec![("sidewalk", "left")],
+            left: true,
+            right: false,
+        },
+        Case {
+            tags: vec![("sidewalk", "right"), ("oneway", "-1")],
+            left: false,
+            right: true,
+        },
+        Case {
+            tags: vec![("sidewalk", "no")],
+            left: false,
+            right: false,
+        },
+        Case {
+            tags: vec![("sidewalk", "separate")],
+            left: false,
+            right: false,
+        },
+        Case {
+            tags: vec![("sidewalk", "both"), ("sidewalk:right", "no")],
+            left: true,
+            right: false,
+        },
+        Case {
+            tags: vec![
+                ("sidewalk", "no"),
+                ("sidewalk:both", "yes"),
+                ("sidewalk:left", "separate"),
+            ],
+            left: false,
+            right: true,
+        },
+    ];
+    for case in cases {
+        let mut source = source();
+        node(&mut source, 1, XZ { x: -40., z: 0. }, &[]);
+        node(&mut source, 2, XZ { x: 40., z: 0. }, &[]);
+        let mut tags = case.tags.clone();
+        tags.extend([("highway", "residential"), ("width", "8")]);
+        way(&mut source, 10, &[1, 2], &tags);
+        let map = fixture_map(&source, None).unwrap();
+        let (temp, _, compiled) = surfaces(&map);
+        let parsed =
+            SourceLocation::parse(&fs::read_to_string(temp.directory.join("city.txt")).unwrap())
+                .unwrap();
+        assert_eq!(parsed.road_lines[0].sidewalks.left, case.left);
+        assert_eq!(parsed.road_lines[0].sidewalks.right, case.right);
+        let pavement_at = |z| {
+            compiled.road_triangles().iter().any(|t| {
+                matches!(t.usage, world::TriangleUsage::Pavement(_))
+                    && polygon(&t.points.map(|p| XZ {
+                        x: p.x as f64,
+                        z: p.z as f64,
+                    }))
+                    .contains(&point(XZ { x: 1.23, z }))
+            })
+        };
+        assert_eq!(pavement_at(-4.7), case.left, "{:?}", case.tags);
+        assert_eq!(pavement_at(4.7), case.right, "{:?}", case.tags);
+    }
+}
+
+#[test]
+fn mapped_paths_preserve_width_surface_crop_and_clear_roads_and_buildings() {
+    let mut source = source();
+    let mut next = 100;
+    let mut add_way = |id, points: &[XZ], tags: &[(&str, &str)]| {
+        let mut refs = Vec::new();
+        for (i, p) in points.iter().enumerate() {
+            if i > 0 && i == points.len() - 1 && points.first() == points.last() {
+                refs.push(refs[0]);
+                continue;
+            }
+            node(&mut source, next, *p, &[]);
+            refs.push(next);
+            next += 1;
+        }
+        way(&mut source, id, &refs, tags);
+    };
+    add_way(
+        10,
+        &[
+            XZ { x: -100., z: -100. },
+            XZ { x: 100., z: -100. },
+            XZ { x: 100., z: 100. },
+            XZ { x: -100., z: 100. },
+            XZ { x: -100., z: -100. },
+        ],
+        &[("leisure", "park")],
+    );
+    add_way(
+        11,
+        &[XZ { x: -120., z: 20. }, XZ { x: 120., z: 20. }],
+        &[("highway", "footway"), ("width", "4 m")],
+    );
+    add_way(
+        12,
+        &[XZ { x: -80., z: 30. }, XZ { x: 80., z: 30. }],
+        &[("highway", "path"), ("surface", "compacted")],
+    );
+    add_way(
+        13,
+        &[XZ { x: -80., z: 40. }, XZ { x: 80., z: 40. }],
+        &[("highway", "pedestrian"), ("surface", "concrete")],
+    );
+    add_way(
+        14,
+        &[XZ { x: 30., z: -20. }, XZ { x: 30., z: 60. }],
+        &[
+            ("highway", "footway"),
+            ("surface", "asphalt"),
+            ("width", "2"),
+        ],
+    );
+    add_way(
+        15,
+        &[
+            XZ { x: 56., z: 16. },
+            XZ { x: 64., z: 16. },
+            XZ { x: 64., z: 24. },
+            XZ { x: 56., z: 24. },
+            XZ { x: 56., z: 16. },
+        ],
+        &[("natural", "water")],
+    );
+    node(
+        &mut source,
+        1,
+        XZ { x: 20., z: 20. },
+        &[("natural", "tree")],
+    );
+    node(
+        &mut source,
+        2,
+        XZ { x: 20., z: 25. },
+        &[("natural", "tree")],
+    );
+    let map = map(
+        &[XZ { x: -80., z: 0. }, XZ { x: 80., z: 0. }],
+        &[(0, 1, 8., 1)],
+        &[vec![
+            XZ { x: -4., z: 16. },
+            XZ { x: 4., z: 16. },
+            XZ { x: 4., z: 24. },
+            XZ { x: -4., z: 24. },
+        ]],
+    );
+    let (temp, surfaces, _) = surfaces(&map);
+    let path = temp.directory.join("landscape.txt");
+    build_landscape(&source, &map, &surfaces, &path).unwrap();
+    let landscape = test_support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
+    let material_at = |x, z| landscape.ground_material(XZ { x, z });
+    assert_eq!(material_at(20., 21.8), Some(world::Material::Paving));
+    assert_eq!(material_at(20., 22.2), Some(world::Material::Park));
+    assert_eq!(material_at(99., 20.), Some(world::Material::Paving));
+    assert_eq!(material_at(101., 20.), None);
+    assert_eq!(material_at(0., 20.), Some(world::Material::Park));
+    assert_eq!(material_at(30., 0.), Some(world::Material::Park));
+    assert_eq!(material_at(20., 30.5), Some(world::Material::BareGround));
+    assert_eq!(material_at(20., 30.8), Some(world::Material::Park));
+    assert_eq!(material_at(20., 41.4), Some(world::Material::Concrete));
+    assert_eq!(material_at(20., 41.7), Some(world::Material::Park));
+    assert_eq!(material_at(30., 10.), Some(world::Material::Asphalt));
+    assert_eq!(material_at(60., 20.), Some(world::Material::Water));
+    assert_eq!(
+        landscape
+            .trees()
+            .iter()
+            .map(|tree| tree.id)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    let mut area = 0.;
+    for triangle in landscape.ground_triangles() {
+        let geometry = polygon(&triangle.points.map(|p| XZ {
+            x: p.x as f64,
+            z: p.z as f64,
+        }));
+        area += geometry.unsigned_area();
+    }
+    assert!(
+        (area - 40000.).abs() < 0.01,
+        "ground layers overlap or leave holes: {area}"
+    );
+}
+
+#[test]
+fn closed_paths_stay_rings_and_elevated_paths_are_not_flattened() {
+    for tags in [
+        vec![],
+        vec![("bridge", "yes")],
+        vec![("tunnel", "yes")],
+        vec![("layer", "1")],
+    ] {
+        let mut source = source();
+        let points = [
+            XZ { x: 10., z: 10. },
+            XZ { x: 50., z: 10. },
+            XZ { x: 50., z: 50. },
+            XZ { x: 10., z: 50. },
+        ];
+        for (i, p) in points.iter().enumerate() {
+            node(&mut source, i as i64 + 1, *p, &[]);
+        }
+        let mut way_tags = tags.clone();
+        way_tags.extend([("highway", "footway"), ("width", "2")]);
+        way(&mut source, 10, &[1, 2, 3, 4, 1], &way_tags);
+        let map = map(
+            &[XZ { x: -80., z: 0. }, XZ { x: 80., z: 0. }],
+            &[(0, 1, 8., 1)],
+            &[],
+        );
+        let (temp, surfaces, _) = surfaces(&map);
+        let path = temp.directory.join("landscape.txt");
+        build_landscape(&source, &map, &surfaces, &path).unwrap();
+        let landscape = test_support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(landscape.ground_material(XZ { x: 30., z: 30. }), None);
+        assert_eq!(
+            landscape.ground_material(XZ { x: 30., z: 10. }),
+            if tags.is_empty() {
+                Some(world::Material::Paving)
+            } else {
+                None
+            }
+        );
+    }
+}
+
+#[test]
+fn mapped_crossing_styles_and_overrides_survive_street_export() {
+    struct Case {
+        node_tags: Vec<(&'static str, &'static str)>,
+        way_tags: Vec<(&'static str, &'static str)>,
+        zebra: bool,
+        lines: bool,
+    }
+    let cases = [
+        Case {
+            node_tags: vec![("crossing:markings", "zebra")],
+            way_tags: vec![],
+            zebra: true,
+            lines: false,
+        },
+        Case {
+            node_tags: vec![("crossing", "uncontrolled")],
+            way_tags: vec![],
+            zebra: true,
+            lines: false,
+        },
+        Case {
+            node_tags: vec![("crossing:markings", "lines")],
+            way_tags: vec![],
+            zebra: false,
+            lines: true,
+        },
+        Case {
+            node_tags: vec![("crossing:markings", "dashes")],
+            way_tags: vec![],
+            zebra: false,
+            lines: true,
+        },
+        Case {
+            node_tags: vec![("crossing:markings", "yes")],
+            way_tags: vec![("crossing:markings", "lines")],
+            zebra: false,
+            lines: true,
+        },
+        Case {
+            node_tags: vec![("crossing:markings", "no"), ("crossing", "zebra")],
+            way_tags: vec![("crossing:markings", "zebra")],
+            zebra: false,
+            lines: false,
+        },
+        Case {
+            node_tags: vec![("crossing", "unmarked")],
+            way_tags: vec![("crossing:markings", "zebra")],
+            zebra: false,
+            lines: false,
+        },
+        Case {
+            node_tags: vec![("crossing", "traffic_signals")],
+            way_tags: vec![],
+            zebra: false,
+            lines: false,
+        },
+        Case {
+            node_tags: vec![("crossing:markings", "unrecognised")],
+            way_tags: vec![],
+            zebra: false,
+            lines: false,
+        },
+    ];
+    for case in cases {
+        let mut source = source();
+        node(&mut source, 1, XZ { x: -40., z: 0. }, &[]);
+        let mut tags = case.node_tags.clone();
+        tags.push(("highway", "crossing"));
+        node(&mut source, 2, XZ { x: 0., z: 0. }, &tags);
+        node(&mut source, 3, XZ { x: 40., z: 0. }, &[]);
+        node(&mut source, 4, XZ { x: 0., z: -10. }, &[]);
+        node(&mut source, 5, XZ { x: 0., z: 10. }, &[]);
+        way(
+            &mut source,
+            100,
+            &[1, 2, 3],
+            &[("highway", "residential"), ("width", "8")],
+        );
+        let mut tags = case.way_tags.clone();
+        tags.extend([("highway", "footway"), ("footway", "crossing")]);
+        way(&mut source, 101, &[4, 2, 5], &tags);
+        let map = fixture_map(&source, None).unwrap();
+        let temp = Temp::new();
+        let path = temp.directory.join("streets.txt");
+        build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
+        let compiled = street_surface::StreetSurface::load(
+            &fs::read_to_string(path).unwrap(),
+            map.road_lines.len(),
+        )
+        .unwrap()
+        .0;
+        let mut paint_area = 0.;
+        let mut paint_polygons = Vec::new();
+        for triangle in compiled
+            .road_triangles()
+            .iter()
+            .filter(|triangle| triangle.usage == world::TriangleUsage::Marking)
+        {
+            let geometry = polygon(&triangle.points.map(|point| XZ {
+                x: point.x as f64,
+                z: point.z as f64,
+            }));
+            paint_area += geometry.unsigned_area();
+            paint_polygons.push(MultiPolygon(vec![geometry]));
+        }
+        let paint = build_surfaces::union(&paint_polygons);
+        assert_eq!(
+            paint.contains(&point(XZ { x: 0.4, z: 1.9 })),
+            case.zebra,
+            "{:?}",
+            case.node_tags
+        );
+        assert_eq!(
+            paint.contains(&point(XZ { x: 1.4, z: 1.9 })),
+            case.zebra || case.lines,
+            "{:?}",
+            case.node_tags
+        );
+        if case.lines {
+            // The ordinary centre line must not run through the crossing's interior.
+            assert!(!paint.contains(&point(XZ { x: -0.4, z: 0. })));
+        }
+        assert!(
+            (paint_area - paint.unsigned_area()).abs() < 0.001,
+            "overlapping paint triangles"
+        );
+    }
+}
+
+#[test]
+fn skew_crossing_paths_keep_their_angle_and_paint_near_junctions() {
+    let mut source = source();
+    for (id, p) in [
+        (1, XZ { x: -40., z: 0. }),
+        (2, XZ { x: -5., z: 0. }),
+        (3, XZ { x: 0., z: 0. }),
+        (4, XZ { x: 40., z: 0. }),
+        (5, XZ { x: 0., z: -40. }),
+        (6, XZ { x: -11., z: -10. }),
+        (7, XZ { x: 1., z: 10. }),
+    ] {
+        node(&mut source, id, p, &[]);
+    }
+    way(
+        &mut source,
+        100,
+        &[1, 2, 3, 4],
+        &[("highway", "residential"), ("width", "8")],
+    );
+    way(
+        &mut source,
+        101,
+        &[3, 5],
+        &[("highway", "residential"), ("width", "8")],
+    );
+    // A crossing way supplies markings even when its shared road node has no tags.
+    way(
+        &mut source,
+        102,
+        &[6, 2, 7],
+        &[
+            ("highway", "footway"),
+            ("footway", "crossing"),
+            ("crossing:markings", "zebra"),
+        ],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    let temp = Temp::new();
+    let path = temp.directory.join("streets.txt");
+    build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
+    let compiled = street_surface::StreetSurface::load(
+        &fs::read_to_string(path).unwrap(),
+        map.road_lines.len(),
+    )
+    .unwrap()
+    .0;
+    let mut paint = Vec::new();
+    let mut road = Vec::new();
+    for triangle in compiled.road_triangles() {
+        let geometry = MultiPolygon(vec![polygon(&triangle.points.map(|p| XZ {
+            x: p.x as f64,
+            z: p.z as f64,
+        }))]);
+        if triangle.usage == world::TriangleUsage::Marking {
+            paint.push(geometry);
+        } else if triangle.usage.is_road() {
+            road.push(geometry);
+        }
+    }
+    let paint = build_surfaces::union(&paint);
+    let road = build_surfaces::union(&road);
+    let across = unit(XZ { x: 0.6, z: 1.0 });
+    assert!(paint.contains(&point(XZ {
+        x: -5. + across.x * 1.8,
+        z: across.z * 1.8
+    })));
+    assert!(!paint.contains(&point(XZ {
+        x: -5. + across.x * 1.35,
+        z: across.z * 1.35
+    })));
+    assert!(paint.difference(&road).unsigned_area() < 0.001);
+}
+
+#[test]
+fn excluded_crossing_roads_do_not_paint_nearby_parallel_streets() {
+    for restriction in [("bridge", "yes"), ("access", "private")] {
+        let mut source = source();
+        for (id, p) in [
+            (1, XZ { x: -40., z: 0. }),
+            (2, XZ { x: 0., z: 0. }),
+            (3, XZ { x: 40., z: 0. }),
+            (4, XZ { x: -40., z: 3. }),
+            (5, XZ { x: 40., z: 3. }),
+        ] {
+            node(&mut source, id, p, &[]);
+        }
+        test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[("highway", "crossing"), ("crossing:markings", "zebra")],
+        );
+        way(
+            &mut source,
+            100,
+            &[1, 2, 3],
+            &[("highway", "residential"), restriction],
+        );
+        way(
+            &mut source,
+            101,
+            &[4, 5],
+            &[("highway", "residential"), ("width", "7")],
+        );
+        let map = fixture_map(&source, None).unwrap();
+        let temp = Temp::new();
+        let path = temp.directory.join("streets.txt");
+        build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
+        let compiled = street_surface::StreetSurface::load(
+            &fs::read_to_string(path).unwrap(),
+            map.road_lines.len(),
+        )
+        .unwrap()
+        .0;
+        assert!(compiled
+            .road_triangles()
+            .iter()
+            .all(|triangle| triangle.usage != world::TriangleUsage::Marking));
+    }
 }

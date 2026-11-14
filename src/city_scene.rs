@@ -164,7 +164,7 @@ pub(super) fn ground_mesh(
     let pavement = city.pavement_height_meters();
     for triangle in city.road_triangles() {
         let height = triangle.usage.render_height(pavement);
-        field.drape(triangle.points.map(Into::into), |mut p| {
+        let mut emit = |mut p: [XYZ; 3]| {
             for v in &mut p {
                 v.y += height;
             }
@@ -172,7 +172,12 @@ pub(super) fn ground_mesh(
                 [p[0], p[1], p[2], p[0]],
                 Surface::road(triangle.material.color()),
             );
-        });
+        };
+        if matches!(triangle.usage, world::TriangleUsage::Pavement(_)) {
+            field.drape(triangle.points.map(Into::into), &mut emit);
+        } else {
+            city.drape_road_triangle(triangle.points.map(Into::into), &mut emit);
+        }
     }
     for curb in city.curbs() {
         let [a, c] = curb.ends;
@@ -181,7 +186,7 @@ pub(super) fn ground_mesh(
         } else {
             pavement
         };
-        for pair in city.ground_segment(a, c).windows(2) {
+        for pair in city.raised_road_segment(a, c).windows(2) {
             let a = pair[0];
             let c = pair[1];
             b.quad(
@@ -198,12 +203,12 @@ pub(super) fn ground_mesh(
                     },
                     XYZ {
                         x: c.x,
-                        y: c.y + top,
+                        y: (city.height(c.xz()) + top).max(c.y + 0.05),
                         z: c.z,
                     },
                     XYZ {
                         x: a.x,
-                        y: a.y + top,
+                        y: (city.height(a.xz()) + top).max(a.y + 0.05),
                         z: a.z,
                     },
                 ],

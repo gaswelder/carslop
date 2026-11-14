@@ -30,6 +30,8 @@ pub struct Location {
     pub ground: Vec<Triangle>,
     pub trees: Vec<Tree>,
     pub furniture: Vec<Furniture>,
+    pub barriers: Vec<world::Barrier>,
+    pub road_rises: Vec<world::RoadRise>,
     pub labels: Labels,
     /// Large render payloads stay on disk and are streamed when writing.
     media: Media,
@@ -213,6 +215,18 @@ impl Location {
                     phase: f.phase,
                 })
                 .collect(),
+            barriers: match fs::read_to_string(directory.join("barriers.txt")) {
+                Ok(text) => asset_codecs::barriers::parse(&text)
+                    .map_err(|e| format!("barriers.txt: {e}"))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(format!("barriers.txt: {e}")),
+            },
+            road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
+                Ok(text) => asset_codecs::road_rises::parse(&text)
+                    .map_err(|e| format!("road-rises.txt: {e}"))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(format!("road-rises.txt: {e}")),
+            },
             labels: read_labels(directory)?,
             media,
         })
@@ -320,6 +334,14 @@ impl Location {
                 )?;
             }
             furniture.flush()?;
+            asset_codecs::barriers::write(
+                &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
+                &self.barriers,
+            )?;
+            asset_codecs::road_rises::write(
+                &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
+                &self.road_rises,
+            )?;
             street_surface::binary::write_geometry(
                 &directory.join("streets.bin"),
                 &self.streets,
@@ -396,6 +418,8 @@ mod tests {
         assert_eq!(a.ground, b.ground);
         assert_eq!(a.trees, b.trees);
         assert_eq!(a.furniture, b.furniture);
+        assert_eq!(a.barriers, b.barriers);
+        assert_eq!(a.road_rises, b.road_rises);
         assert_eq!(a.labels, b.labels);
     }
 
@@ -414,6 +438,20 @@ mod tests {
             location.roads[0].width_meters = 8.123457;
             location.elevation.values[0] = 7.1234565;
             if populated {
+                location.road_rises.push(world::RoadRise {
+                    points: [
+                        XZ { x: 0., z: 0. }.at_height(0.),
+                        XZ { x: 1., z: 0. }.at_height(0.1234567),
+                        XZ { x: 0., z: 1. }.at_height(0.),
+                    ],
+                });
+                location.barriers.push(world::Barrier {
+                    source_id: 17,
+                    kind: world::BarrierKind::ChainLink,
+                    ends: [XZ { x: -5.1234565, z: 10. }, XZ { x: 5., z: 10. }],
+                    height_meters: 1.8765432,
+                    width_meters: 0.1234567,
+                });
                 location.buildings[0].height_meters = 5.1234565;
                 location.furniture[0].position.x = 5.1234565;
                 location.trees[0].coords.x = -5.1234565;

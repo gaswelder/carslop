@@ -1,4 +1,3 @@
-//! CITY 2: f64 compiler input, deliberately f32 parsed geometry.
 use super::Number;
 use crate::error;
 use crate::error::invalid;
@@ -40,7 +39,7 @@ pub fn write(
         writeln!(writer, "n {} {}", Number(p.x, coords), Number(p.z, coords))?;
     }
     for r in &map.road_lines {
-        writeln!(
+        write!(
             writer,
             "r {} {} {} {} {} {} {}",
             r.ends[0],
@@ -52,6 +51,15 @@ pub fn write(
             r.kind,
             r.lanes
         )?;
+        if !r.sidewalks.left || !r.sidewalks.right {
+            write!(
+                writer,
+                " {} {}",
+                u8::from(r.sidewalks.left),
+                u8::from(r.sidewalks.right)
+            )?;
+        }
+        writeln!(writer)?;
     }
     for b in &map.buildings {
         write!(
@@ -154,6 +162,18 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                     direction,
                     kind: fields.get(6).map(|_| n(6)).transpose()?.unwrap_or(1),
                     lanes: fields.get(7).map(|_| n(7)).transpose()?.unwrap_or(2),
+                    sidewalks: crate::source_location::Sidewalks {
+                        left: match fields.get(8).copied() {
+                            None | Some("1") => true,
+                            Some("0") => false,
+                            _ => return Err("invalid left sidewalk".into()),
+                        },
+                        right: match fields.get(9).copied() {
+                            None | Some("1") => true,
+                            Some("0") => false,
+                            _ => return Err("invalid right sidewalk".into()),
+                        },
+                    },
                 });
             }
             Some("b") => {

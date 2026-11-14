@@ -1,4 +1,6 @@
 use crate::asset_codecs;
+use crate::build_barriers;
+use crate::build_traffic_calming;
 use crate::city_assets;
 use crate::geometry::{add, cross, dist, dot, length, line, mul, polygon, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
@@ -75,7 +77,6 @@ impl ImportPaths {
 
 /// Compile entirely from local sources, retaining large render payloads on disk.
 pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
-    println!("Compiling location from downloaded data...");
     let workspace = tempfile::Builder::new()
         .prefix("carslop-compile-")
         .tempdir()?;
@@ -162,9 +163,25 @@ fn generate_assets(
         "building streets ({} segments)",
         location_map.road_lines.len()
     );
-    let streets_result = write_streets_txt(location_map, &paths.streets)?;
+    let streets_result = write_streets_txt(location_map, &paths.streets, Some(source_osm_map))?;
 
-    println!("Building mapped landscape and roadside controls...");
+    println!("building traffic calming");
+    build_traffic_calming::build_traffic_calming(
+        source_osm_map,
+        location_map,
+        &streets_result.surfaces,
+        &paths.output.join("road-rises.txt"),
+    )?;
+
+    println!("building barriers");
+    build_barriers::build_barriers(
+        source_osm_map,
+        location_map,
+        &streets_result.surfaces,
+        &paths.output.join("barriers.txt"),
+    )?;
+
+    println!("building landscape");
     build_landscape(
         source_osm_map,
         location_map,
@@ -172,7 +189,7 @@ fn generate_assets(
         &paths.landscape,
     )?;
 
-    println!("  Placing road controls...");
+    println!("building furniture");
     build_furniture(
         source_osm_map,
         location_map,
@@ -180,8 +197,7 @@ fn generate_assets(
         &paths.furniture,
     )?;
 
-    // Write heightfield.txt
-    println!("Building elevation...");
+    println!("building elevation");
     build_terrain::build_terrain(
         location_map,
         &paths
@@ -223,7 +239,7 @@ fn generate_assets(
     // Read it back again...
     let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
 
-    println!("Baking collision data...");
+    println!("building collision data");
 
     build_collisions(&paths.collisions, &city_result.city, streets_txt_source)?;
 
@@ -396,6 +412,30 @@ fn bake(
         &paths.output,
     )?;
     Ok(())
+}
+
+// More specific side tags override sidewalk:both and the general sidewalk tag.
+fn sidewalks(way: &osm::OSMElement) -> crate::source_location::Sidewalks {
+    let general = way.tag("sidewalk");
+    let side = |key: &str, name: &str| {
+        for value in [way.tag(key), way.tag("sidewalk:both")] {
+            match value {
+                "yes" => return true,
+                "no" | "none" | "separate" => return false,
+                _ => {}
+            }
+        }
+        match general {
+            "both" | "yes" => true,
+            "no" | "none" | "separate" => false,
+            "left" | "right" => general == name,
+            _ => true,
+        }
+    };
+    crate::source_location::Sidewalks {
+        left: side("sidewalk:left", "left"),
+        right: side("sidewalk:right", "right"),
+    }
 }
 
 fn create_location_map(
@@ -584,6 +624,7 @@ fn create_location_map(
                     }
                     map.road_lines.push(SourceRoad {
                         direction,
+                        sidewalks: sidewalks(way),
                         osm_way_id: Some(way.id),
                         kind: if major.contains(&kind) {
                             0

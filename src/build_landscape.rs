@@ -4,11 +4,12 @@ use crate::build_surfaces;
 use crate::build_surfaces::{union, Surfaces};
 use crate::error::{invalid, Result};
 use crate::geometry::XZ;
-use crate::geometry::{empty, polygon};
+use crate::geometry::{empty, line, polygon};
 use crate::osm;
 use crate::osm::{OSMElement, OSMMap};
 use crate::source_location::SourceLocation;
 use crate::world;
+use geo::algorithm::buffer;
 use geo::MultiPolygon;
 use geo::{algorithm::orient::Direction, BooleanOps, Buffer, Orient, Point};
 use std::fs;
@@ -31,12 +32,7 @@ fn style(e: &OSMElement) -> Option<usize> {
     } else if matches!(e.tag("highway"), "pedestrian" | "footway" | "path")
         || !e.tag("area:highway").is_empty()
     {
-        Some(match surface {
-            "asphalt" => 3,
-            "concrete" => 5,
-            "gravel" | "dirt" | "ground" | "unpaved" | "compacted" => 6,
-            _ => 4,
-        })
+        Some(path_style(surface))
     } else if e.tag("natural") == "scrub" {
         Some(2)
     } else if matches!(e.tag("landuse"), "grass" | "meadow")
@@ -54,6 +50,34 @@ fn style(e: &OSMElement) -> Option<usize> {
         None
     }
 }
+fn path_style(surface: &str) -> usize {
+    match surface {
+        "asphalt" => 3,
+        "concrete" => 5,
+        "gravel" | "dirt" | "ground" | "unpaved" | "compacted" => 6,
+        _ => 4,
+    }
+}
+
+// Closed highway ways are still paths unless explicitly mapped as areas.
+fn path_width(way: &OSMElement) -> Option<f64> {
+    let default = match way.tag("highway") {
+        "footway" => 1.8,
+        "path" => 1.2,
+        "pedestrian" => 3.0,
+        _ => return None,
+    };
+    if way.tag("area") == "yes" || !way.tag("area:highway").is_empty() {
+        return None;
+    }
+    Some(
+        osm::number(way.tag("width"))
+            .filter(|width| *width > 0.0)
+            .unwrap_or(default)
+            .clamp(0.4, 12.0),
+    )
+}
+
 // Join split relation members by node identity, including reversed OSM ways.
 pub fn rings(mut parts: Vec<Vec<i64>>) -> Option<Vec<Vec<i64>>> {
     let mut rings = vec![];
@@ -85,6 +109,8 @@ pub fn build_landscape(
     let coord = |id: &i64| source.nodes.get(id).map(|e| map.metres(e.coord.unwrap()));
     let mut groups: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
     let mut consumed = std::collections::BTreeSet::new();
+    let mut paths: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
+    let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
     let crop = map.boundary.clone().unwrap_or_else(|| {
         MultiPolygon(vec![polygon(&[
             XZ {
@@ -164,34 +190,73 @@ pub fn build_landscape(
         let Some(kind) = style(way) else {
             continue;
         };
-        if consumed.contains(&way.id)
-            || way.nodes.len() < 4
-            || way.nodes.first() != way.nodes.last()
+        if consumed.contains(&way.id) {
+            continue;
+        }
+        if matches!(way.tag("highway"), "footway" | "path" | "pedestrian")
+            && (["bridge", "tunnel"]
+                .iter()
+                .any(|key| !matches!(way.tag(key), "" | "no"))
+                || !matches!(way.tag("layer"), "" | "0"))
         {
             continue;
         }
-        let Some(points) = way.nodes.iter().map(&coord).collect::<Option<Vec<_>>>() else {
+        let Some(mut points) = way.nodes.iter().map(&coord).collect::<Option<Vec<_>>>() else {
             continue;
         };
-        groups[kind].push(polygon(&points).intersection(&crop));
+        if let Some(width) = path_width(way) {
+            points.dedup();
+            if points.len() < 2 {
+                continue;
+            }
+            let geometry = line(&points)
+                .buffer_with_style(
+                    buffer::BufferStyle::new(width / 2.0)
+                        .line_cap(buffer::LineCap::Butt)
+                        .line_join(buffer::LineJoin::Round(std::f64::consts::PI / 16.0)),
+                )
+                .intersection(&crop);
+            let geometry = geometry.difference(&obstacles.nearby(&geometry));
+            paths[path_style(way.tag("surface"))].push(geometry);
+        } else if points.len() >= 4 && way.nodes.first() == way.nodes.last() {
+            groups[kind].push(polygon(&points).intersection(&crop));
+        }
     }
     let mut file = asset_codecs::landscape::Writer::new(
         BufWriter::new(fs::File::create(landscape_path)?),
         asset_codecs::landscape::Precision::Imported,
     )?;
     let mut covered = empty();
-    for kind in [8, 7, 3, 4, 5, 2, 0, 1, 6] {
-        let geometry = union(&groups[kind]).difference(&covered);
+    let mut emit = |kind: usize, regions: &[MultiPolygon<f64>]| -> Result<()> {
+        let geometry = union(regions).difference(&covered);
         covered = covered.union(&geometry);
         let material = world::Material::from_ground_id(kind).map_err(invalid)?;
         build_surfaces::triangulate(&geometry, |points| {
             file.ground(material, points)?;
             Ok(())
         })?;
+        Ok(())
+    };
+    emit(8, &groups[8])?;
+    // Paths cut through surrounding park/grass/dirt cover, including unpaved paths.
+    for kind in [3, 4, 5, 6] {
+        emit(kind, &paths[kind])?;
+    }
+    for kind in [7, 3, 4, 5, 2, 0, 1, 6] {
+        emit(kind, &groups[kind])?;
     }
     println!("  Filtering mapped trees...");
-    let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
-    let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
+    // Keep small pieces in the index so connected paths do not create a city-wide probe.
+    let path_geometry = MultiPolygon(
+        paths
+            .into_iter()
+            .flatten()
+            .flat_map(|geometry| geometry.0)
+            .collect(),
+    );
+    let path_obstacles = build_surfaces::PolygonIndex::new(&path_geometry);
+    let conflicts =
+        |probe: &MultiPolygon<f64>| obstacles.intersects(probe) || path_obstacles.intersects(probe);
     for node in source.nodes.values().filter(|n| n.tag("natural") == "tree") {
         let p = map.metres(node.coord.unwrap());
         if !map.contains(p) {

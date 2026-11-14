@@ -995,7 +995,52 @@ fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset_codecs;
     use crate::test_support;
+    use crate::world;
+
+    #[test]
+    fn mapped_speed_table_moves_the_suspension_and_settles() {
+        let run = |hz: u32| {
+            let folder = tempfile::tempdir().unwrap();
+            let assets = test_support::stored_location(folder.path(), false);
+            asset_codecs::road_rises::write(
+                &mut std::fs::File::create(folder.path().join("road-rises.txt")).unwrap(),
+                &test_support::speed_table_rises(),
+            )
+            .unwrap();
+            let track = std::sync::Arc::new(world::Location::load(&assets).unwrap());
+            assert!((track.drive_height(XZ { x: 14., z: 0. }) - 7.1).abs() < 0.00001);
+            let mut car = Vehicle::on_track(
+                XZ { x: 11.5, z: 0. }.at_height(7.48),
+                std::f32::consts::FRAC_PI_2,
+                test_support::car(),
+                track,
+            );
+            car.manual = true;
+            car.gear = NEUTRAL_GEAR;
+            car.velocity = XZ { x: 5., z: 0. };
+            let mut peak_height: f32 = 0.;
+            let mut peak_pitch: f32 = 0.;
+            for _ in 0..hz * 3 {
+                if car.position.x > 18. {
+                    car.velocity = XZ::default();
+                }
+                car.update(Duration::from_secs_f64(1. / hz as f64), Controls::default());
+                peak_height = peak_height.max(car.position.y - 7.48);
+                peak_pitch = peak_pitch.max(car.suspension_pitch.abs());
+                assert!(car.position.iter().all(|v| v.is_finite()));
+            }
+            assert!(
+                peak_height > 0.04 && peak_height < 0.3,
+                "heave {peak_height}"
+            );
+            assert!(peak_pitch > 0.01 && peak_pitch < 0.2, "pitch {peak_pitch}");
+            assert!((car.position.y - car.ride_height()).abs() < 0.01);
+            peak_height
+        };
+        assert!((run(60) - run(240)).abs() < 0.02);
+    }
 
     #[test]
     fn aerodynamic_drag_uses_coefficient_area_and_mass() {

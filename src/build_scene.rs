@@ -49,12 +49,8 @@ pub fn build_scene(
         //
         // create spool?
         //
-        let mut spool = scene::city_layer_spooled(
-            city,
-            layer,
-            temporary_directory,
-            boundary_polygon.as_ref(),
-        )?;
+        let mut spool =
+            scene::city_layer_spooled(city, layer, temporary_directory, boundary_polygon.as_ref())?;
 
         //
         //
@@ -86,7 +82,7 @@ pub fn build_scene(
         }
         layers.push(spool);
     }
-    println!("Writing city render archive...");
+    println!("writing location");
     write_spooled(output_path, &mut layers)?;
     Ok(())
 }

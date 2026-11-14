@@ -124,7 +124,6 @@ fn scan(path: &Path, mut f: impl FnMut(osmpbf::Element<'_>) -> Result<()>) -> Re
 }
 
 pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -> Result<()> {
-    println!("Extracting OSM data...");
     if !bounds.is_valid() {
         return Err(invalid("invalid SOUTH WEST NORTH EAST bounds"));
     }
@@ -144,7 +143,6 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
         }
     }
     let mut inside = BTreeSet::new();
-    println!("Selecting nodes...");
     scan(source, |e| {
         let n = match e {
             osmpbf::Element::Node(n) => Some((n.id(), n.lat(), n.lon())),

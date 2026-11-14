@@ -58,7 +58,6 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
     )?;
 
     // Parse and validate the boundary.
-    println!("parsing the boundary");
     let boundary_map = osm::read(&download_dir.join(BOUNDARY_FILE))?;
     let name = osm::import_name(
         boundary_map
@@ -89,7 +88,11 @@ pub fn download_map_data(relation_url: &str) -> Result<std::path::PathBuf> {
         &options,
     )?;
 
-    println!("extracting the requested area from the region map");
+    println!(
+        "extracting requested area ({}x{} km)",
+        (width / 100.0).round() / 10.0,
+        (height / 100.0).round() / 10.0
+    );
     sources::extract_osm_boundary(
         &download_dir.join(REGIONAL_OSM),
         &download_dir.join(LOCATION_OSM_FILE),
@@ -474,8 +477,7 @@ mod stage_tests {
         assert_eq!(location.trees, reread.trees);
         assert_eq!(location.labels, reread.labels);
         assert_eq!(location.roads, reread.roads);
-        world::Location::load(&city_assets::CityAsset::new(output.path().into()))
-            .unwrap();
+        world::Location::load(&city_assets::CityAsset::new(output.path().into())).unwrap();
         drop(location);
         assert!(output.path().join("scene.pack").is_file());
     }

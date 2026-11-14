@@ -16,7 +16,7 @@ pub struct InferredTree {
 
 /// Supplement the downloaded sources with geographic canopy positions and radii.
 pub fn add_trees(download_dir: &Path) -> Result<()> {
-    println!("Inferring trees from downloaded satellite images...");
+    println!("extracting trees from satellite images");
     let data = add_location_download::read_manifest(download_dir)?;
     let mut trees = Vec::new();
     for block in &data.imagery_blocks {

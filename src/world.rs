@@ -3,14 +3,41 @@ use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::landscape;
 use crate::track;
 
+mod barriers;
 mod buildings;
 mod preparation;
+mod raised_roads;
 mod roads;
 pub mod spatial;
+use barriers::Barriers;
 use buildings::Buildings;
 pub use preparation::CompiledLocation;
+use raised_roads::RaisedRoads;
 use roads::RoadNetwork;
 use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BarrierKind {
+    Wall,
+    Fence,
+    ChainLink,
+    WoodFence,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Barrier {
+    pub source_id: u64,
+    pub kind: BarrierKind,
+    pub ends: [XZ<f32>; 2],
+    pub height_meters: f32,
+    pub width_meters: f32,
+}
+
+/// Road-space triangles with height offsets; terrain remains an independent surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoadRise {
+    pub points: [XYZ; 3],
+}
 
 /// Prepared runtime world. Constructed by asset loading or authored circuit preparation.
 #[derive(Debug)]
@@ -30,6 +57,8 @@ pub struct Location {
     roads: RoadNetwork,
     ground: landscape::GroundCover,
     buildings: Buildings,
+    barriers: Barriers,
+    raised_roads: RaisedRoads,
 
     /// Traffic lights and road signs and stuff like that.
     pub furniture: Vec<Furniture>,
@@ -268,6 +297,8 @@ impl Location {
             display_name: String::new(),
             origin: None,
             buildings: Buildings::new(Vec::new()),
+            barriers: Barriers::new(Vec::new()),
+            raised_roads: RaisedRoads::new(Vec::new()),
             furniture: Vec::new(),
             bounding_box: BoundingBoxXZ::default(),
             elevation: None,
@@ -365,7 +396,7 @@ impl Location {
 
     /// Ground rise per horizontal metre, excluding discrete curb impacts.
     pub fn ground_gradient(&self, position: XYZ) -> XZ<f32> {
-        let height = |x, z| self.height(XZ { x, z });
+        let height = |x, z| self.height(XZ { x, z }) + self.road_rise(XZ { x, z });
         let XYZ { x, z, .. } = position;
         XZ {
             x: height(x + 0.5, z) - height(x - 0.5, z),

@@ -28,6 +28,23 @@ pub struct SourceRoad<T = f64> {
     pub direction: i8,
     pub kind: usize,
     pub lanes: usize,
+    /// Generated pavement sides relative to the original way direction.
+    pub sidewalks: Sidewalks,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sidewalks {
+    pub left: bool,
+    pub right: bool,
+}
+
+impl Default for Sidewalks {
+    fn default() -> Self {
+        Self {
+            left: true,
+            right: true,
+        }
+    }
 }
 
 impl<T: Copy> SourceRoad<T> {
@@ -39,6 +56,7 @@ impl<T: Copy> SourceRoad<T> {
             direction: 0,
             kind: 1,
             lanes: 2,
+            sidewalks: Sidewalks::default(),
         }
     }
 }

@@ -1,8 +1,10 @@
+use crate::build_crossings;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::geometry::{
     add, cross, dist, dot, empty, length, line, mul, path_length, polygon, sub, substring, unit,
 };
+use crate::osm;
 use crate::{
     error::{invalid, Result},
     source_location::{SourceLocation, SourceRoad},
@@ -27,9 +29,8 @@ pub struct Surfaces {
     pub paths: Vec<Vec<XZ>>,
     /// Incident road indices for each SourceLocation node.
     pub adjacency: Vec<Vec<usize>>,
-    /// Union of asphalt polygons in local [X, Z] metres, retained for tests.
-    #[cfg(test)]
-    asphalt: MultiPolygon<f64>,
+    /// Exact carriageway footprint, including junctions, for raised road clipping.
+    pub asphalt: MultiPolygon<f64>,
     /// Road, junction and building exclusion polygons in local [X, Z] metres; may overlap.
     pub obstacles: MultiPolygon<f64>,
 }
@@ -92,7 +93,7 @@ impl<'a> PolygonIndex<'a> {
             .iter()
             .any(|p| p.intersects(geometry))
     }
-    fn nearby(&self, geometry: &MultiPolygon<f64>) -> MultiPolygon<f64> {
+    pub fn nearby(&self, geometry: &MultiPolygon<f64>) -> MultiPolygon<f64> {
         MultiPolygon(self.candidates(geometry).into_iter().cloned().collect())
     }
 }
@@ -125,6 +126,54 @@ fn ribbon(
     }
     union(&parts)
 }
+// Clip the legacy rounded ribbon to the selected side of the smoothed path.
+// Local Z points south, so OSM left is the negative cross-product side.
+fn pavement_ribbon(
+    path: &[XZ],
+    road: &SourceRoad<f64>,
+    adjacency: &[Vec<usize>],
+    width: f64,
+) -> MultiPolygon<f64> {
+    let sides = road.sidewalks;
+    if !sides.left && !sides.right {
+        return empty();
+    }
+    let full = ribbon(path, road, adjacency, width);
+    if sides.left && sides.right {
+        return full;
+    }
+    let reach = road.road_width_start_meters / 2.0 + width;
+    let sign = if sides.left { -1.0 } else { 1.0 };
+    let first = unit(sub(path[1], path[0]));
+    let last = unit(sub(path[path.len() - 1], path[path.len() - 2]));
+    let mut centre = path.to_vec();
+    centre[0] = sub(centre[0], mul(first, reach));
+    let end = centre.len() - 1;
+    centre[end] = add(centre[end], mul(last, reach));
+    let mut outer = Vec::with_capacity(centre.len());
+    for (i, p) in centre.iter().enumerate() {
+        let before = if i == 0 {
+            first
+        } else {
+            unit(sub(*p, centre[i - 1]))
+        };
+        let after = if i == end {
+            last
+        } else {
+            unit(sub(centre[i + 1], *p))
+        };
+        let normal = |v: XZ| XZ { x: -v.z, z: v.x };
+        let bisector = add(normal(before), normal(after));
+        let offset = mul(
+            bisector,
+            sign * reach / (1.0 + dot(before, after)).max(0.25),
+        );
+        outer.push(add(*p, offset));
+    }
+    centre.extend(outer.into_iter().rev());
+    full.intersection(&MultiPolygon(vec![polygon(&centre)]))
+}
+
 fn paths(map: &SourceLocation<f64>, adjacency: &[Vec<usize>]) -> Vec<Vec<XZ>> {
     let end = |node: usize, other: usize| {
         let p = map.road_nodes[node].xz();
@@ -317,6 +366,7 @@ pub struct WriteStreetsResult {
 pub fn write_streets_txt(
     map: &SourceLocation<f64>,
     path_streets_txt: &Path,
+    source: Option<&osm::OSMMap>,
 ) -> Result<WriteStreetsResult> {
     let mut adjacency = vec![vec![]; map.road_nodes.len()];
     for (i, r) in map.road_lines.iter().enumerate() {
@@ -335,6 +385,7 @@ pub fn write_streets_txt(
     let mut patches = Vec::new();
     let mut patch_kinds = Vec::new();
     let mut patch_nodes = Vec::new();
+    let mut patch_pavement = Vec::new();
     for (node, arms) in adjacency.iter().enumerate().filter(|(_, a)| a.len() >= 3) {
         let p = map.road_nodes[node].xz();
         let other = |i: usize| {
@@ -400,6 +451,16 @@ pub fn write_streets_txt(
             let poly = MultiPolygon(vec![polygon(&points)]);
             let poly = poly.difference(&building_index.nearby(&poly));
             if !poly.0.is_empty() {
+                let has_pavement = |i: usize, outward: XZ| {
+                    let road = &map.road_lines[i];
+                    let forward = mul(outward, if road.ends[0] == node { 1.0 } else { -1.0 });
+                    if cross(forward, add(a, b)) < 0.0 {
+                        road.sidewalks.left
+                    } else {
+                        road.sidewalks.right
+                    }
+                };
+                patch_pavement.push(has_pavement(ia, a) && has_pavement(ib, b));
                 patches.push(poly);
                 patch_kinds.push(kind);
                 patch_nodes.push(node);
@@ -423,7 +484,6 @@ pub fn write_streets_txt(
         cores.push(Point::new(p.x, p.z).buffer(width));
         core_kinds.push(arms.iter().map(|i| map.road_lines[*i].kind).min().unwrap());
     }
-    println!("  Unioning carriageways and pavement...");
     let asphalt = union(
         &buffers
             .iter()
@@ -476,20 +536,20 @@ pub fn write_streets_txt(
             .iter()
             .zip(&map.road_lines)
             .filter(|(_, r)| r.kind == kind)
-            .map(|(p, r)| ribbon(p, r, &adjacency, width))
+            .map(|(p, r)| pavement_ribbon(p, r, &adjacency, width))
             .collect();
         pieces.extend(
             patches
                 .iter()
                 .zip(&patch_kinds)
-                .filter(|(_, k)| **k == kind)
-                .map(|(g, _)| g.buffer(width)),
+                .zip(&patch_pavement)
+                .filter(|((_, k), enabled)| **k == kind && **enabled)
+                .map(|((g, _), _)| g.buffer(width)),
         );
         let zone = union(&pieces);
         groups.push((5 + kind, zone.difference(&paved).difference(&buildings)));
         paved = paved.union(&zone);
     }
-    println!("  Building continuous road markings...");
     let junctions = union(
         &adjacency
             .iter()
@@ -593,7 +653,16 @@ pub fn write_streets_txt(
             }
         }
     }
-    groups.push((4, union(&marks).intersection(&inner).difference(&junctions)));
+    let lane_marks = union(&marks).intersection(&inner).difference(&junctions);
+    let paint = if let Some(source) = source {
+        let crossings = build_crossings::build_crossings(source, map, &paths, &inner);
+        lane_marks
+            .difference(&crossings.clearance)
+            .union(&crossings.paint)
+    } else {
+        lane_marks
+    };
+    groups.push((4, paint));
     let mut file = io::BufWriter::new(fs::File::create(&path_streets_txt)?);
     io::Write::write_fmt(
         &mut file,
@@ -611,7 +680,7 @@ pub fn write_streets_txt(
         }
         io::Write::write_fmt(&mut file, format_args!("{row}\n"))?;
     }
-    println!("  Triangulating surfaces...");
+
     let mut counts = BTreeMap::new();
     for (style, geometry) in groups {
         let geometry = map
@@ -676,7 +745,6 @@ pub fn write_streets_txt(
         surfaces: Surfaces {
             paths,
             adjacency,
-            #[cfg(test)]
             asphalt,
             obstacles,
         },
@@ -744,7 +812,7 @@ mod geometry_tests {
         let temp = Temp::new();
         src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
         let s =
-            build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt")).unwrap();
+            build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None).unwrap();
         let loaded = street_surface::StreetSurface::load(
             &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
             map.road_lines.len(),
@@ -756,6 +824,61 @@ mod geometry_tests {
     fn point(p: XZ) -> Point<f64> {
         Point::new(p.x, p.z)
     }
+    #[test]
+    fn pavement_follows_left_side_through_a_bend_and_round_end_caps() {
+        let mut road = SourceRoad::new([0, 1], 8.0);
+        road.sidewalks.right = false;
+        let path = [
+            XZ { x: -30., z: 0. },
+            XZ { x: 0., z: 0. },
+            XZ { x: 0., z: -30. },
+        ];
+        let geometry = pavement_ribbon(&path, &road, &[vec![0], vec![0]], 1.4);
+        for p in [
+            XZ { x: -15., z: -4.7 },
+            XZ { x: -4.7, z: -15. },
+            XZ { x: -31., z: -4.7 },
+        ] {
+            assert!(
+                geometry.contains(&point(p)),
+                "missing left pavement at {p:?}"
+            );
+        }
+        for p in [
+            XZ { x: -15., z: 4.7 },
+            XZ { x: 4.7, z: -15. },
+            XZ { x: -31., z: 4.7 },
+        ] {
+            assert!(
+                !geometry.contains(&point(p)),
+                "unexpected right pavement at {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn junction_without_sidewalks_has_no_generated_pavement() {
+        let mut m = map(
+            &[
+                XZ { x: -40., z: 0. },
+                XZ { x: 0., z: 0. },
+                XZ { x: 40., z: 0. },
+                XZ { x: 0., z: -40. },
+            ],
+            &[(0, 1, 8., 0), (1, 2, 8., 0), (1, 3, 6.5, 1)],
+            &[],
+        );
+        for road in &mut m.road_lines {
+            road.sidewalks.left = false;
+            road.sidewalks.right = false;
+        }
+        let (_, _, compiled) = surfaces(&m);
+        assert!(compiled
+            .road_triangles()
+            .iter()
+            .all(|t| !matches!(t.usage, world::TriangleUsage::Pavement(_))));
+    }
+
     #[test]
     fn junction_fillets_partition_asphalt_and_pavement_without_overlap() {
         let m = map(

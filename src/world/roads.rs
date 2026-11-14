@@ -212,10 +212,7 @@ impl Location {
         // Compiled road surfaces are draped over the heightfield between path knots.
         if self.has_compiled_roads() {
             if let Some(field) = &self.elevation {
-                point.y = field.height(XZ {
-                    x: point.x,
-                    z: point.z,
-                });
+                point.y = field.height(point.xz()) + self.road_rise(point.xz());
             }
         }
         RoadSample {

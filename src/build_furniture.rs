@@ -115,7 +115,10 @@ fn place_furniture(
         let highway = e.tag("highway");
         let sign = e.tag("traffic_sign");
         let kind = if highway == "traffic_signals"
-            || (highway == "crossing" && e.tag("crossing") == "traffic_signals")
+            || (highway == "crossing"
+                && (e.tag("crossing:signals") == "yes"
+                    || (e.tag("crossing:signals").is_empty()
+                        && e.tag("crossing") == "traffic_signals")))
         {
             0
         } else if highway == "stop" || sign == "stop" {
@@ -428,13 +431,36 @@ mod tests {
         ];
         let output = tempfile::tempdir().unwrap();
         let mut surfaces =
-            build_surfaces::write_streets_txt(&map, &output.path().join("streets.txt"))
+            build_surfaces::write_streets_txt(&map, &output.path().join("streets.txt"), None)
                 .unwrap()
                 .surfaces;
         surfaces.paths = vec![vec![points[0], points[1]], vec![points[2], points[1]]];
         surfaces.adjacency = vec![vec![0], vec![0, 1], vec![1]];
         surfaces.obstacles = MultiPolygon(vec![]);
         (source, map, surfaces)
+    }
+
+    #[test]
+    fn crossing_signal_tags_override_the_legacy_crossing_type() {
+        let (mut source, map, surfaces) = junction();
+        test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[("highway", "crossing"), ("crossing:signals", "yes")],
+        );
+        let placed = place_furniture(&source, &map, &surfaces);
+        assert_eq!(placed.len(), 2);
+        assert!(placed
+            .iter()
+            .all(|feature| feature.kind == FurnitureKind::Signal));
+        test_support::set_osm_tags(
+            source.nodes.get_mut(&2).unwrap(),
+            &[
+                ("highway", "crossing"),
+                ("crossing", "traffic_signals"),
+                ("crossing:signals", "no"),
+            ],
+        );
+        assert!(place_furniture(&source, &map, &surfaces).is_empty());
     }
 
     #[test]

@@ -100,6 +100,8 @@ impl Location {
                 phase: f.phase,
             })
             .collect();
+        city.barriers = Barriers::new(stored.barriers);
+        city.raised_roads = RaisedRoads::new(stored.road_rises);
         city.ground = landscape::GroundCover::new(stored.ground, stored.trees);
         city.elevation = Some(field);
         city.id = LocationId::Asset(assets.directory().to_path_buf());

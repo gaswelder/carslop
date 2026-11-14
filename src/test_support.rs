@@ -481,3 +481,51 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
     }
     CityAsset::new(directory.to_path_buf())
 }
+
+/// A four-metre speed table on the straight part of the stored-location fixture.
+pub fn speed_table_rises() -> Vec<world::RoadRise> {
+    struct Section {
+        x: f32,
+        height: f32,
+    }
+    let sections = [
+        Section { x: 12., height: 0. },
+        Section {
+            x: 13.,
+            height: 0.1,
+        },
+        Section {
+            x: 15.,
+            height: 0.1,
+        },
+        Section { x: 16., height: 0. },
+    ];
+    let mut rises = Vec::new();
+    for pair in sections.windows(2) {
+        let a = XZ {
+            x: pair[0].x,
+            z: -1.,
+        }
+        .at_height(pair[0].height);
+        let b = XZ {
+            x: pair[0].x,
+            z: 1.,
+        }
+        .at_height(pair[0].height);
+        let c = XZ {
+            x: pair[1].x,
+            z: 1.,
+        }
+        .at_height(pair[1].height);
+        let d = XZ {
+            x: pair[1].x,
+            z: -1.,
+        }
+        .at_height(pair[1].height);
+        rises.extend([
+            world::RoadRise { points: [a, b, c] },
+            world::RoadRise { points: [a, c, d] },
+        ]);
+    }
+    rises
+}

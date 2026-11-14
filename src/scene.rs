@@ -9,6 +9,8 @@ use crate::{asset_car, track, world::Material};
 use std::f32::consts::TAU;
 use std::ops::Range;
 
+#[path = "barrier_scene.rs"]
+mod barrier_scene;
 #[path = "building_assets.rs"]
 mod building_assets;
 #[path = "car_glb.rs"]
@@ -196,6 +198,7 @@ pub fn city_layer_spooled(
         city_scene::ground_mesh(&mut b, city, boundary);
     } else {
         city_scene::buildings(&mut b, city, layer == 1)?;
+        barrier_scene::build(&mut b, city, layer == 1);
     }
     b.chunks.unwrap().finish_spooled()
 }
