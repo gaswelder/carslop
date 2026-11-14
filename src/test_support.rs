@@ -79,6 +79,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
         asset_car::CarSpec {
             design,
             name: "TEST VEHICLE".into(),
+            paint_color: [1.0, 0.18, 0.08],
             weight_kg: 1200.0,
             top_speed: 50.0,
             brake_force: 22000.0,
@@ -143,7 +144,8 @@ pub fn track() -> Arc<track::Location> {
 pub fn car_definition() -> serde_json::Value {
     let s = car_spec();
     serde_json::json!({
-        "name": s.name, "weight_kg": s.weight_kg, "brake_force": s.brake_force,
+        "name": s.name, "paint_color": s.paint_color,
+        "weight_kg": s.weight_kg, "brake_force": s.brake_force,
         "tire_friction_coefficient": s.tire_friction_coefficient,
         "engine_power_hp": s.engine_power_watts / asset_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,

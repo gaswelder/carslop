@@ -805,7 +805,7 @@ impl App {
         } else {
             gl::chase_camera(aspect, self.chase.pose())
         };
-        let vehicles = [(&self.session.vehicle, [1.0, 0.18, 0.08])];
+        let vehicles = [(&self.session.vehicle, car.spec.paint_color)];
         let contacts = vehicles.map(|(car, _)| shadows::ContactShadow::new(car));
         self.mesh()
             .draw_ground(self.scene_program, &camera, &contacts);

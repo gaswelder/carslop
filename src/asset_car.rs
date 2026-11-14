@@ -8,6 +8,7 @@ pub const WATTS_PER_HP: f32 = 745.6999;
 #[derive(Clone, Debug)]
 pub struct CarSpec {
     pub name: String,
+    pub paint_color: [f32; 3],
     pub weight_kg: f32,
     pub engine_max_torque_nm: f32,
     pub engine_torque_curve: Vec<TorquePoint>,
@@ -105,6 +106,8 @@ pub fn load(dirpath: &std::path::Path) -> Result<Vec<std::sync::Arc<CarSpec>>, S
 #[derive(serde::Deserialize)]
 struct CarDefinition {
     name: String,
+    #[serde(default = "default_paint_color")]
+    paint_color: [f32; 3],
     weight_kg: f32,
     brake_force: f32,
     tire_friction_coefficient: f32,
@@ -130,6 +133,9 @@ impl CarDefinition {
     fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("expected nonempty text".into());
+        }
+        for channel in self.paint_color {
+            fraction(channel)?;
         }
         for value in [
             self.weight_kg,
@@ -247,6 +253,10 @@ impl CarDefinition {
     }
 }
 
+fn default_paint_color() -> [f32; 3] {
+    [1.0, 0.18, 0.08]
+}
+
 fn positive(value: f32) -> Result<(), String> {
     if !value.is_finite() || value <= 0.0 {
         return Err("expected finite positive number".into());
@@ -294,6 +304,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
 
     let mut spec = CarSpec {
         name: definition.name,
+        paint_color: definition.paint_color,
         weight_kg: definition.weight_kg,
         engine_max_torque_nm: definition.engine_max_torque_nm,
         engine_torque_curve: definition.engine_torque_curve,
@@ -372,6 +383,15 @@ fn load_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mosquito_reference_model_loads() {
+        let car = load_car(std::path::Path::new("data/cars/1969-mosquito-ss/car.json"))
+            .expect("Mosquito SS must load rather than disappear from the car selection");
+        assert_eq!(car.name, "1969 MOSQUITO SS");
+        assert_eq!(car.paint_color, [0.035, 0.56, 0.82]);
+        assert!((car.design.height() - 1.298).abs() < 0.002);
+    }
 
     #[test]
     fn wheelbase_comes_from_axle_midpoints() {

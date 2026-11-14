@@ -4,6 +4,7 @@
 Usage: python3 tools/build_fictional_cars.py {agolf,mosquito,pitsunda} [--output FILE.glb]
 """
 import argparse
+from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
@@ -41,6 +42,10 @@ class Mesh:
         if sum(x*x for x in face) < 1e-14:
             return
         normals = normals or [unit(face)] * 3
+        # A parametric patch can collapse to a point along one edge (for
+        # example a triangular window tip). Its derivative normal is zero
+        # there, although the emitted triangle still has a valid face.
+        normals = [n if sum(x*x for x in n) > 1e-12 else unit(face) for n in normals]
         ids = self.groups.setdefault(material, [])
         for p, n in zip(points, normals):
             ids.append(len(self.vertices))
@@ -73,14 +78,14 @@ class Mesh:
         for ids in [(0,3,2,1),(4,5,6,7),(0,4,7,3),(1,2,6,5),(0,1,5,4),(3,7,6,2)]:
             self.quad([p[i] for i in ids], material, color)
 
-    def disc(self, center, radius, material, color, axis='z', ring=0.0, floor_y=None):
+    def disc(self, center, radius, material, color, axis='z', ring=0.0, floor_y=None, facing=1):
         for i in range(48):
             a, b = i*2*PI/48, (i+1)*2*PI/48
             def p(t, r):
                 if axis == 'z':
                     return (center[0]+r*math.cos(t), center[1]+r*math.sin(t), center[2])
                 y = center[1]+r*math.cos(t)
-                return (center[0], max(y, floor_y) if floor_y is not None else y, center[2]+r*math.sin(t))
+                return (center[0], max(y, floor_y) if floor_y is not None else y, center[2]+facing*r*math.sin(t))
             if ring:
                 self.quad([p(a,ring), p(a,radius), p(b,radius), p(b,ring)], material, color)
             else:
@@ -191,6 +196,8 @@ def wheel(radius, width, side, style):
         (radius-.035+.035*math.cos(v*2*PI))*math.cos(u*2*PI),
         (radius-.035+.035*math.cos(v*2*PI))*math.sin(u*2*PI)),RUBBER,(.025,.029,.032))
     face = side*(width*.5+.002)
+    if style == 'wire':
+        return wire_wheel(b, radius, width, side, face)
     b.disc((face,0,0),radius*.83,METAL,CHROME,'x',radius*.76)
     b.disc((face-side*.012,0,0),radius*.76,RUBBER,(.065,.075,.08),'x')
     count = 8 if style=='mesh' else (7 if style=='modern' else 5)
@@ -208,6 +215,30 @@ def wheel(radius, width, side, style):
     for i in range(5):
         a=i*2*PI/5
         b.disc((face+side*.006,math.cos(a)*radius*.12,math.sin(a)*radius*.12),.012,METAL,(.8,.82,.83),'x')
+    return b
+
+
+def wire_wheel(b, radius, width, side, face):
+    # Thick sidewalls and fine radial spokes traced from the reference wheels.
+    b.disc((face,0,0),radius*.90,RUBBER,(.025,.029,.032),'x',radius*.64,facing=side)
+    b.disc((face+side*.002,0,0),radius*.66,METAL,CHROME,'x',radius*.61,facing=side)
+    b.disc((face,0,0),radius*.61,RUBBER,(.035,.045,.05),'x',facing=side)
+    for i in range(36):
+        angle=i*2*PI/36
+        inner=radius*.21
+        outer=radius*.61
+        spread=.011
+        spokes=[(face+side*.005,inner*math.cos(angle-spread),inner*math.sin(angle-spread)),
+                (face+side*.005,outer*math.cos(angle+.04-spread),outer*math.sin(angle+.04-spread)),
+                (face+side*.005,outer*math.cos(angle+.04+spread),outer*math.sin(angle+.04+spread)),
+                (face+side*.005,inner*math.cos(angle+spread),inner*math.sin(angle+spread))]
+        b.quad(spokes if side > 0 else spokes[::-1],METAL,CHROME)
+    b.disc((face+side*.008,0,0),radius*.23,METAL,CHROME,'x',facing=side)
+    b.disc((face+side*.010,0,0),radius*.14,METAL,(.40,.45,.48),'x',radius*.115,facing=side)
+    for i in range(5):
+        angle=i*2*PI/5
+        b.disc((face+side*.012,radius*.17*math.cos(angle),radius*.17*math.sin(angle)),
+               .012,METAL,(.82,.85,.85),'x',facing=side)
     return b
 
 
@@ -288,47 +319,252 @@ def agolf():
     return b,axles,.30,.715,'mesh'
 
 
+@dataclass(frozen=True)
+class TracePoint:
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class WheelFit:
+    rear_radius: float
+    front_radius: float
+
+
+@dataclass(frozen=True)
+class WindowSpan:
+    top: float
+    bottom: float
+
+
+class MosquitoTrace:
+    """Side elevation traced in pixels from the supplied blue coupe reference.
+
+    Bumper bounds 269..1525 map to 4.724 m; roof/ground 179..548 map
+    to the annotated 1.298 m height. +Z points toward the image's left.
+    Keeping the source landmarks here makes the silhouette editable directly.
+    """
+    def __init__(self, mesh):
+        self.mesh = mesh
+        self.top = [TracePoint(269,355), TracePoint(288,340), TracePoint(330,319),
+                    TracePoint(405,304), TracePoint(515,292), TracePoint(621,282),
+                    TracePoint(680,286), TracePoint(716,299), TracePoint(795,301),
+                    TracePoint(1035,295), TracePoint(1150,280), TracePoint(1306,267),
+                    TracePoint(1406,283), TracePoint(1490,300), TracePoint(1506,311),
+                    TracePoint(1512,359)]
+        self.lower = [TracePoint(269,415), TracePoint(292,438), TracePoint(322,463),
+                      TracePoint(372,476), TracePoint(614,480), TracePoint(1128,471),
+                      TracePoint(1353,449), TracePoint(1448,437), TracePoint(1480,424),
+                      TracePoint(1512,381)]
+        self.roof = [TracePoint(685,290), TracePoint(720,255), TracePoint(765,213),
+                     TracePoint(800,190), TracePoint(844,182), TracePoint(946,179),
+                     TracePoint(1046,181), TracePoint(1110,186), TracePoint(1165,198),
+                     TracePoint(1190,214), TracePoint(1260,251), TracePoint(1306,268)]
+        self.arches = [
+            [TracePoint(380,476), TracePoint(384,438), TracePoint(395,410),
+             TracePoint(415,389), TracePoint(445,380), TracePoint(483,377),
+             TracePoint(521,380), TracePoint(551,391), TracePoint(574,412),
+             TracePoint(589,445), TracePoint(603,479)],
+            [TracePoint(1130,471), TracePoint(1140,429), TracePoint(1153,397),
+             TracePoint(1175,375), TracePoint(1205,365), TracePoint(1247,361),
+             TracePoint(1287,364), TracePoint(1318,376), TracePoint(1339,400),
+             TracePoint(1350,431), TracePoint(1355,449)]]
+
+    @staticmethod
+    def height(pixel_y):
+        return (548-pixel_y)*1.298/369-.48
+
+    @staticmethod
+    def length(pixel_x):
+        return (897-pixel_x)*4.724/1256
+
+    @staticmethod
+    def at(points, x):
+        for a, b in zip(points, points[1:]):
+            if x <= b.x:
+                t = max(0, min(1, (x-a.x)/(b.x-a.x)))
+                return a.y+(b.y-a.y)*t
+        return points[-1].y
+
+    def width(self, x):
+        return self.at([TracePoint(269,.79), TracePoint(330,.86),
+                        TracePoint(490,.91), TracePoint(720,.86),
+                        TracePoint(1035,.87), TracePoint(1250,.93),
+                        TracePoint(1450,.87), TracePoint(1512,.80)], x)
+
+    def bottom(self, x):
+        y = self.at(self.lower, x)
+        for arch in self.arches:
+            if arch[0].x <= x <= arch[-1].x:
+                y = min(y, self.at(arch, x))
+        return y
+
+    def side(self, side, point, offset=0):
+        top = self.at(self.top, point.x)
+        low = self.bottom(point.x)
+        t = max(0, min(1, (point.y-top)/max(1, low-top)))
+        # Crown the fenders, tuck the rocker, and retain the long belt crease.
+        inset = .036*t*t + .012*math.sin(t*2*PI)
+        return (side*(self.width(point.x)-inset+offset),
+                self.height(point.y), self.length(point.x))
+
+    def cabin_side(self, side, point, offset=0):
+        top = self.at(self.roof, point.x)
+        base = self.at(self.top, point.x)
+        t = max(0, min(1, (point.y-top)/max(1,base-top)))
+        return (side*(.715+(self.width(point.x)-.715)*t+offset),
+                self.height(point.y), self.length(point.x))
+
+    def line(self, side, points, material, color, width=1.3, cabin=False, offset=.004):
+        surface = self.cabin_side if cabin else self.side
+        samples = []
+        for a, b in zip(points, points[1:]):
+            steps = max(1, math.ceil(math.hypot(b.x-a.x,b.y-a.y)/2))
+            samples.extend(TracePoint(a.x+(b.x-a.x)*i/steps,
+                                      a.y+(b.y-a.y)*i/steps) for i in range(steps))
+        samples.append(points[-1])
+        for a, b in zip(samples, samples[1:]):
+            d = math.hypot(b.x-a.x,b.y-a.y)
+            dx, dy = -(b.y-a.y)*width/(2*d), (b.x-a.x)*width/(2*d)
+            corners = [TracePoint(a.x+dx,a.y+dy), TracePoint(b.x+dx,b.y+dy),
+                       TracePoint(b.x-dx,b.y-dy), TracePoint(a.x-dx,a.y-dy)]
+            vertices = [surface(side, p, offset) for p in corners]
+            self.mesh.quad(vertices if side > 0 else vertices[::-1], material, color)
+
+    def shell(self):
+        b = self.mesh
+        # Split at every contour landmark so the cutouts follow the trace exactly.
+        cuts = sorted({p.x for points in [self.top,self.lower,*self.arches]
+                       for p in points})
+        for side in [-1,1]:
+            for left,right in zip(cuts,cuts[1:]):
+                def flank(u,v):
+                    x = left+(right-left)*(u if side > 0 else 1-u)
+                    y = self.bottom(x)+(self.at(self.top,x)-self.bottom(x))*v
+                    return self.side(side,TracePoint(x,y))
+                b.patch(max(1,int((right-left)/3)),16,flank,PAINT,WHITE)
+            for arch in self.arches:
+                self.line(side,arch,METAL,CHROME,width=1.7,offset=.007)
+                for a,c in zip(arch,arch[1:]):
+                    outer_a,outer_c = self.side(side,a),self.side(side,c)
+                    inner_a = (outer_a[0]-side*.18,outer_a[1],outer_a[2])
+                    inner_c = (outer_c[0]-side*.18,outer_c[1],outer_c[2])
+                    b.quad([outer_a,outer_c,inner_c,inner_a],RUBBER,DARK)
+            for left,right in zip(self.roof,self.roof[1:]):
+                def pillar(u,v):
+                    x=left.x+(right.x-left.x)*(u if side > 0 else 1-u)
+                    y=self.at(self.top,x)+(self.at(self.roof,x)-self.at(self.top,x))*v
+                    return self.cabin_side(side,TracePoint(x,y))
+                b.patch(max(1,int((right.x-left.x)/4)),8,pillar,PAINT,WHITE)
+        # Hood/deck and a softly crowned roof connect both traced side panels.
+        for left,right in zip(self.top,self.top[1:]):
+            def deck(u,v):
+                x=left.x+(right.x-left.x)*u
+                q=v*2-1
+                return (q*self.width(x), self.height(self.at(self.top,x))+.022*(1-q*q), self.length(x))
+            b.patch(max(1,int((right.x-left.x)/4)),24,deck,PAINT,WHITE)
+        for left,right in zip(self.roof,self.roof[1:]):
+            def roof(u,v):
+                x=left.x+(right.x-left.x)*u
+                q=v*2-1
+                # The centre of the roof reaches the traced highest point.
+                return (q*.715,self.height(self.at(self.roof,x))-.018*q*q,self.length(x))
+            b.patch(max(1,int((right.x-left.x)/3)),24,roof,PAINT,WHITE)
+        for x in [269,1512]:
+            b.quad([self.side(-1,TracePoint(x,self.at(self.lower,x))),
+                    self.side(1,TracePoint(x,self.at(self.lower,x))),
+                    self.side(1,TracePoint(x,self.at(self.top,x))),
+                    self.side(-1,TracePoint(x,self.at(self.top,x)))][::1 if x==269 else -1],PAINT,WHITE)
+
+    def windows(self):
+        # Hardtop opening and the slim divider in front of the triangular quarter glass.
+        windows = [[TracePoint(747,291),TracePoint(835,211),TracePoint(997,211),
+                    TracePoint(1027,217),TracePoint(1026,291)],
+                   [TracePoint(1040,219),TracePoint(1074,241),TracePoint(1135,273),
+                    TracePoint(1040,289)]]
+        for side in [-1,1]:
+            for outline in windows:
+                # Vertical strips follow the curved pillar surface without
+                # large decal triangles cutting through the painted shell.
+                cuts=sorted({p.x for p in outline} |
+                            {p.x for p in self.roof+self.top
+                             if min(p.x for p in outline) < p.x < max(p.x for p in outline)})
+                for left,right in zip(cuts,cuts[1:]):
+                    def limits(x):
+                        x=max(min(p.x for p in outline),min(max(p.x for p in outline),x))
+                        crossings=[]
+                        for a,c in zip(outline,outline[1:]+outline[:1]):
+                            if a.x != c.x and min(a.x,c.x) <= x <= max(a.x,c.x):
+                                crossings.append(a.y+(c.y-a.y)*(x-a.x)/(c.x-a.x))
+                        return WindowSpan(top=min(crossings),bottom=max(crossings))
+                    def pane(u,v):
+                        x=left+(right-left)*(u if side > 0 else 1-u)
+                        span=limits(x)
+                        return self.cabin_side(side,TracePoint(x,span.top+(span.bottom-span.top)*v),.009)
+                    self.mesh.patch(max(1,math.ceil((right-left)/2)),6,pane,GLASS,(.12,.17,.20))
+                self.line(side,outline+outline[:1],RUBBER,DARK,width=5,cabin=True,offset=.008)
+            surround=[TracePoint(738,295),TracePoint(830,203),TracePoint(999,203),
+                      TracePoint(1038,210),TracePoint(1083,241),TracePoint(1142,275)]
+            self.line(side,surround,METAL,CHROME,width=1.8,cabin=True,offset=.011)
+            self.line(side,[TracePoint(747,295),TracePoint(1028,296)],METAL,CHROME,
+                      width=2,cabin=True,offset=.011)
+        # Windshield and backlight lie on the transverse sloping roof surface.
+        for start,end in [(706,803),(1182,1278)]:
+            def glass(u,v):
+                x=start+(end-start)*u
+                q=(v*2-1)*.88
+                return (q*.715,self.height(self.at(self.roof,x))-.018*q*q+.009,self.length(x))
+            self.mesh.patch(end-start,32,glass,GLASS,(.12,.17,.20))
+
+
 def mosquito():
     b = Mesh()
-    stations=[(-2.35,.83,.24,.25),(-2.0,.95,.29,.38),(-1.38,.98,.27,.40),
-              (-.65,.92,.27,.32),(.55,.91,.24,.31),(1.36,.98,.23,.36),
-              (2.08,.92,.21,.27),(2.35,.83,.22,.23)]
-    axles=[-1.38,1.36]
-    cabin=[(-1.45,.68,.33),(-.80,.72,.80),(-.30,.73,.84),(.25,.71,.82),(.95,.76,.27)]
-    shell=Coachwork(b,stations,axles,.33,cabin)
-    shell.skin(hatch=True,rub_strip=False)
-    # Low, wide grille and single round headlamps with chrome bezels.
-    b.box((-.82,-.015,2.351),(.82,.215,2.37),RUBBER,DARK)
-    for y in [-.025,.215]: b.box((-.84,y,2.372),(.84,y+.009,2.383),METAL,CHROME)
-    for x in [-.84,.831]: b.box((x,-.025,2.372),(x+.009,.224,2.383),METAL,CHROME)
-    for i in range(21):
-        x=-.49+i*.049
-        b.box((x,.0,2.373),(x+.007,.20,2.378),RUBBER,(.09,.10,.11))
+    trace = MosquitoTrace(b)
+    trace.shell()
+    trace.windows()
     for side in [-1,1]:
-        b.disc((side*.68,.105,2.384),.112,METAL,CHROME)
-        b.disc((side*.68,.105,2.39),.099,LENS,(.72,.77,.74))
-        b.box((side*.47-.08,-.18,2.39),(side*.47+.08,-.13,2.402),LENS,(.91,.46,.08))
-    b.box((-.87,-.10,2.32),(.87,-.045,2.405),METAL,CHROME)
-    b.box((-.43,-.28,2.352),(.43,-.215,2.37),RUBBER,DARK)
-    badge(b,'SS',(0,.105,2.39),.013)
-    # Twin bonnet/deck stripes; surface-following paint avoids floating decals.
+        # Full length coupe door, chrome rocker, pull handle and three quarter vents.
+        trace.line(side,[TracePoint(720,305),TracePoint(693,367),TracePoint(712,465),
+                         TracePoint(1045,454),TracePoint(1048,352),TracePoint(1035,297)],
+                   RUBBER,(.055,.06,.065),width=1.5)
+        trace.line(side,[TracePoint(612,470),TracePoint(1128,457)],METAL,CHROME,width=3)
+        trace.line(side,[TracePoint(991,322),TracePoint(1033,320)],METAL,CHROME,width=4)
+        trace.line(side,[TracePoint(1000,326),TracePoint(1026,325)],RUBBER,DARK,width=2)
+        for x in [1100,1117,1134]:
+            trace.line(side,[TracePoint(x,431),TracePoint(x+12,395),TracePoint(x+23,372)],
+                       METAL,CHROME,width=7,offset=.007)
+            trace.line(side,[TracePoint(x+1,430),TracePoint(x+13,395),TracePoint(x+23,373)],
+                       RUBBER,DARK,width=4,offset=.009)
+        trace.line(side,[TracePoint(282,391),TracePoint(330,390)],METAL,CHROME,width=5)
+        trace.line(side,[TracePoint(1462,368),TracePoint(1480,367)],METAL,CHROME,width=6)
+        trace.line(side,[TracePoint(1464,368),TracePoint(1478,367)],RUBBER,DARK,width=3,offset=.007)
+        # Small fender SS emblem and the chrome mirror at the windshield foot.
+        for x in [640,658]:
+            trace.line(side,[TracePoint(x+12,397),TracePoint(x+3,397),TracePoint(x,400),
+                             TracePoint(x+11,401),TracePoint(x+9,404),TracePoint(x,404)],
+                       METAL,CHROME,width=1.5)
+        mount=trace.side(side,TracePoint(781,302),.02)
+        b.box((mount[0]-.022,mount[1],mount[2]-.015),
+              (mount[0]+.022,mount[1]+.075,mount[2]+.015),METAL,CHROME)
+        b.box((side*.99-.045,mount[1]+.06,mount[2]-.055),
+              (side*.99+.045,mount[1]+.135,mount[2]+.025),METAL,CHROME)
+    front=trace.length(269)-.014
+    rear=trace.length(1512)
+    b.box((-.78,trace.height(410),front),(.78,trace.height(355),front+.004),RUBBER,DARK)
     for side in [-1,1]:
-        shell.stripe(side*.27,.19,1.02,2.23,(.87,.86,.79))
-        shell.stripe(side*.27,.19,-2.23,-1.48,(.87,.86,.79))
-        shell.stripe(side*.62,.005,1.03,2.21,(.05,.045,.04))
-    b.box((-.87,-.035,-2.366),(.87,.245,-2.349),RUBBER,DARK)
-    tail_pair(b,-2.375,.83,.37,.055,.20)
-    for side in [-1,1]:
-        for k in [1,2]:
-            x=side*(.37+(.83-.37)*k/3)
-            b.box((x-.003,.055,-2.388),(x+.003,.20,-2.381),RUBBER,DARK)
-    b.box((-.88,-.10,-2.41),(.88,-.045,-2.33),METAL,CHROME)
-    b.box((-.22,-.23,-2.39),(.22,-.14,-2.372),METAL,(.65,.66,.61))
-    badge(b,'MOSQUITO',(0,-.187,-2.393),.007)
-    badge(b,'SS',(0,.12,-2.383),.012)
-    for x in [-.64,.64]:
-        b.box((x-.035,-.29,-2.46),(x+.035,-.24,-2.25),METAL,(.43,.46,.48))
-    return b,axles,.33,.77,'classic'
+        b.disc((side*.64,trace.height(382),front+.009),.094,METAL,CHROME)
+        b.disc((side*.64,trace.height(382),front+.014),.082,LENS,(.72,.77,.74))
+    b.box((-.80,trace.height(429),front-.015),(.80,trace.height(411),front+.008),METAL,CHROME)
+    b.box((-.84,trace.height(382),rear-.048),(.84,trace.height(359),rear+.012),METAL,CHROME)
+    tail_pair(b,rear-.014,.73,.36,trace.height(346),trace.height(321))
+    badge(b,'SS',(0,trace.height(340),rear-.026),.012)
+    # Rear valance trim follows the short upswept tail visible in the reference.
+    b.box((-.79,trace.height(443),trace.length(1482)),
+          (.79,trace.height(435),trace.length(1452)),METAL,CHROME)
+    # Match the slightly taller rear tire in the supplied side elevation.
+    fit=WheelFit(rear_radius=.334,front_radius=.306)
+    axles=[trace.length(1248),trace.length(491)]
+    return b,axles,fit,.79,'wire'
 
 
 def pitsunda():
@@ -403,8 +639,10 @@ def export(path, body, axles, radius, track, style):
         blob.extend(data)
         return index
     parts=[('body',body,None)]
+    fit=radius if isinstance(radius,WheelFit) else WheelFit(rear_radius=radius,front_radius=radius)
     for i,(axle,side) in enumerate([(axles[0],-1),(axles[0],1),(axles[1],-1),(axles[1],1)]):
-        parts.append((['wheel_rl','wheel_rr','wheel_fl','wheel_fr'][i],wheel(radius,.18,side,style),(side*track,radius-.48,axle)))
+        wheel_radius=fit.rear_radius if i < 2 else fit.front_radius
+        parts.append((['wheel_rl','wheel_rr','wheel_fl','wheel_fr'][i],wheel(wheel_radius,.18,side,style),(side*track,wheel_radius-.48,axle)))
     for name,mesh,translation in parts:
         data=b''.join(struct.pack('<9f',*v) for v in mesh.vertices)
         view=add(data,34962);doc['bufferViews'][view]['byteStride']=36

@@ -1,5 +1,6 @@
 {
   "name": "1969 MOSQUITO SS",
+  "paint_color": [0.035, 0.56, 0.82],
   "weight_kg": 1450.0,
   "brake_force": 26100.0,
   "tire_friction_coefficient": 1.019368,
