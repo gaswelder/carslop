@@ -88,6 +88,12 @@ impl Location {
                 .collect(),
         )
         .with_terrain(&field);
+        for entrance in stored.entrances {
+            city.entrances
+                .entry(entrance.building_id)
+                .or_default()
+                .push(entrance.position);
+        }
         city.furniture = stored
             .furniture
             .into_iter()

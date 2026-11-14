@@ -463,6 +463,12 @@ impl Location {
         city.bounding_box = source.bounding_box;
         city.roads = RoadNetwork::from_source(source.road_nodes, source.road_lines);
         city.buildings = Buildings::new(source.buildings);
+        for entrance in source.entrances {
+            city.entrances
+                .entry(entrance.building_id)
+                .or_default()
+                .push(entrance.position);
+        }
         Ok(city)
     }
 }

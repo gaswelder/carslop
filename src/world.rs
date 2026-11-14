@@ -39,6 +39,13 @@ pub struct RoadRise {
     pub points: [XYZ; 3],
 }
 
+/// Mapped entrance position on the perimeter of its owning building.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entrance<T = f32> {
+    pub building_id: u64,
+    pub position: XZ<T>,
+}
+
 /// Prepared runtime world. Constructed by asset loading or authored circuit preparation.
 #[derive(Debug)]
 pub struct Location {
@@ -57,6 +64,7 @@ pub struct Location {
     roads: RoadNetwork,
     ground: landscape::GroundCover,
     buildings: Buildings,
+    entrances: HashMap<u64, Vec<XZ<f32>>>,
     barriers: Barriers,
     raised_roads: RaisedRoads,
 
@@ -297,6 +305,7 @@ impl Location {
             display_name: String::new(),
             origin: None,
             buildings: Buildings::new(Vec::new()),
+            entrances: HashMap::new(),
             barriers: Barriers::new(Vec::new()),
             raised_roads: RaisedRoads::new(Vec::new()),
             furniture: Vec::new(),

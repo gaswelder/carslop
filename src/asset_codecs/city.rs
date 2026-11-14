@@ -3,7 +3,8 @@ use crate::error;
 use crate::error::invalid;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::source_location::{SourceLocation, SourceRoad};
-use crate::world::Building;
+use crate::world::{Building, Entrance};
+use std::collections::BTreeSet;
 use std::io::Write;
 
 #[derive(Clone, Copy)]
@@ -74,6 +75,15 @@ pub fn write(
             write!(writer, " {} {}", Number(p.x, coords), Number(p.z, coords))?;
         }
         writeln!(writer)?;
+    }
+    for entrance in &map.entrances {
+        writeln!(
+            writer,
+            "e {} {} {}",
+            entrance.building_id,
+            Number(entrance.position.x, coords),
+            Number(entrance.position.z, coords)
+        )?;
     }
     Ok(())
 }
@@ -176,6 +186,17 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                     },
                 });
             }
+            Some("e") => {
+                if fields.len() != 4 {
+                    return Err("invalid entrance record".into());
+                }
+                city.entrances.push(Entrance {
+                    building_id: fields[1]
+                        .parse()
+                        .map_err(|_| "invalid entrance building ID")?,
+                    position: XZ { x: f(2)?, z: f(3)? },
+                });
+            }
             Some("b") => {
                 let id = fields
                     .get(1)
@@ -213,6 +234,14 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
             .any(|(a, b)| a >= b)
     {
         return Err("empty city or invalid bounds".into());
+    }
+    let buildings: BTreeSet<_> = city.buildings.iter().map(|building| building.id).collect();
+    if city
+        .entrances
+        .iter()
+        .any(|entrance| !buildings.contains(&entrance.building_id))
+    {
+        return Err("entrance references a missing building".into());
     }
     Ok(city)
 }
@@ -265,6 +294,30 @@ mod tests {
             ],
         });
         map
+    }
+
+    #[test]
+    fn entrance_records_round_trip_and_require_an_existing_building() {
+        for precision in [Precision::Imported, Precision::Authored] {
+            let mut map = fixture();
+            map.entrances.push(Entrance {
+                building_id: 7,
+                position: XZ {
+                    x: 1.123456789,
+                    z: 2.0,
+                },
+            });
+            let mut bytes = Vec::new();
+            write(&mut bytes, &map, precision).unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let city = parse(text).unwrap();
+            assert_eq!(city.entrances.len(), 1);
+            assert_eq!(city.entrances[0].building_id, 7);
+            assert!((city.entrances[0].position.x - 1.1234568).abs() < 0.001);
+            for malformed in ["e 999 0 0", "e 7 NaN 0", "e 7 0", "e bad 0 0"] {
+                assert!(parse(&format!("{text}{malformed}\n")).is_err());
+            }
+        }
     }
 
     #[test]

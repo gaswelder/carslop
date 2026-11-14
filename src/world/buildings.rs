@@ -39,6 +39,9 @@ impl Buildings {
     }
 }
 impl Location {
+    pub fn building_entrances(&self, building_id: u64) -> &[XZ<f32>] {
+        self.entrances.get(&building_id).map_or(&[], Vec::as_slice)
+    }
     pub fn buildings(&self) -> &[Building] {
         &self.buildings.items
     }

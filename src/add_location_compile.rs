@@ -741,6 +741,20 @@ fn create_location_map(
             base_y: 0.0,
             ground_outline: points,
         });
+        for node_id in way.nodes.iter().copied().collect::<BTreeSet<_>>() {
+            let Some(node) = source.nodes.get(&node_id) else {
+                continue;
+            };
+            if matches!(node.tag("entrance"), "" | "no") {
+                continue;
+            }
+            if let Some(coord) = node.coord {
+                map.entrances.push(world::Entrance {
+                    building_id: way.id as u64,
+                    position: map.metres(coord),
+                });
+            }
+        }
     }
     Ok(map)
 }

@@ -1195,3 +1195,106 @@ fn excluded_crossing_roads_do_not_paint_nearby_parallel_streets() {
             .all(|triangle| triangle.usage != world::TriangleUsage::Marking));
     }
 }
+
+#[test]
+fn entrance_nodes_stay_with_their_buildings_when_footprint_winding_changes() {
+    let mut source = source();
+    node(&mut source, 1, XZ { x: -40., z: -20. }, &[]);
+    node(&mut source, 2, XZ { x: 40., z: -20. }, &[]);
+    way(&mut source, 300, &[1, 2], &[("highway", "residential")]);
+    struct MappedNode {
+        id: i64,
+        position: XZ,
+    }
+    for mapped in [
+        MappedNode {
+            id: 10,
+            position: XZ { x: 0., z: 0. },
+        },
+        MappedNode {
+            id: 11,
+            position: XZ { x: 4., z: 0. },
+        },
+        MappedNode {
+            id: 12,
+            position: XZ { x: 12., z: 0. },
+        },
+        MappedNode {
+            id: 13,
+            position: XZ { x: 12., z: 10. },
+        },
+        MappedNode {
+            id: 14,
+            position: XZ { x: 0., z: 10. },
+        },
+        MappedNode {
+            id: 15,
+            position: XZ { x: 12., z: 6. },
+        },
+        MappedNode {
+            id: 20,
+            position: XZ { x: 20., z: 0. },
+        },
+        MappedNode {
+            id: 21,
+            position: XZ { x: 24., z: 0. },
+        },
+        MappedNode {
+            id: 22,
+            position: XZ { x: 30., z: 0. },
+        },
+        MappedNode {
+            id: 23,
+            position: XZ { x: 30., z: 10. },
+        },
+        MappedNode {
+            id: 24,
+            position: XZ { x: 20., z: 10. },
+        },
+        MappedNode {
+            id: 30,
+            position: XZ { x: 6., z: 5. },
+        },
+    ] {
+        node(&mut source, mapped.id, mapped.position, &[]);
+    }
+    test_support::set_osm_tags(source.nodes.get_mut(&11).unwrap(), &[("entrance", "main")]);
+    test_support::set_osm_tags(
+        source.nodes.get_mut(&15).unwrap(),
+        &[("entrance", "service")],
+    );
+    test_support::set_osm_tags(source.nodes.get_mut(&21).unwrap(), &[("entrance", "no")]);
+    test_support::set_osm_tags(source.nodes.get_mut(&30).unwrap(), &[("entrance", "yes")]);
+    way(
+        &mut source,
+        100,
+        &[10, 11, 12, 15, 13, 14, 10],
+        &[("building", "yes")],
+    );
+    way(
+        &mut source,
+        200,
+        &[20, 21, 22, 23, 24, 20],
+        &[("building", "yes")],
+    );
+    let map = fixture_map(&source, None).unwrap();
+    assert_eq!(map.entrances.len(), 2);
+    assert!(map
+        .entrances
+        .iter()
+        .all(|entrance| entrance.building_id == 100));
+    assert!(map
+        .entrances
+        .iter()
+        .any(|entrance| (entrance.position.x - 4.).abs() < 0.001
+            && entrance.position.z.abs() < 0.001));
+    source.ways.get_mut(&100).unwrap().nodes.reverse();
+    let reversed = fixture_map(&source, None).unwrap();
+    assert_eq!(reversed.entrances, map.entrances);
+    let temp = Temp::new();
+    let parsed = src_files::write_city_txt(&map, &temp.directory.join("city.txt"))
+        .unwrap()
+        .city;
+    assert_eq!(parsed.entrances.len(), 2);
+    assert_eq!(parsed.entrances[0].building_id, 100);
+}

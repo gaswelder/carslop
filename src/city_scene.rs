@@ -235,6 +235,110 @@ fn tinted(color: [f32; 3], gain: f32) -> [f32; 3] {
     color.map(|c| (c * gain).clamp(0.0, 1.0))
 }
 
+// Entrance nodes often split a straight wall. Merge those segments for facade
+// details while keeping the surveyed footprint for the shell and collision.
+fn facade_edges(outline: &[XZ<f32>]) -> Vec<[XZ<f32>; 2]> {
+    let mut corners = Vec::new();
+    for (i, point) in outline.iter().enumerate() {
+        let before = outline[(i + outline.len() - 1) % outline.len()];
+        let after = outline[(i + 1) % outline.len()];
+        let length = (after.x - before.x).hypot(after.z - before.z);
+        if length < 0.0001 || cross(before, *point, after).abs() / length as f64 > 0.02 {
+            corners.push(*point);
+        }
+    }
+    let points = if corners.len() >= 3 {
+        &corners
+    } else {
+        outline
+    };
+    (0..points.len())
+        .map(|i| [points[i], points[(i + 1) % points.len()]])
+        .collect()
+}
+
+struct Door {
+    wall: usize,
+    center: f32,
+    bottom: f32,
+}
+struct DoorCandidate {
+    placement: Door,
+    distance: f32,
+}
+fn door_placements(
+    building: &Building,
+    city: &Location,
+    edges: &[[XZ<f32>; 2]],
+    models: &Catalog,
+) -> Vec<Door> {
+    let entrances = city.building_entrances(building.id);
+    if entrances.is_empty() {
+        if building.height_meters <= models.placement.entrance_min_height {
+            return Vec::new();
+        }
+        return edges
+            .iter()
+            .enumerate()
+            .find_map(|(wall, [a, c])| {
+                let length = (c.x - a.x).hypot(c.z - a.z);
+                (length > models.placement.entrance_min_wall).then_some(Door {
+                    wall,
+                    center: length * 0.5,
+                    bottom: building.base_y + 0.02,
+                })
+            })
+            .into_iter()
+            .collect();
+    }
+    if building.height_meters < models.entrance.size.y + 0.04 {
+        return Vec::new();
+    }
+    let margin = models.entrance.size.x / 2.0 + 0.02;
+    let mut doors: Vec<Door> = Vec::new();
+    for position in entrances {
+        let candidate = edges
+            .iter()
+            .enumerate()
+            .filter_map(|(wall, [a, c])| {
+                let length = (c.x - a.x).hypot(c.z - a.z);
+                if length < margin * 2.0 {
+                    return None;
+                }
+                let center = (((position.x - a.x) * (c.x - a.x)
+                    + (position.z - a.z) * (c.z - a.z))
+                    / length)
+                    .clamp(margin, length - margin);
+                let point = XZ {
+                    x: a.x + (c.x - a.x) * center / length,
+                    z: a.z + (c.z - a.z) * center / length,
+                };
+                let distance = (position.x - point.x).hypot(position.z - point.z);
+                (distance <= 0.75).then_some(DoorCandidate {
+                    placement: Door {
+                        wall,
+                        center,
+                        bottom: city.height(point)
+                            + city.paving_height(point).unwrap_or(0.02)
+                            + 0.01,
+                    },
+                    distance,
+                })
+            })
+            .min_by(|a, b| a.distance.total_cmp(&b.distance));
+        if let Some(candidate) = candidate {
+            let door = candidate.placement;
+            if !doors.iter().any(|other| {
+                other.wall == door.wall
+                    && (other.center - door.center).abs() < models.entrance.size.x * 0.9
+            }) {
+                doors.push(door);
+            }
+        }
+    }
+    doors
+}
+
 fn building_mesh(
     b: &mut Builder,
     building: &Building,
@@ -382,9 +486,9 @@ fn building_mesh(
         shutter: shutter.color,
         glass: [1.0; 3],
     };
-    for i in 0..building.ground_outline.len() {
-        let a = building.ground_outline[i];
-        let c = building.ground_outline[(i + 1) % building.ground_outline.len()];
+    let edges = facade_edges(&building.ground_outline);
+    let doors = door_placements(building, city, &edges, models);
+    for (i, [a, c]) in edges.iter().copied().enumerate() {
         let length = (c.x - a.x).hypot(c.z - a.z);
         if length < 3.0 {
             continue;
@@ -440,10 +544,12 @@ fn building_mesh(
             for column in 0..columns {
                 let center = (column as f32 + 0.5) * length / columns as f32;
                 if floor == 0
-                    && i == 0
-                    && length > models.placement.entrance_min_wall
-                    && building.height_meters > models.placement.entrance_min_height
-                    && (center - length * 0.5).abs() < half + 0.72
+                    && doors.iter().any(|door| {
+                        door.wall == i
+                            && (center - door.center).abs()
+                                < half + models.entrance.size.x * 0.5 + 0.45
+                            && bottom < door.bottom + models.entrance.size.y + 0.1
+                    })
                 {
                     continue;
                 }
@@ -480,17 +586,6 @@ fn building_mesh(
                 }
             }
         }
-        // One recessed-looking entrance, reserved for a single substantial wall.
-        if i == 0
-            && length > models.placement.entrance_min_wall
-            && building.height_meters > models.placement.entrance_min_height
-        {
-            let center = length * 0.5;
-            let bottom = building.base_y + 0.02;
-            models
-                .entrance
-                .place(b, [a, c], center, bottom, models.entrance.size, &tints);
-        }
         // Broad stacked terraces on two substantial exterior faces. Keep them
         // off concave footprints, where an outward projection could fill a court.
         let convex = (0..building.ground_outline.len()).all(|j| {
@@ -509,6 +604,11 @@ fn building_mesh(
         {
             apartment_balconies(b, a, c, building, storey, style, models, &tints);
         }
+    }
+    for door in doors {
+        models.entrance.place(
+            b, edges[door.wall], door.center, door.bottom, models.entrance.size, &tints,
+        );
     }
 }
 
@@ -718,6 +818,78 @@ mod tests {
     use crate::hud;
     use crate::location;
     use crate::test_support;
+
+    #[test]
+    fn mapped_doors_use_their_walls_and_local_ground_without_an_extra_default() {
+        let mut city = test_support::parse_world(concat!(
+            "CITY 2\nbounds -50 -50 50 50\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n",
+            "b 1 6 1 5 0 5 0 0 12 0 12 10 0 10\ne 1 0 5\ne 1 12 7\n",
+        ))
+        .unwrap();
+        let field = elevation::HeightField::generate(city.bounding_box(), |point| {
+            point.x * 0.1 + point.z * 0.02
+        });
+        test_support::set_elevation(&mut city, Some(field));
+        let building = &city.buildings()[0];
+        let edges = facade_edges(&building.ground_outline);
+        assert_eq!(edges.len(), 4, "entrance nodes must not split facade runs");
+        let models = Catalog::load_default().unwrap();
+        let doors = door_placements(building, &city, &edges, &models);
+        assert_eq!(doors.len(), 2);
+        let mut mesh = Builder::default();
+        building_mesh(&mut mesh, building, &city, true, &models);
+        let tints = Tints {
+            wall: [1.; 3],
+            frame: [1.; 3],
+            glass: [1.; 3],
+            trim: [1.; 3],
+            shutter: [1.; 3],
+        };
+        for door in doors {
+            let [a, c] = edges[door.wall];
+            let length = (c.x - a.x).hypot(c.z - a.z);
+            let p = XZ {
+                x: a.x + (c.x - a.x) * door.center / length,
+                z: a.z + (c.z - a.z) * door.center / length,
+            };
+            assert!(city
+                .building_entrances(1)
+                .iter()
+                .any(|entry| (entry.x - p.x).hypot(entry.z - p.z) < 0.0001));
+            assert!((door.bottom - city.height(p) - 0.03).abs() < 0.0001);
+            let mut expected = Builder::default();
+            models.entrance.place(
+                &mut expected,
+                [a, c],
+                door.center,
+                door.bottom,
+                models.entrance.size,
+                &tints,
+            );
+            assert!(!expected.vertices.is_empty());
+            for vertex in expected.vertices {
+                assert!(
+                    mesh.vertices.iter().any(|actual| actual
+                        .position
+                        .iter()
+                        .zip(vertex.position)
+                        .all(|(a, b)| (*a - b).abs() < 0.00001)),
+                    "mapped door missing from the facade mesh"
+                );
+            }
+        }
+        let city = test_support::parse_world("CITY 2\nbounds -50 -50 50 50\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\nb 1 6 1 4 0 0 12 0 12 10 0 10\n").unwrap();
+        assert_eq!(
+            door_placements(
+                &city.buildings()[0],
+                &city,
+                &facade_edges(&city.buildings()[0].ground_outline),
+                &models
+            )
+            .len(),
+            1
+        );
+    }
 
     #[test]
     fn shared_building_storefronts_load_and_render_separate_panels() {

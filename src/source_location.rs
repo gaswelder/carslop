@@ -6,7 +6,7 @@ use crate::city;
 use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::location;
-use crate::world::Building;
+use crate::world::{Building, Entrance};
 use geo::{Intersects, MultiPolygon, Point};
 
 #[derive(Debug)]
@@ -17,6 +17,7 @@ pub struct SourceLocation<T = f64> {
     pub road_nodes: Vec<XYZ<T>>,
     pub road_lines: Vec<SourceRoad<T>>,
     pub buildings: Vec<Building<T>>,
+    pub entrances: Vec<Entrance<T>>,
 }
 
 /// Road metadata at source precision; path lengths and indexes belong to preparation.
@@ -70,6 +71,7 @@ impl<T: Default> SourceLocation<T> {
             road_nodes: Vec::new(),
             road_lines: Vec::new(),
             buildings: Vec::new(),
+            entrances: Vec::new(),
         }
     }
 }

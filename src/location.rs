@@ -24,6 +24,7 @@ pub struct Location {
     pub road_nodes: Vec<XZ<f32>>,
     pub roads: Vec<Road>,
     pub buildings: Vec<Building>,
+    pub entrances: Vec<world::Entrance>,
     pub streets: Streets,
     pub pavement_height_meters: f32,
     pub elevation: HeightField,
@@ -195,6 +196,7 @@ impl Location {
                     height_meters: b.height_meters,
                 })
                 .collect(),
+            entrances: source.entrances,
             streets,
             pavement_height_meters,
             elevation: assets
@@ -273,6 +275,12 @@ impl Location {
                     write!(city, " {} {}", p.x, p.z)?;
                 }
                 writeln!(city)?;
+            }
+            for entrance in &self.entrances {
+                writeln!(
+                    city, "e {} {} {}",
+                    entrance.building_id, entrance.position.x, entrance.position.z,
+                )?;
             }
             city.flush()?;
             fs::write(
@@ -412,6 +420,7 @@ mod tests {
         assert_eq!(a.road_nodes, b.road_nodes);
         assert_eq!(a.roads, b.roads);
         assert_eq!(a.buildings, b.buildings);
+        assert_eq!(a.entrances, b.entrances);
         assert_eq!(a.streets, b.streets);
         assert_eq!(a.pavement_height_meters, b.pavement_height_meters);
         assert_eq!(a.elevation, b.elevation);
@@ -438,6 +447,10 @@ mod tests {
             location.roads[0].width_meters = 8.123457;
             location.elevation.values[0] = 7.1234565;
             if populated {
+                location.entrances.push(world::Entrance {
+                    building_id: 1,
+                    position: XZ { x: 10., z: 12.123457 },
+                });
                 location.road_rises.push(world::RoadRise {
                     points: [
                         XZ { x: 0., z: 0. }.at_height(0.),
