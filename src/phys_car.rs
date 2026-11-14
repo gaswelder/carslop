@@ -30,12 +30,11 @@ fn torque_factor(curve: &[asset_car::TorquePoint], rpm: f32) -> f32 {
 const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 
 impl asset_car::CarSpec {
-    fn drive_force(&self, speed: f32, gear: u8, boost_fraction: f32) -> f32 {
+    fn drive_force(&self, speed: f32, gear: u8) -> f32 {
         let g = &self.gearbox;
         let ratio = g.ratios[(gear - 1) as usize];
         let rpm = g.rpm(speed, gear).max(IDLE_RPM);
         self.engine_torque(rpm) * ratio * g.final_drive * DRIVETRAIN_EFFICIENCY / g.rolling_radius
-            * boost_fraction
     }
 
     /// Full-load crankshaft torque, bounded by the authored engine power.
@@ -51,7 +50,7 @@ impl asset_car::CarSpec {
     }
 
     /// Full-throttle equilibrium on level ground in the best forward gear.
-    /// Uses steady turbo boost and the same torque, redline and road load as driving.
+    /// Uses the same spec torque, redline and road load as driving.
     pub fn calculate_top_speed(&self) -> f32 {
         (1..=self.gearbox.gears())
             .map(|gear| {
@@ -59,15 +58,7 @@ impl asset_car::CarSpec {
                 let mut high = self.gearbox.speed_at_rpm(self.redline_rpm, gear);
                 for _ in 0..48 {
                     let speed = (low + high) * 0.5;
-                    let rpm = self.gearbox.rpm(speed, gear).max(IDLE_RPM);
-                    let boost = self.turbo.as_ref().map_or(1.0, |t| {
-                        let spool = ((rpm - t.spool_start_rpm)
-                            / (t.full_boost_rpm - t.spool_start_rpm))
-                            .clamp(0.0, 1.0);
-                        t.off_boost_fraction + (1.0 - t.off_boost_fraction) * spool
-                    });
-                    if self.drive_force(speed, gear, boost)
-                        > self.weight_kg * self.resistance_accel(speed)
+                    if self.drive_force(speed, gear) > self.weight_kg * self.resistance_accel(speed)
                     {
                         low = speed;
                     } else {
@@ -653,11 +644,7 @@ impl Vehicle {
         let combustion = if self.fuel_cut {
             0.0
         } else {
-            throttle
-                * (spec.engine_torque(self.engine_rpm)
-                    * self.boost_power_fraction()
-                    * DRIVETRAIN_EFFICIENCY
-                    + drag)
+            throttle * (spec.engine_torque(self.engine_rpm) * DRIVETRAIN_EFFICIENCY + drag)
         };
         combustion - drag
     }
@@ -690,12 +677,6 @@ impl Vehicle {
             spec.engine_max_torque_nm * 2.0 * engagement,
             dt,
         ))
-    }
-
-    fn boost_power_fraction(&self) -> f32 {
-        self.spec.turbo.as_ref().map_or(1.0, |t| {
-            t.off_boost_fraction + (1.0 - t.off_boost_fraction) * self.turbo_boost
-        })
     }
 
     fn update_turbo(&mut self, dt: f32, throttle: f32) {
@@ -859,7 +840,11 @@ impl Vehicle {
     fn resolve_road(&mut self) -> f32 {
         if self.track.has_compiled_roads() {
             let city = &self.track;
-            return city.constrain(&mut self.position, &mut self.velocity);
+            return city.constrain(
+                &mut self.position,
+                &mut self.velocity,
+                self.spec.design.height(),
+            );
         }
         let bounds = self.track.terrain_bounds();
         let mut impact = 0.0_f32;
@@ -1276,8 +1261,7 @@ mod tests {
     #[test]
     fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         let run = |throttle| {
-            let mut car =
-                level_route_car(test_support::scenic_id(), test_support::car());
+            let mut car = level_route_car(test_support::scenic_id(), test_support::car());
             let h = car.heading;
             car.velocity = XZ {
                 x: h.sin() * 10.0 + h.cos() * 2.0,
@@ -1753,7 +1737,7 @@ mod tests {
                         z: q.z + curb.inward.z * distance,
                     };
                     let before = p;
-                    city.constrain(&mut p, &mut XZ::default());
+                    city.constrain(&mut p, &mut XZ::default(), 1.7);
                     if (p.x - before.x).hypot(p.z - before.z) > 0.001 {
                         return None;
                     }
@@ -1767,8 +1751,7 @@ mod tests {
             z: q.z + normal.z * 0.08,
         };
         let heading = (-normal.x).atan2(-normal.z);
-        let mut car =
-            Vehicle::on_track(position, heading, test_support::car(), track.clone());
+        let mut car = Vehicle::on_track(position, heading, test_support::car(), track.clone());
         car.velocity = normal.map(|n| -n * 8.0);
         car.update(Duration::from_millis(24), Controls::default());
         assert!(!city.contains_road(XZ {
@@ -2538,60 +2521,5 @@ mod tests {
                 v.driven_wheel_omega
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod turbo_tests {
-    use super::*;
-    use crate::test_support;
-
-    #[test]
-    fn boost_lags_adds_force_and_dumps_on_lift_shift_and_reset() {
-        let model = test_support::cars()
-            .iter()
-            .cloned()
-            .find(|m| m.turbo.is_some())
-            .unwrap();
-        let mut car = Vehicle::new(
-            XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            0.0,
-            model,
-        );
-        car.gear = 3;
-        car.engine_rpm = 4200.0;
-        let cold_force = car.engine_net_torque(1.0);
-        car.update_turbo(0.02, 1.0);
-        assert!(car.turbo_boost < 0.05);
-        for _ in 0..1500 {
-            car.update_turbo(0.004, 1.0);
-        }
-        assert!(car.turbo_boost > 0.99);
-        assert!(car.engine_net_torque(1.0) > cold_force * 1.6);
-        for _ in 0..30 {
-            car.update_turbo(0.004, 0.0);
-        }
-        assert!(car.turbo_boost < 0.15);
-        assert!(car.turbo_spool > car.turbo_boost);
-        car.shift(true);
-        car.update_turbo(0.1, 1.0);
-        assert!(car.turbo_boost < 0.05);
-        car.reset(
-            XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            0.0,
-        );
-        assert_eq!(car.turbo_spool, 0.0);
-        assert_eq!(car.turbo_boost, 0.0);
-        car.gear = NEUTRAL_GEAR;
-        car.update_turbo(5.0, 1.0);
-        assert_eq!(car.turbo_spool, 0.0);
     }
 }

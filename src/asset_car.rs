@@ -51,7 +51,6 @@ pub struct TorquePoint {
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct Turbo {
-    pub off_boost_fraction: f32,
     pub spool_start_rpm: f32,
     pub full_boost_rpm: f32,
     pub spool_seconds: f32,
@@ -236,7 +235,6 @@ impl CarDefinition {
             }
         }
         if let Some(turbo) = &self.turbo {
-            fraction(turbo.off_boost_fraction)?;
             for value in [
                 turbo.spool_start_rpm,
                 turbo.full_boost_rpm,

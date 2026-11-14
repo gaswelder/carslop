@@ -109,7 +109,6 @@
     "samples": "../1964-kestrel/audio"
   },
   "turbo": {
-    "off_boost_fraction": 0.6,
     "spool_start_rpm": 2000,
     "full_boost_rpm": 3800,
     "spool_seconds": 0.65,
