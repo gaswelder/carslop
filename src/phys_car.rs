@@ -14,7 +14,7 @@ const SOUND_SHIFT_SECONDS: f32 = 0.36;
 const AIR_DENSITY_KG_M3: f32 = 1.225;
 
 // Assumes all cars have the same tires.
-const FRICTION_COEFFICIENT_ASPHALT: f32 = 1.2;
+const FRICTION_COEFFICIENT_ASPHALT: f32 = 1.5;
 
 fn torque_factor(curve: &[asset_car::TorquePoint], rpm: f32) -> f32 {
     let upper = curve.partition_point(|point| point.rpm < rpm);
