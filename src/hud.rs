@@ -130,7 +130,7 @@ pub struct PauseMenu<'a> {
 
 const MAP_CONTENT: [[f32; 2]; 2] = [[0.61, 0.49], [0.95, 0.88]];
 const FULL_MAP_CONTENT: [[f32; 2]; 2] = [[-0.94, -0.72], [0.94, 0.75]];
-const MAP_WIDTH_METRES: f32 = 500.0;
+const MAP_WIDTH_METRES: f32 = 1000.0;
 
 struct MapFit {
     center: XZ<f32>,
@@ -1465,10 +1465,7 @@ mod tests {
                     let width = (east[0] - center[0]) * viewport[0];
                     let height = (south[1] - center[1]).abs() * viewport[1];
                     assert!((width - height).abs() < 0.001);
-                    assert_eq!(
-                        south[1] < center[1],
-                        id == test_support::nicosia_id()
-                    );
+                    assert_eq!(south[1] < center[1], id == test_support::nicosia_id());
                 }
             }
         }
