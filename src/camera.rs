@@ -155,11 +155,9 @@ impl ChaseCamera {
     }
 }
 
-// A rigid mount above the rear of the bonnet. Both the eye and sightline
-// use the rendered body basis, including suspension pitch, roll and curb heave.
 fn bonnet_pose(car: &Vehicle) -> Pose {
     let body = gl::vehicle_body_matrix(car);
-    let eye = XYZ::from_fn(|i| body[12 + i] + body[4 + i] * 0.65 + body[8 + i] * 0.95);
+    let eye = XYZ::from_fn(|i| body[12 + i] + body[4 + i] * 0.85 + body[8 + i] * 0.95);
     Pose {
         eye: (eye),
         target: XYZ::from_fn(|i| eye.component(i) + (body[8 + i] - body[4 + i] * 0.08) * 30.0),
