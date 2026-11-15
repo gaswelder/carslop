@@ -4,7 +4,7 @@ use crate::location;
 #[cfg(test)]
 use crate::test_support;
 pub use crate::world::{Curb, Triangle};
-use crate::world::{CurbStyle, Location, Material, TriangleUsage};
+use crate::world::{CurbStyle, WorldLocation, Material, TriangleUsage};
 use std::collections::HashMap;
 
 /// Runtime centrelines in local metres, indexed like Location::road_lines.
@@ -220,7 +220,7 @@ impl StreetSurface {
 
 impl StreetSurface {
     #[cfg(test)]
-    fn into_test_location(self) -> Location {
+    fn into_test_location(self) -> WorldLocation {
         let mut location = test_support::empty_world();
         test_support::install_surfaces(&mut location, self);
         location
@@ -318,7 +318,7 @@ impl Triangle {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn paved(&self, p: XZ<f32>) -> bool {
         if self
             .triangle_at(p, true)

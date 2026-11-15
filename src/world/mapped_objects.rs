@@ -1,11 +1,11 @@
 //! Contact with the same mapped street objects used by the scene builder.
-use super::{spatial, Location};
+use super::{spatial, WorldLocation};
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{MapObject, ObjectKind};
 use crate::track;
 use crate::vehicle_location;
 
-impl Location {
+impl WorldLocation {
     pub fn mapped_object_clearance(&self, p: XZ<f32>) -> f32 {
         self.details
             .nearby_objects(p)

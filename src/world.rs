@@ -56,7 +56,7 @@ pub struct Entrance<T = f32> {
 
 /// Prepared runtime world. Constructed by asset loading or authored circuit preparation.
 #[derive(Debug)]
-pub struct Location {
+pub struct WorldLocation {
     pub id: LocationId,
     assets: Option<city_assets::CityAsset>,
     pub display_name: String,
@@ -72,7 +72,7 @@ pub struct Location {
     roads: RoadNetwork,
     ground: landscape::GroundCover,
     buildings: Buildings,
-    details: map_details::Prepared,
+    pub details: map_details::Prepared,
     entrances: HashMap<u64, Vec<XZ<f32>>>,
     barriers: Barriers,
     raised_roads: RaisedRoads,
@@ -346,7 +346,7 @@ impl Building {
     }
 }
 
-impl Location {
+impl WorldLocation {
     fn empty() -> Self {
         Self {
             roads: RoadNetwork::empty(),
@@ -370,7 +370,7 @@ impl Location {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn map_details(&self) -> &map_details::Data {
         self.details.data()
     }
@@ -534,13 +534,13 @@ pub enum LocationId {
     File(usize),
 }
 
-impl Location {
+impl WorldLocation {
     pub fn assets(&self) -> Option<&city_assets::CityAsset> {
         self.assets.as_ref()
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn elevation(&self) -> Option<&HeightField> {
         self.elevation.as_ref()
     }
@@ -555,7 +555,7 @@ impl Location {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn bounding_box(&self) -> BoundingBoxXZ<f32> {
         self.bounding_box
     }

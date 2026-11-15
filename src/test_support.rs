@@ -168,7 +168,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
     })
 }
 
-pub fn track() -> Arc<track::Location> {
+pub fn track() -> Arc<track::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Module test road","scenery":"coastal","points":[[0,3,0,8],[400,6,0,8],[400,5,400,8],[0,3,400,8]]}"#).unwrap();
     track::register_file(file.path())
@@ -283,11 +283,7 @@ pub fn cars() -> Vec<std::sync::Arc<asset_car::CarSpec>> {
 
 /// Tiny generated world with a real scene archive and one raw aerial tile.
 /// All fixtures use the same relative filenames to expose accidental cross-world reads.
-pub fn generated_location(
-    directory: &std::path::Path,
-    height: f32,
-    provider: &str,
-) -> CityAsset {
+pub fn generated_location(directory: &std::path::Path, height: f32, provider: &str) -> CityAsset {
     use std::fs;
     fs::create_dir_all(directory.join("elevation")).unwrap();
     fs::create_dir_all(directory.join("aerial")).unwrap();
@@ -356,7 +352,7 @@ pub fn location_ids() -> [track::LocationId; 3] {
     [track::LocationId::Compact, scenic_id(), nicosia_id()]
 }
 
-pub fn variable_width_track() -> Arc<track::Location> {
+pub fn variable_width_track() -> Arc<track::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
     track::register_file(file.path())
@@ -370,8 +366,8 @@ pub fn angle(value: f32) -> f32 {
     (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
-pub fn compact_track() -> Arc<track::Location> {
-    static TRACK: OnceLock<Arc<track::Location>> = OnceLock::new();
+pub fn compact_track() -> Arc<track::WorldLocation> {
+    static TRACK: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
     TRACK
         .get_or_init(|| track::LocationId::Compact.try_track().unwrap())
         .clone()
@@ -382,12 +378,7 @@ pub fn vehicle(
     heading: f32,
     model: std::sync::Arc<asset_car::CarSpec>,
 ) -> phys_car::Vehicle {
-    phys_car::Vehicle::on_track(
-        position,
-        heading,
-        model,
-        compact_track(),
-    )
+    phys_car::Vehicle::on_track(position, heading, model, compact_track())
 }
 
 pub fn partition(vertices: Vec<scene::Vertex>) -> Vec<chunks::Chunk> {
@@ -443,8 +434,8 @@ pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
     element
 }
 
-pub fn nicosia_world() -> Arc<track::Location> {
-    static WORLD: OnceLock<Arc<track::Location>> = OnceLock::new();
+pub fn nicosia_world() -> Arc<track::WorldLocation> {
+    static WORLD: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
     WORLD
         .get_or_init(|| nicosia_id().try_track().unwrap())
         .clone()

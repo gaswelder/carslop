@@ -4,7 +4,7 @@ use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::phys_car;
 #[cfg(test)]
 use crate::track::LocationId;
-use crate::{asset_car, track::Location};
+use crate::{asset_car, track::WorldLocation};
 use std::ffi::CString;
 
 mod atlas;
@@ -81,7 +81,7 @@ pub fn selection_menu_hit_test(
     location_menu_hit_test(x, y, selected, count)
 }
 pub struct Map<'a> {
-    pub track: &'a Location,
+    pub track: &'a WorldLocation,
     pub player: XYZ,
 }
 
@@ -140,7 +140,7 @@ struct MapFit {
     content: [[f32; 2]; 2],
 }
 impl MapFit {
-    fn new(track: &Location, player: XYZ, viewport: [f32; 2]) -> Self {
+    fn new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> Self {
         let x_scale = (MAP_CONTENT[1][0] - MAP_CONTENT[0][0]) / MAP_WIDTH_METRES;
         Self {
             center: player.xz(),
@@ -191,7 +191,7 @@ struct FullMapView {
     max_scale: f32,
 }
 impl FullMapView {
-    fn new(track: &Location, player: XYZ, viewport: [f32; 2]) -> Self {
+    fn new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> Self {
         // Keep the minimap's metres per pixel, expanding the visible area.
         let mut fit = MapFit::new(track, player, viewport);
         fit.content = FULL_MAP_CONTENT;
@@ -1212,7 +1212,7 @@ fn text_with_font(
     });
 }
 
-impl Location {
+impl WorldLocation {
     fn map_segments(&self) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
         Box::new(
             self.road_lines()

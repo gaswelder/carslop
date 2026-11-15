@@ -50,7 +50,7 @@ impl Buildings {
         self
     }
 }
-impl Location {
+impl WorldLocation {
     pub fn building_style(&self, building: &Building) -> Option<&map_details::BuildingStyle> {
         self.buildings
             .groups

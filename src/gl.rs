@@ -573,7 +573,7 @@ impl Drop for Mesh {
 
 impl Mesh {
     pub fn new(
-        track: &track::Location,
+        track: &track::WorldLocation,
         cars: &[std::sync::Arc<asset_car::CarSpec>],
     ) -> Result<Self, String> {
         let archive = if track.has_compiled_roads() {
@@ -1184,7 +1184,7 @@ pub fn garage_camera(
     aspect: f32,
     position: XYZ,
     angle: f32,
-    city: Option<&world::Location>,
+    city: Option<&world::WorldLocation>,
 ) -> Camera {
     let angle = angle + 0.8;
     let eye = XYZ {
@@ -1755,7 +1755,7 @@ mod renderer_tests {
     use crate::test_support;
 
     fn assert_particle_pixel_readback(app: &App) {
-        let car = &app.session.vehicle;
+        let car = &app.session.car;
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
@@ -1893,7 +1893,7 @@ mod renderer_tests {
                 app.program,
                 hud::Map {
                     track: app.session.track(),
-                    player: app.session.vehicle.position,
+                    player: app.session.car.position,
                 },
                 0.0,
                 hud::Gauges {
@@ -1931,7 +1931,7 @@ mod renderer_tests {
     fn stop_lights_renderer() {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
-            let mut car = test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+            let mut car = test_support::vehicle(app.session.car.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -2055,7 +2055,7 @@ mod renderer_tests {
     fn reverse_lights_renderer() {
         let app = App::new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
-            let mut car = test_support::vehicle(app.session.vehicle.position, 0.0, model.clone());
+            let mut car = test_support::vehicle(app.session.car.position, 0.0, model.clone());
             let p = car.position;
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
@@ -2137,7 +2137,7 @@ mod renderer_tests {
     }
 
     fn assert_contact_pixel_readback(app: &App) {
-        let car = &app.session.vehicle;
+        let car = &app.session.car;
         let camera = gl::chase_camera(
             WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
             camera::Pose {
@@ -2226,13 +2226,13 @@ mod renderer_tests {
             for distance in [50.0, 50.6] {
                 let road = app.session.track().at_distance(distance);
                 app.session
-                    .vehicle
+                    .car
                     .reset(road.vehicle_position(0.0), road.heading());
-                app.session.vehicle.tire_scrub = 0.9;
-                app.session.skids.record(0, &app.session.vehicle);
+                app.session.car.tire_scrub = 0.9;
+                app.session.skids.record(0, &app.session.car);
             }
             assert!(!app.session.skids.vertices().is_empty());
-            let v = &mut app.session.vehicle;
+            let v = &mut app.session.car;
             v.velocity = geometry::XZ {
                 x: v.heading.sin() * 8.0,
                 z: v.heading.cos() * 8.0,
@@ -2247,7 +2247,7 @@ mod renderer_tests {
             );
             for _ in 0..20 {
                 app.session.particles.advance(TICK);
-                app.session.particles.record(0, &app.session.vehicle, TICK);
+                app.session.particles.record(0, &app.session.car, TICK);
             }
             assert_particle_pixel_readback(&app);
             for fraction in [0.0, 0.25, 0.5, 0.75] {
@@ -2256,7 +2256,7 @@ mod renderer_tests {
                     .track()
                     .at_distance(app.session.track().sampling_length() * fraction);
                 app.session
-                    .vehicle
+                    .car
                     .reset(road.vehicle_position(0.0), road.heading());
                 app.snap_camera();
                 assert_contact_pixel_readback(&app);
@@ -2265,7 +2265,7 @@ mod renderer_tests {
                         app.key_down(Keycode::Tab);
                     }
                     for _ in 0..120 {
-                        app.chase.update(&app.session.vehicle, TICK);
+                        app.chase.update(&app.session.car, TICK);
                     }
                     app.render(TICK);
                     assert_eq!(
@@ -2299,16 +2299,16 @@ mod renderer_tests {
             s.state = GameState::Menu;
             for model in test_support::cars() {
                 s.select_car(model.clone());
-                assert!(std::sync::Arc::ptr_eq(&s.vehicle.spec, &model));
+                assert!(std::sync::Arc::ptr_eq(&s.car.spec, &model));
                 assert_eq!(s.track().id, id);
                 assert!(s.state == GameState::Menu);
                 let road = s.track().at_distance(s.track().sampling_length() * 0.5);
-                s.vehicle.reset(road.vehicle_position(0.0), road.heading());
+                s.car.reset(road.vehicle_position(0.0), road.heading());
                 s.recoveries = 2;
                 s.restart();
                 assert_eq!(s.track().id, id);
-                assert!(std::sync::Arc::ptr_eq(&s.vehicle.spec, &model));
-                assert_eq!(s.vehicle.position, s.track().spawn().vehicle_position(0.0));
+                assert!(std::sync::Arc::ptr_eq(&s.car.spec, &model));
+                assert_eq!(s.car.position, s.track().spawn().vehicle_position(0.0));
                 assert_eq!(s.recoveries, 0);
                 assert!(s.state == GameState::Driving);
                 s.state = GameState::Menu;
@@ -2321,9 +2321,9 @@ mod renderer_tests {
         for id in test_support::location_ids() {
             let mut s = Session::on_track(test_support::car(), id.clone());
             let road = s.track().at_distance(s.track().sampling_length() * 0.5);
-            s.vehicle.reset(road.vehicle_position(1.0), road.heading());
+            s.car.reset(road.vehicle_position(1.0), road.heading());
             assert!(s.recover());
-            let recovered = s.track().project(s.vehicle.position);
+            let recovered = s.track().project(s.car.position);
             assert!((recovered.distance - road.distance).abs() < 0.1);
             assert!(recovered.offset.abs() < 0.01);
             assert_eq!(s.track().id, id);
@@ -2333,27 +2333,27 @@ mod renderer_tests {
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
         let mut s = Session::on_track(test_support::car(), test_support::nicosia_id());
-        let start = s.vehicle.position;
+        let start = s.car.position;
         for _ in 0..40 {
             s.tick(Controls {
                 throttle: 0.6,
                 ..Controls::default()
             });
         }
-        assert!((s.vehicle.position.x - start.x).hypot(s.vehicle.position.z - start.z) > 0.5);
+        assert!((s.car.position.x - start.x).hypot(s.car.position.z - start.z) > 0.5);
         s.state = GameState::Paused;
-        let frozen = s.vehicle.position;
+        let frozen = s.car.position;
         for _ in 0..10 {
             s.tick(Controls {
                 throttle: 1.0,
                 ..Controls::default()
             });
         }
-        assert_eq!(s.vehicle.position, frozen);
+        assert_eq!(s.car.position, frozen);
         s.state = GameState::Driving;
         assert!(s.recover());
         assert_eq!(s.track().id, test_support::nicosia_id());
-        assert!(s.track().road_clearance(s.vehicle.position) < 0.0);
+        assert!(s.track().road_clearance(s.car.position) < 0.0);
     }
 
     #[test]
@@ -2378,17 +2378,11 @@ mod renderer_tests {
         if app.cars.len() > 3 {
             app.menu_action(hud::MenuAction::Car(3));
             assert_eq!(app.selected_car, 3);
-            assert!(std::sync::Arc::ptr_eq(
-                &app.session.vehicle.spec,
-                &app.cars[3]
-            ));
+            assert!(std::sync::Arc::ptr_eq(&app.session.car.spec, &app.cars[3]));
             app.render(Duration::ZERO);
             app.menu_action(hud::MenuAction::Car(0));
             assert_eq!(app.selected_car, 0);
-            assert!(std::sync::Arc::ptr_eq(
-                &app.session.vehicle.spec,
-                &app.cars[0]
-            ));
+            assert!(std::sync::Arc::ptr_eq(&app.session.car.spec, &app.cars[0]));
         }
         let city_choice = app
             .locations
@@ -2453,19 +2447,16 @@ mod renderer_tests {
         let second = cache.prepare_for_render(&second_id).unwrap();
         cache.install(second);
         session.restart();
-        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
-        assert_eq!(
-            session.vehicle.position,
-            first.spawn().vehicle_position(0.0)
-        );
+        assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
+        assert_eq!(session.car.position, first.spawn().vehicle_position(0.0));
         session.state = GameState::Menu;
         session.select_car(test_support::car());
-        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
-        let position = session.vehicle.position;
+        assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
+        let position = session.car.position;
         std::fs::remove_file(second_assets.directory().join("scene.pack")).unwrap();
         assert!(cache.prepare_for_render(&second_id).is_err());
-        assert_eq!(session.vehicle.position, position);
-        assert!(std::sync::Arc::ptr_eq(&first, &session.vehicle.track));
+        assert_eq!(session.car.position, position);
+        assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
     }
 
     #[test]
@@ -2488,10 +2479,10 @@ mod renderer_tests {
             second_assets.directory().join("saved.pack"),
         )
         .unwrap();
-        let position = app.session.vehicle.position;
+        let position = app.session.car.position;
         assert!(app.install_location(second.clone()).is_err());
-        assert!(std::sync::Arc::ptr_eq(&first, &app.session.vehicle.track));
-        assert_eq!(app.session.vehicle.position, position);
+        assert!(std::sync::Arc::ptr_eq(&first, &app.session.car.track));
+        assert_eq!(app.session.car.position, position);
         assert!(app.meshes.contains_key(&first_id));
         assert!(!app.meshes.contains_key(&second_id));
         app.render(Duration::ZERO);

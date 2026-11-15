@@ -1,6 +1,6 @@
 use crate::geometry::XYZ;
 use crate::track;
-use crate::world::{Location, LocationId};
+use crate::world::{WorldLocation, LocationId};
 
 /// Authoring input for a closed circuit, discarded from runtime geometry after sampling.
 pub struct Circuit {
@@ -57,12 +57,12 @@ impl Circuit {
     }
 
     /// Build the shared runtime world once; spline control points remain authoring input.
-    pub fn build(&self, id: LocationId) -> Result<Location, String> {
-        Location::prepare_authored(self, id)
+    pub fn build(&self, id: LocationId) -> Result<WorldLocation, String> {
+        WorldLocation::prepare_authored(self, id)
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn build(id: LocationId, controls: &[XYZ]) -> Self {
         Self::build_points(
             id,

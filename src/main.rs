@@ -76,7 +76,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use track::{Location, LocationId};
+use track::{LocationId, WorldLocation};
 
 const HELP: &str = "Arguments: <command>
 Commands:
@@ -99,7 +99,7 @@ enum GameState {
 }
 
 struct Session {
-    vehicle: Vehicle,
+    car: Vehicle,
     state: GameState,
     recoveries: u32,
     skids: feedback::SkidMarks,
@@ -116,11 +116,11 @@ impl Session {
 
     fn on_world(
         model: std::sync::Arc<asset_car::CarSpec>,
-        track: std::sync::Arc<Location>,
+        track: std::sync::Arc<WorldLocation>,
     ) -> Self {
         let start = track.spawn();
         Self {
-            vehicle: {
+            car: {
                 let mut vehicle =
                     Vehicle::on_track(start.vehicle_position(0.0), start.heading(), model, track);
                 vehicle.manual = true;
@@ -135,27 +135,27 @@ impl Session {
         }
     }
 
-    fn track(&self) -> &Location {
-        &self.vehicle.track
+    fn track(&self) -> &WorldLocation {
+        &self.car.track
     }
 
     fn restart(&mut self) {
-        *self = Self::on_world(self.vehicle.spec.clone(), self.vehicle.track.clone());
+        *self = Self::on_world(self.car.spec.clone(), self.car.track.clone());
     }
 
     fn select_car(&mut self, model: std::sync::Arc<asset_car::CarSpec>) {
         if self.state != GameState::Menu {
             return;
         }
-        *self = Self::on_world(model, self.vehicle.track.clone());
+        *self = Self::on_world(model, self.car.track.clone());
         self.state = GameState::Menu;
     }
 
     fn update_feedback(&mut self) {
         self.skids.advance(TICK);
-        self.skids.record(0, &self.vehicle);
+        self.skids.record(0, &self.car);
         self.particles.advance(TICK);
-        self.particles.record(0, &self.vehicle, TICK);
+        self.particles.record(0, &self.car, TICK);
     }
 
     fn tick(&mut self, controls: Controls) {
@@ -164,7 +164,7 @@ impl Session {
         }
         self.signal_time =
             (self.signal_time + TICK.as_secs_f32()).rem_euclid(traffic::CYCLE_SECONDS);
-        self.impact = self.impact.max(self.vehicle.update(TICK, controls));
+        self.impact = self.impact.max(self.car.update(TICK, controls));
         self.update_feedback();
     }
 
@@ -172,10 +172,10 @@ impl Session {
         if self.state != GameState::Driving {
             return false;
         }
-        let road = self.track().recovery(self.vehicle.position);
-        let backwards = (self.vehicle.heading - road.heading()).cos() < 0.0;
+        let road = self.track().recovery(self.car.position);
+        let backwards = (self.car.heading - road.heading()).cos() < 0.0;
         let heading = road.heading() + if backwards { std::f32::consts::PI } else { 0.0 };
-        self.vehicle.reset(road.vehicle_position(0.0), heading);
+        self.car.reset(road.vehicle_position(0.0), heading);
         self.skids.break_trail(0);
         self.particles.reset_car(0);
         self.impact = 0.0;
@@ -318,10 +318,10 @@ impl App {
         } else {
             Settings::load()
         };
-        let mut chase = camera::ChaseCamera::new(&session.vehicle);
+        let mut chase = camera::ChaseCamera::new(&session.car);
         if let Some(view) = settings.camera() {
             chase.set_view(view);
-            chase.snap(&session.vehicle);
+            chase.snap(&session.car);
         }
         let mut app = Self {
             sdl_context,
@@ -371,7 +371,7 @@ impl App {
         }
     }
 
-    fn install_location(&mut self, world: std::sync::Arc<Location>) -> Result<(), String> {
+    fn install_location(&mut self, world: std::sync::Arc<WorldLocation>) -> Result<(), String> {
         // Keep the active session and all its GL resources until candidate creation succeeds.
         let candidate_mesh = if self.meshes.contains_key(&world.id) {
             None
@@ -385,7 +385,7 @@ impl App {
         self.meshes
             .retain(|key, _| key.asset_path().is_none() || key == &world.id);
         self.locations_cache.install(world.clone());
-        self.session = Session::on_world(self.session.vehicle.spec.clone(), world);
+        self.session = Session::on_world(self.session.car.spec.clone(), world);
         self.restart();
         Ok(())
     }
@@ -426,7 +426,7 @@ impl App {
     }
 
     fn snap_camera(&mut self) {
-        self.chase.snap(&self.session.vehicle);
+        self.chase.snap(&self.session.car);
     }
 
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -489,7 +489,7 @@ impl App {
             }
             let impact = std::mem::take(&mut self.session.impact);
             if let Some(audio) = &mut self.audio {
-                let car = &self.session.vehicle;
+                let car = &self.session.car;
                 if let Err(error) = audio.update(
                     car,
                     self.chase.pose(),
@@ -633,7 +633,7 @@ impl App {
         let url = self
             .session
             .track()
-            .google_maps_url(self.session.vehicle.position);
+            .google_maps_url(self.session.car.position);
         let status = if let Some(url) = url {
             match self
                 .sdl_context
@@ -652,9 +652,9 @@ impl App {
         self.hud.map_copy_status(
             hud::Map {
                 track: self.session.track(),
-                player: self.session.vehicle.position,
+                player: self.session.car.position,
             },
-            self.session.vehicle.heading,
+            self.session.car.heading,
             [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
             status,
         );
@@ -667,9 +667,9 @@ impl App {
         if let Some(zoom) = self.hud.zoom_full_map(
             hud::Map {
                 track: self.session.track(),
-                player: self.session.vehicle.position,
+                player: self.session.car.position,
             },
-            self.session.vehicle.heading,
+            self.session.car.heading,
             [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
             steps,
         ) {
@@ -692,9 +692,9 @@ impl App {
                 self.hud.prepare_full_map(
                     hud::Map {
                         track: self.session.track(),
-                        player: self.session.vehicle.position,
+                        player: self.session.car.position,
                     },
-                    self.session.vehicle.heading,
+                    self.session.car.heading,
                     [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
                     self.settings.map_zoom(),
                 );
@@ -747,7 +747,7 @@ impl App {
                 }
             }
             Keycode::A | Keycode::Z if self.session.state == GameState::Driving => {
-                self.session.vehicle.shift(key == Keycode::A);
+                self.session.car.shift(key == Keycode::A);
             }
             Keycode::V => {
                 if let Some(audio) = &mut self.audio {
@@ -779,13 +779,13 @@ impl App {
         let _ = self.window.set_title(&format!(
             "{} | {} | FREE DRIVE",
             self.session.track().display_name,
-            self.session.vehicle.spec.name,
+            self.session.car.spec.name,
         ));
     }
 
     fn render_scene(&mut self, frame_time: Duration) {
         gl::set_signal_time(self.scene_program, self.session.signal_time);
-        let car = &self.session.vehicle;
+        let car = &self.session.car;
         if matches!(self.session.state, GameState::Driving) {
             self.chase.update(car, frame_time);
         }
@@ -808,7 +808,7 @@ impl App {
         } else {
             gl::chase_camera(aspect, self.chase.pose())
         };
-        let vehicles = [(&self.session.vehicle, car.spec.paint_color)];
+        let vehicles = [(&self.session.car, car.spec.paint_color)];
         let contacts = vehicles.map(|(car, _)| shadows::ContactShadow::new(car));
         self.mesh()
             .draw_ground(self.scene_program, &camera, &contacts);

@@ -4,9 +4,9 @@ use super::{Builder, Surface};
 use crate::geometry::{XYZ, XZ};
 use crate::map_details;
 use crate::map_details::RoadSurface;
-use crate::world::Location;
+use crate::world::WorldLocation;
 
-pub(super) fn build(builder: &mut Builder, city: &Location) {
+pub(super) fn build(builder: &mut Builder, city: &WorldLocation) {
     let concrete = Surface::matte([0.57, 0.57, 0.54]);
     let metal = Surface::matte([0.48, 0.52, 0.52]);
     for deck in &city.map_details().decks {

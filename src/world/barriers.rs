@@ -1,5 +1,5 @@
 //! Mapped barriers and their collision grid share one owner.
-use super::{Barrier, Location};
+use super::{Barrier, WorldLocation};
 use crate::geometry::{XYZ, XZ};
 use crate::track;
 use crate::vehicle_location;
@@ -35,7 +35,7 @@ impl Barriers {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn barriers(&self) -> &[Barrier] {
         &self.barriers.items
     }

@@ -21,7 +21,7 @@ pub fn prepare(
     sdl: &sdl3::Sdl,
     hud: &hud::Hud,
     program: u32,
-) -> Option<std::sync::Arc<world::Location>> {
+) -> Option<std::sync::Arc<world::WorldLocation>> {
     if id.asset_path().is_none() {
         return cache
             .prepare_for_render(&id)

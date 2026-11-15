@@ -2,7 +2,7 @@
 use super::{Builder, Surface};
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{LineKind, ObjectKind};
-use crate::world::Location;
+use crate::world::WorldLocation;
 use glam::Vec3;
 
 pub(super) fn beam(b: &mut Builder, a: XYZ, c: XYZ, width: f32, surface: Surface) {
@@ -67,7 +67,7 @@ fn cylinder(b: &mut Builder, x: f32, z: f32, radius: f32, bottom: f32, top: f32,
         );
     }
 }
-pub(super) fn build(b: &mut Builder, city: &Location, detailed: bool) {
+pub(super) fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
     let metal = Surface::matte([0.28, 0.32, 0.32]);
     let wood = Surface::matte([0.43, 0.31, 0.20]);
     let stone = Surface::matte([0.66, 0.64, 0.57]);

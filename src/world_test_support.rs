@@ -6,15 +6,15 @@ use crate::landscape;
 use crate::source_location::SourceLocation;
 use crate::street_surface;
 
-pub fn empty_world() -> Location {
-    Location::empty()
+pub fn empty_world() -> WorldLocation {
+    WorldLocation::empty()
 }
 
-pub fn parse_world(text: &str) -> Result<Location, String> {
-    Location::from_source(SourceLocation::<f32>::parse(text)?)
+pub fn parse_world(text: &str) -> Result<WorldLocation, String> {
+    WorldLocation::from_source(SourceLocation::<f32>::parse(text)?)
 }
 
-pub fn landscape(text: &str) -> Result<Location, String> {
+pub fn landscape(text: &str) -> Result<WorldLocation, String> {
     let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
     std::fs::write(folder.path().join("landscape.txt"), text).map_err(|e| e.to_string())?;
     let (ground, trees) = CityAsset::new(folder.path().to_path_buf()).get_landscape_data()?;
@@ -23,15 +23,15 @@ pub fn landscape(text: &str) -> Result<Location, String> {
     Ok(world)
 }
 
-pub fn set_elevation(world: &mut Location, field: Option<HeightField>) {
+pub fn set_elevation(world: &mut WorldLocation, field: Option<HeightField>) {
     world.elevation = field;
 }
 
-pub fn install_surfaces(world: &mut Location, surfaces: street_surface::StreetSurface) {
+pub fn install_surfaces(world: &mut WorldLocation, surfaces: street_surface::StreetSurface) {
     world.roads.geometry = RoadGeometry::Compiled(surfaces);
 }
 
-pub fn flat_track(world: &Location) -> Location {
+pub fn flat_track(world: &WorldLocation) -> WorldLocation {
     let mut track = authoring::Circuit {
         control_points: FLAT_POINTS
             .map(|p| authoring::ControlPoint {
@@ -47,7 +47,7 @@ pub fn flat_track(world: &Location) -> Location {
     track
 }
 
-pub fn bumpy_track(world: &Location) -> Location {
+pub fn bumpy_track(world: &WorldLocation) -> WorldLocation {
     let mut track = flat_track(world);
     track.roads.bump();
     track

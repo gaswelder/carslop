@@ -185,7 +185,7 @@ impl RoadNetwork {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn road_lines(&self) -> &[Road] {
         &self.roads.lines
     }
@@ -368,7 +368,7 @@ impl Location {
             .map(String::as_str)
     }
 }
-impl Location {
+impl WorldLocation {
     pub fn compiled_surfaces(&self) -> Option<&StreetSurface> {
         match &self.roads.geometry {
             RoadGeometry::Compiled(surfaces) => Some(surfaces),
@@ -460,7 +460,7 @@ mod tests {
 pub mod test_support;
 
 #[cfg(test)]
-impl Location {
+impl WorldLocation {
     #[cfg(test)]
     fn from_source(source: SourceLocation<f32>) -> Result<Self, String> {
         let mut city = Self::empty();

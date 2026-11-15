@@ -1,7 +1,7 @@
 //! Terrain-following walls and open metal, chain-link, or wooden fence panels.
 use super::{Builder, Surface};
 use crate::geometry::{XYZ, XZ};
-use crate::world::{BarrierKind, Location};
+use crate::world::{BarrierKind, WorldLocation};
 
 fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surface) {
     let length = (c.x - a.x).hypot(c.z - a.z);
@@ -45,11 +45,11 @@ fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surf
     b.upward_quad(top, surface);
 }
 
-fn support(city: &Location, point: XZ<f32>) -> XYZ {
+fn support(city: &WorldLocation, point: XZ<f32>) -> XYZ {
     point.at_height(city.height(point) + city.paving_height(point).unwrap_or(0.0))
 }
 
-pub(super) fn build(b: &mut Builder, city: &Location, detailed: bool) {
+pub(super) fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
     for barrier in city.barriers() {
         let height = barrier.height_meters;
         let width = barrier.width_meters;
@@ -243,7 +243,7 @@ mod tests {
                 &barriers,
             )
             .unwrap();
-            let mut city = world::Location::load(&assets).unwrap();
+            let mut city = world::WorldLocation::load(&assets).unwrap();
             let field = world::HeightField::generate(city.bounding_box(), |p| 7.0 + p.x * 0.1);
             test_support::set_elevation(&mut city, Some(field));
             for detailed in [false, true] {

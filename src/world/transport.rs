@@ -1,14 +1,12 @@
 //! Vertical road support and edge contact without joining crossing road levels.
-use super::Location;
+use super::WorldLocation;
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::RoadSurface;
 use crate::track;
-use crate::world::Material;
-
 use crate::vehicle_location;
 
-impl Location {
+impl WorldLocation {
     pub fn tunnel_openings(&self) -> geo::MultiPolygon<f64> {
         let pieces: Vec<_> = self.raised_roads.lowered_footprints().collect();
         if pieces.is_empty() {
@@ -18,26 +16,6 @@ impl Location {
         }
     }
 
-    pub fn mapped_surface_grip(&self, p: XYZ) -> f32 {
-        let reference = p.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-        if let Some(deck) = self.details.nearby_decks(p.xz()).find(|deck| {
-            self.details
-                .height_on(deck, p.xz())
-                .is_some_and(|h| (h - reference).abs() < 1.5)
-        }) {
-            return match deck.surface {
-                RoadSurface::Unpaved => 0.65,
-                RoadSurface::Paving => 0.90,
-                _ => 1.,
-            };
-        }
-        self.triangle_at(p.xz(), true)
-            .map_or(1., |triangle| match triangle.material {
-                Material::BareGround => 0.65,
-                Material::Paving => 0.90,
-                _ => 1.,
-            })
-    }
     pub fn paved_near(&self, p: XYZ) -> bool {
         let reference = p.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT;
         self.details
@@ -128,7 +106,7 @@ mod tests {
     fn tunnels_pass_beneath_ground_buildings_without_invisible_walls() {
         let folder = tempfile::tempdir().unwrap();
         let assets = test_support::stored_location(folder.path(), true);
-        let mut city = Location::load(&assets).unwrap();
+        let mut city = WorldLocation::load(&assets).unwrap();
         let mut data = map_details::Data::default();
         data.decks.push(map_details::Deck {
             road: 0,
@@ -183,7 +161,7 @@ mod tests {
             surface: RoadSurface::Asphalt,
         });
         stored.write(folder.path()).unwrap();
-        let city = Location::load(&assets).unwrap();
+        let city = WorldLocation::load(&assets).unwrap();
         for height in [7., 12.] {
             let p = XYZ {
                 x: 10.,
@@ -199,7 +177,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let assets = test_support::stored_location(folder.path(), false);
         for grade in [-1, 1] {
-            let mut city = Location::load(&assets).unwrap();
+            let mut city = WorldLocation::load(&assets).unwrap();
             city.elevation = Some(HeightField::generate(city.bounding_box(), |_| 0.));
             let mut data = map_details::Data::default();
             data.decks.push(map_details::Deck {

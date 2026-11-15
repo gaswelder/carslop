@@ -176,7 +176,7 @@ pub struct Geometry {
     pub wheel_range: Vec<[Range<i32>; 4]>,
 }
 
-pub fn build(track: &track::Location, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
+pub fn build(track: &track::WorldLocation, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
     if track.has_compiled_roads() {
         let city = track;
         let mut b = Builder::default();
@@ -199,7 +199,7 @@ fn generation_stage<T>(name: &str, generate: impl FnOnce() -> T) -> T {
 }
 
 pub fn city_layer_spooled(
-    city: &world::Location,
+    city: &world::WorldLocation,
     layer: usize,
     temporary_directory: &std::path::Path,
     boundary: Option<&geo::MultiPolygon<f64>>,
@@ -258,11 +258,11 @@ fn finish(mut b: Builder, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geomet
     }
 }
 
-fn terrain_height(track: &track::Location, x: f32, z: f32) -> f32 {
+fn terrain_height(track: &track::WorldLocation, x: f32, z: f32) -> f32 {
     track.terrain_height(XZ { x, z })
 }
 
-fn terrain(b: &mut Builder, track: &track::Location) {
+fn terrain(b: &mut Builder, track: &track::WorldLocation) {
     for triangle in track.ground_triangles() {
         let color = triangle.material.color();
         let points = triangle
@@ -275,7 +275,7 @@ fn terrain(b: &mut Builder, track: &track::Location) {
     }
 }
 
-fn water(b: &mut Builder, track: &track::Location) {
+fn water(b: &mut Builder, track: &track::WorldLocation) {
     let sea = elevation::SEA_LEVEL;
     let BoundingBoxXZ { min, max } = track.terrain_bounds();
     b.quad(
@@ -308,7 +308,7 @@ fn water(b: &mut Builder, track: &track::Location) {
     );
 }
 
-fn perimeter_fence(b: &mut Builder, track: &track::Location) {
+fn perimeter_fence(b: &mut Builder, track: &track::WorldLocation) {
     let BoundingBoxXZ { min, max } = track.terrain_bounds();
     let field = track.elevation().expect("authored track terrain");
     // Fence only the outer terrain perimeter, leaving both verges open.
@@ -375,7 +375,7 @@ fn perimeter_fence(b: &mut Builder, track: &track::Location) {
 
 fn road_quad(
     b: &mut Builder,
-    track: &track::Location,
+    track: &track::WorldLocation,
     points: [XYZ; 4],
     lift: f32,
     surface: Surface,
@@ -397,11 +397,11 @@ fn road_quad(
     }
 }
 
-fn road(b: &mut Builder, track: &track::Location) {
+fn road(b: &mut Builder, track: &track::WorldLocation) {
     bake_road(b, track, track::coastal_preset(&track.id));
 }
 
-fn bake_road(b: &mut Builder, track: &track::Location, coastal: bool) {
+fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
     let count = (track.sampling_length() / 0.7).ceil() as usize;
     for i in 0..count {
         let a = track.at_distance(track.sampling_length() * i as f32 / count as f32);
@@ -566,7 +566,7 @@ fn bake_road(b: &mut Builder, track: &track::Location, coastal: bool) {
     }
 }
 
-fn tree(b: &mut Builder, track: &track::Location, x: f32, z: f32, scale: f32) {
+fn tree(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32, scale: f32) {
     let y = terrain_height(track, x, z) - 0.15;
     b.cuboid(
         XYZ {
@@ -615,7 +615,7 @@ fn tree(b: &mut Builder, track: &track::Location, x: f32, z: f32, scale: f32) {
     }
 }
 
-fn house(b: &mut Builder, track: &track::Location, x: f32, z: f32) {
+fn house(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32) {
     let y = [-2.0, 2.0]
         .into_iter()
         .flat_map(|dx| [-2.0, 2.0].map(|dz| terrain_height(track, x + dx, z + dz)))
@@ -713,7 +713,7 @@ pub struct AuthoredScenery {
     pub buildings: Vec<city::Building>,
 }
 
-pub fn authored_scenery(track: &track::Location, coastal: bool) -> AuthoredScenery {
+pub fn authored_scenery(track: &track::WorldLocation, coastal: bool) -> AuthoredScenery {
     let mut trees = Vec::new();
     let mut buildings = Vec::new();
     let mut add_tree = |p: XYZ, scale: f32| {
@@ -779,7 +779,7 @@ pub fn authored_scenery(track: &track::Location, coastal: bool) -> AuthoredScene
     AuthoredScenery { trees, buildings }
 }
 
-fn scenery(b: &mut Builder, track: &track::Location) {
+fn scenery(b: &mut Builder, track: &track::WorldLocation) {
     for t in track.trees() {
         tree(b, track, t.coords.x, t.coords.z, t.height_meters / 4.3);
     }
@@ -824,7 +824,7 @@ fn rocks(b: &mut Builder) {
     }
 }
 
-pub fn bake_authored_landscape(track: &track::Location, coastal: bool) -> Vec<world::Triangle> {
+pub fn bake_authored_landscape(track: &track::WorldLocation, coastal: bool) -> Vec<world::Triangle> {
     let field = track.elevation().expect("authored track terrain");
     let mut ground = Vec::new();
     for row in 0..field.rows - 1 {
@@ -857,7 +857,7 @@ pub fn bake_authored_landscape(track: &track::Location, coastal: bool) -> Vec<wo
     ground
 }
 
-fn decorations(b: &mut Builder, track: &track::Location, coastal: bool) {
+fn decorations(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
     water(b, track);
     perimeter_fence(b, track);
     if !coastal {
@@ -865,7 +865,7 @@ fn decorations(b: &mut Builder, track: &track::Location, coastal: bool) {
     }
 }
 
-pub fn authored_decorations(track: &track::Location, coastal: bool) -> [Vec<chunks::Chunk>; 3] {
+pub fn authored_decorations(track: &track::WorldLocation, coastal: bool) -> [Vec<chunks::Chunk>; 3] {
     let mut builder = Builder::default();
     decorations(&mut builder, track, coastal);
     let mut chunks = chunks::ChunkBuilder::default();
@@ -896,7 +896,7 @@ impl Material {
     }
 }
 
-impl track::Location {
+impl track::WorldLocation {
     pub fn road_color(&self, p: XZ<f32>) -> [f32; 3] {
         self.triangle_at(p, false)
             .map_or([0.23, 0.25, 0.26], |t| t.material.color())

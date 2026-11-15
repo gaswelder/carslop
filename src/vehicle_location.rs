@@ -1,12 +1,12 @@
 //! Vehicle placement and collision response against location geometry.
 use crate::geometry::{XYZ, XZ};
 use crate::track;
-use crate::world::{Location, RoadSample};
+use crate::world::{RoadSample, WorldLocation};
 
 /// Vehicle origin height above the road's reference elevation, in metres.
 pub const VEHICLE_ORIGIN_HEIGHT: f32 = 0.48;
 
-impl Location {
+impl WorldLocation {
     /// Vehicle origin uses the asphalt's 5 cm reference. Sidewalks and other
     /// surfaces retain their rendered heights rather than burying the wheels.
     pub fn drive_height(&self, p: XZ<f32>) -> f32 {

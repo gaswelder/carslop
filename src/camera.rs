@@ -46,7 +46,7 @@ pub struct Pose {
 }
 
 pub struct ChaseCamera {
-    track: std::sync::Arc<track::Location>,
+    track: std::sync::Arc<track::WorldLocation>,
     view: FollowView,
     anchor: XYZ,
     heading: f32,
@@ -214,7 +214,7 @@ fn angle(value: f32) -> f32 {
     (value + PI).rem_euclid(TAU) - PI
 }
 
-impl track::Location {
+impl track::WorldLocation {
     pub fn camera_eye(&self, anchor: XYZ, eye: XYZ) -> XYZ {
         let length = (eye.x - anchor.x).hypot(eye.z - anchor.z);
         let steps = (length / 0.35).ceil().max(1.0) as usize;

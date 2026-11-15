@@ -3,11 +3,11 @@ use crate::authoring;
 use crate::city_assets;
 use crate::geometry::XYZ;
 use crate::scene_archive;
-pub use crate::world::{Location, LocationId, RoadSample};
+pub use crate::world::{LocationId, RoadSample, WorldLocation};
 
 // Authoring and test sampling enumerate streets in storage order. This is
 // deliberately separate from gameplay navigation, which uses nearby roads.
-impl Location {
+impl WorldLocation {
     /// Total horizontal distance of sampled streets, derived for generation and tests.
     pub fn sampling_length(&self) -> f32 {
         self.road_lines()
@@ -170,7 +170,7 @@ impl LocationId {
         }
     }
 
-    pub fn try_track(&self) -> Result<std::sync::Arc<Location>, String> {
+    pub fn try_track(&self) -> Result<std::sync::Arc<WorldLocation>, String> {
         use std::sync::Arc;
         Ok(match self {
             Self::File(index) => {
@@ -185,10 +185,10 @@ impl LocationId {
                 Arc::new(track)
             }
 
-            Self::Compact => Arc::new(Location::build(self.clone(), &ROAD_POINTS)),
-            Self::Asset(path) => {
-                Arc::new(Location::load(&city_assets::CityAsset::new(path.clone()))?)
-            }
+            Self::Compact => Arc::new(WorldLocation::build(self.clone(), &ROAD_POINTS)),
+            Self::Asset(path) => Arc::new(WorldLocation::load(&city_assets::CityAsset::new(
+                path.clone(),
+            ))?),
         })
     }
 }
@@ -199,7 +199,7 @@ impl LocationId {
 mod tests {
     use crate::test_support;
 
-    fn variable_width_track() -> std::sync::Arc<super::Location> {
+    fn variable_width_track() -> std::sync::Arc<super::WorldLocation> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
         super::register_file(file.path())
@@ -321,18 +321,21 @@ pub fn coastal_preset(id: &LocationId) -> bool {
 /// sessions keep their own Arcs. Files at a path are immutable until invalidate.
 #[derive(Clone, Default)]
 pub struct LocationCache {
-    current: Option<std::sync::Arc<Location>>,
+    current: Option<std::sync::Arc<WorldLocation>>,
 }
 impl LocationCache {
     /// Prepare a candidate without changing the installed cache or active session.
-    fn prepare(&self, id: &LocationId) -> Result<std::sync::Arc<Location>, String> {
+    fn prepare(&self, id: &LocationId) -> Result<std::sync::Arc<WorldLocation>, String> {
         let world = match self.current.as_ref().filter(|world| &world.id == id) {
             Some(world) => world.clone(),
             None => id.try_track()?,
         };
         Ok(world)
     }
-    pub fn prepare_for_render(&self, id: &LocationId) -> Result<std::sync::Arc<Location>, String> {
+    pub fn prepare_for_render(
+        &self,
+        id: &LocationId,
+    ) -> Result<std::sync::Arc<WorldLocation>, String> {
         let world = self.prepare(id)?;
         if let Some(assets) = world.assets() {
             scene_archive::Archive::open_for(assets).map_err(|e| {
@@ -341,7 +344,7 @@ impl LocationCache {
         }
         Ok(world)
     }
-    pub fn install(&mut self, world: std::sync::Arc<Location>) {
+    pub fn install(&mut self, world: std::sync::Arc<WorldLocation>) {
         self.invalidate();
         self.current = Some(world);
     }

@@ -59,7 +59,7 @@ pub fn create_track(source: &Path) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn compile(source: &Path, track: &track::Location, output: &Path) -> Result<()> {
+fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result<()> {
     println!("Sampling authored road...");
     let count = (track.sampling_length().ceil() as usize).max(4);
     let samples: Vec<_> = (0..count)
@@ -280,7 +280,7 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_elevation(track: &track::Location, output: &Path) -> Result<()> {
+fn write_elevation(track: &track::WorldLocation, output: &Path) -> Result<()> {
     fs::create_dir_all(output.join("elevation"))?;
     let field = track
         .elevation()
@@ -308,7 +308,7 @@ fn write_elevation(track: &track::Location, output: &Path) -> Result<()> {
 }
 
 fn write_landscape(
-    track: &track::Location,
+    track: &track::WorldLocation,
     trees: &[landscape::Tree],
     output: &Path,
 ) -> Result<()> {

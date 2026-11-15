@@ -11,7 +11,7 @@ use crate::geometry::{XYZ, XZ};
 use crate::landscape;
 use crate::map_details::{RoofShape, TreeKind};
 use crate::world;
-use crate::world::Location;
+use crate::world::WorldLocation;
 use geo::TriangulateEarcut;
 use std::ptr;
 
@@ -68,7 +68,7 @@ fn roof_triangles(polygon: &[XZ<f32>]) -> Vec<[usize; 3]> {
     triangles
 }
 
-pub(super) fn buildings(b: &mut Builder, city: &Location, detailed: bool) -> std::io::Result<()> {
+pub(super) fn buildings(b: &mut Builder, city: &WorldLocation, detailed: bool) -> std::io::Result<()> {
     let models = Catalog::load_default()?;
     for building in city.buildings() {
         building_mesh(b, building, city, detailed, &models);
@@ -186,7 +186,7 @@ fn drape_ground_cover(
 
 pub(super) fn ground_mesh(
     b: &mut Builder,
-    city: &Location,
+    city: &WorldLocation,
     boundary: Option<&geo::MultiPolygon<f64>>,
 ) {
     let field = city.elevation().expect("city rendering requires elevation");
@@ -355,7 +355,7 @@ struct DoorCandidate {
 }
 fn door_placements(
     building: &Building,
-    city: &Location,
+    city: &WorldLocation,
     edges: &[[XZ<f32>; 2]],
     models: &Catalog,
 ) -> Vec<Door> {
@@ -444,7 +444,7 @@ fn door_placements(
 fn building_mesh(
     b: &mut Builder,
     building: &Building,
-    city: &Location,
+    city: &WorldLocation,
     detailed: bool,
     models: &Catalog,
 ) {
@@ -834,7 +834,7 @@ fn canopy_quad(
     }
 }
 
-fn mapped_tree(b: &mut Builder, city: &Location, tree: &landscape::Tree) {
+fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &landscape::Tree) {
     let XZ { x, z } = tree.coords;
     let y = city.height(XZ { x, z });
     let h = tree.height_meters;
@@ -1154,7 +1154,7 @@ mod tests {
             serde_json::to_vec(&labels).unwrap(),
         )
         .unwrap();
-        let city = Location::load(&asset).unwrap();
+        let city = WorldLocation::load(&asset).unwrap();
         assert_eq!(city.storefront_names(1).len(), 3);
         let mut builder = Builder::default();
         storefront_signs(&mut builder, &city);
@@ -1194,7 +1194,7 @@ mod tests {
         }
     }
 
-    fn small_city() -> Location {
+    fn small_city() -> WorldLocation {
         test_support::parse_world("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n")
             .unwrap()
     }
@@ -1443,7 +1443,7 @@ mod tests {
 }
 
 /// Runtime signs also work with existing baked city archives.
-pub(super) fn storefront_signs(b: &mut Builder, city: &Location) {
+pub(super) fn storefront_signs(b: &mut Builder, city: &WorldLocation) {
     for building in city.buildings() {
         if !city
             .primary_building_volume(building.id)

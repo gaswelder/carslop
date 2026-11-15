@@ -1744,7 +1744,7 @@ fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
         fs::read_to_string(path).unwrap(),
     )
     .unwrap();
-    let prepared = world::Location::load(&assets).unwrap();
+    let prepared = world::WorldLocation::load(&assets).unwrap();
     assert!(prepared.road_triangles().is_empty());
     assert!((prepared.spawn().point.y - 12.).abs() < 0.001);
     let output = tempfile::tempdir().unwrap();
@@ -1753,7 +1753,7 @@ fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
         .write(output.path())
         .unwrap();
     let reread =
-        world::Location::load(&city_assets::CityAsset::new(output.path().to_owned())).unwrap();
+        world::WorldLocation::load(&city_assets::CityAsset::new(output.path().to_owned())).unwrap();
     assert!((reread.spawn().point.y - 12.).abs() < 0.001);
 }
 

@@ -222,7 +222,7 @@ impl rstar::Point for XZ {
     }
 }
 
-impl world::Location {
+impl world::WorldLocation {
     /// Convert local metres (east +X, south +Z) to geographic coordinates.
     pub fn geographic_position(&self, position: XYZ) -> Option<LatLon> {
         let LatLon { lat, lon } = self.origin?;

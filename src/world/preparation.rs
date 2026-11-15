@@ -14,21 +14,21 @@ use crate::world;
 /// A world with compiled street surfaces and all required bake layers installed.
 /// Read-only access prevents a caller from removing layers before scene baking.
 #[derive(Debug)]
-pub struct CompiledLocation(Location);
+pub struct CompiledLocation(WorldLocation);
 impl std::ops::Deref for CompiledLocation {
-    type Target = Location;
-    fn deref(&self) -> &Location {
+    type Target = WorldLocation;
+    fn deref(&self) -> &WorldLocation {
         &self.0
     }
 }
 impl CompiledLocation {
     /// Consume the bake capability and share the prepared world with simulation.
-    fn into_location(self) -> Location {
+    fn into_location(self) -> WorldLocation {
         self.0
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn load(assets: &city_assets::CityAsset) -> Result<Self, String> {
         CompiledLocation::load(assets).map(CompiledLocation::into_location)
     }
@@ -42,7 +42,7 @@ impl CompiledLocation {
         assets
             .resolved()
             .map_err(|e| e.to_string())
-            .and_then(|assets| Location::load_assets(&assets))
+            .and_then(|assets| WorldLocation::load_assets(&assets))
             .map(Self)
             .map_err(|error| {
                 format!(
@@ -53,7 +53,7 @@ impl CompiledLocation {
     }
 }
 
-impl Location {
+impl WorldLocation {
     /// Install parsed (already quantized) CITY geometry into a runtime draft.
     /// Only controlled preparation in this module can publish that draft.
 
@@ -120,10 +120,10 @@ impl Location {
     }
 }
 
-impl Location {
+impl WorldLocation {
     pub fn prepare_authored(circuit: &Circuit, id: LocationId) -> Result<Self, String> {
         circuit.validate()?;
-        let mut location = Location::from_circuit(circuit, id == LocationId::Compact)?;
+        let mut location = WorldLocation::from_circuit(circuit, id == LocationId::Compact)?;
         location.id = id;
         location.display_name = "COASTAL LOOP".into();
         let terrain_bounds = location.terrain_bounds();

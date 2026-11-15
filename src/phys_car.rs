@@ -1,5 +1,7 @@
 use crate::geometry::{XYZ, XZ};
+use crate::map_details::RoadSurface;
 use crate::vehicle_location;
+use crate::world::Material;
 use crate::{asset_car, phys_powertrain, track};
 use std::time::Duration;
 
@@ -13,8 +15,21 @@ const SOUND_SHIFT_SECONDS: f32 = 0.36;
 
 const AIR_DENSITY_KG_M3: f32 = 1.225;
 
-// Assumes all cars have the same tires.
-const FRICTION_COEFFICIENT_ASPHALT: f32 = 1.5;
+fn friction_coefficient_road(s: RoadSurface) -> f32 {
+    match s {
+        RoadSurface::Unpaved => 0.65,
+        RoadSurface::Paving => 0.90,
+        _ => 1.0,
+    }
+}
+
+fn friction_coefficient_other(m: Material) -> f32 {
+    match m {
+        Material::BareGround => 0.65,
+        Material::Paving => 0.90,
+        _ => 1.,
+    }
+}
 
 fn torque_factor(curve: &[asset_car::TorquePoint], rpm: f32) -> f32 {
     let upper = curve.partition_point(|point| point.rpm < rpm);
@@ -136,7 +151,7 @@ pub struct Controls {
 
 pub struct Vehicle {
     pub spec: std::sync::Arc<asset_car::CarSpec>,
-    pub track: std::sync::Arc<track::Location>,
+    pub track: std::sync::Arc<track::WorldLocation>,
     pub position: XYZ,
     pub velocity: XZ<f32>,
     pub speed: f32,
@@ -181,7 +196,7 @@ impl Vehicle {
         position: XYZ,
         heading: f32,
         spec: std::sync::Arc<asset_car::CarSpec>,
-        track: std::sync::Arc<track::Location>,
+        track: std::sync::Arc<track::WorldLocation>,
     ) -> Self {
         let mut car = Self {
             spec,
@@ -329,6 +344,7 @@ impl Vehicle {
         let direction = if reversing { -1.0 } else { 1.0 };
         let brake_accel = self.brake_accel();
         let mut impact: f32 = 0.0;
+
         for _ in 0..steps {
             let previous_gear = self.gear;
             self.refresh_speed();
@@ -399,8 +415,28 @@ impl Vehicle {
                     / spec.track_width
                     * share;
                 let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
-                FRICTION_COEFFICIENT_ASPHALT
-                    * self.track.mapped_surface_grip(self.position)
+
+                let loc = &self.track;
+                let position = self.position;
+
+                let reference = position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+                let deck = loc.details.nearby_decks(position.xz()).find(|deck| {
+                    loc.details
+                        .height_on(deck, position.xz())
+                        .is_some_and(|h| (h - reference).abs() < 1.5)
+                });
+
+                let grip = if let Some(deck) = deck {
+                    friction_coefficient_road(deck.surface)
+                } else {
+                    loc.triangle_at(position.xz(), true)
+                        .map_or(1., |triangle| friction_coefficient_other(triangle.material))
+                };
+
+                let _hack = 1.5;
+
+                _hack
+                    * grip
                     * load
                     * (1.0 - 0.18 * imbalance * imbalance)
                     * if axle == 0 { FRONT_LIMIT_GRIP } else { 1.0 }
@@ -617,6 +653,7 @@ impl Vehicle {
                 }
             }
         }
+
         self.refresh_speed();
         self.update_engine_feedback(controls, dt.as_secs_f32());
         let motion = self.velocity.x.hypot(self.velocity.z);
@@ -843,8 +880,8 @@ impl Vehicle {
     }
 
     fn steering_lock_fraction(&self) -> f32 {
-        let fade = ((self.speed.abs() - STEERING_LOCK_SPEED) / STEERING_LOCK_FADE_SPEED)
-            .clamp(0.0, 1.0);
+        let fade =
+            ((self.speed.abs() - STEERING_LOCK_SPEED) / STEERING_LOCK_FADE_SPEED).clamp(0.0, 1.0);
         1.0 - (1.0 - STEERING_HIGH_SPEED_LOCK) * fade
     }
 
@@ -1019,7 +1056,7 @@ mod tests {
                 &test_support::speed_table_rises(),
             )
             .unwrap();
-            let track = std::sync::Arc::new(world::Location::load(&assets).unwrap());
+            let track = std::sync::Arc::new(world::WorldLocation::load(&assets).unwrap());
             assert!((track.drive_height(XZ { x: 14., z: 0. }) - 7.1).abs() < 0.00001);
             let mut car = Vehicle::on_track(
                 XZ { x: 11.5, z: 0. }.at_height(7.48),
@@ -1846,8 +1883,7 @@ mod tests {
             // cycles. Keep the tight comparison until the limiter first cuts,
             // then allow its 250 RPM band plus one substep of tire acceleration.
             let mut tolerance = 0.01;
-            let limiter_tolerance =
-                model.gearbox.speed_at_rpm(250.0, 0) + FRICTION_COEFFICIENT_ASPHALT * 9.81 / 240.0;
+            let limiter_tolerance = model.gearbox.speed_at_rpm(250.0, 0) + 9.81 / 240.0;
             for _ in 0..240 * 12 {
                 for car in [&mut compact, &mut scenic] {
                     treadmill_tick(

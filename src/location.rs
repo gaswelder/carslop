@@ -538,7 +538,7 @@ mod tests {
                     .unwrap();
             assert_eq!(manifest.as_object().unwrap().len(), 1);
             let world =
-                world::Location::load(&city_assets::CityAsset::new(output.path().to_path_buf()))
+                world::WorldLocation::load(&city_assets::CityAsset::new(output.path().to_path_buf()))
                     .unwrap();
             assert!(world.has_compiled_roads());
             assert!(reread.labels.streets.contains(&(1, "Road & Square".into())));

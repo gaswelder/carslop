@@ -1,5 +1,5 @@
 //! Raised road triangles and their spatial index share one owner.
-use super::{HeightField, Location, RoadRise};
+use super::{HeightField, WorldLocation, RoadRise};
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use geo::{BooleanOps, MultiPolygon, TriangulateEarcut};
@@ -190,7 +190,7 @@ impl RaisedRoads {
             .collect()
     }
 }
-impl Location {
+impl WorldLocation {
     pub fn road_rise(&self, p: XZ<f32>) -> f32 {
         self.raised_roads.offset(p)
     }
