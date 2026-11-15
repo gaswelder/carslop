@@ -1,9 +1,9 @@
-use crate::error::{invalid, Result};
-use crate::geometry;
-use crate::geometry::XZ;
-use crate::hgt;
-use crate::hgt::covering;
-use crate::source_location::SourceLocation;
+use crate::build_hgt;
+use crate::build_hgt::covering;
+use crate::model_source_location::SourceLocation;
+use crate::util_error::{invalid, Result};
+use crate::util_geometry;
+use crate::util_geometry::XZ;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -18,7 +18,7 @@ pub fn build_terrain(
         .origin
         .ok_or_else(|| invalid("terrain requires a geographic origin"))?;
     let (dem, sources) = covering(source, map)?;
-    let datum = hgt::sample(&dem, origin)?;
+    let datum = build_hgt::sample(&dem, origin)?;
     let step = 20.0;
     let min = XZ {
         x: ((map.bounding_box.min.x - 80.0) / step).floor() * step,
@@ -44,11 +44,11 @@ pub fn build_terrain(
         for col in 0..size[0] {
             let x = min.x + col as f64 * step;
             let z = min.z + row as f64 * step;
-            let p = geometry::new(
+            let p = util_geometry::new(
                 origin.lat - z.to_degrees() / 6371000.0,
                 origin.lon + x.to_degrees() / 6371000.0 / origin.lat.to_radians().cos(),
             );
-            let value = hgt::sample(&dem, p)? - datum;
+            let value = build_hgt::sample(&dem, p)? - datum;
             if !value.is_finite() || value.abs() >= 10000.0 {
                 return Err(invalid(
                     "terrain exceeds the supported relative height range",

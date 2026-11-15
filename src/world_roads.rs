@@ -1,20 +1,20 @@
 //! Road geometry and the grid derived from its prepared paths are one owner.
 
-use crate::elevation;
-use crate::geometry;
-use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
-use crate::location;
-use crate::map_details;
+use crate::model_location;
+use crate::model_map_details;
 #[cfg(test)]
-use crate::source_location::{SourceLocation, SourceRoad};
-use crate::street_surface;
-use crate::street_surface::{RoadPaths, StreetSurface};
-use crate::world;
-use crate::world::{Curb, HeightField, Road, RoadSample, Triangle, WorldLocation};
+use crate::model_source_location::{SourceLocation, SourceRoad};
+use crate::model_world;
+use crate::model_world::{Curb, HeightField, Road, RoadSample, Triangle, WorldLocation};
+use crate::util_geometry;
+use crate::util_geometry::{BoundingBoxXZ, XYZ, XZ};
 #[cfg(test)]
 use crate::world_buildings;
+use crate::world_elevation;
 use crate::world_raised_roads;
 use crate::world_spatial;
+use crate::world_street_surface;
+use crate::world_street_surface::{RoadPaths, StreetSurface};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -38,18 +38,18 @@ pub fn empty() -> RoadNetwork {
         geometry: RoadGeometry::Centreline,
     }
 }
-pub fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<location::Road>) -> RoadNetwork {
+pub fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<model_location::Road>) -> RoadNetwork {
     from_roads(
         nodes
             .into_iter()
-            .map(|p| geometry::at_height(p, 0.0))
+            .map(|p| util_geometry::at_height(p, 0.0))
             .collect(),
         roads
             .into_iter()
             .map(|r| Road {
                 osm_way_id: r.way_id,
                 direction: r.direction,
-                ..world::new(r.ends, r.width_meters)
+                ..model_world::new(r.ends, r.width_meters)
             })
             .collect(),
     )
@@ -64,7 +64,7 @@ fn road_network_from_source(nodes: Vec<XYZ>, source_roads: Vec<SourceRoad<f32>>)
                 osm_way_id: r.osm_way_id,
                 direction: r.direction,
                 road_width_end_meters: r.road_width_start_meters,
-                ..world::new(r.ends, r.road_width_start_meters)
+                ..model_world::new(r.ends, r.road_width_start_meters)
             })
             .collect(),
     )
@@ -92,7 +92,10 @@ fn from_roads(nodes: Vec<XYZ>, source_roads: Vec<Road>) -> RoadNetwork {
         world_spatial::insert(
             &mut grid,
             world_spatial::bounds(
-                lines[i].ends.iter().map(|&node| geometry::xz(nodes[node])),
+                lines[i]
+                    .ends
+                    .iter()
+                    .map(|&node| util_geometry::xz(nodes[node])),
                 32.0,
             ),
             i,
@@ -123,12 +126,12 @@ pub fn authored(nodes: Vec<XYZ>, widths: Vec<f32>) -> Result<RoadNetwork, String
             distance,
             path: vec![a, b],
             path_distances: vec![0.0, length],
-            ..world::new([i, j], widths[i])
+            ..model_world::new([i, j], widths[i])
         });
         distance += length;
         world_spatial::insert(
             &mut grid,
-            world_spatial::bounds([a, b].into_iter().map(|p| geometry::xz(p)), 32.0),
+            world_spatial::bounds([a, b].into_iter().map(|p| util_geometry::xz(p)), 32.0),
             i,
         );
     }
@@ -167,16 +170,16 @@ pub fn with_compiled(
         distance += street.length;
         world_spatial::insert(
             &mut grid,
-            world_spatial::bounds(street.path.iter().map(|p| geometry::xz(*p)), 32.0),
+            world_spatial::bounds(street.path.iter().map(|p| util_geometry::xz(*p)), 32.0),
             i,
         );
     }
     for p in &mut road_network.nodes {
-        p.y = elevation::height(field, geometry::xz(*p));
+        p.y = world_elevation::height(field, util_geometry::xz(*p));
     }
     for street in &mut road_network.lines {
         for p in &mut street.path {
-            p.y = elevation::height(field, geometry::xz(*p));
+            p.y = world_elevation::height(field, util_geometry::xz(*p));
         }
     }
     road_network.grid = grid;
@@ -211,7 +214,7 @@ pub fn sample(world: &WorldLocation, index: usize, t: f32) -> RoadSample {
 }
 
 pub fn sample_distance(world: &WorldLocation, index: usize, distance: f32) -> RoadSample {
-    let deck = map_details::road_deck(&world.details, index);
+    let deck = model_map_details::road_deck(&world.details, index);
     let r = &world.roads.lines[index];
     let distance = distance.clamp(0.0, r.length);
     let index = r
@@ -223,19 +226,19 @@ pub fn sample_distance(world: &WorldLocation, index: usize, distance: f32) -> Ro
     let b = r.path[index + 1];
     let length = r.path_distances[index + 1] - r.path_distances[index];
     let t = ((distance - r.path_distances[index]) / length).clamp(0.0, 1.0);
-    let mut point = geometry::xyz_from_fn(|i| {
-        geometry::xyz_component(a, i)
-            + (geometry::xyz_component(b, i) - geometry::xyz_component(a, i)) * t
+    let mut point = util_geometry::xyz_from_fn(|i| {
+        util_geometry::xyz_component(a, i)
+            + (util_geometry::xyz_component(b, i) - util_geometry::xyz_component(a, i)) * t
     });
     // Compiled road surfaces are draped over the heightfield between path knots.
     if let Some(deck) = deck {
-        if let Some(height) = map_details::height_on(deck, geometry::xz(point)) {
+        if let Some(height) = model_map_details::height_on(deck, util_geometry::xz(point)) {
             point.y = height;
         }
-    } else if street_surface::has_compiled_roads(world) {
+    } else if world_street_surface::has_compiled_roads(world) {
         if let Some(field) = &world.elevation {
-            point.y = elevation::height(field, geometry::xz(point))
-                + world_raised_roads::road_rise(world, geometry::xz(point));
+            point.y = world_elevation::height(field, util_geometry::xz(point))
+                + world_raised_roads::road_rise(world, util_geometry::xz(point));
         }
     }
     RoadSample {
@@ -330,7 +333,7 @@ pub fn projected(world: &WorldLocation, index: usize, p: XYZ) -> (f32, RoadSampl
                 x: p.x - s.point.x,
                 z: p.z - s.point.z,
             };
-            s.offset = delta.x * world::normal(s).x + delta.z * world::normal(s).z;
+            s.offset = delta.x * model_world::normal(s).x + delta.z * model_world::normal(s).z;
             (delta.x.hypot(delta.z), s)
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -361,7 +364,7 @@ pub fn nearest_road(world: &WorldLocation, p: XYZ) -> (usize, RoadSample) {
                     for &i in ids {
                         if seen.insert(i) {
                             let mut candidate = projected(world, i, p);
-                            if !world::map_details(world).decks.is_empty() {
+                            if !model_world::map_details(world).decks.is_empty() {
                                 candidate.0 = candidate.0.hypot(candidate.1.point.y - p.y);
                             }
                             if best.is_none_or(|b| {
@@ -399,23 +402,23 @@ pub fn compiled_surfaces(world: &WorldLocation) -> Option<&StreetSurface> {
     }
 }
 pub fn road_triangles(world: &WorldLocation) -> &[Triangle] {
-    compiled_surfaces(world).map_or(&[], |s| street_surface::road_triangles(s))
+    compiled_surfaces(world).map_or(&[], |s| world_street_surface::road_triangles(s))
 }
 pub fn curbs(world: &WorldLocation) -> &[Curb] {
-    compiled_surfaces(world).map_or(&[], |s| street_surface::curbs(s))
+    compiled_surfaces(world).map_or(&[], |s| world_street_surface::curbs(s))
 }
 pub fn pavement_height_meters(world: &WorldLocation) -> f32 {
-    compiled_surfaces(world).map_or(street_surface::DEFAULT_PAVEMENT_HEIGHT, |s| {
-        street_surface::pavement_height_meters(s)
+    compiled_surfaces(world).map_or(world_street_surface::DEFAULT_PAVEMENT_HEIGHT, |s| {
+        world_street_surface::pavement_height_meters(s)
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::elevation;
-    use crate::geometry;
-    use crate::street_surface;
+    use crate::util_geometry;
+    use crate::world_elevation;
     use crate::world_roads;
+    use crate::world_street_surface;
 
     use super::*;
     use crate::test_support;
@@ -435,8 +438,9 @@ mod tests {
                     "p 0 3 -90 0 0 20 90 0\np 1 3 -90 70 0 50 90 70\n",
                     "t 1 -90 -4 90 -4 90 4\nc 1 -90 -4 90 -4 0 1\n"
                 );
-                let (surfaces, paths) = street_surface::load(text, 2).unwrap();
-                let field = elevation::generate(world.bounding_box, |p| p.x * 0.01 + p.z * 0.02);
+                let (surfaces, paths) = world_street_surface::load(text, 2).unwrap();
+                let field =
+                    world_elevation::generate(world.bounding_box, |p| p.x * 0.01 + p.z * 0.02);
                 world.roads =
                     world_roads::with_compiled(world.roads, surfaces, paths, &field).unwrap();
                 world.elevation = Some(field);
@@ -444,7 +448,7 @@ mod tests {
             }
             for x in (-200..=200).step_by(13) {
                 for z in (-200..=200).step_by(17) {
-                    let point = geometry::at_height(
+                    let point = util_geometry::at_height(
                         XZ {
                             x: x as f32 + 0.13,
                             z: z as f32 + 0.37,
@@ -487,13 +491,13 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "world_test_support.rs"]
+#[path = "test_world_support.rs"]
 pub mod test_support;
 
 #[cfg(test)]
 #[cfg(test)]
 fn world_location_from_source(source: SourceLocation<f32>) -> Result<WorldLocation, String> {
-    let mut city = world::empty();
+    let mut city = model_world::empty();
     city.origin = source.origin;
     city.bounding_box = source.bounding_box;
     city.roads = road_network_from_source(source.road_nodes, source.road_lines);

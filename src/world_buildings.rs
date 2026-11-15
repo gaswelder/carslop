@@ -1,15 +1,15 @@
 //! Footprints and their padded collision/camera grid cannot be edited independently.
 
-use crate::elevation;
-use crate::geometry;
+use crate::model_map_details;
+use crate::model_world;
+use crate::model_world::{Building, HeightField, WorldLocation};
+use crate::physics_vehicle_location;
+use crate::util_geometry;
 #[cfg(test)]
-use crate::geometry::BoundingBoxXZ;
-use crate::geometry::{XYZ, XZ};
-use crate::map_details;
-use crate::track;
-use crate::vehicle_location;
-use crate::world;
-use crate::world::{Building, HeightField, WorldLocation};
+use crate::util_geometry::BoundingBoxXZ;
+use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
+use crate::world_locations;
 use crate::world_spatial;
 use geo::Area;
 use std::collections::HashMap;
@@ -27,7 +27,10 @@ pub fn new(items: Vec<Building>) -> Buildings {
         groups.entry(b.id).or_default().push(i);
         world_spatial::insert(
             &mut grid,
-            world_spatial::bounds(b.ground_outline.iter().copied(), track::CAR_RADIUS + 1.0),
+            world_spatial::bounds(
+                b.ground_outline.iter().copied(),
+                world_locations::CAR_RADIUS + 1.0,
+            ),
             i,
         );
     }
@@ -40,10 +43,11 @@ pub fn new(items: Vec<Building>) -> Buildings {
 pub fn with_terrain(mut buildings: Buildings, field: &HeightField) -> Buildings {
     let mut bases: HashMap<u64, f32> = HashMap::new();
     for building in &buildings.items {
-        let height = world::rings(building)
+        let height = model_world::rings(building)
             .flat_map(|ring| {
-                (0..ring.len())
-                    .flat_map(|i| elevation::segment(field, ring[i], ring[(i + 1) % ring.len()]))
+                (0..ring.len()).flat_map(|i| {
+                    world_elevation::segment(field, ring[i], ring[(i + 1) % ring.len()])
+                })
             })
             .map(|p| p.y)
             .fold(f32::NEG_INFINITY, f32::max)
@@ -62,14 +66,14 @@ pub fn with_terrain(mut buildings: Buildings, field: &HeightField) -> Buildings 
 pub fn building_style<'a>(
     world: &'a WorldLocation,
     building: &Building,
-) -> Option<&'a map_details::BuildingStyle> {
+) -> Option<&'a model_map_details::BuildingStyle> {
     world
         .buildings
         .groups
         .get(&building.id)?
         .iter()
         .find(|i| std::ptr::eq(&world.buildings.items[**i], building))
-        .and_then(|i| map_details::building(&world.details, *i))
+        .and_then(|i| model_map_details::building(&world.details, *i))
 }
 pub fn primary_building_volume(world: &WorldLocation, id: u64) -> Option<&Building> {
     world
@@ -81,9 +85,9 @@ pub fn primary_building_volume(world: &WorldLocation, id: u64) -> Option<&Buildi
         .map(|i| &world.buildings.items[*i])
         .filter(|building| building.min_height_meters == 0.0)
         .max_by(|a, b| {
-            world::footprint(a)
+            model_world::footprint(a)
                 .unsigned_area()
-                .total_cmp(&world::footprint(b).unsigned_area())
+                .total_cmp(&model_world::footprint(b).unsigned_area())
         })
 }
 pub fn entrance_building_volume(
@@ -100,13 +104,13 @@ pub fn entrance_building_volume(
         .map(|i| &world.buildings.items[*i])
         .filter(|building| building.min_height_meters == 0.0)
         .min_by(|a, b| {
-            world::nearest(a, point)
+            model_world::nearest(a, point)
                 .2
-                .total_cmp(&world::nearest(b, point).2)
+                .total_cmp(&model_world::nearest(b, point).2)
                 .then_with(|| {
-                    world::footprint(b)
+                    model_world::footprint(b)
                         .unsigned_area()
-                        .total_cmp(&world::footprint(a).unsigned_area())
+                        .total_cmp(&model_world::footprint(a).unsigned_area())
                 })
         })
 }
@@ -129,11 +133,11 @@ pub fn nearby_buildings(world: &WorldLocation, p: XZ<f32>) -> impl Iterator<Item
 pub fn building_clearance(world: &WorldLocation, p: XZ<f32>) -> f32 {
     building_clearance_at(
         world,
-        geometry::at_height(p, world::height(world, p) + 0.48),
+        util_geometry::at_height(p, model_world::height(world, p) + 0.48),
     )
 }
 pub fn building_clearance_at(world: &WorldLocation, position: XYZ) -> f32 {
-    let p = geometry::xz(position);
+    let p = util_geometry::xz(position);
     world
         .buildings
         .grid
@@ -141,13 +145,18 @@ pub fn building_clearance_at(world: &WorldLocation, position: XYZ) -> f32 {
         .map_or(f32::INFINITY, |ids| {
             ids.iter()
                 .filter(|i| {
-                    position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT + 1.7
-                        >= world::height(world, p) - 0.2
-                        && world::overlaps_vehicle(&world.buildings.items[**i], position, 1.7)
+                    position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT + 1.7
+                        >= model_world::height(world, p) - 0.2
+                        && model_world::overlaps_vehicle(&world.buildings.items[**i], position, 1.7)
                 })
                 .map(|i| {
                     let b = &world.buildings.items[*i];
-                    world::nearest(b, p).2 * if world::contains(b, p) { -1.0 } else { 1.0 }
+                    model_world::nearest(b, p).2
+                        * if model_world::contains(b, p) {
+                            -1.0
+                        } else {
+                            1.0
+                        }
                 })
                 .fold(f32::INFINITY, f32::min)
         })
@@ -155,12 +164,12 @@ pub fn building_clearance_at(world: &WorldLocation, position: XYZ) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use crate::camera;
-    use crate::elevation;
-    use crate::geometry;
-    use crate::vehicle_location;
-    use crate::world;
+    use crate::model_world;
+    use crate::physics_vehicle_location;
+    use crate::render_camera;
+    use crate::util_geometry;
     use crate::world_buildings;
+    use crate::world_elevation;
 
     use super::*;
     use crate::test_support;
@@ -194,21 +203,21 @@ mod tests {
             "b 100 9 0 4 15 0 20 0 20 10 15 10\n",
         ))
         .unwrap();
-        let start = geometry::at_height(XZ { x: 10., z: 5. }, 0.48);
+        let start = util_geometry::at_height(XZ { x: 10., z: 5. }, 0.48);
         let mut position = start;
-        vehicle_location::constrain(&city, &mut position, &mut XZ { x: 0., z: 4. }, 1.4);
+        physics_vehicle_location::constrain(&city, &mut position, &mut XZ { x: 0., z: 4. }, 1.4);
         assert_eq!(position, start);
-        assert!(world_buildings::building_clearance(&(city), geometry::xz(position)) > 1.4);
-        let eye = geometry::at_height(XZ { x: 10., z: 15. }, 1.5);
+        assert!(world_buildings::building_clearance(&(city), util_geometry::xz(position)) > 1.4);
+        let eye = util_geometry::at_height(XZ { x: 10., z: 15. }, 1.5);
         assert_eq!(
-            camera::camera_eye(
+            render_camera::camera_eye(
                 &(city),
-                geometry::at_height(XZ { x: 10., z: -5. }, 1.5),
+                util_geometry::at_height(XZ { x: 10., z: -5. }, 1.5),
                 eye
             ),
             eye
         );
-        vehicle_location::constrain(&city, &mut position, &mut XZ { x: 0., z: 4. }, 3.5);
+        physics_vehicle_location::constrain(&city, &mut position, &mut XZ { x: 0., z: 4. }, 3.5);
         assert!((position.x - start.x).hypot(position.z - start.z) > 1.0);
     }
 
@@ -220,7 +229,7 @@ mod tests {
             building(2, 28., 28.),
             building(3, 40., 28.),
         ]);
-        let field = elevation::generate(
+        let field = world_elevation::generate(
             BoundingBoxXZ {
                 min: XZ { x: -64., z: -64. },
                 max: XZ { x: 64., z: 64. },
@@ -250,7 +259,14 @@ mod tests {
         for p in &probes {
             let expected = world_buildings::buildings(&world)
                 .iter()
-                .map(|b| world::nearest(b, *p).2 * if world::contains(b, *p) { -1. } else { 1. })
+                .map(|b| {
+                    model_world::nearest(b, *p).2
+                        * if model_world::contains(b, *p) {
+                            -1.
+                        } else {
+                            1.
+                        }
+                })
                 .fold(f32::INFINITY, f32::min);
             assert_eq!(
                 world_buildings::building_clearance(&(world), *p),
@@ -280,7 +296,7 @@ mod tests {
             let max_height = b
                 .ground_outline
                 .iter()
-                .map(|&p| elevation::height(&field, p))
+                .map(|&p| world_elevation::height(&field, p))
                 .fold(f32::NEG_INFINITY, f32::max);
             assert!((b.base_y - max_height - 0.02).abs() < 0.0001);
         }

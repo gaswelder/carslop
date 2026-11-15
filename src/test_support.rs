@@ -1,35 +1,35 @@
 //! Shared fixture builders and controlled inputs for module tests.
 
-use crate::asset_car;
+use crate::asset_car_glb;
 use crate::build_collision;
+use crate::build_osm;
 use crate::build_scene;
 use crate::build_surfaces;
-use crate::car_glb;
-use crate::chunks;
-use crate::city_assets;
-use crate::city_assets::CityAsset;
-use crate::geometry;
-use crate::geometry::{polygon, BoundingBoxXZ, XYZ, XZ};
-use crate::osm;
-use crate::phys_car;
-use crate::scene;
-use crate::source_location;
-use crate::src_files;
-use crate::street_surface;
-use crate::track;
-use crate::world;
-use crate::world::Building;
+use crate::model_car;
+use crate::model_source_location;
+use crate::model_world;
+use crate::model_world::Building;
+use crate::physics_car;
+use crate::render_chunks;
+use crate::render_scene;
+use crate::storage_city_assets;
+use crate::storage_city_assets::CityAsset;
+use crate::storage_source_files;
+use crate::util_geometry;
+use crate::util_geometry::{polygon, BoundingBoxXZ, XYZ, XZ};
+use crate::world_locations;
 use crate::world_preparation;
 pub use crate::world_roads::test_support::*;
+use crate::world_street_surface;
 use geo::MultiPolygon;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-pub fn road_footprint(surface: &street_surface::StreetSurface) -> MultiPolygon<f64> {
+pub fn road_footprint(surface: &world_street_surface::StreetSurface) -> MultiPolygon<f64> {
     build_surfaces::union(
-        &street_surface::road_triangles(surface)
+        &world_street_surface::road_triangles(surface)
             .iter()
-            .filter(|triangle| world::is_road(triangle.usage))
+            .filter(|triangle| model_world::is_road(triangle.usage))
             .map(|triangle| {
                 MultiPolygon(vec![polygon(&triangle.points.map(|point| XZ {
                     x: point.x as f64,
@@ -40,9 +40,9 @@ pub fn road_footprint(surface: &street_surface::StreetSurface) -> MultiPolygon<f
     )
 }
 
-pub fn audio_voice() -> &'static asset_car::EngineVoice {
-    static VOICE: OnceLock<asset_car::EngineVoice> = OnceLock::new();
-    VOICE.get_or_init(|| asset_car::EngineVoice {
+pub fn audio_voice() -> &'static model_car::EngineVoice {
+    static VOICE: OnceLock<model_car::EngineVoice> = OnceLock::new();
+    VOICE.get_or_init(|| model_car::EngineVoice {
         harmonics: vec![[1.0, 0.6], [2.0, 0.25], [3.0, 0.15]],
         gain: 2.0,
         coast_gain: 0.4,
@@ -71,16 +71,16 @@ pub fn engine_wav(pcm: &[u8]) -> Vec<u8> {
     wav
 }
 
-pub fn car_spec() -> &'static asset_car::CarSpec {
-    static SPEC: OnceLock<asset_car::CarSpec> = OnceLock::new();
+pub fn car_spec() -> &'static model_car::CarSpec {
+    static SPEC: OnceLock<model_car::CarSpec> = OnceLock::new();
     SPEC.get_or_init(|| {
-        let vertex = |position| scene::Vertex {
+        let vertex = |position| render_scene::Vertex {
             position,
             color: [0.5; 3],
             normal: [0.0, 1.0, 0.0],
             material: [0.0; 2],
         };
-        let design = Arc::new(car_glb::Design {
+        let design = Arc::new(asset_car_glb::Design {
             body: vec![
                 vertex([-0.9, -0.3, -2.0]),
                 vertex([0.9, -0.3, -2.0]),
@@ -117,8 +117,8 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
             ],
             wheel_radii: [0.32; 4],
         });
-        let frontal_area_m2 = car_glb::frontal_area_m2(&design);
-        asset_car::CarSpec {
+        let frontal_area_m2 = asset_car_glb::frontal_area_m2(&design);
+        model_car::CarSpec {
             design,
             name: "TEST VEHICLE".into(),
             paint_color: [1.0, 0.18, 0.08],
@@ -137,26 +137,26 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
             corner_stiffness: [70000.0; 2],
             engine_max_torque_nm: 180.0,
             engine_torque_curve: vec![
-                asset_car::TorquePoint {
+                model_car::TorquePoint {
                     rpm: 0.0,
                     torque: 0.6,
                 },
-                asset_car::TorquePoint {
+                model_car::TorquePoint {
                     rpm: 3500.0,
                     torque: 1.0,
                 },
-                asset_car::TorquePoint {
+                model_car::TorquePoint {
                     rpm: 6500.0,
                     torque: 0.9,
                 },
-                asset_car::TorquePoint {
+                model_car::TorquePoint {
                     rpm: 33500.0,
                     torque: 0.0,
                 },
             ],
             redline_rpm: 6500.0,
             suspension_hz: 1.7,
-            gearbox: asset_car::Gearbox {
+            gearbox: model_car::Gearbox {
                 ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
                 rolling_radius: 0.32,
@@ -164,7 +164,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
                 upshift_rpm: 5500.0,
                 downshift_rpm: 2200.0,
             },
-            engine_power_watts: 120.0 * asset_car::WATTS_PER_HP,
+            engine_power_watts: 120.0 * model_car::WATTS_PER_HP,
             drag_coefficient: 0.3,
             frontal_area_m2,
             turbo: None,
@@ -172,10 +172,10 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
     })
 }
 
-pub fn track() -> Arc<track::WorldLocation> {
+pub fn track() -> Arc<world_locations::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Module test road","scenery":"coastal","points":[[0,3,0,8],[400,6,0,8],[400,5,400,8],[0,3,400,8]]}"#).unwrap();
-    track::try_track(&track::register_file(file.path()).unwrap().0).unwrap()
+    world_locations::try_track(&world_locations::register_file(file.path()).unwrap().0).unwrap()
 }
 
 pub fn car_definition() -> serde_json::Value {
@@ -183,9 +183,9 @@ pub fn car_definition() -> serde_json::Value {
     serde_json::json!({
         "name": s.name, "paint_color": s.paint_color,
         "weight_kg": s.weight_kg, "brake_force": s.brake_force,
-        "engine_power_hp": s.engine_power_watts / asset_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
+        "engine_power_hp": s.engine_power_watts / model_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
-        "cg_height_fraction": s.cg_height / car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
+        "cg_height_fraction": s.cg_height / asset_car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
         "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine_max_torque_nm,
         "engine_torque_curve": s.engine_torque_curve.iter().map(|point|
@@ -201,7 +201,7 @@ pub fn car_definition() -> serde_json::Value {
 }
 
 /// Minimal GLB made from controlled triangle geometry, with independently editable parts.
-pub fn model_glb(design: &car_glb::Design) -> Vec<u8> {
+pub fn model_glb(design: &asset_car_glb::Design) -> Vec<u8> {
     use serde_json::json;
     let mut binary = Vec::new();
     let mut views = Vec::new();
@@ -277,7 +277,7 @@ pub fn write_car(directory: &std::path::Path) -> serde_json::Value {
     definition
 }
 
-pub fn cars() -> Vec<std::sync::Arc<asset_car::CarSpec>> {
+pub fn cars() -> Vec<std::sync::Arc<model_car::CarSpec>> {
     [0.0, 0.5, 1.0]
         .into_iter()
         .map(|drive_bias| {
@@ -310,7 +310,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     .unwrap();
     build_collision::build_collisions(
         &directory.join("streets.bin"),
-        &source_location::parse(city).unwrap(),
+        &model_source_location::parse(city).unwrap(),
         "STREETS 1 1\np 0 2 0 0 20 0\nt 1 0 -4 20 -4 20 4\nt 1 0 -4 20 4 0 4\nc 1 0 -4 20 -4 0 1\n"
             .into(),
     )
@@ -330,7 +330,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
         serde_json::json!({"source":provider, "provider":provider}).to_string(),
     )
     .unwrap();
-    let assets = city_assets::new(directory.to_path_buf());
+    let assets = storage_city_assets::new(directory.to_path_buf());
     let world = world_preparation::compiled_location_load(&assets).unwrap();
     build_scene::build_scene(
         &world,
@@ -343,22 +343,22 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     assets
 }
 
-pub fn car() -> Arc<asset_car::CarSpec> {
+pub fn car() -> Arc<model_car::CarSpec> {
     Arc::new(car_spec().clone())
 }
 
 /// A generated elevated loop, deliberately much larger than the compact route.
-pub fn authored_id() -> track::LocationId {
-    static ID: OnceLock<track::LocationId> = OnceLock::new();
+pub fn authored_id() -> world_locations::LocationId {
+    static ID: OnceLock<world_locations::LocationId> = OnceLock::new();
     ID.get_or_init(|| {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), r#"{"version":2,"name":"Test coastal loop","scenery":"coastal","points":[[0,0,0,8],[600,50,0,8],[600,80,500,8],[0,20,500,8]]}"#).unwrap();
-        track::register_file(file.path()).unwrap().0
+        world_locations::register_file(file.path()).unwrap().0
     }).clone()
 }
 
 struct CityFixture {
-    id: track::LocationId,
+    id: world_locations::LocationId,
     _directory: tempfile::TempDir,
 }
 
@@ -410,50 +410,54 @@ fn city_fixture() -> &'static CityFixture {
             elevation.push('\n');
         }
         std::fs::write(root.join("elevation/heightfield.txt"), elevation).unwrap();
-        build_collision::build_collisions(&root.join("streets.bin"), &source_location::parse(&city).unwrap(), streets).unwrap();
-        CityFixture { id: track::asset(root).unwrap(), _directory: directory }
+        build_collision::build_collisions(&root.join("streets.bin"), &model_source_location::parse(&city).unwrap(), streets).unwrap();
+        CityFixture { id: world_locations::asset(root).unwrap(), _directory: directory }
     })
 }
 
-pub fn city_id() -> track::LocationId {
+pub fn city_id() -> world_locations::LocationId {
     city_fixture().id.clone()
 }
 
-pub fn location_ids() -> [track::LocationId; 3] {
-    [track::LocationId::Compact, authored_id(), city_id()]
+pub fn location_ids() -> [world_locations::LocationId; 3] {
+    [
+        world_locations::LocationId::Compact,
+        authored_id(),
+        city_id(),
+    ]
 }
 
-pub fn variable_width_track() -> Arc<track::WorldLocation> {
+pub fn variable_width_track() -> Arc<world_locations::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
-    track::try_track(&track::register_file(file.path()).unwrap().0).unwrap()
+    world_locations::try_track(&world_locations::register_file(file.path()).unwrap().0).unwrap()
 }
 
 pub fn angle(value: f32) -> f32 {
     (value + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
-pub fn compact_track() -> Arc<track::WorldLocation> {
-    static TRACK: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
+pub fn compact_track() -> Arc<world_locations::WorldLocation> {
+    static TRACK: OnceLock<Arc<world_locations::WorldLocation>> = OnceLock::new();
     TRACK
-        .get_or_init(|| track::try_track(&track::LocationId::Compact).unwrap())
+        .get_or_init(|| world_locations::try_track(&world_locations::LocationId::Compact).unwrap())
         .clone()
 }
 
 pub fn vehicle(
     position: XYZ,
     heading: f32,
-    model: std::sync::Arc<asset_car::CarSpec>,
-) -> phys_car::Vehicle {
-    phys_car::on_track(position, heading, model, compact_track())
+    model: std::sync::Arc<model_car::CarSpec>,
+) -> physics_car::Vehicle {
+    physics_car::on_track(position, heading, model, compact_track())
 }
 
-pub fn partition(vertices: Vec<scene::Vertex>) -> Vec<chunks::Chunk> {
-    let mut builder = chunks::ChunkBuilder::default();
+pub fn partition(vertices: Vec<render_scene::Vertex>) -> Vec<render_chunks::Chunk> {
+    let mut builder = render_chunks::ChunkBuilder::default();
     for triangle in vertices.as_chunks::<3>().0 {
-        chunks::push(&mut builder, *triangle);
+        render_chunks::push(&mut builder, *triangle);
     }
-    chunks::finish(builder)
+    render_chunks::finish(builder)
 }
 
 pub struct Temp {
@@ -469,7 +473,7 @@ pub fn new() -> Temp {
     }
 }
 
-pub fn set_osm_tags(element: &mut osm::OSMElement, tags: &[(&str, &str)]) {
+pub fn set_osm_tags(element: &mut build_osm::OSMElement, tags: &[(&str, &str)]) {
     let mut replacement = osm_element(element.id, tags);
     replacement.coord = element.coord;
     replacement.nodes = std::mem::take(&mut element.nodes);
@@ -477,7 +481,7 @@ pub fn set_osm_tags(element: &mut osm::OSMElement, tags: &[(&str, &str)]) {
     *element = replacement;
 }
 
-pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
+pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> build_osm::OSMElement {
     let file = tempfile::NamedTempFile::new().unwrap();
     let parsed_id = id.max(1);
     let mut xml = format!("<osm><node id=\"{parsed_id}\" lat=\"0\" lon=\"0\">");
@@ -490,7 +494,7 @@ pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
     }
     xml.push_str("</node></osm>");
     std::fs::write(file.path(), xml).unwrap();
-    let mut element = osm::read(file.path())
+    let mut element = build_osm::read(file.path())
         .unwrap()
         .nodes
         .remove(&parsed_id)
@@ -500,25 +504,25 @@ pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
     element
 }
 
-pub fn city_world() -> Arc<track::WorldLocation> {
-    static WORLD: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
+pub fn city_world() -> Arc<world_locations::WorldLocation> {
+    static WORLD: OnceLock<Arc<world_locations::WorldLocation>> = OnceLock::new();
     WORLD
-        .get_or_init(|| track::try_track(&city_id()).unwrap())
+        .get_or_init(|| world_locations::try_track(&city_id()).unwrap())
         .clone()
 }
 
 pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
-    let mut source = source_location::empty::<f64>();
-    source.origin = Some(geometry::new(34.7, 33.0));
+    let mut source = model_source_location::empty::<f64>();
+    source.origin = Some(util_geometry::new(34.7, 33.0));
     source.bounding_box = BoundingBoxXZ {
         min: XZ { x: -10.0, z: -10.0 },
         max: XZ { x: 30.0, z: 30.0 },
     };
     source.road_nodes = vec![
-        geometry::at_height(XZ { x: 0.0, z: 0.0 }, 0.0),
-        geometry::at_height(XZ { x: 20.0, z: 0.0 }, 0.0),
+        util_geometry::at_height(XZ { x: 0.0, z: 0.0 }, 0.0),
+        util_geometry::at_height(XZ { x: 20.0, z: 0.0 }, 0.0),
     ];
-    let mut road = source_location::new([0, 1], 8.0);
+    let mut road = model_source_location::new([0, 1], 8.0);
     road.osm_way_id = Some(1);
     source.road_lines.push(road);
     if populated {
@@ -537,7 +541,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
             ],
         });
     }
-    let parsed = src_files::write_city_txt(&source, &directory.join("city.txt"))
+    let parsed = storage_source_files::write_city_txt(&source, &directory.join("city.txt"))
         .unwrap()
         .city;
     std::fs::write(directory.join("manifest.json"), "{}").unwrap();
@@ -577,11 +581,11 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
         )
         .unwrap();
     }
-    city_assets::new(directory.to_path_buf())
+    storage_city_assets::new(directory.to_path_buf())
 }
 
 /// A four-metre speed table on the straight part of the stored-location fixture.
-pub fn speed_table_rises() -> Vec<world::RoadRise> {
+pub fn speed_table_rises() -> Vec<model_world::RoadRise> {
     struct Section {
         x: f32,
         height: f32,
@@ -600,28 +604,28 @@ pub fn speed_table_rises() -> Vec<world::RoadRise> {
     ];
     let mut rises = Vec::new();
     for pair in sections.windows(2) {
-        let a = geometry::at_height(
+        let a = util_geometry::at_height(
             XZ {
                 x: pair[0].x,
                 z: -1.,
             },
             pair[0].height,
         );
-        let b = geometry::at_height(
+        let b = util_geometry::at_height(
             XZ {
                 x: pair[0].x,
                 z: 1.,
             },
             pair[0].height,
         );
-        let c = geometry::at_height(
+        let c = util_geometry::at_height(
             XZ {
                 x: pair[1].x,
                 z: 1.,
             },
             pair[1].height,
         );
-        let d = geometry::at_height(
+        let d = util_geometry::at_height(
             XZ {
                 x: pair[1].x,
                 z: -1.,
@@ -629,8 +633,8 @@ pub fn speed_table_rises() -> Vec<world::RoadRise> {
             pair[1].height,
         );
         rises.extend([
-            world::RoadRise { points: [a, b, c] },
-            world::RoadRise { points: [a, c, d] },
+            model_world::RoadRise { points: [a, b, c] },
+            model_world::RoadRise { points: [a, c, d] },
         ]);
     }
     rises

@@ -1,10 +1,10 @@
 //! Raised road triangles and their spatial index share one owner.
 
-use crate::elevation;
-use crate::geometry;
-use crate::geometry::{XYZ, XZ};
-use crate::world;
-use crate::world::{HeightField, RoadRise, WorldLocation};
+use crate::model_world;
+use crate::model_world::{HeightField, RoadRise, WorldLocation};
+use crate::util_geometry;
+use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
 use geo::{BooleanOps, MultiPolygon, TriangulateEarcut};
 use rstar::{RTree, RTreeObject, AABB};
 
@@ -34,7 +34,7 @@ pub fn road_rise_offset(road_rise: &RoadRise, p: XZ<f32>) -> Option<f32> {
         x: a.x - b.x,
         z: a.z - b.z,
     };
-    let p = geometry::at_height(p, 0.0);
+    let p = util_geometry::at_height(p, 0.0);
     let denominator = cross(delta(b, a), delta(c, a));
     let u = cross(delta(p, a), delta(c, a)) / denominator;
     let v = cross(delta(b, a), delta(p, a)) / denominator;
@@ -63,8 +63,8 @@ fn bounds(points: impl Iterator<Item = XZ<f64>>) -> AABB<XZ<f64>> {
     AABB::from_corners(min, max)
 }
 fn polygon(points: [XZ<f32>; 3]) -> MultiPolygon<f64> {
-    MultiPolygon(vec![geometry::polygon(
-        &points.map(|p| geometry::xz_map(p, f64::from)),
+    MultiPolygon(vec![util_geometry::polygon(
+        &points.map(|p| util_geometry::xz_map(p, f64::from)),
     )])
 }
 
@@ -76,10 +76,10 @@ pub fn lowered_footprints(
         .iter()
         .filter(|rise| rise.points.iter().any(|p| p.y < -0.03))
         .map(|rise| {
-            geometry::polygon(
+            util_geometry::polygon(
                 &rise
                     .points
-                    .map(|p| geometry::xz_map(geometry::xz(p), f64::from)),
+                    .map(|p| util_geometry::xz_map(util_geometry::xz(p), f64::from)),
             )
         })
 }
@@ -94,7 +94,7 @@ pub fn new(triangles: Vec<RoadRise>) -> RaisedRoads {
                 bounds: bounds(
                     rise.points
                         .iter()
-                        .map(|p| geometry::xz_map(geometry::xz(*p), f64::from)),
+                        .map(|p| util_geometry::xz_map(util_geometry::xz(*p), f64::from)),
                 ),
             })
             .collect(),
@@ -104,7 +104,7 @@ pub fn new(triangles: Vec<RoadRise>) -> RaisedRoads {
 fn raised_roads_offset(raised_roads: &RaisedRoads, p: XZ<f32>) -> f32 {
     raised_roads
         .index
-        .locate_in_envelope_intersecting(&AABB::from_point(geometry::xz_map(p, f64::from)))
+        .locate_in_envelope_intersecting(&AABB::from_point(util_geometry::xz_map(p, f64::from)))
         .filter_map(|item| road_rise_offset(&raised_roads.triangles[item.index], p))
         .max_by(f32::total_cmp)
         .unwrap_or(0.0)
@@ -118,17 +118,19 @@ fn drape(
     let mut candidates = raised_roads
         .index
         .locate_in_envelope_intersecting(&bounds(
-            points.into_iter().map(|p| geometry::xz_map(p, f64::from)),
+            points
+                .into_iter()
+                .map(|p| util_geometry::xz_map(p, f64::from)),
         ))
         .peekable();
     if candidates.peek().is_none() {
-        elevation::drape(field, points, emit);
+        world_elevation::drape(field, points, emit);
         return;
     }
     let mut remaining = polygon(points);
     for item in candidates {
         let rise = &raised_roads.triangles[item.index];
-        let footprint = polygon(rise.points.map(|p| geometry::xz(p)));
+        let footprint = polygon(rise.points.map(|p| util_geometry::xz(p)));
         let raised = remaining.intersection(&footprint);
         for triangle in raised
             .0
@@ -139,9 +141,9 @@ fn drape(
                 x: p.x as f32,
                 z: p.y as f32,
             });
-            elevation::drape(field, points, |mut triangle| {
+            world_elevation::drape(field, points, |mut triangle| {
                 for point in &mut triangle {
-                    point.y += road_rise_offset(rise, geometry::xz(*point)).unwrap_or(0.0);
+                    point.y += road_rise_offset(rise, util_geometry::xz(*point)).unwrap_or(0.0);
                 }
                 emit(triangle);
             });
@@ -150,14 +152,14 @@ fn drape(
     }
     // Preserve the original fast drape when this triangle has no nearby rises.
     if remaining == polygon(points) {
-        elevation::drape(field, points, emit);
+        world_elevation::drape(field, points, emit);
     } else {
         for triangle in remaining
             .0
             .iter()
             .flat_map(|polygon| polygon.earcut_triangles())
         {
-            elevation::drape(
+            world_elevation::drape(
                 field,
                 triangle.to_array().map(|p| XZ {
                     x: p.x as f32,
@@ -173,14 +175,16 @@ fn segment(raised_roads: &RaisedRoads, field: &HeightField, a: XZ<f32>, b: XZ<f3
     let dz = (b.z - a.z) as f64;
     let length_squared = dx * dx + dz * dz;
     if length_squared < 0.000001 {
-        return elevation::segment(field, a, b);
+        return world_elevation::segment(field, a, b);
     }
-    let mut stations: Vec<f64> = elevation::segment(field, a, b)
+    let mut stations: Vec<f64> = world_elevation::segment(field, a, b)
         .iter()
         .map(|p| ((p.x - a.x) as f64 * dx + (p.z - a.z) as f64 * dz) / length_squared)
         .collect();
     for item in raised_roads.index.locate_in_envelope_intersecting(&bounds(
-        [a, b].into_iter().map(|p| geometry::xz_map(p, f64::from)),
+        [a, b]
+            .into_iter()
+            .map(|p| util_geometry::xz_map(p, f64::from)),
     )) {
         let points = raised_roads.triangles[item.index].points;
         for i in 0..3 {
@@ -210,9 +214,9 @@ fn segment(raised_roads: &RaisedRoads, field: &HeightField, a: XZ<f32>, b: XZ<f3
                 x: a.x + dx as f32 * t as f32,
                 z: a.z + dz as f32 * t as f32,
             };
-            geometry::at_height(
+            util_geometry::at_height(
                 p,
-                elevation::height(field, p) + raised_roads_offset(raised_roads, p),
+                world_elevation::height(field, p) + raised_roads_offset(raised_roads, p),
             )
         })
         .collect()
@@ -226,22 +230,22 @@ pub fn drape_road_triangle(
     points: [XZ<f32>; 3],
     emit: impl FnMut([XYZ; 3]),
 ) {
-    let field = world::elevation(world).expect("raised road rendering requires elevation");
+    let field = model_world::elevation(world).expect("raised road rendering requires elevation");
     drape(&world.raised_roads, field, points, emit);
 }
 pub fn raised_road_segment(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Vec<XYZ> {
-    let field = world::elevation(world).expect("raised road rendering requires elevation");
+    let field = model_world::elevation(world).expect("raised road rendering requires elevation");
     segment(&world.raised_roads, field, a, b)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::elevation;
-    use crate::geometry;
+    use crate::util_geometry;
+    use crate::world_elevation;
     use crate::world_raised_roads;
 
     use super::*;
-    use crate::geometry::BoundingBoxXZ;
+    use crate::util_geometry::BoundingBoxXZ;
 
     #[test]
     fn raised_road_drape_and_contact_share_the_same_piecewise_surface() {
@@ -269,28 +273,28 @@ mod tests {
             },
         ];
         for pair in sections.windows(2) {
-            let a = geometry::at_height(
+            let a = util_geometry::at_height(
                 XZ {
                     x: pair[0].station,
                     z: -4.,
                 },
                 pair[0].height,
             );
-            let b = geometry::at_height(
+            let b = util_geometry::at_height(
                 XZ {
                     x: pair[0].station,
                     z: 4.,
                 },
                 pair[0].height,
             );
-            let c = geometry::at_height(
+            let c = util_geometry::at_height(
                 XZ {
                     x: pair[1].station,
                     z: 4.,
                 },
                 pair[1].height,
             );
-            let d = geometry::at_height(
+            let d = util_geometry::at_height(
                 XZ {
                     x: pair[1].station,
                     z: -4.,
@@ -337,7 +341,7 @@ mod tests {
                     < 0.00001
             );
         }
-        let field = elevation::generate(
+        let field = world_elevation::generate(
             BoundingBoxXZ {
                 min: XZ { x: -8., z: -8. },
                 max: XZ { x: 8., z: 8. },
@@ -365,19 +369,20 @@ mod tests {
             let height = (a.y + b.y + c.y) / 3.;
             assert!(
                 (height
-                    - elevation::height(&(field), center)
+                    - world_elevation::height(&(field), center)
                     - world_raised_roads::raised_roads_offset(&(rises), center))
                 .abs()
                     < 0.00001,
                 "mesh {} contact {} at {:?}: {:?}",
                 height,
-                elevation::height(&(field), center)
+                world_elevation::height(&(field), center)
                     + world_raised_roads::raised_roads_offset(&(rises), center),
                 center,
                 triangle
             );
             for point in triangle {
-                peak = peak.max(point.y - elevation::height(&field, geometry::xz(point)));
+                peak =
+                    peak.max(point.y - world_elevation::height(&field, util_geometry::xz(point)));
             }
         });
         assert!((area - 96.).abs() < 0.0001);
@@ -390,8 +395,8 @@ mod tests {
         for point in edge {
             assert!(
                 (point.y
-                    - elevation::height(&(field), geometry::xz(point))
-                    - world_raised_roads::raised_roads_offset(&(rises), geometry::xz(point)))
+                    - world_elevation::height(&(field), util_geometry::xz(point))
+                    - world_raised_roads::raised_roads_offset(&(rises), util_geometry::xz(point)))
                 .abs()
                     < 0.00001
             );

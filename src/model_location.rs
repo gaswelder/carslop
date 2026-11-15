@@ -1,0 +1,636 @@
+//! The persisted, playable location. No spatial indexes, terrain fitting, OSM
+//! objects, compiler provenance, or derived query bounds live in these records.
+
+use crate::model_map_details;
+use crate::model_source_location;
+use crate::model_world;
+use crate::model_world::{Curb, FurnitureKind, HeightField, Tree, Triangle};
+use crate::render_aerial;
+use crate::storage_city_assets;
+use crate::storage_codec_barriers;
+use crate::storage_codec_city;
+use crate::storage_codec_landscape;
+use crate::storage_codec_road_rises;
+use crate::storage_street_surface_binary;
+use crate::util_error;
+use crate::util_geometry;
+use crate::util_geometry::{BoundingBoxXZ, LatLon, XZ};
+use crate::world_street_surface;
+use std::{
+    fs,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug)]
+pub struct Location {
+    pub name: String,
+    pub origin: Option<LatLon>,
+    /// Explicit authored extent from CITY; query bounds are derived by the game.
+    pub extent: BoundingBoxXZ<f32>,
+    pub road_nodes: Vec<XZ<f32>>,
+    pub roads: Vec<Road>,
+    pub buildings: Vec<Building>,
+    pub entrances: Vec<model_world::Entrance>,
+    pub streets: Streets,
+    pub pavement_height_meters: f32,
+    pub elevation: HeightField,
+    pub ground: Vec<Triangle>,
+    pub trees: Vec<Tree>,
+    pub furniture: Vec<Furniture>,
+    pub barriers: Vec<model_world::Barrier>,
+    pub road_rises: Vec<model_world::RoadRise>,
+    pub labels: Labels,
+    pub details: model_map_details::Data,
+    /// Large render payloads stay on disk and are streamed when writing.
+    media: Media,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Road {
+    pub ends: [usize; 2],
+    pub way_id: Option<i64>,
+    pub width_meters: f32,
+    pub direction: i8,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Building {
+    pub id: u64,
+    pub outline: Vec<XZ<f32>>,
+    pub holes: Vec<Vec<XZ<f32>>>,
+    pub min_height_meters: f32,
+    pub height_meters: f32,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Furniture {
+    pub id: u64,
+    pub kind: FurnitureKind,
+    pub position: XZ<f32>,
+    pub travel: XZ<f32>,
+    pub value: u16,
+    pub phase: u8,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Streets {
+    pub paths: Vec<Vec<XZ<f32>>>,
+    pub triangles: Vec<Triangle>,
+    pub curbs: Vec<Curb>,
+}
+
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Labels {
+    pub streets: Vec<(i64, String)>,
+    pub buildings: Vec<(u64, String)>,
+    #[serde(default)]
+    pub storefronts: Vec<(u64, String)>,
+}
+
+/// References to immutable, already compiled payloads, not a source/build folder.
+/// These remain disk-backed to avoid retaining a whole city scene or tile set.
+#[derive(Debug, Default)]
+struct Media {
+    scene: Option<Payload>,
+    aerial: Vec<Payload>,
+    // Own temporary compiled payloads until the location is dropped.
+    workspace: Option<tempfile::TempDir>,
+}
+#[derive(Debug)]
+struct Payload {
+    source: PathBuf,
+    relative: PathBuf,
+}
+
+fn payload_read(root: &Path, relative: PathBuf) -> Result<Payload, String> {
+    let source = root
+        .join(&relative)
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", relative.display()))?;
+    Ok(Payload { source, relative })
+}
+fn payload_write(payload: &Payload, root: &Path) -> Result<(), String> {
+    let target = root.join(&payload.relative);
+    if target.canonicalize().ok().as_ref() == Some(&payload.source) {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::copy(&payload.source, target).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn from_compilation(workspace: tempfile::TempDir) -> Result<Location, String> {
+    let mut location = location_read(workspace.path())?;
+    location.media.workspace = Some(workspace);
+    Ok(location)
+}
+
+pub fn location_read(dirpath: impl AsRef<Path>) -> Result<Location, String> {
+    let directory = dirpath.as_ref();
+    read_inner(directory).map_err(|e| format!("location {}: {e}", directory.display()))
+}
+
+fn read_inner(directory: &Path) -> Result<Location, String> {
+    let assets = storage_city_assets::new(directory.to_path_buf());
+    let source = storage_city_assets::get_city(&assets).map_err(|e| format!("city.txt: {e}"))?;
+    let streets = storage_street_surface_binary::load_geometry(directory, source.road_lines.len())
+        .map_err(|e| format!("streets.bin: {e}"))?;
+    let manifest =
+        storage_city_assets::get_manifest(&assets).map_err(|e| format!("manifest.json: {e}"))?;
+    let pavement_height_meters = match manifest.get("pavement_height_metres") {
+        Some(v) => v
+            .as_f64()
+            .filter(|h| (0.08..=0.25).contains(h))
+            .ok_or("manifest.json: pavement_height_metres must be between 0.08 and 0.25")?
+            as f32,
+        None => world_street_surface::DEFAULT_PAVEMENT_HEIGHT,
+    };
+    let (ground, trees) = storage_city_assets::get_landscape_data(&assets)?;
+    let details =
+        model_map_details::read(directory, source.buildings.len(), source.road_lines.len())?;
+    let mut media = Media::default();
+    if directory.join("scene.pack").exists() {
+        media.scene = Some(payload_read(directory, "scene.pack".into())?);
+    }
+    // Keep only the catalog, tiles, and attribution used by the renderer.
+    // Service requests and download/build metadata are not location data.
+    if directory.join("aerial/tiles.txt").is_file() {
+        let catalog = render_aerial::tile_filenames(
+            &fs::read_to_string(directory.join("aerial/tiles.txt")).map_err(|e| e.to_string())?,
+        )?;
+        let mut files = vec![PathBuf::from("aerial/tiles.txt")];
+        for name in catalog {
+            files.push(PathBuf::from("aerial").join(name));
+        }
+        if directory.join("aerial/source.json").exists() {
+            files.push("aerial/source.json".into());
+        }
+        files.sort();
+        files.dedup();
+        media.aerial = files
+            .into_iter()
+            .map(|file| payload_read(directory, file))
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(Location {
+        name: storage_city_assets::name(&assets).to_owned(),
+        origin: source.origin,
+        extent: source.bounding_box,
+        road_nodes: source
+            .road_nodes
+            .into_iter()
+            .map(|p| util_geometry::xz(p))
+            .collect(),
+        roads: source
+            .road_lines
+            .into_iter()
+            .map(|r| Road {
+                ends: r.ends,
+                way_id: r.osm_way_id,
+                width_meters: r.road_width_start_meters,
+                direction: r.direction,
+            })
+            .collect(),
+        buildings: source
+            .buildings
+            .into_iter()
+            .map(|b| Building {
+                id: b.id,
+                outline: b.ground_outline,
+                holes: b.holes,
+                min_height_meters: b.min_height_meters,
+                height_meters: b.height_meters,
+            })
+            .collect(),
+        entrances: source.entrances,
+        streets,
+        pavement_height_meters,
+        elevation: storage_city_assets::get_heightfield(&assets)
+            .map_err(|e| format!("elevation/heightfield.txt: {e}"))?,
+        ground,
+        trees,
+        furniture: storage_city_assets::get_furniture(&assets)
+            .map_err(|e| format!("furniture.txt: {e}"))?
+            .into_iter()
+            .map(|f| Furniture {
+                id: f._source_id,
+                kind: f.kind,
+                position: util_geometry::xz(f.coords),
+                travel: f.travel,
+                value: f.value,
+                phase: f.phase,
+            })
+            .collect(),
+        barriers: match fs::read_to_string(directory.join("barriers.txt")) {
+            Ok(text) => {
+                storage_codec_barriers::parse(&text).map_err(|e| format!("barriers.txt: {e}"))?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("barriers.txt: {e}")),
+        },
+        road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
+            Ok(text) => storage_codec_road_rises::parse(&text)
+                .map_err(|e| format!("road-rises.txt: {e}"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("road-rises.txt: {e}")),
+        },
+        labels: read_labels(directory)?,
+        details,
+        media,
+    })
+}
+
+pub fn location_write(location: &Location, dirpath: impl AsRef<Path>) -> Result<(), String> {
+    let directory = dirpath.as_ref();
+    model_map_details::validate(
+        &location.details,
+        location.buildings.len(),
+        location.roads.len(),
+    )?;
+    write_inner(location, directory).map_err(|e| format!("location {}: {e}", directory.display()))
+}
+
+fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory.join("elevation")).map_err(|e| e.to_string())?;
+    let write = || -> util_error::Result<()> {
+        let mut city = BufWriter::new(fs::File::create(directory.join("city.txt"))?);
+        writeln!(city, "CITY 2")?;
+        if let Some(p) = location.origin {
+            writeln!(city, "origin {} {}", p.lat, p.lon)?;
+        }
+        writeln!(
+            city,
+            "bounds {} {} {} {}",
+            location.extent.min.x,
+            location.extent.min.z,
+            location.extent.max.x,
+            location.extent.max.z
+        )?;
+        for p in &location.road_nodes {
+            writeln!(city, "n {} {}", p.x, p.z)?;
+        }
+        for r in &location.roads {
+            writeln!(
+                city,
+                "r {} {} {} {} {}",
+                r.ends[0],
+                r.ends[1],
+                r.width_meters,
+                r.direction,
+                r.way_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".into())
+            )?;
+        }
+        for (index, b) in location.buildings.iter().enumerate() {
+            write!(city, "b {} {} 0 {}", b.id, b.height_meters, b.outline.len())?;
+            for p in &b.outline {
+                write!(city, " {} {}", p.x, p.z)?;
+            }
+            writeln!(city)?;
+            storage_codec_city::write_volume(
+                &mut city,
+                index,
+                b.min_height_meters,
+                &b.holes,
+                storage_codec_city::Precision::Authored,
+            )?;
+        }
+        for entrance in &location.entrances {
+            writeln!(
+                city,
+                "e {} {} {}",
+                entrance.building_id, entrance.position.x, entrance.position.z,
+            )?;
+        }
+        city.flush()?;
+        fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "pavement_height_metres": location.pavement_height_meters,
+            }))?,
+        )?;
+        fs::write(
+            directory.join("labels.json"),
+            serde_json::to_vec(&location.labels)?,
+        )?;
+        // Serialize at full f32 precision; compiler writers deliberately quantize.
+        let mut elevation = BufWriter::new(fs::File::create(
+            directory.join("elevation/heightfield.txt"),
+        )?);
+        let f = &location.elevation;
+        writeln!(
+            elevation,
+            "ELEVATION 1\ngrid {} {} {} {} {} 0",
+            f.columns, f.rows, f.origin.x, f.origin.z, f.step
+        )?;
+        for row in f.values.chunks(f.columns) {
+            for v in row {
+                write!(elevation, "{v} ")?;
+            }
+            writeln!(elevation)?;
+        }
+        elevation.flush()?;
+        let mut landscape = storage_codec_landscape::new(
+            BufWriter::new(fs::File::create(directory.join("landscape.txt"))?),
+            storage_codec_landscape::Precision::Authored,
+        )?;
+        for t in &location.ground {
+            if t.usage != model_world::TriangleUsage::Ground {
+                return Err(util_error::invalid("ground layer contains street geometry"));
+            }
+            storage_codec_landscape::ground(&mut landscape, t.material, t.points)?;
+        }
+        for t in &location.trees {
+            storage_codec_landscape::tree(&mut landscape, t)?;
+        }
+        storage_codec_landscape::flush(&mut landscape)?;
+        let mut furniture = BufWriter::new(fs::File::create(directory.join("furniture.txt"))?);
+        writeln!(furniture, "FURNITURE 3")?;
+        for f in &location.furniture {
+            let kind = match f.kind {
+                FurnitureKind::Signal => "signal",
+                FurnitureKind::Stop => "stop",
+                FurnitureKind::Yield => "yield",
+                FurnitureKind::Speed => "speed_limit",
+            };
+            writeln!(
+                furniture,
+                "{} {kind} {} {} {} {} {} {}",
+                f.id, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
+            )?;
+        }
+        furniture.flush()?;
+        storage_codec_barriers::write(
+            &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
+            &location.barriers,
+        )?;
+        storage_codec_road_rises::write(
+            &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
+            &location.road_rises,
+        )?;
+        storage_street_surface_binary::write_geometry(
+            &directory.join("streets.bin"),
+            &location.streets,
+        )?;
+        Ok(())
+    };
+    write().map_err(|e| e.to_string())?;
+    // Imagery trees are merged into the ordinary vegetation layer on read.
+    remove_optional(&directory.join("imagery-trees.txt"))?;
+    if let Some(scene) = &location.media.scene {
+        payload_write(scene, directory)?;
+    } else {
+        remove_optional(&directory.join("scene.pack"))?;
+    }
+    // Remove only files referenced by the previous renderer catalog.
+    let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
+        .ok()
+        .and_then(|text| render_aerial::tile_filenames(&text).ok())
+        .unwrap_or_default();
+    let previous_files = previous_tiles
+        .into_iter()
+        .map(|name| PathBuf::from("aerial").join(name))
+        .chain([
+            PathBuf::from("aerial/tiles.txt"),
+            PathBuf::from("aerial/source.json"),
+        ]);
+    for relative in previous_files {
+        if !location.media.aerial.iter().any(|p| p.relative == relative) {
+            remove_optional(&directory.join(relative))?;
+        }
+    }
+    model_map_details::write(&location.details, directory)?;
+    for payload in &location.media.aerial {
+        payload_write(payload, directory)?;
+    }
+    Ok(())
+}
+
+fn remove_optional(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+fn read_labels(directory: &Path) -> Result<Labels, String> {
+    match fs::read(directory.join("labels.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("labels.json: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            model_source_location::read_legacy_labels(directory)
+        }
+        Err(e) => Err(format!("labels.json: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model_location;
+    use crate::util_geometry;
+    use crate::world_preparation;
+    use crate::world_roads;
+    use crate::world_street_surface;
+
+    use super::*;
+    use crate::model_world;
+    use crate::storage_city_assets;
+    use crate::test_support;
+
+    fn assert_data_equal(a: &Location, b: &Location) {
+        assert_eq!(a.origin, b.origin);
+        assert_eq!(a.extent, b.extent);
+        assert_eq!(a.road_nodes, b.road_nodes);
+        assert_eq!(a.roads, b.roads);
+        assert_eq!(a.buildings, b.buildings);
+        assert_eq!(a.entrances, b.entrances);
+        assert_eq!(a.streets, b.streets);
+        assert_eq!(a.pavement_height_meters, b.pavement_height_meters);
+        assert_eq!(a.elevation, b.elevation);
+        assert_eq!(a.ground, b.ground);
+        assert_eq!(a.trees, b.trees);
+        assert_eq!(a.furniture, b.furniture);
+        assert_eq!(a.barriers, b.barriers);
+        assert_eq!(a.road_rises, b.road_rises);
+        assert_eq!(a.labels, b.labels);
+        assert_eq!(a.details, b.details);
+    }
+
+    #[test]
+    fn stored_location_round_trip_is_lossless_without_build_inputs() {
+        for populated in [false, true] {
+            let input = tempfile::tempdir().unwrap();
+            let output = tempfile::tempdir().unwrap();
+            test_support::stored_location(input.path(), populated);
+            fs::write(input.path().join("source.osm"), r#"<osm><way id="1"><tag k="name" v="Road &amp; Square"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
+            fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
+            let mut location = model_location::location_read(input.path()).unwrap();
+            location.pavement_height_meters = 0.17345679;
+            location.roads[0].way_id = None;
+            location.roads[0].width_meters = 8.123457;
+            location.elevation.values[0] = 7.1234565;
+            location.details.trees.push(model_map_details::TreeStyle {
+                id: 9,
+                kind: model_map_details::TreeKind::Olive,
+                evergreen: true,
+            });
+            location.details.objects.push(model_map_details::MapObject {
+                kind: model_map_details::ObjectKind::Bench,
+                position: [4.1234565, 6.],
+                angle: 1.2,
+                height: 0.9,
+                width: 1.8,
+                text: "Πάρκο".into(),
+                locked: false,
+            });
+            location.details.decks.push(model_map_details::Deck {
+                road: 0,
+                grade: 1,
+                width: 8.,
+                path: vec![[0., 5.1234565, 0.], [20., 6., 0.]],
+                surface: model_map_details::RoadSurface::Concrete,
+            });
+            if populated {
+                location
+                    .details
+                    .buildings
+                    .push(model_map_details::BuildingStyle {
+                        volume: 0,
+                        shape: model_map_details::RoofShape::Gabled,
+                        roof_height: 1.5,
+                        angle: 0.3,
+                        wall_color: Some([0.2, 0.3, 0.4]),
+                        roof_color: None,
+                    });
+                location.entrances.push(model_world::Entrance {
+                    building_id: 1,
+                    position: XZ {
+                        x: 10.,
+                        z: 12.123457,
+                    },
+                });
+                location.road_rises.push(model_world::RoadRise {
+                    points: [
+                        util_geometry::at_height(XZ { x: 0., z: 0. }, 0.),
+                        util_geometry::at_height(XZ { x: 1., z: 0. }, 0.1234567),
+                        util_geometry::at_height(XZ { x: 0., z: 1. }, 0.),
+                    ],
+                });
+                location.barriers.push(model_world::Barrier {
+                    source_id: 17,
+                    kind: model_world::BarrierKind::ChainLink,
+                    ends: [
+                        XZ {
+                            x: -5.1234565,
+                            z: 10.,
+                        },
+                        XZ { x: 5., z: 10. },
+                    ],
+                    height_meters: 1.8765432,
+                    width_meters: 0.1234567,
+                });
+                location.buildings[0].min_height_meters = 1.234567;
+                location.buildings[0].holes = vec![vec![
+                    XZ { x: 11., z: 11. },
+                    XZ { x: 11., z: 12. },
+                    XZ { x: 12., z: 12. },
+                    XZ { x: 12., z: 11. },
+                ]];
+                location.buildings[0].height_meters = 5.1234565;
+                location.furniture[0].position.x = 5.1234565;
+                location.trees[0].coords.x = -5.1234565;
+            }
+            model_location::location_write(&location, output.path()).unwrap();
+            let reread = model_location::location_read(output.path()).unwrap();
+            assert_data_equal(&location, &reread);
+            assert_eq!(
+                reread.name,
+                output.path().file_name().unwrap().to_string_lossy()
+            );
+            assert!(!output.path().join("source.osm").exists());
+            assert!(!output.path().join("source.track.json").exists());
+            assert!(!output.path().join("imagery-trees.txt").exists());
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
+                    .unwrap();
+            assert_eq!(manifest.as_object().unwrap().len(), 1);
+            let world = world_preparation::world_location_load(&storage_city_assets::new(
+                output.path().to_path_buf(),
+            ))
+            .unwrap();
+            assert!(world_street_surface::has_compiled_roads(&(world)));
+            assert!(reread.labels.streets.contains(&(1, "Road & Square".into())));
+            assert!(reread
+                .labels
+                .buildings
+                .contains(&(1, "Road & Square".into())));
+            assert_eq!(world_roads::road_lines(&(world))[0].path.len(), 3);
+            assert!(world_roads::road_lines(&(world))[0].length > 20.0);
+            assert!(world_roads::road_lines(&(world))
+                .iter()
+                .all(|r| r.path[0].y != 0.0));
+            // Writing in place neither duplicates the optional trees nor rounds data.
+            model_location::location_write(&reread, output.path()).unwrap();
+            assert_data_equal(
+                &location,
+                &model_location::location_read(output.path()).unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn render_payloads_round_trip_and_overwrite_removes_stale_optional_layers() {
+        let input = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        test_support::stored_location(input.path(), true);
+        fs::write(input.path().join("scene.pack"), b"opaque compiled scene").unwrap();
+        fs::create_dir(input.path().join("aerial")).unwrap();
+        fs::write(
+            input.path().join("aerial/tiles.txt"),
+            "AERIAL 1\nsize 64 1\ntile -10 -10 30 30 tile.rgb\n",
+        )
+        .unwrap();
+        fs::write(input.path().join("aerial/tile.rgb"), b"opaque tile").unwrap();
+        fs::write(
+            input.path().join("aerial/source.json"),
+            br#"{"provider":"Cyprus"}"#,
+        )
+        .unwrap();
+        fs::write(input.path().join("aerial/service.json"), b"build-only").unwrap();
+        let mut location = model_location::location_read(input.path()).unwrap();
+        model_location::location_write(&location, output.path()).unwrap();
+        for file in [
+            "scene.pack",
+            "aerial/tiles.txt",
+            "aerial/tile.rgb",
+            "aerial/source.json",
+        ] {
+            assert_eq!(
+                fs::read(input.path().join(file)).unwrap(),
+                fs::read(output.path().join(file)).unwrap()
+            );
+        }
+        assert!(!output.path().join("aerial/service.json").exists());
+        assert_eq!(
+            model_location::location_read(output.path())
+                .unwrap()
+                .media
+                .aerial
+                .len(),
+            3
+        );
+        model_location::location_write(&location, input.path()).unwrap();
+        location.media = Media::default();
+        fs::write(output.path().join("imagery-trees.txt"), "stale").unwrap();
+        model_location::location_write(&location, output.path()).unwrap();
+        let reread = model_location::location_read(output.path()).unwrap();
+        assert!(reread.media.scene.is_none());
+        assert!(reread.media.aerial.is_empty());
+        assert!(!output.path().join("aerial/tile.rgb").exists());
+        assert_data_equal(&location, &reread);
+    }
+}

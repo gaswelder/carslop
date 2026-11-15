@@ -1,14 +1,14 @@
 //! Resolve mapped building parts against their enclosing outlines.
 
 use crate::build_landscape;
+use crate::build_osm;
 use crate::build_surfaces;
-use crate::geometry;
-use crate::geometry::{LatLon, XZ};
-use crate::osm;
-use crate::source_location;
-use crate::source_location::SourceLocation;
-use crate::world;
-use crate::world::{Building, Entrance};
+use crate::model_source_location;
+use crate::model_source_location::SourceLocation;
+use crate::model_world;
+use crate::model_world::{Building, Entrance};
+use crate::util_geometry;
+use crate::util_geometry::{LatLon, XZ};
 use geo::{
     orient::Direction, Area, BooleanOps, BoundingRect, Contains, MultiPolygon, Orient, Polygon,
 };
@@ -43,13 +43,13 @@ fn bounds(footprint: &Polygon<f64>) -> AABB<XZ> {
     )
 }
 
-pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
+pub fn resolve_parts(source: &build_osm::OSMMap, map: &mut SourceLocation<f64>) {
     let mut buildings = std::mem::take(&mut map.buildings);
     let is_part: Vec<_> = buildings
         .iter()
         .map(|building| {
-            osm::building_source(source, building.id)
-                .is_some_and(|way| !matches!(osm::tag(way, "building:part"), "" | "no"))
+            build_osm::building_source(source, building.id)
+                .is_some_and(|way| !matches!(build_osm::tag(way, "building:part"), "" | "no"))
         })
         .collect();
     let parents = RTree::bulk_load(
@@ -58,7 +58,7 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
             .enumerate()
             .filter(|(i, _)| !is_part[*i])
             .map(|(index, building)| {
-                let footprint = world::footprint(building);
+                let footprint = model_world::footprint(building);
                 Parent {
                     index,
                     bounds: bounds(&footprint),
@@ -76,11 +76,11 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
     for relation in source
         .relations
         .iter()
-        .filter(|relation| osm::tag(relation, "type") == "building")
+        .filter(|relation| build_osm::tag(relation, "type") == "building")
     {
         let identity = |member: &(String, i64, String)| {
             if member.0 == "relation" {
-                osm::relation_feature_id(member.1)
+                build_osm::relation_feature_id(member.1)
             } else {
                 member.1 as u64
             }
@@ -97,7 +97,7 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
         if !is_part[i] {
             continue;
         }
-        let footprint = world::footprint(&buildings[i]);
+        let footprint = model_world::footprint(&buildings[i]);
         let parent = explicit
             .get(&buildings[i].id)
             .and_then(|id| indices.get(id))
@@ -116,9 +116,10 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
         if let Some(parent) = parent {
             children.entry(parent).or_default().push(i);
             owners.insert(buildings[i].id, buildings[parent].id);
-            let way = osm::building_source(source, buildings[i].id).expect("mapped building part");
-            if osm::number(osm::tag(way, "height")).is_none()
-                && osm::number(osm::tag(way, "building:levels")).is_none()
+            let way =
+                build_osm::building_source(source, buildings[i].id).expect("mapped building part");
+            if build_osm::number(build_osm::tag(way, "height")).is_none()
+                && build_osm::number(build_osm::tag(way, "building:levels")).is_none()
             {
                 buildings[i].height_meters = buildings[parent]
                     .height_meters
@@ -135,7 +136,7 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
                 build_surfaces::union(
                     &parts
                         .iter()
-                        .map(|i| MultiPolygon(vec![world::footprint(&(buildings[*i]))]))
+                        .map(|i| MultiPolygon(vec![model_world::footprint(&(buildings[*i]))]))
                         .collect::<Vec<_>>(),
                 ),
             )
@@ -146,7 +147,7 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
         if children.contains_key(&i) {
             // Child footprints are collected before consuming the source volumes.
             let covered = &part_footprints[&i];
-            let remaining = MultiPolygon(vec![world::footprint(&(building))])
+            let remaining = MultiPolygon(vec![model_world::footprint(&(building))])
                 .difference(covered)
                 .orient(Direction::Default);
             for polygon in remaining.0 {
@@ -196,8 +197,8 @@ pub fn resolve_parts(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
 
 /// Assemble a complete building multipolygon using source node identity.
 pub fn relation_geometry(
-    source: &osm::OSMMap,
-    relation: &osm::OSMElement,
+    source: &build_osm::OSMMap,
+    relation: &build_osm::OSMElement,
     project: impl Fn(LatLon) -> XZ,
 ) -> Option<MultiPolygon<f64>> {
     let mut outer = Vec::new();
@@ -225,7 +226,7 @@ pub fn relation_geometry(
                     .iter()
                     .map(|id| source.nodes.get(id)?.coord.map(&project))
                     .collect();
-                Some(MultiPolygon(vec![geometry::polygon(&points?)]))
+                Some(MultiPolygon(vec![util_geometry::polygon(&points?)]))
             })
             .collect();
         Some(build_surfaces::union(&polygons?))
@@ -237,40 +238,42 @@ pub fn relation_geometry(
     )
 }
 
-pub fn import_relations(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
+pub fn import_relations(source: &build_osm::OSMMap, map: &mut SourceLocation<f64>) {
     for relation in source.relations.iter().filter(|relation| {
-        osm::tag(relation, "type") == "multipolygon"
-            && (!matches!(osm::tag(relation, "building"), "" | "no")
-                || !matches!(osm::tag(relation, "building:part"), "" | "no"))
+        build_osm::tag(relation, "type") == "multipolygon"
+            && (!matches!(build_osm::tag(relation, "building"), "" | "no")
+                || !matches!(build_osm::tag(relation, "building:part"), "" | "no"))
     }) {
         let Some(geometry) =
-            relation_geometry(source, relation, |p| source_location::metres(map, p))
+            relation_geometry(source, relation, |p| model_source_location::metres(map, p))
         else {
             continue;
         };
-        let height = osm::number(osm::tag(relation, "height")).filter(|v| *v > 0.);
-        let min_height = osm::number(osm::tag(relation, "min_height"))
-            .or_else(|| osm::number(osm::tag(relation, "building:min_level")).map(|v| v * 3.1))
+        let height = build_osm::number(build_osm::tag(relation, "height")).filter(|v| *v > 0.);
+        let min_height = build_osm::number(build_osm::tag(relation, "min_height"))
+            .or_else(|| {
+                build_osm::number(build_osm::tag(relation, "building:min_level")).map(|v| v * 3.1)
+            })
             .unwrap_or(0.)
             .clamp(0., 69.);
         let top = height
             .or_else(|| {
-                osm::number(osm::tag(relation, "building:levels"))
-                    .map(|v| v * 3.1 + osm::roof_height(relation))
+                build_osm::number(build_osm::tag(relation, "building:levels"))
+                    .map(|v| v * 3.1 + build_osm::roof_height(relation))
             })
             .unwrap_or(6.2)
             .clamp(2.5, 70.);
         if top <= min_height {
             continue;
         }
-        let id = osm::relation_feature_id(relation.id);
+        let id = build_osm::relation_feature_id(relation.id);
         for polygon in geometry.0 {
             if polygon.unsigned_area() < 4.0
                 || polygon
                     .exterior()
                     .0
                     .iter()
-                    .any(|p| !source_location::contains(map, XZ { x: p.x, z: p.y }))
+                    .any(|p| !model_source_location::contains(map, XZ { x: p.x, z: p.y }))
                 || map
                     .boundary
                     .as_ref()
@@ -310,13 +313,13 @@ pub fn import_relations(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
             }
             if let Some(way) = source.ways.get(&member.1) {
                 for node in way.nodes.iter().filter_map(|id| source.nodes.get(id)) {
-                    if matches!(osm::tag(node, "entrance"), "" | "no") {
+                    if matches!(build_osm::tag(node, "entrance"), "" | "no") {
                         continue;
                     }
                     if let Some(p) = node.coord {
                         map.entrances.push(Entrance {
                             building_id: id,
-                            position: source_location::metres(map, p),
+                            position: model_source_location::metres(map, p),
                         });
                     }
                 }
@@ -329,18 +332,19 @@ pub fn import_relations(source: &osm::OSMMap, map: &mut SourceLocation<f64>) {
 }
 
 /// A building passage removes the ground volume only; the occupied floors above remain.
-pub fn open_passages(source: &osm::OSMMap, map: &mut SourceLocation) {
+pub fn open_passages(source: &build_osm::OSMMap, map: &mut SourceLocation) {
     use geo::Buffer;
     for road in map.road_lines.iter().filter(|road| {
         road.osm_way_id
             .and_then(|id| source.ways.get(&id))
-            .is_some_and(|way| osm::tag(way, "tunnel") == "building_passage")
+            .is_some_and(|way| build_osm::tag(way, "tunnel") == "building_passage")
     }) {
         let way = &source.ways[&road.osm_way_id.unwrap()];
-        let corridor = geometry::line(&road.ends.map(|n| geometry::xz(map.road_nodes[n])))
-            .buffer(road.road_width_start_meters / 2. + 0.15);
-        let clearance = osm::number(osm::tag(way, "maxheight:physical"))
-            .or_else(|| osm::number(osm::tag(way, "maxheight")))
+        let corridor =
+            util_geometry::line(&road.ends.map(|n| util_geometry::xz(map.road_nodes[n])))
+                .buffer(road.road_width_start_meters / 2. + 0.15);
+        let clearance = build_osm::number(build_osm::tag(way, "maxheight:physical"))
+            .or_else(|| build_osm::number(build_osm::tag(way, "maxheight")))
             .unwrap_or(3.0)
             .clamp(1.8, 12.);
         let mut result = Vec::new();
@@ -349,7 +353,7 @@ pub fn open_passages(source: &osm::OSMMap, map: &mut SourceLocation) {
                 result.push(building);
                 continue;
             }
-            let footprint = MultiPolygon(vec![world::footprint(&(building))]);
+            let footprint = MultiPolygon(vec![model_world::footprint(&(building))]);
             let overlap = footprint.intersection(&corridor);
             if overlap.unsigned_area() < 0.01 {
                 result.push(building);

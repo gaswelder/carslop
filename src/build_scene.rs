@@ -1,11 +1,11 @@
 //! Compile render geometry from prepared location assets.
 
-use crate::chunks;
-use crate::osm;
-use crate::scene;
-use crate::scene_archive;
+use crate::build_osm;
+use crate::render_chunks;
+use crate::render_scene;
+use crate::render_scene_archive;
 use crate::world_preparation;
-use crate::{osm::OSMArea, scene_archive::write_spooled};
+use crate::{build_osm::OSMArea, render_scene_archive::write_spooled};
 use std::path::Path;
 
 pub fn build_scene(
@@ -22,7 +22,7 @@ pub fn build_scene(
         let origin = city
             .origin
             .ok_or_else(|| std::io::Error::other("boundary needs a geographic origin"))?;
-        Some(osm::local(boundary, origin))
+        Some(build_osm::local(boundary, origin))
     } else {
         None
     };
@@ -38,7 +38,7 @@ pub fn build_scene(
     // load decorations
     //
     let mut decorations = if decorations_path.is_file() {
-        Some(scene_archive::open(decorations_path)?)
+        Some(render_scene_archive::open(decorations_path)?)
     } else {
         None
     };
@@ -49,8 +49,12 @@ pub fn build_scene(
         //
         // create spool?
         //
-        let mut spool =
-            scene::city_layer_spooled(city, layer, temporary_directory, boundary_polygon.as_ref())?;
+        let mut spool = render_scene::city_layer_spooled(
+            city,
+            layer,
+            temporary_directory,
+            boundary_polygon.as_ref(),
+        )?;
 
         //
         //
@@ -63,23 +67,23 @@ pub fn build_scene(
                 //
                 // make a builder
                 //
-                let mut builder = chunks::ChunkBuilder::default();
+                let mut builder = render_chunks::ChunkBuilder::default();
 
                 //
                 // push triangles into builder
                 //
-                for tri in scene_archive::read_layer(archive, entry, layer)?
+                for tri in render_scene_archive::read_layer(archive, entry, layer)?
                     .as_chunks::<3>()
                     .0
                 {
-                    chunks::push(&mut builder, *tri);
+                    render_chunks::push(&mut builder, *tri);
                 }
 
                 //
                 // ?
                 //
-                for chunk in chunks::finish(builder) {
-                    scene_archive::append(&mut spool, chunk)?;
+                for chunk in render_chunks::finish(builder) {
+                    render_scene_archive::append(&mut spool, chunk)?;
                 }
             }
         }

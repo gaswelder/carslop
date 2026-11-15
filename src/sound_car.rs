@@ -1,9 +1,9 @@
-use crate::asset_car;
-use crate::camera;
-use crate::engine_sample;
-use crate::geometry;
-use crate::geometry::{XYZ, XZ};
-use crate::phys_car;
+use crate::model_car;
+use crate::physics_car;
+use crate::render_camera;
+use crate::sound_engine_sample;
+use crate::util_geometry;
+use crate::util_geometry::{XYZ, XZ};
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use std::f32::consts::TAU;
 
@@ -23,13 +23,13 @@ struct Voice<'a> {
     frequency: f32,
     load: f32,
     scrub: f32,
-    tuning: &'a asset_car::EngineVoice,
+    tuning: &'a model_car::EngineVoice,
     enabled: bool,
 }
 
 #[derive(Default)]
 struct Synth {
-    recorded: engine_sample::RecordedEngine,
+    recorded: sound_engine_sample::RecordedEngine,
     turbo_target: f32,
     turbo_spool: f32,
     turbo_air_low: f32,
@@ -95,9 +95,9 @@ fn synth_sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     let procedural = (p.sin() * (1.0 - synth.load) + harmonics * synth.load)
         * (0.065 + synth.load * 0.065)
         + synth.filtered_noise * synth.load * 0.025;
-    engine_sample::select(&mut synth.recorded, tuning.sample_directory.as_deref());
-    let engine = if engine_sample::available(&synth.recorded) {
-        engine_sample::sample(
+    sound_engine_sample::select(&mut synth.recorded, tuning.sample_directory.as_deref());
+    let engine = if sound_engine_sample::available(&synth.recorded) {
+        sound_engine_sample::sample(
             &mut synth.recorded,
             synth.frequency * 30.0,
             tuning.pulses_per_revolution,
@@ -229,11 +229,14 @@ impl Default for SpatialAudio {
     }
 }
 
-fn placement(source: XYZ, listener: camera::Pose) -> (f32, f32, f32) {
-    let offset: XYZ = geometry::xyz_from_fn(|i| {
-        geometry::xyz_component(source, i) - geometry::xyz_component(listener.eye, i)
+fn placement(source: XYZ, listener: render_camera::Pose) -> (f32, f32, f32) {
+    let offset: XYZ = util_geometry::xyz_from_fn(|i| {
+        util_geometry::xyz_component(source, i) - util_geometry::xyz_component(listener.eye, i)
     });
-    let distance = geometry::iter(&offset).map(|v| v * v).sum::<f32>().sqrt();
+    let distance = util_geometry::iter(&offset)
+        .map(|v| v * v)
+        .sum::<f32>()
+        .sqrt();
     // Gentle falloff keeps driving cues present; distance also changes
     // the direct/reflected balance below, rather than just turning down.
     let gain = (6.0 / (distance + 3.0)).min(1.0);
@@ -318,8 +321,8 @@ pub fn new(sdl: &sdl3::Sdl) -> Result<EngineAudio, String> {
 
 pub fn update(
     engine_audio: &mut EngineAudio,
-    car: &phys_car::Vehicle,
-    listener: camera::Pose,
+    car: &physics_car::Vehicle,
+    listener: render_camera::Pose,
     throttle: bool,
     active: bool,
     impact: f32,
@@ -376,7 +379,7 @@ fn output_sample(driving: f32) -> f32 {
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
-    rpm.max(phys_car::IDLE_RPM) / 30.0
+    rpm.max(physics_car::IDLE_RPM) / 30.0
 }
 
 #[cfg(test)]
@@ -384,7 +387,7 @@ mod tests {
     use crate::sound_car;
 
     use super::*;
-    use crate::camera;
+    use crate::render_camera;
     use crate::test_support;
 
     #[test]
@@ -460,7 +463,7 @@ mod tests {
 
     #[test]
     fn stereo_follows_listener_orientation_and_changes_smoothly() {
-        let listener = camera::Pose {
+        let listener = render_camera::Pose {
             eye: XYZ {
                 x: 0.0,
                 y: 0.0,
@@ -495,7 +498,7 @@ mod tests {
                 y: 0.0,
                 z: 5.0,
             },
-            camera::Pose {
+            render_camera::Pose {
                 target: XYZ {
                     x: 0.0,
                     y: 0.0,

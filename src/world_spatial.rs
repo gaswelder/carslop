@@ -1,5 +1,5 @@
 //! Shared low-level grid and segment math. Geometry owners keep the grids private.
-use crate::geometry::{BoundingBoxXZ, XZ};
+use crate::util_geometry::{BoundingBoxXZ, XZ};
 use std::collections::HashMap;
 
 pub const CELL: f32 = 32.0;

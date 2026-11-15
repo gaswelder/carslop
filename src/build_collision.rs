@@ -1,7 +1,7 @@
-use crate::error::Result;
-use crate::source_location::SourceLocation;
-use crate::street_surface;
-use crate::street_surface_binary::write_binary_street_surface;
+use crate::model_source_location::SourceLocation;
+use crate::storage_street_surface_binary::write_binary_street_surface;
+use crate::util_error::Result;
+use crate::world_street_surface;
 use std::path::Path;
 
 pub fn build_collisions(
@@ -9,7 +9,7 @@ pub fn build_collisions(
     city: &SourceLocation<f32>,
     streets_txt_source: String,
 ) -> Result<()> {
-    let (surfaces, paths) = street_surface::load(&streets_txt_source, city.road_lines.len())?;
+    let (surfaces, paths) = world_street_surface::load(&streets_txt_source, city.road_lines.len())?;
     let directory = path_streets_bin
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

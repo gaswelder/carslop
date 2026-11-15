@@ -1,14 +1,14 @@
 //! Explicit lane directions and roadside lane paint, clipped to the surveyed carriageway.
 
 use crate::build_details;
+use crate::build_osm;
 use crate::build_surfaces;
 use crate::build_transport;
-use crate::geometry;
-use crate::geometry::XZ;
-use crate::map_details::RoadSurface;
-use crate::osm;
-use crate::source_location;
-use crate::source_location::SourceLocation;
+use crate::model_map_details::RoadSurface;
+use crate::model_source_location;
+use crate::model_source_location::SourceLocation;
+use crate::util_geometry;
+use crate::util_geometry::XZ;
 use geo::{BooleanOps, MultiPolygon};
 
 fn strip(path: &[XZ], offset: f64, half_width: f64) -> MultiPolygon<f64> {
@@ -16,13 +16,13 @@ fn strip(path: &[XZ], offset: f64, half_width: f64) -> MultiPolygon<f64> {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let tangent = geometry::unit(geometry::sub(
+            let tangent = util_geometry::unit(util_geometry::sub(
                 path[(i + 1).min(path.len() - 1)],
                 path[i.saturating_sub(1)],
             ));
-            geometry::add(
+            util_geometry::add(
                 *p,
-                geometry::mul(
+                util_geometry::mul(
                     XZ {
                         x: -tangent.z,
                         z: tangent.x,
@@ -32,11 +32,11 @@ fn strip(path: &[XZ], offset: f64, half_width: f64) -> MultiPolygon<f64> {
             )
         })
         .collect();
-    geometry::line(&points).buffer(half_width)
+    util_geometry::line(&points).buffer(half_width)
 }
 use geo::Buffer;
 pub fn paint(
-    source: &osm::OSMMap,
+    source: &build_osm::OSMMap,
     map: &SourceLocation,
     paths: &[Vec<XZ>],
     road: &MultiPolygon<f64>,
@@ -47,19 +47,19 @@ pub fn paint(
             continue;
         };
         if build_transport::grade(way) != 0
-            || build_details::road_surface(osm::tag(way, "surface")) == RoadSurface::Unpaved
+            || build_details::road_surface(build_osm::tag(way, "surface")) == RoadSurface::Unpaved
         {
             continue;
         }
         let path = &paths[index];
-        let length = geometry::path_length(path);
+        let length = util_geometry::path_length(path);
         for (side, key, old) in [
             (-1., "cycleway:left", "parking:lane:left"),
             (1., "cycleway:right", "parking:lane:right"),
         ] {
-            if osm::tag(way, key) == "lane"
-                || osm::tag(way, "cycleway:both") == "lane"
-                || osm::tag(way, "cycleway") == "lane"
+            if build_osm::tag(way, key) == "lane"
+                || build_osm::tag(way, "cycleway:both") == "lane"
+                || build_osm::tag(way, "cycleway") == "lane"
             {
                 pieces.push(strip(
                     path,
@@ -73,15 +73,15 @@ pub fn paint(
                 "parking:right"
             };
             if matches!(
-                osm::tag(way, old),
+                build_osm::tag(way, old),
                 "parallel" | "diagonal" | "perpendicular"
-            ) || matches!(osm::tag(way, key), "lane" | "street_side")
+            ) || matches!(build_osm::tag(way, key), "lane" | "street_side")
             {
                 let offset = side * (line.road_width_start_meters / 2. - 2.);
                 let mut station = 3.;
                 while station + 2. < length {
                     pieces.push(strip(
-                        &geometry::substring(path, station, station + 1.5),
+                        &util_geometry::substring(path, station, station + 1.5),
                         offset,
                         0.05,
                     ));
@@ -98,10 +98,10 @@ pub fn paint(
             } else {
                 "turn:lanes:forward"
             };
-            let tag = if osm::tag(way, key).is_empty() && line.direction != 0 {
-                osm::tag(way, "turn:lanes")
+            let tag = if build_osm::tag(way, key).is_empty() && line.direction != 0 {
+                build_osm::tag(way, "turn:lanes")
             } else {
-                osm::tag(way, key)
+                build_osm::tag(way, key)
             };
             if tag.is_empty() {
                 continue;
@@ -114,7 +114,7 @@ pub fn paint(
             let Some(end) = terminal
                 .and_then(|id| source.nodes.get(id))
                 .and_then(|n| n.coord)
-                .map(|p| source_location::metres(map, p))
+                .map(|p| model_source_location::metres(map, p))
             else {
                 continue;
             };
@@ -122,7 +122,7 @@ pub fn paint(
             if backward {
                 path.reverse();
             }
-            if geometry::dist(*path.last().unwrap(), end) > 1. || length < 10. {
+            if util_geometry::dist(*path.last().unwrap(), end) > 1. || length < 10. {
                 continue;
             }
             let lanes: Vec<_> = tag.split('|').collect();
@@ -132,19 +132,22 @@ pub fn paint(
                 let offset =
                     -(line.road_width_start_meters - 0.9) / 2. + lane_width * (lane as f64 + 0.5);
                 let station = length - 6.;
-                let center = geometry::along(&path, station);
-                let travel = geometry::unit(geometry::sub(
-                    geometry::along(&path, station + 0.2),
-                    geometry::along(&path, station - 0.2),
+                let center = util_geometry::along(&path, station);
+                let travel = util_geometry::unit(util_geometry::sub(
+                    util_geometry::along(&path, station + 0.2),
+                    util_geometry::along(&path, station - 0.2),
                 ));
                 let normal = XZ {
                     x: -travel.z,
                     z: travel.x,
                 };
                 let transform = |x: f64, z: f64| {
-                    geometry::add(
+                    util_geometry::add(
                         center,
-                        geometry::add(geometry::mul(normal, x + offset), geometry::mul(travel, z)),
+                        util_geometry::add(
+                            util_geometry::mul(normal, x + offset),
+                            util_geometry::mul(travel, z),
+                        ),
                     )
                 };
                 for turn in turns.split(';') {
@@ -156,21 +159,22 @@ pub fn paint(
                     };
                     let tip = transform(lateral * 0.8, 1.5);
                     let elbow = transform(0., if lateral == 0. { 1.0 } else { 0.4 });
-                    pieces.push(geometry::line(&[transform(0., -1.5), elbow, tip]).buffer(0.08));
-                    let direction = geometry::unit(geometry::sub(tip, elbow));
+                    pieces
+                        .push(util_geometry::line(&[transform(0., -1.5), elbow, tip]).buffer(0.08));
+                    let direction = util_geometry::unit(util_geometry::sub(tip, elbow));
                     let normal = XZ {
                         x: -direction.z,
                         z: direction.x,
                     };
-                    pieces.push(MultiPolygon(vec![geometry::polygon(&[
+                    pieces.push(MultiPolygon(vec![util_geometry::polygon(&[
                         tip,
-                        geometry::add(
-                            geometry::sub(tip, geometry::mul(direction, 0.65)),
-                            geometry::mul(normal, 0.35),
+                        util_geometry::add(
+                            util_geometry::sub(tip, util_geometry::mul(direction, 0.65)),
+                            util_geometry::mul(normal, 0.35),
                         ),
-                        geometry::sub(
-                            geometry::sub(tip, geometry::mul(direction, 0.65)),
-                            geometry::mul(normal, 0.35),
+                        util_geometry::sub(
+                            util_geometry::sub(tip, util_geometry::mul(direction, 0.65)),
+                            util_geometry::mul(normal, 0.35),
                         ),
                     ])]));
                 }

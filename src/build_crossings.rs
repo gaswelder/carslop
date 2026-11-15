@@ -1,11 +1,11 @@
 //! Paint mapped pedestrian crossings into the compiled street marking layer.
 
+use crate::build_osm;
 use crate::build_surfaces;
-use crate::geometry;
-use crate::geometry::XZ;
-use crate::osm;
-use crate::source_location;
-use crate::source_location::SourceLocation;
+use crate::model_source_location;
+use crate::model_source_location::SourceLocation;
+use crate::util_geometry;
+use crate::util_geometry::XZ;
 use geo::{BooleanOps, Buffer, MultiPolygon};
 use std::collections::BTreeMap;
 
@@ -17,7 +17,7 @@ enum Style {
 }
 
 struct Walking<'a> {
-    way: &'a osm::OSMElement,
+    way: &'a build_osm::OSMElement,
     direction: XZ,
 }
 
@@ -39,29 +39,34 @@ fn markings(value: &str) -> Option<Style> {
     }
 }
 
-fn style(node: &osm::OSMElement, walking: Option<&Walking<'_>>) -> Option<Style> {
-    let explicit = osm::tag(node, "crossing:markings");
+fn style(node: &build_osm::OSMElement, walking: Option<&Walking<'_>>) -> Option<Style> {
+    let explicit = build_osm::tag(node, "crossing:markings");
     if !explicit.is_empty() && explicit != "yes" {
         return markings(explicit);
     }
-    if explicit.is_empty() && matches!(osm::tag(node, "crossing"), "unmarked" | "informal" | "no") {
+    if explicit.is_empty()
+        && matches!(
+            build_osm::tag(node, "crossing"),
+            "unmarked" | "informal" | "no"
+        )
+    {
         return None;
     }
     if let Some(walking) = walking {
-        let value = osm::tag(walking.way, "crossing:markings");
+        let value = build_osm::tag(walking.way, "crossing:markings");
         if !value.is_empty() {
             return markings(value);
         }
     }
     if explicit == "yes"
-        || osm::tag(node, "crossing_ref") == "zebra"
+        || build_osm::tag(node, "crossing_ref") == "zebra"
         || matches!(
-            osm::tag(node, "crossing"),
+            build_osm::tag(node, "crossing"),
             "zebra" | "marked" | "uncontrolled"
         )
         || walking.is_some_and(|walking| {
             matches!(
-                osm::tag(walking.way, "crossing"),
+                build_osm::tag(walking.way, "crossing"),
                 "zebra" | "marked" | "uncontrolled"
             )
         })
@@ -78,12 +83,15 @@ fn rectangle(center: XZ, across: XZ, lo: f64, hi: f64, near: f64, far: f64) -> M
         z: across.x,
     };
     let point = |x, y| {
-        geometry::add(
+        util_geometry::add(
             center,
-            geometry::add(geometry::mul(across, x), geometry::mul(forward, y)),
+            util_geometry::add(
+                util_geometry::mul(across, x),
+                util_geometry::mul(forward, y),
+            ),
         )
     };
-    MultiPolygon(vec![geometry::polygon(&[
+    MultiPolygon(vec![util_geometry::polygon(&[
         point(lo, near),
         point(hi, near),
         point(hi, far),
@@ -91,15 +99,15 @@ fn rectangle(center: XZ, across: XZ, lo: f64, hi: f64, near: f64, far: f64) -> M
     ])])
 }
 
-fn ground_level(element: &osm::OSMElement) -> bool {
-    matches!(osm::tag(element, "layer"), "" | "0")
+fn ground_level(element: &build_osm::OSMElement) -> bool {
+    matches!(build_osm::tag(element, "layer"), "" | "0")
         && ["bridge", "tunnel"]
             .iter()
-            .all(|key| matches!(osm::tag(element, key), "" | "no"))
+            .all(|key| matches!(build_osm::tag(element, key), "" | "no"))
 }
 
 pub fn build_crossings(
-    source: &osm::OSMMap,
+    source: &build_osm::OSMMap,
     map: &SourceLocation<f64>,
     paths: &[Vec<XZ>],
     asphalt: &MultiPolygon<f64>,
@@ -124,7 +132,8 @@ pub fn build_crossings(
     let mut walking = BTreeMap::new();
     for way in source.ways.values().filter(|way| {
         ground_level(way)
-            && (osm::tag(way, "footway") == "crossing" || osm::tag(way, "path") == "crossing")
+            && (build_osm::tag(way, "footway") == "crossing"
+                || build_osm::tag(way, "path") == "crossing")
     }) {
         for (i, id) in way.nodes.iter().enumerate() {
             let before = way.nodes[i.saturating_sub(1)];
@@ -135,14 +144,14 @@ pub fn build_crossings(
             let Some(b) = source.nodes.get(&after).and_then(|node| node.coord) else {
                 continue;
             };
-            let direction = geometry::sub(
-                source_location::metres(map, b),
-                source_location::metres(map, a),
+            let direction = util_geometry::sub(
+                model_source_location::metres(map, b),
+                model_source_location::metres(map, a),
             );
-            if geometry::length(direction) > 0.1 {
+            if util_geometry::length(direction) > 0.1 {
                 walking.entry(*id).or_insert(Walking {
                     way,
-                    direction: geometry::unit(direction),
+                    direction: util_geometry::unit(direction),
                 });
             }
         }
@@ -154,7 +163,8 @@ pub fn build_crossings(
             continue;
         };
         let walk = walking.get(&id);
-        if (osm::tag(node, "highway") != "crossing" && walk.is_none()) || !ground_level(node) {
+        if (build_osm::tag(node, "highway") != "crossing" && walk.is_none()) || !ground_level(node)
+        {
             continue;
         }
         let Some(style) = style(node, walk) else {
@@ -163,40 +173,40 @@ pub fn build_crossings(
         let Some(coord) = node.coord else {
             continue;
         };
-        let position = source_location::metres(map, coord);
-        if !source_location::contains(map, position) {
+        let position = model_source_location::metres(map, coord);
+        if !model_source_location::contains(map, position) {
             continue;
         }
-        let width = osm::number(osm::tag(node, "width"))
+        let width = build_osm::number(build_osm::tag(node, "width"))
             .filter(|width| *width > 0.)
             .or_else(|| {
-                walk.and_then(|walk| osm::number(osm::tag(walk.way, "width")))
+                walk.and_then(|walk| build_osm::number(build_osm::tag(walk.way, "width")))
                     .filter(|width| *width > 0.)
             })
             .unwrap_or(3.0)
             .clamp(1.0, 8.0);
         for way_id in way_ids {
             let Some(&road_index) = roads[&way_id].iter().min_by(|a, b| {
-                geometry::project(&paths[**a], position)
+                util_geometry::project(&paths[**a], position)
                     .0
-                    .total_cmp(&geometry::project(&paths[**b], position).0)
+                    .total_cmp(&util_geometry::project(&paths[**b], position).0)
             }) else {
                 continue;
             };
             let path = &paths[road_index];
-            let (distance, station) = geometry::project(path, position);
+            let (distance, station) = util_geometry::project(path, position);
             // Use connected source ways only; nearby bridges/parallel roads are not hosts.
             if distance > 3.0 {
                 continue;
             }
-            let length = geometry::path_length(path);
-            let tangent = geometry::unit(geometry::sub(
-                geometry::along(path, (station + 0.5).min(length)),
-                geometry::along(path, (station - 0.5).max(0.0)),
+            let length = util_geometry::path_length(path);
+            let tangent = util_geometry::unit(util_geometry::sub(
+                util_geometry::along(path, (station + 0.5).min(length)),
+                util_geometry::along(path, (station - 0.5).max(0.0)),
             ));
             let across = if let Some(walk) = walk {
                 // A crossing path running along a road does not cross that road.
-                if geometry::dot(walk.direction, tangent).abs() >= 0.85 {
+                if util_geometry::dot(walk.direction, tangent).abs() >= 0.85 {
                     continue;
                 }
                 walk.direction
@@ -207,8 +217,8 @@ pub fn build_crossings(
                 }
             };
             let half = (map.road_lines[road_index].road_width_start_meters / 2.0 + 0.3)
-                / geometry::cross(tangent, across).abs().max(0.5);
-            let center = geometry::along(path, station);
+                / util_geometry::cross(tangent, across).abs().max(0.5);
+            let center = util_geometry::along(path, station);
             clearance.push(rectangle(
                 center,
                 across,

@@ -1,41 +1,41 @@
 //! Vertical road support and edge contact without joining crossing road levels.
 
-use crate::geometry;
-use crate::geometry::{XYZ, XZ};
-use crate::map_details;
-use crate::map_details::RoadSurface;
-use crate::street_surface;
-use crate::track;
-use crate::vehicle_location;
-use crate::world::WorldLocation;
+use crate::model_map_details;
+use crate::model_map_details::RoadSurface;
+use crate::model_world::WorldLocation;
+use crate::physics_vehicle_location;
+use crate::util_geometry;
+use crate::util_geometry::{XYZ, XZ};
+use crate::world_locations;
 use crate::world_raised_roads;
+use crate::world_street_surface;
 
 pub fn tunnel_openings(world: &WorldLocation) -> geo::MultiPolygon<f64> {
     let pieces: Vec<_> = world_raised_roads::lowered_footprints(&world.raised_roads).collect();
     if pieces.is_empty() {
-        geometry::empty()
+        util_geometry::empty()
     } else {
         geo::algorithm::unary_union(&pieces)
     }
 }
 
 pub fn paved_near(world: &WorldLocation, p: XYZ) -> bool {
-    let reference = p.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-    map_details::nearby_decks(&world.details, geometry::xz(p))
+    let reference = p.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+    model_map_details::nearby_decks(&world.details, util_geometry::xz(p))
         .find(|deck| {
-            map_details::height_on(deck, geometry::xz(p))
+            model_map_details::height_on(deck, util_geometry::xz(p))
                 .is_some_and(|h| (h - reference).abs() < 1.5)
         })
         .map_or_else(
-            || street_surface::paved(world, geometry::xz(p)),
+            || world_street_surface::paved(world, util_geometry::xz(p)),
             |deck| deck.surface != RoadSurface::Unpaved,
         )
 }
 pub fn deck_height(world: &WorldLocation, p: XZ<f32>, reference: f32) -> Option<f32> {
-    map_details::deck_height(&world.details, p, reference)
+    model_map_details::deck_height(&world.details, p, reference)
 }
 pub fn drive_height_near(world: &WorldLocation, p: XZ<f32>, reference: f32) -> f32 {
-    let ground = vehicle_location::drive_height(world, p);
+    let ground = physics_vehicle_location::drive_height(world, p);
     deck_height(world, p, reference)
         .filter(|height| (height - reference).abs() < (ground - reference).abs())
         .unwrap_or(ground)
@@ -46,7 +46,7 @@ pub fn constrain_transport(
     velocity: &mut XZ<f32>,
 ) -> f32 {
     let mut impact: f32 = 0.;
-    for deck in map_details::nearby_decks(&world.details, geometry::xz(*position)) {
+    for deck in model_map_details::nearby_decks(&world.details, util_geometry::xz(*position)) {
         for pair in deck.path.windows(2) {
             let a = XZ {
                 x: pair[0][0],
@@ -64,7 +64,7 @@ pub fn constrain_transport(
                 continue;
             }
             let height = pair[0][1] + (pair[1][1] - pair[0][1]) * along / length;
-            if (position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT - height).abs() > 1.5 {
+            if (position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT - height).abs() > 1.5 {
                 continue;
             }
             let normal = XZ {
@@ -72,7 +72,7 @@ pub fn constrain_transport(
                 z: dx / length,
             };
             let lateral = (position.x - a.x) * normal.x + (position.z - a.z) * normal.z;
-            let limit = deck.width / 2. - track::CAR_RADIUS - 0.08;
+            let limit = deck.width / 2. - world_locations::CAR_RADIUS - 0.08;
             if lateral.abs() > limit && lateral.abs() < deck.width / 2. + 2. {
                 let penetration = lateral.abs() - limit;
                 let n = XZ {
@@ -81,17 +81,17 @@ pub fn constrain_transport(
                 };
                 position.x -= n.x * penetration;
                 position.z -= n.z * penetration;
-                impact = impact.max(vehicle_location::deflect(velocity, n));
+                impact = impact.max(physics_vehicle_location::deflect(velocity, n));
             }
         }
     }
     impact
 }
 pub fn tunnel_ceiling(world: &WorldLocation, p: XZ<f32>, reference: f32) -> Option<f32> {
-    map_details::nearby_decks(&world.details, p)
+    model_map_details::nearby_decks(&world.details, p)
         .filter(|deck| deck.grade < 0)
         .filter_map(|deck| {
-            map_details::height_on(deck, p)
+            model_map_details::height_on(deck, p)
                 .filter(|h| (h - reference).abs() < 3.)
                 .map(|h| h + 4.5)
         })
@@ -100,17 +100,17 @@ pub fn tunnel_ceiling(world: &WorldLocation, p: XZ<f32>, reference: f32) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use crate::camera;
-    use crate::elevation;
-    use crate::vehicle_location;
-    use crate::world;
+    use crate::model_world;
+    use crate::physics_vehicle_location;
+    use crate::render_camera;
     use crate::world_buildings;
+    use crate::world_elevation;
     use crate::world_preparation;
     use crate::world_roads;
     use crate::world_transport;
 
     use super::*;
-    use crate::map_details;
+    use crate::model_map_details;
     use crate::test_support;
 
     #[test]
@@ -118,15 +118,15 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let assets = test_support::stored_location(folder.path(), true);
         let mut city = world_preparation::world_location_load(&assets).unwrap();
-        let mut data = map_details::Data::default();
-        data.decks.push(map_details::Deck {
+        let mut data = model_map_details::Data::default();
+        data.decks.push(model_map_details::Deck {
             road: 0,
             grade: -1,
             width: 8.,
             path: vec![[0., 2., 12.], [20., 2., 12.]],
             surface: RoadSurface::Asphalt,
         });
-        city.details = map_details::new(data);
+        city.details = model_map_details::new(data);
         let mut position = XYZ {
             x: 12.,
             y: 2.48,
@@ -136,7 +136,7 @@ mod tests {
         let mut velocity = XZ { x: 4., z: 0. };
         assert!(world_buildings::building_clearance_at(&(city), position) > 10.);
         assert_eq!(
-            vehicle_location::constrain(&(city), &mut position, &mut velocity, 1.7),
+            physics_vehicle_location::constrain(&(city), &mut position, &mut velocity, 1.7),
             0.
         );
         assert!((position.y - original.y).abs() < 0.001);
@@ -152,38 +152,40 @@ mod tests {
             y: 3.8,
             z: 12.,
         };
-        assert_eq!(camera::camera_eye(&(city), anchor, eye), eye);
+        assert_eq!(render_camera::camera_eye(&(city), anchor, eye), eye);
     }
     #[test]
     fn recovery_keeps_the_drivers_level_at_an_overlapping_road() {
-        use crate::location;
+        use crate::model_location;
         let folder = tempfile::tempdir().unwrap();
         let assets = test_support::stored_location(folder.path(), false);
-        let mut stored = location::location_read(folder.path()).unwrap();
-        stored.roads.push(location::Road {
+        let mut stored = model_location::location_read(folder.path()).unwrap();
+        stored.roads.push(model_location::Road {
             ends: stored.roads[0].ends,
             way_id: Some(2),
             width_meters: 8.,
             direction: 0,
         });
         stored.streets.paths.push(stored.streets.paths[0].clone());
-        stored.details.decks.push(map_details::Deck {
+        stored.details.decks.push(model_map_details::Deck {
             road: 0,
             grade: 1,
             width: 8.,
             path: vec![[0., 12., 0.], [10., 12., 1.], [20., 12., 0.]],
             surface: RoadSurface::Asphalt,
         });
-        location::location_write(&stored, folder.path()).unwrap();
+        model_location::location_write(&stored, folder.path()).unwrap();
         let city = world_preparation::world_location_load(&assets).unwrap();
         for height in [7., 12.] {
             let p = XYZ {
                 x: 10.,
-                y: height + vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                y: height + physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT,
                 z: 1.,
             };
             assert!((world_roads::project(&(city), p).point.y - height).abs() < 0.001);
-            assert!((vehicle_location::recovery(&(city), p).point.y - height).abs() < 0.001);
+            assert!(
+                (physics_vehicle_location::recovery(&(city), p).point.y - height).abs() < 0.001
+            );
         }
     }
     #[test]
@@ -192,16 +194,19 @@ mod tests {
         let assets = test_support::stored_location(folder.path(), false);
         for grade in [-1, 1] {
             let mut city = world_preparation::world_location_load(&assets).unwrap();
-            city.elevation = Some(elevation::generate(world::bounding_box(&city), |_| 0.));
-            let mut data = map_details::Data::default();
-            data.decks.push(map_details::Deck {
+            city.elevation = Some(world_elevation::generate(
+                model_world::bounding_box(&city),
+                |_| 0.,
+            ));
+            let mut data = model_map_details::Data::default();
+            data.decks.push(model_map_details::Deck {
                 road: 0,
                 grade,
                 width: 8.,
                 path: vec![[0., grade as f32 * 5., 0.], [20., grade as f32 * 5., 0.]],
                 surface: RoadSurface::Asphalt,
             });
-            city.details = map_details::new(data);
+            city.details = model_map_details::new(data);
             let p = XZ { x: 10., z: 0. };
             assert!(world_transport::drive_height_near(&(city), p, 0.).abs() < 0.001);
             assert!(
@@ -215,7 +220,7 @@ mod tests {
             );
             let mut position = XYZ {
                 x: 10.,
-                y: grade as f32 * 5. + vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                y: grade as f32 * 5. + physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT,
                 z: 3.7,
             };
             let mut velocity = XZ { x: 3., z: 5. };
@@ -225,7 +230,7 @@ mod tests {
             assert!(position.z < 3.);
             let mut ground = XYZ {
                 x: 10.,
-                y: vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                y: physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT,
                 z: 3.7,
             };
             let original = ground;
@@ -245,8 +250,8 @@ mod tests {
                     y: -3.0,
                     z: 0.,
                 };
-                assert_eq!(camera::camera_eye(&(city), anchor, eye), eye);
-                assert!(camera::camera_eye(&(city), anchor, XYZ { y: 0., ..eye }).y < -0.5);
+                assert_eq!(render_camera::camera_eye(&(city), anchor, eye), eye);
+                assert!(render_camera::camera_eye(&(city), anchor, XYZ { y: 0., ..eye }).y < -0.5);
             }
         }
     }

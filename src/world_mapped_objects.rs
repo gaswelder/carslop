@@ -1,16 +1,16 @@
 //! Contact with the same mapped street objects used by the scene builder.
 
-use crate::geometry;
-use crate::geometry::{XYZ, XZ};
-use crate::map_details;
-use crate::map_details::{MapObject, ObjectKind};
-use crate::track;
-use crate::vehicle_location;
-use crate::world::WorldLocation;
+use crate::model_map_details;
+use crate::model_map_details::{MapObject, ObjectKind};
+use crate::model_world::WorldLocation;
+use crate::physics_vehicle_location;
+use crate::util_geometry;
+use crate::util_geometry::{XYZ, XZ};
+use crate::world_locations;
 use crate::world_spatial;
 
 pub fn mapped_object_clearance(world: &WorldLocation, p: XZ<f32>) -> f32 {
-    map_details::nearby_objects(&world.details, p)
+    model_map_details::nearby_objects(&world.details, p)
         .flat_map(capsules)
         .map(|capsule| {
             let q = world_spatial::nearest_edge(p, capsule.ends[0], capsule.ends[1]);
@@ -23,30 +23,30 @@ pub fn constrain_mapped_objects(
     position: &mut XYZ,
     velocity: &mut XZ<f32>,
 ) -> f32 {
-    let p = geometry::xz(*position);
+    let p = util_geometry::xz(*position);
     let mut impact: f32 = 0.;
-    for object in map_details::nearby_objects(&world.details, p) {
-        let ground = vehicle_location::drive_height(
+    for object in model_map_details::nearby_objects(&world.details, p) {
+        let ground = physics_vehicle_location::drive_height(
             world,
             XZ {
                 x: object.position[0],
                 z: object.position[1],
             },
         );
-        if position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT > ground + object.height {
+        if position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT > ground + object.height {
             continue;
         }
         if position.y + 1.5 < ground {
             continue;
         }
         for Capsule { ends, radius } in capsules(object) {
-            let q = world_spatial::nearest_edge(geometry::xz(*position), ends[0], ends[1]);
+            let q = world_spatial::nearest_edge(util_geometry::xz(*position), ends[0], ends[1]);
             let delta = XZ {
                 x: position.x - q.x,
                 z: position.z - q.z,
             };
             let distance = delta.x.hypot(delta.z);
-            if distance < radius + track::CAR_RADIUS {
+            if distance < radius + world_locations::CAR_RADIUS {
                 let n = if distance > 0.0001 {
                     XZ {
                         x: delta.x / distance,
@@ -58,9 +58,12 @@ pub fn constrain_mapped_objects(
                         z: object.angle.cos(),
                     }
                 };
-                position.x = q.x + n.x * (radius + track::CAR_RADIUS + 0.01);
-                position.z = q.z + n.z * (radius + track::CAR_RADIUS + 0.01);
-                impact = impact.max(vehicle_location::deflect(velocity, XZ { x: -n.x, z: -n.z }));
+                position.x = q.x + n.x * (radius + world_locations::CAR_RADIUS + 0.01);
+                position.z = q.z + n.z * (radius + world_locations::CAR_RADIUS + 0.01);
+                impact = impact.max(physics_vehicle_location::deflect(
+                    velocity,
+                    XZ { x: -n.x, z: -n.z },
+                ));
             }
         }
     }
@@ -156,13 +159,13 @@ mod tests {
     use crate::world_mapped_objects;
 
     use super::*;
-    use crate::map_details;
+    use crate::model_map_details;
     use crate::test_support;
     #[test]
     fn open_gates_leave_the_driving_gap_clear_and_locked_gates_stop_a_car() {
         let mut city = test_support::empty_world();
         for locked in [false, true] {
-            let mut data = map_details::Data::default();
+            let mut data = model_map_details::Data::default();
             data.objects.push(MapObject {
                 kind: ObjectKind::Gate,
                 position: [0., 0.],
@@ -172,7 +175,7 @@ mod tests {
                 text: String::new(),
                 locked,
             });
-            city.details = map_details::new(data);
+            city.details = model_map_details::new(data);
             let mut p = XYZ {
                 x: 0.,
                 y: 0.48,
@@ -184,7 +187,7 @@ mod tests {
             assert_eq!(impact > 0., locked);
             assert_eq!(
                 world_mapped_objects::mapped_object_clearance(&(city), XZ { x: 0., z: 0. })
-                    < track::CAR_RADIUS,
+                    < world_locations::CAR_RADIUS,
                 locked
             );
             let mut above = XYZ {
