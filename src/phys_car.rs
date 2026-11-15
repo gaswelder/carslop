@@ -107,6 +107,18 @@ impl asset_car::Gearbox {
 const STEERING_RATE: f32 = 9.0;
 // Forward speed (m/s) at which released steering reaches its full return rate.
 const STEERING_CENTERING_SPEED: f32 = 10.0;
+// Below this speed the full lock is available for parking and tight turns.
+const STEERING_LOCK_SPEED: f32 = 6.0;
+// Speed range over which the lock fades from full to its minimum fraction.
+const STEERING_LOCK_FADE_SPEED: f32 = 20.0;
+// Fraction of full lock available once the fade is complete. It keeps a held
+// input from asking for several times the slip angle the tires can use.
+const STEERING_HIGH_SPEED_LOCK: f32 = 0.35;
+// Front axle grip relative to the rear. With equal grip the limit yaw moment
+// is exactly neutral (each axle's capacity scales with its static load), so a
+// fully developed slide never straightens itself. A small front deficit makes
+// the front saturate first, so the car pushes wide instead of spinning.
+const FRONT_LIMIT_GRIP: f32 = 0.94;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
@@ -391,6 +403,7 @@ impl Vehicle {
                     * self.track.mapped_surface_grip(self.position)
                     * load
                     * (1.0 - 0.18 * imbalance * imbalance)
+                    * if axle == 0 { FRONT_LIMIT_GRIP } else { 1.0 }
             });
             let rear_v = lateral - self.yaw_rate * b;
             let throttle = controls.throttle.clamp(0.0, 1.0);
@@ -803,26 +816,36 @@ impl Vehicle {
     }
 
     fn update_steering(&mut self, requested: f32, dt: f32) {
-        let requested = requested.clamp(-1.0, 1.0);
+        // The lock available at this speed bounds both the held angle and the
+        // new request, so speeding up mid-corner also unwinds the wheels.
+        let lock = self.steering_lock_fraction();
+        self.steering = self.steering.clamp(-lock, lock);
+        let requested = requested.clamp(-lock, lock);
         if requested == 0.0 {
             // Stationary wheels hold their angle. Forward motion progressively
             // restores self-centering, independently of deliberate countersteering.
             let motion = (self.speed / STEERING_CENTERING_SPEED).clamp(0.0, 1.0);
-            let step = STEERING_RATE * 0.85 * motion * dt;
+            let step = STEERING_RATE * 0.45 * motion * dt;
             self.steering -= self.steering.clamp(-step, step);
             return;
         }
-        // Cross the centre quickly when countersteering, then build the new
-        // turn progressively. Small digital taps never request instant lock.
+        // Cross the centre quickly when countersteering, then build and release
+        // the turn at the same speed-dependent rate. Release no faster than
+        // build stops the wheel snapping back when a key is let go.
         let reversing = requested * self.steering < 0.0;
-        let centering = reversing || requested.abs() < self.steering.abs();
         let target = if reversing { 0.0 } else { requested };
-        let rate = if centering {
+        let rate = if reversing {
             STEERING_RATE * 0.85
         } else {
             STEERING_RATE * 0.45 / (1.0 + self.speed.abs() * 0.008)
         };
         self.steering += (target - self.steering).clamp(-rate * dt, rate * dt);
+    }
+
+    fn steering_lock_fraction(&self) -> f32 {
+        let fade = ((self.speed.abs() - STEERING_LOCK_SPEED) / STEERING_LOCK_FADE_SPEED)
+            .clamp(0.0, 1.0);
+        1.0 - (1.0 - STEERING_HIGH_SPEED_LOCK) * fade
     }
 
     fn steering_angle(&self) -> f32 {
@@ -1557,12 +1580,44 @@ mod tests {
     }
 
     #[test]
+    fn steering_lock_tapers_with_speed_but_stays_full_for_parking() {
+        let mut car = Vehicle::new(
+            XYZ {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+            test_support::car(),
+        );
+        for speed in [-5.0, 0.0, 5.0] {
+            car.speed = speed;
+            car.steering = 0.0;
+            car.update_steering(1.0, 1.0);
+            assert!(
+                (car.steering_angle().abs() - 0.54).abs() < 0.001,
+                "parking speed {speed} must keep full lock"
+            );
+        }
+        car.speed = 30.0;
+        car.update_steering(1.0, 1.0);
+        let fast = car.steering_angle().abs();
+        assert!(fast > 0.1, "some lock must remain at speed");
+        assert!(
+            fast < 0.54 * 0.4,
+            "high speed must not offer parking lock: {fast}"
+        );
+    }
+
+    #[test]
     fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
         let model = test_support::car();
         for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
             let mut car = level_route_car(track::LocationId::Compact, model.clone());
             let heading = car.heading;
-            steering_run(&mut car, speed, 1.0, 0.1, 120.0);
+            // Stay below the high-speed lock so this measures tap versus hold
+            // rather than the speed-dependent lock taper.
+            steering_run(&mut car, speed, 0.2, 0.1, 120.0);
             let tap_yaw = car.yaw_rate.abs();
             steering_run(&mut car, speed, 0.0, 0.4, 120.0);
             let tap = test_support::angle(car.heading - heading).abs();
@@ -1573,7 +1628,7 @@ mod tests {
                 "releasing steering must reduce yaw"
             );
             let mut held = level_route_car(track::LocationId::Compact, model.clone());
-            steering_run(&mut held, speed, 1.0, 1.0, 120.0);
+            steering_run(&mut held, speed, 0.2, 1.0, 120.0);
             let turn = test_support::angle(held.heading - heading).abs();
             assert!(
                 turn > tap * 3.0,
