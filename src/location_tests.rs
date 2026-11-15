@@ -1,8 +1,9 @@
 use crate::add_location_compile::create_location_map;
-use crate::asset_codecs;
 use crate::build_collision;
 use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
+use crate::codec_furniture;
+use crate::codec_road_rises;
 use crate::error::Result;
 use crate::geometry::{cross, polygon, sub, unit};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
@@ -690,10 +691,8 @@ fn controls(oneway: bool, enabled: bool) -> Vec<traffic::Furniture> {
     build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
     println!("  Placing road controls...");
     build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
-    asset_codecs::furniture::parse(
-        &std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap(),
-    )
-    .unwrap()
+    codec_furniture::parse(&std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap())
+        .unwrap()
 }
 
 #[test]
@@ -1471,7 +1470,7 @@ fn separated_roads_keep_source_topology_and_join_graded_approaches() {
         assert!(
             (prepared.deck_height(XZ { x: 0., z: 0. }, height).unwrap() - height).abs() < 0.001
         );
-        let rises = asset_codecs::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+        let rises = codec_road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
         let lift = |p| {
             rises
                 .iter()
@@ -1798,6 +1797,6 @@ fn traffic_calming_tags_do_not_generate_or_preserve_raised_roads() {
         &path,
     )
     .unwrap();
-    let rises = asset_codecs::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+    let rises = codec_road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
     assert!(rises.is_empty());
 }

@@ -1,4 +1,4 @@
-use super::Number;
+use crate::codec_number::Number;
 use crate::error;
 use crate::error::invalid;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
@@ -39,13 +39,18 @@ pub fn write_volume<T: Copy + Into<f64> + Display>(
         writer,
         "v {} {} {}",
         index,
-        Number(min_height, sizes),
+        Number::new(min_height, sizes),
         holes.len()
     )?;
     for hole in holes {
         write!(writer, " {}", hole.len())?;
         for p in hole {
-            write!(writer, " {} {}", Number(p.x, coords), Number(p.z, coords))?;
+            write!(
+                writer,
+                " {} {}",
+                Number::new(p.x, coords),
+                Number::new(p.z, coords)
+            )?;
         }
     }
     writeln!(writer)?;
@@ -68,13 +73,18 @@ pub fn write(
     writeln!(
         writer,
         "bounds {} {} {} {}",
-        Number(map.bounding_box.min.x, coords),
-        Number(map.bounding_box.min.z, coords),
-        Number(map.bounding_box.max.x, coords),
-        Number(map.bounding_box.max.z, coords)
+        Number::new(map.bounding_box.min.x, coords),
+        Number::new(map.bounding_box.min.z, coords),
+        Number::new(map.bounding_box.max.x, coords),
+        Number::new(map.bounding_box.max.z, coords)
     )?;
     for p in &map.road_nodes {
-        writeln!(writer, "n {} {}", Number(p.x, coords), Number(p.z, coords))?;
+        writeln!(
+            writer,
+            "n {} {}",
+            Number::new(p.x, coords),
+            Number::new(p.z, coords)
+        )?;
     }
     for r in &map.road_lines {
         write!(
@@ -82,7 +92,7 @@ pub fn write(
             "r {} {} {} {} {} {} {}",
             r.ends[0],
             r.ends[1],
-            Number(r.road_width_start_meters, sizes),
+            Number::new(r.road_width_start_meters, sizes),
             r.direction,
             r.osm_way_id
                 .ok_or_else(|| invalid("compiler road is missing a way ID"))?,
@@ -104,12 +114,17 @@ pub fn write(
             writer,
             "b {} {} {} {}",
             b.id,
-            Number(b.height_meters, sizes),
+            Number::new(b.height_meters, sizes),
             u8::from(b.tagged),
             b.ground_outline.len()
         )?;
         for p in &b.ground_outline {
-            write!(writer, " {} {}", Number(p.x, coords), Number(p.z, coords))?;
+            write!(
+                writer,
+                " {} {}",
+                Number::new(p.x, coords),
+                Number::new(p.z, coords)
+            )?;
         }
         writeln!(writer)?;
         write_volume(writer, index, b.min_height_meters, &b.holes, precision)?;
@@ -119,8 +134,8 @@ pub fn write(
             writer,
             "e {} {} {}",
             entrance.building_id,
-            Number(entrance.position.x, coords),
-            Number(entrance.position.z, coords)
+            Number::new(entrance.position.x, coords),
+            Number::new(entrance.position.z, coords)
         )?;
     }
     Ok(())

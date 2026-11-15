@@ -1,6 +1,7 @@
 //! File-backed architectural parts, loaded only while baking location geometry.
-use super::{mesh_glb, Builder};
 use crate::geometry::{XYZ, XZ};
+use crate::mesh_glb;
+use crate::scene::Builder;
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use serde_json::Value;
 use std::{io, path::Path};
@@ -25,7 +26,7 @@ fn range(value: &Value, name: &str) -> io::Result<[f32; 2]> {
     Ok(values)
 }
 
-pub(super) struct Part {
+pub struct Part {
     meshes: Vec<mesh_glb::Mesh>,
     pub size: XYZ,
     scale_axes: [bool; 3],
@@ -125,14 +126,14 @@ impl Part {
     }
 }
 
-pub(super) struct Tints {
+pub struct Tints {
     pub wall: [f32; 3],
     pub frame: [f32; 3],
     pub glass: [f32; 3],
     pub trim: [f32; 3],
     pub shutter: [f32; 3],
 }
-pub(super) struct Placement {
+pub struct Placement {
     pub window_spacing: [f32; 2],
     pub modern_window_spacing: f32,
     pub entrance_min_wall: f32,
@@ -146,7 +147,7 @@ pub(super) struct Placement {
     pub balcony_floor_offset: f32,
     pub balcony_headroom: f32,
 }
-pub(super) struct Catalog {
+pub struct Catalog {
     pub window: Part,
     pub entrance: Part,
     pub balconies: [Part; 2],
@@ -221,10 +222,7 @@ mod tests {
         // placement must preserve outward normals and triangle winding.
         catalog.window.place(
             &mut b,
-            [
-                XZ { x: 10., z: 20. },
-                XZ { x: 10., z: 30. },
-            ],
+            [XZ { x: 10., z: 20. }, XZ { x: 10., z: 30. }],
             5.,
             7.,
             XYZ {
@@ -257,10 +255,7 @@ mod tests {
         let mut b = Builder::default();
         catalog.entrance.place(
             &mut b,
-            [
-                XZ { x: 0., z: 0. },
-                XZ { x: 10., z: 0. },
-            ],
+            [XZ { x: 0., z: 0. }, XZ { x: 10., z: 0. }],
             5.,
             0.,
             XYZ {

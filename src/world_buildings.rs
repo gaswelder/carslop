@@ -1,24 +1,29 @@
 //! Footprints and their padded collision/camera grid cannot be edited independently.
-use super::*;
+#[cfg(test)]
+use crate::geometry::BoundingBoxXZ;
+use crate::geometry::{XYZ, XZ};
 use crate::map_details;
 use crate::track;
-use crate::world;
+use crate::vehicle_location;
+use crate::world::{Building, HeightField, WorldLocation};
+use crate::world_spatial;
 use geo::Area;
+use std::collections::HashMap;
 #[derive(Debug)]
-pub(super) struct Buildings {
+pub struct Buildings {
     items: Vec<Building>,
     grid: HashMap<(i32, i32), Vec<usize>>,
     groups: HashMap<u64, Vec<usize>>,
 }
 impl Buildings {
-    pub(super) fn new(items: Vec<Building>) -> Self {
+    pub fn new(items: Vec<Building>) -> Self {
         let mut grid = HashMap::new();
         let mut groups: HashMap<u64, Vec<usize>> = HashMap::new();
         for (i, b) in items.iter().enumerate() {
             groups.entry(b.id).or_default().push(i);
-            world::spatial::insert(
+            world_spatial::insert(
                 &mut grid,
-                world::spatial::bounds(b.ground_outline.iter().copied(), track::CAR_RADIUS + 1.0),
+                world_spatial::bounds(b.ground_outline.iter().copied(), track::CAR_RADIUS + 1.0),
                 i,
             );
         }
@@ -28,7 +33,7 @@ impl Buildings {
             groups,
         }
     }
-    pub(super) fn with_terrain(mut self, field: &HeightField) -> Self {
+    pub fn with_terrain(mut self, field: &HeightField) -> Self {
         let mut bases: HashMap<u64, f32> = HashMap::new();
         for building in &self.items {
             let height = building
@@ -101,7 +106,7 @@ impl WorldLocation {
     pub fn nearby_buildings(&self, p: XZ<f32>) -> impl Iterator<Item = &Building> {
         self.buildings
             .grid
-            .get(&world::spatial::cell(p))
+            .get(&world_spatial::cell(p))
             .into_iter()
             .flatten()
             .map(|&i| &self.buildings.items[i])
@@ -114,7 +119,7 @@ impl WorldLocation {
         let p = position.xz();
         self.buildings
             .grid
-            .get(&world::spatial::cell(p))
+            .get(&world_spatial::cell(p))
             .map_or(f32::INFINITY, |ids| {
                 ids.iter()
                     .filter(|i| {

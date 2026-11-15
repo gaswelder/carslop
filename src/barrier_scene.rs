@@ -1,6 +1,6 @@
 //! Terrain-following walls and open metal, chain-link, or wooden fence panels.
-use super::{Builder, Surface};
 use crate::geometry::{XYZ, XZ};
+use crate::scene::{Builder, Surface};
 use crate::world::{BarrierKind, WorldLocation};
 
 fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surface) {
@@ -49,7 +49,7 @@ fn support(city: &WorldLocation, point: XZ<f32>) -> XYZ {
     point.at_height(city.height(point) + city.paving_height(point).unwrap_or(0.0))
 }
 
-pub(super) fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
+pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
     for barrier in city.barriers() {
         let height = barrier.height_meters;
         let width = barrier.width_meters;
@@ -217,7 +217,7 @@ pub(super) fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset_codecs;
+    use crate::codec_barriers;
     use crate::test_support;
     use crate::world;
 
@@ -238,7 +238,7 @@ mod tests {
                 height_meters: 2.,
                 width_meters: 0.12,
             }];
-            asset_codecs::barriers::write(
+            codec_barriers::write(
                 &mut std::fs::File::create(folder.path().join("barriers.txt")).unwrap(),
                 &barriers,
             )

@@ -1,9 +1,9 @@
 //! Mapped barriers and their collision grid share one owner.
-use super::{Barrier, WorldLocation};
 use crate::geometry::{XYZ, XZ};
 use crate::track;
 use crate::vehicle_location;
-use crate::world::spatial;
+use crate::world::{Barrier, WorldLocation};
+use crate::world_spatial;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -15,9 +15,9 @@ impl Barriers {
     pub fn new(items: Vec<Barrier>) -> Self {
         let mut grid = HashMap::new();
         for (i, barrier) in items.iter().enumerate() {
-            spatial::insert(
+            world_spatial::insert(
                 &mut grid,
-                spatial::bounds(
+                world_spatial::bounds(
                     barrier.ends.iter().copied(),
                     track::CAR_RADIUS + barrier.width_meters / 2.0 + 0.2,
                 ),
@@ -28,7 +28,7 @@ impl Barriers {
     }
     fn nearby(&self, p: XZ<f32>) -> impl Iterator<Item = &Barrier> {
         self.grid
-            .get(&spatial::cell(p))
+            .get(&world_spatial::cell(p))
             .into_iter()
             .flatten()
             .map(|i| &self.items[*i])
@@ -44,7 +44,7 @@ impl WorldLocation {
         self.barriers
             .nearby(p)
             .map(|barrier| {
-                let q = spatial::nearest_edge(p, barrier.ends[0], barrier.ends[1]);
+                let q = world_spatial::nearest_edge(p, barrier.ends[0], barrier.ends[1]);
                 (p.x - q.x).hypot(p.z - q.z) - barrier.width_meters / 2.0
             })
             .fold(f32::INFINITY, f32::min)
@@ -59,7 +59,7 @@ impl WorldLocation {
                 continue;
             }
             let p = position.xz();
-            let q = spatial::nearest_edge(p, barrier.ends[0], barrier.ends[1]);
+            let q = world_spatial::nearest_edge(p, barrier.ends[0], barrier.ends[1]);
             let distance = (p.x - q.x).hypot(p.z - q.z);
             let clearance = track::CAR_RADIUS + barrier.width_meters / 2.0;
             if distance >= clearance {

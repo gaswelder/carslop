@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::source_location::SourceLocation;
-use crate::street_surface::binary::write_binary_street_surface;
 use crate::street_surface::StreetSurface;
+use crate::street_surface_binary::write_binary_street_surface;
 use std::path::Path;
 
 pub fn build_collisions(

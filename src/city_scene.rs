@@ -1,8 +1,5 @@
-use super::{
-    building_assets::{Catalog, Tints},
-    Builder, Surface,
-};
 use crate::build_surfaces;
+use crate::building_assets::{Catalog, Tints};
 use crate::city::Building;
 use crate::elevation;
 use crate::font;
@@ -10,6 +7,10 @@ use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::landscape;
 use crate::map_details::{RoofShape, TreeKind};
+use crate::road_furniture;
+use crate::roof_scene;
+use crate::scene;
+use crate::scene::{Builder, Surface};
 use crate::world;
 use crate::world::WorldLocation;
 use geo::TriangulateEarcut;
@@ -68,7 +69,7 @@ fn roof_triangles(polygon: &[XZ<f32>]) -> Vec<[usize; 3]> {
     triangles
 }
 
-pub(super) fn buildings(b: &mut Builder, city: &WorldLocation, detailed: bool) -> std::io::Result<()> {
+pub fn buildings(b: &mut Builder, city: &WorldLocation, detailed: bool) -> std::io::Result<()> {
     let models = Catalog::load_default()?;
     for building in city.buildings() {
         building_mesh(b, building, city, detailed, &models);
@@ -184,13 +185,13 @@ fn drape_ground_cover(
     }
 }
 
-pub(super) fn ground_mesh(
+pub fn ground_mesh(
     b: &mut Builder,
     city: &WorldLocation,
     boundary: Option<&geo::MultiPolygon<f64>>,
 ) {
     let field = city.elevation().expect("city rendering requires elevation");
-    let openings = super::generation_stage("tunnel openings", || city.tunnel_openings());
+    let openings = scene::generation_stage("tunnel openings", || city.tunnel_openings());
     let opening_index = build_surfaces::PolygonIndex::new(&openings);
     let opening_index = (!openings.0.is_empty()).then_some(&opening_index);
     // Retain the terrain extent used for imports without an explicit area boundary.
@@ -209,7 +210,7 @@ pub(super) fn ground_mesh(
             },
         ])])
     });
-    super::generation_stage("terrain", || {
+    scene::generation_stage("terrain", || {
         terrain_mesh(
             b,
             field,
@@ -217,7 +218,7 @@ pub(super) fn ground_mesh(
             opening_index,
         );
     });
-    super::generation_stage("ground cover", || {
+    scene::generation_stage("ground cover", || {
         for triangle in city.ground_triangles() {
             let mut emit = |mut p: [XYZ; 3]| {
                 for v in &mut p {
@@ -231,13 +232,13 @@ pub(super) fn ground_mesh(
             drape_ground_cover(field, triangle.points, opening_index, &mut emit);
         }
     });
-    super::generation_stage("trees", || {
+    scene::generation_stage("trees", || {
         for tree in city.trees() {
             mapped_tree(b, city, tree);
         }
     });
     let pavement = city.pavement_height_meters();
-    super::generation_stage("roads and pavement", || {
+    scene::generation_stage("roads and pavement", || {
         assert!(
             city.has_compiled_roads(),
             "city rendering requires compiled street surfaces"
@@ -262,7 +263,7 @@ pub(super) fn ground_mesh(
             }
         }
     });
-    super::generation_stage("curbs", || {
+    scene::generation_stage("curbs", || {
         for curb in city.curbs() {
             let [a, c] = curb.ends;
             let top = if curb.style == world::CurbStyle::ServiceRoad {
@@ -301,9 +302,9 @@ pub(super) fn ground_mesh(
             }
         }
     });
-    super::generation_stage("street furniture", || {
+    scene::generation_stage("street furniture", || {
         for feature in &city.furniture {
-            super::road_furniture::build(b, feature);
+            road_furniture::build(b, feature);
         }
     });
 }
@@ -532,7 +533,7 @@ fn building_mesh(
         }
     }
     if let Some(style) = mapped.filter(|style| style.shape != RoofShape::Flat) {
-        super::roof_scene::build(b, building, style, roof, wall);
+        roof_scene::build(b, building, style, roof, wall);
     } else if building.holes.is_empty() {
         for triangle in roof_triangles(&building.ground_outline) {
             let p = triangle.map(|i| building.ground_outline[i].at_height(height));
@@ -819,7 +820,7 @@ fn canopy_quad(
                 z: position.z - center.z,
             };
             let length = delta.iter().map(|n| n * n).sum::<f32>().sqrt().max(0.00001);
-            super::Vertex {
+            scene::Vertex {
                 position: (position).into(),
                 normal: (delta.map(|n| n / length)).into(),
                 color,
@@ -1408,7 +1409,7 @@ mod tests {
                 x: normal.z,
                 z: -normal.x,
             };
-            let screen_x = |v: &super::super::Vertex| {
+            let screen_x = |v: &scene::Vertex| {
                 (v.position[0] - c.x) * right.x + (v.position[2] - c.z) * right.z
             };
             let text = &b.vertices[6..];
@@ -1443,7 +1444,7 @@ mod tests {
 }
 
 /// Runtime signs also work with existing baked city archives.
-pub(super) fn storefront_signs(b: &mut Builder, city: &WorldLocation) {
+pub fn storefront_signs(b: &mut Builder, city: &WorldLocation) {
     for building in city.buildings() {
         if !city
             .primary_building_volume(building.id)

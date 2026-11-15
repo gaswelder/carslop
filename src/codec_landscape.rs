@@ -1,6 +1,6 @@
 //! LANDSCAPE 1 records, shared by runtime loading and compiler exclusion checks.
 //! Legacy trailing header fields remain accepted. Unknown/malformed records fail.
-use super::Number;
+use crate::codec_number::Number;
 use crate::geometry::XZ;
 use crate::world::{Material, Tree};
 use std::{fmt::Display, io, str::FromStr};
@@ -131,8 +131,8 @@ impl<W: io::Write> Writer<W> {
             write!(
                 self.output,
                 " {} {}",
-                Number(p.x, digits),
-                Number(p.z, digits)
+                Number::new(p.x, digits),
+                Number::new(p.z, digits)
             )?;
         }
         writeln!(self.output)
@@ -162,10 +162,10 @@ impl<W: io::Write> Writer<W> {
             self.output,
             "t {} {} {} {} {}",
             id,
-            Number(coords.x, digits),
-            Number(coords.z, digits),
-            Number(height, digits),
-            Number(radius, digits)
+            Number::new(coords.x, digits),
+            Number::new(coords.z, digits),
+            Number::new(height, digits),
+            Number::new(radius, digits)
         )
     }
     pub fn flush(&mut self) -> io::Result<()> {

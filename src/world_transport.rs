@@ -1,10 +1,10 @@
 //! Vertical road support and edge contact without joining crossing road levels.
-use super::WorldLocation;
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::RoadSurface;
 use crate::track;
 use crate::vehicle_location;
+use crate::world::WorldLocation;
 
 impl WorldLocation {
     pub fn tunnel_openings(&self) -> geo::MultiPolygon<f64> {

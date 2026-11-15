@@ -1,7 +1,7 @@
 //! Original procedural signal heads and sign faces, placed from mapped controls.
-use super::{Builder, Surface};
 use crate::font;
 use crate::geometry::{XYZ, XZ};
+use crate::scene::{Builder, Surface};
 use crate::traffic::{Furniture, FurnitureKind};
 use std::f32::consts::{PI, TAU};
 
@@ -78,7 +78,7 @@ fn lettering(b: &mut Builder, f: &Furniture, label: &str, y: f32, size: f32, sur
     });
 }
 
-pub(super) fn build(b: &mut Builder, f: &Furniture) {
+pub fn build(b: &mut Builder, f: &Furniture) {
     let metal = Surface {
         color: [0.29, 0.32, 0.32],
         material: [0.0, 0.35],

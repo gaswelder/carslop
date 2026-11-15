@@ -1,15 +1,20 @@
 //! Controlled construction of compiled and authored runtime worlds.
-use super::*;
 use crate::authoring::Circuit;
 use crate::city_assets;
 use crate::elevation;
+use crate::geometry::XYZ;
 use crate::landscape;
 use crate::location;
 use crate::map_details;
 use crate::scene;
 use crate::street_surface;
 use crate::track;
-use crate::world;
+use crate::world::{Building, Furniture, HeightField, LocationId, WorldLocation};
+use crate::world_barriers::Barriers;
+use crate::world_buildings::Buildings;
+use crate::world_raised_roads::RaisedRoads;
+use crate::world_roads::RoadNetwork;
+use crate::world_spatial;
 
 /// A world with compiled street surfaces and all required bake layers installed.
 /// Read-only access prevents a caller from removing layers before scene baking.
@@ -188,7 +193,7 @@ impl WorldLocation {
             }
         }
         let mut city = Self::empty();
-        city.bounding_box = world::spatial::bounds(points.iter().map(|p| p.xz()), 0.0);
+        city.bounding_box = world_spatial::bounds(points.iter().map(|p| p.xz()), 0.0);
         city.roads = RoadNetwork::authored(points, widths)?;
         Ok(city)
     }

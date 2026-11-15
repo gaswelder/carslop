@@ -1,13 +1,12 @@
 use crate::city_assets;
 use crate::font;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
+use crate::hud_atlas;
 use crate::phys_car;
 #[cfg(test)]
 use crate::track::LocationId;
 use crate::{asset_car, track::WorldLocation};
 use std::ffi::CString;
-
-mod atlas;
 
 #[repr(C)]
 struct Vertex {
@@ -312,7 +311,7 @@ fn map_marker(v: &mut Vec<Vertex>, point: [f32; 2], size: f32, aspect: f32, colo
 }
 
 pub struct Hud {
-    font_texture: atlas::Texture,
+    font_texture: hud_atlas::Texture,
     vao: u32,
     vbo: u32,
     full_map_vertices: i32,
@@ -358,7 +357,7 @@ impl Hud {
     }
 
     pub fn new() -> Self {
-        let font_texture = atlas::Texture::new();
+        let font_texture = hud_atlas::Texture::new();
         unsafe {
             let (mut vao, mut vbo) = (0, 0);
             gl::GenVertexArrays(1, &mut vao);
@@ -799,7 +798,7 @@ fn choice_button(v: &mut Vec<Vertex>, r: [f32; 4], label: &str, selected: bool, 
     let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::regular().width(label).max(1.0));
     text_with_font(
         v,
-        &atlas::get().regular,
+        &hud_atlas::get().regular,
         label,
         [r[0] + 0.035, (r[1] + r[3]) * 0.5 + size * 5.0],
         size,
@@ -883,11 +882,11 @@ impl InstrumentCanvas<'_> {
         }
     }
     fn label(&mut self, value: &str, center: [f32; 2], size: f32, color: [f32; 3]) {
-        self.font_label(&atlas::get().labels, value, center, size, color);
+        self.font_label(&hud_atlas::get().labels, value, center, size, color);
     }
     fn font_label(
         &mut self,
-        font: &atlas::Font,
+        font: &hud_atlas::Font,
         value: &str,
         center: [f32; 2],
         size: f32,
@@ -971,7 +970,7 @@ fn dial_face(
                 value.to_string()
             };
             c.font_label(
-                &atlas::get().digits,
+                &hud_atlas::get().digits,
                 &label,
                 dial_point(center, radius - 26.0, fraction),
                 1.4,
@@ -1047,7 +1046,7 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
     c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
     c.label("GEAR", [166.0, 129.0], 0.95, muted);
     c.font_label(
-        &atlas::get().digits,
+        &hud_atlas::get().digits,
         &if gauges.gear == phys_car::NEUTRAL_GEAR {
             "N".into()
         } else if gauges.gear == 0 {
@@ -1194,12 +1193,12 @@ fn glyph_quad(v: &mut Vec<Vertex>, positions: [[f32; 2]; 4], uv: [[f32; 2]; 2], 
 }
 
 fn text(v: &mut Vec<Vertex>, value: &str, origin: [f32; 2], size: f32, color: [f32; 3]) {
-    text_with_font(v, &atlas::get().labels, value, origin, size, color);
+    text_with_font(v, &hud_atlas::get().labels, value, origin, size, color);
 }
 
 fn text_with_font(
     v: &mut Vec<Vertex>,
-    font: &atlas::Font,
+    font: &hud_atlas::Font,
     value: &str,
     origin: [f32; 2],
     size: f32,
@@ -1262,7 +1261,7 @@ mod tests {
         let mut vertices = Vec::new();
         let mut triangles = 0;
         let cold = std::time::Instant::now();
-        let atlas = atlas::get();
+        let atlas = hud_atlas::get();
         eprintln!(
             "Atlas: {}x{}, {:.3} s to initialize",
             atlas.width,

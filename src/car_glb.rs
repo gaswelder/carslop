@@ -1,7 +1,7 @@
 //! Static glTF 2.0 car artwork adapted to the existing colored-triangle renderer.
-use super::mesh_glb;
-use super::Vertex;
 use crate::geometry::XYZ;
+use crate::mesh_glb;
+use crate::scene::Vertex;
 use glam::{Mat4, Vec3};
 use std::{io, path::Path};
 

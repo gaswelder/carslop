@@ -1,9 +1,10 @@
 //! Contact with the same mapped street objects used by the scene builder.
-use super::{spatial, WorldLocation};
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{MapObject, ObjectKind};
 use crate::track;
 use crate::vehicle_location;
+use crate::world::WorldLocation;
+use crate::world_spatial;
 
 impl WorldLocation {
     pub fn mapped_object_clearance(&self, p: XZ<f32>) -> f32 {
@@ -11,7 +12,7 @@ impl WorldLocation {
             .nearby_objects(p)
             .flat_map(capsules)
             .map(|capsule| {
-                let q = spatial::nearest_edge(p, capsule.ends[0], capsule.ends[1]);
+                let q = world_spatial::nearest_edge(p, capsule.ends[0], capsule.ends[1]);
                 (p.x - q.x).hypot(p.z - q.z) - capsule.radius
             })
             .fold(f32::INFINITY, f32::min)
@@ -31,7 +32,7 @@ impl WorldLocation {
                 continue;
             }
             for Capsule { ends, radius } in capsules(object) {
-                let q = spatial::nearest_edge(position.xz(), ends[0], ends[1]);
+                let q = world_spatial::nearest_edge(position.xz(), ends[0], ends[1]);
                 let delta = XZ {
                     x: position.x - q.x,
                     z: position.z - q.z,

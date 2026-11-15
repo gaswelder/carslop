@@ -1,8 +1,10 @@
 //! Compile authored points into the same assets used by imported cities.
-use crate::asset_codecs;
 use crate::build_collision;
 use crate::build_scene;
 use crate::city_assets;
+use crate::codec_city;
+use crate::codec_furniture;
+use crate::codec_landscape;
 use crate::error::{invalid, Result};
 use crate::geometry::{BoundingBoxXZ, XZ};
 use crate::landscape;
@@ -13,6 +15,7 @@ use crate::source_location::{SourceLocation, SourceRoad};
 use crate::track;
 use crate::world;
 use crate::world::Building;
+use crate::world_preparation;
 use std::fs;
 use std::path::Path;
 use std::{
@@ -114,20 +117,13 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
         ..SourceLocation::<f64>::empty()
     };
     let mut city_file = BufWriter::new(fs::File::create(output.join("city.txt"))?);
-    asset_codecs::city::write(
-        &mut city_file,
-        &map,
-        asset_codecs::city::Precision::Authored,
-    )?;
+    codec_city::write(&mut city_file, &map, codec_city::Precision::Authored)?;
     city_file.flush()?;
     println!("Building streets ({} segments)...", count);
     write_streets(&samples, output)?;
     write_elevation(track, output)?;
     write_landscape(track, track.trees(), output)?;
-    asset_codecs::furniture::write(
-        &mut fs::File::create(output.join("furniture.txt"))?,
-        &[],
-    )?;
+    codec_furniture::write(&mut fs::File::create(output.join("furniture.txt"))?, &[])?;
     fs::copy(source, output.join("source.track.json"))?;
     // Keep the existing label reader independent of the authoring format.
     fs::write(
@@ -162,7 +158,7 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
     )?;
     source_location::write_labels(output)?;
     // Validate using the regular runtime loader before publishing the directory.
-    let loaded = world::CompiledLocation::load(&city_assets::CityAsset::new(
+    let loaded = world_preparation::CompiledLocation::load(&city_assets::CityAsset::new(
         output.to_path_buf(),
     ))
     .map_err(invalid)?;
@@ -247,14 +243,8 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
         if (a.distance / 2.8) as usize % 2 == 0 {
             let l = [point(a, -0.04), point(b, -0.04)];
             let r = [point(a, 0.04), point(b, 0.04)];
-            triangle(
-                world::TriangleUsage::Marking,
-                [(l[0]), (l[1]), (r[1])],
-            )?;
-            triangle(
-                world::TriangleUsage::Marking,
-                [(l[0]), (r[1]), (r[0])],
-            )?;
+            triangle(world::TriangleUsage::Marking, [(l[0]), (l[1]), (r[1])])?;
+            triangle(world::TriangleUsage::Marking, [(l[0]), (r[1]), (r[0])])?;
         }
     }
     for i in 0..samples.len() {
@@ -312,9 +302,9 @@ fn write_landscape(
     trees: &[landscape::Tree],
     output: &Path,
 ) -> Result<()> {
-    let mut file = asset_codecs::landscape::Writer::new(
+    let mut file = codec_landscape::Writer::new(
         BufWriter::new(fs::File::create(output.join("landscape.txt"))?),
-        asset_codecs::landscape::Precision::Authored,
+        codec_landscape::Precision::Authored,
     )?;
     for triangle in track.ground_triangles() {
         file.ground(triangle.material, triangle.points)?;
@@ -331,7 +321,6 @@ mod tests {
     use crate::authoring;
     use crate::geometry;
     use crate::world;
-
 
     #[test]
     fn invalid_circuit_authoring_input_is_rejected_before_building_runtime_geometry() {

@@ -1,32 +1,17 @@
+use crate::barrier_scene;
 use crate::chunks;
 use crate::city;
+use crate::city_scene;
+use crate::detail_scene;
 use crate::elevation;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::landscape;
 use crate::scene_archive;
+use crate::transport_scene;
 use crate::world;
 use crate::{asset_car, track, world::Material};
 use std::f32::consts::TAU;
 use std::ops::Range;
-
-#[path = "barrier_scene.rs"]
-mod barrier_scene;
-#[path = "building_assets.rs"]
-mod building_assets;
-#[path = "car_glb.rs"]
-pub mod car_glb;
-#[path = "city_scene.rs"]
-mod city_scene;
-#[path = "detail_scene.rs"]
-mod detail_scene;
-#[path = "mesh_glb.rs"]
-mod mesh_glb;
-#[path = "road_furniture.rs"]
-mod road_furniture;
-#[path = "roof_scene.rs"]
-mod roof_scene;
-#[path = "transport_scene.rs"]
-mod transport_scene;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,19 +26,19 @@ pub struct Vertex {
 }
 
 #[derive(Clone, Copy)]
-struct Surface {
-    color: [f32; 3],
-    material: [f32; 2],
+pub struct Surface {
+    pub color: [f32; 3],
+    pub material: [f32; 2],
 }
 
 impl Surface {
-    fn matte(color: [f32; 3]) -> Self {
+    pub fn matte(color: [f32; 3]) -> Self {
         Self {
             color,
             material: [0.0, 0.0],
         }
     }
-    fn road(color: [f32; 3]) -> Self {
+    pub fn road(color: [f32; 3]) -> Self {
         Self {
             color,
             material: [-1.0, 0.0],
@@ -62,13 +47,13 @@ impl Surface {
 }
 
 #[derive(Default)]
-struct Builder {
-    vertices: Vec<Vertex>,
-    chunks: Option<chunks::ChunkBuilder>,
+pub struct Builder {
+    pub vertices: Vec<Vertex>,
+    pub chunks: Option<chunks::ChunkBuilder>,
 }
 
 impl Builder {
-    fn triangle(&mut self, points: [XYZ; 3], surface: Surface) {
+    pub fn triangle(&mut self, points: [XYZ; 3], surface: Surface) {
         let a: XYZ = XYZ::from_fn(|i| points[1].component(i) - points[0].component(i));
         let b: XYZ = XYZ::from_fn(|i| points[2].component(i) - points[0].component(i));
         let n = XYZ {
@@ -94,12 +79,12 @@ impl Builder {
         }
     }
 
-    fn quad(&mut self, p: [XYZ; 4], surface: Surface) {
+    pub fn quad(&mut self, p: [XYZ; 4], surface: Surface) {
         self.triangle([p[0], p[1], p[2]], surface);
         self.triangle([p[0], p[2], p[3]], surface);
     }
 
-    fn upward_quad(&mut self, p: [XYZ; 4], surface: Surface) {
+    pub fn upward_quad(&mut self, p: [XYZ; 4], surface: Surface) {
         // Offset edges can fold locally where piecewise track tangents change.
         // Orient each triangle separately so road tops never acquire underside lighting.
         for mut triangle in [[p[0], p[1], p[2]], [p[0], p[2], p[3]]] {
@@ -113,7 +98,7 @@ impl Builder {
         }
     }
 
-    fn cuboid(&mut self, min: XYZ, max: XYZ, surface: Surface) {
+    pub fn cuboid(&mut self, min: XYZ, max: XYZ, surface: Surface) {
         let p = [
             XYZ {
                 x: min.x,
@@ -176,7 +161,10 @@ pub struct Geometry {
     pub wheel_range: Vec<[Range<i32>; 4]>,
 }
 
-pub fn build(track: &track::WorldLocation, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
+pub fn build(
+    track: &track::WorldLocation,
+    cars: &[std::sync::Arc<asset_car::CarSpec>],
+) -> Geometry {
     if track.has_compiled_roads() {
         let city = track;
         let mut b = Builder::default();
@@ -190,7 +178,7 @@ pub fn build(track: &track::WorldLocation, cars: &[std::sync::Arc<asset_car::Car
     finish(b, cars)
 }
 
-fn generation_stage<T>(name: &str, generate: impl FnOnce() -> T) -> T {
+pub fn generation_stage<T>(name: &str, generate: impl FnOnce() -> T) -> T {
     println!("  Generating {name}...");
     let started = std::time::Instant::now();
     let result = generate();
@@ -824,7 +812,10 @@ fn rocks(b: &mut Builder) {
     }
 }
 
-pub fn bake_authored_landscape(track: &track::WorldLocation, coastal: bool) -> Vec<world::Triangle> {
+pub fn bake_authored_landscape(
+    track: &track::WorldLocation,
+    coastal: bool,
+) -> Vec<world::Triangle> {
     let field = track.elevation().expect("authored track terrain");
     let mut ground = Vec::new();
     for row in 0..field.rows - 1 {
@@ -865,7 +856,10 @@ fn decorations(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
     }
 }
 
-pub fn authored_decorations(track: &track::WorldLocation, coastal: bool) -> [Vec<chunks::Chunk>; 3] {
+pub fn authored_decorations(
+    track: &track::WorldLocation,
+    coastal: bool,
+) -> [Vec<chunks::Chunk>; 3] {
     let mut builder = Builder::default();
     decorations(&mut builder, track, coastal);
     let mut chunks = chunks::ChunkBuilder::default();
@@ -880,7 +874,7 @@ fn car(b: &mut Builder, model: &std::sync::Arc<asset_car::CarSpec>) {
 }
 
 impl Material {
-    fn color(self) -> [f32; 3] {
+    pub fn color(self) -> [f32; 3] {
         match self {
             Self::Grass => [0.39, 0.48, 0.25],
             Self::Park => [0.43, 0.53, 0.30],

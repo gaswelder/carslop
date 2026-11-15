@@ -1,8 +1,8 @@
 //! Compiler geometry and parsed CITY records, without runtime layers or indexes.
 //! Importers and generators keep f64 geometry. CITY parsing deliberately retains
 //! the existing f32 quantization; writers retain their existing decimal precision.
-use crate::asset_codecs;
 use crate::city;
+use crate::codec_city;
 use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::location;
@@ -101,14 +101,12 @@ impl SourceLocation<f64> {
 
 impl SourceLocation<f32> {
     pub fn parse(text: &str) -> Result<Self, String> {
-        asset_codecs::city::parse(text)
+        codec_city::parse(text)
     }
 }
 
 /// Compatibility for old asset folders; build inputs never enter stored Location.
-pub fn read_legacy_labels(
-    directory: &std::path::Path,
-) -> Result<location::Labels, String> {
+pub fn read_legacy_labels(directory: &std::path::Path) -> Result<location::Labels, String> {
     let labels = match std::fs::File::open(directory.join("source.osm")) {
         Ok(file) => match city::read_osm_labels(std::io::BufReader::new(file)) {
             Ok(labels) => labels,

@@ -3,6 +3,7 @@ use crate::asset_car;
 use crate::build_collision;
 use crate::build_scene;
 use crate::build_surfaces;
+use crate::car_glb;
 use crate::chunks;
 use crate::city_assets::CityAsset;
 use crate::geometry::{polygon, BoundingBoxXZ, LatLon, XYZ, XZ};
@@ -14,8 +15,9 @@ use crate::src_files;
 use crate::street_surface;
 use crate::track;
 use crate::world;
-pub use crate::world::test_support::*;
 use crate::world::Building;
+use crate::world_preparation;
+pub use crate::world_roads::test_support::*;
 use geo::MultiPolygon;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -76,7 +78,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
             normal: [0.0, 1.0, 0.0],
             material: [0.0; 2],
         };
-        let design = Arc::new(scene::car_glb::Design {
+        let design = Arc::new(car_glb::Design {
             body: vec![
                 vertex([-0.9, -0.3, -2.0]),
                 vertex([0.9, -0.3, -2.0]),
@@ -201,7 +203,7 @@ pub fn car_definition() -> serde_json::Value {
 }
 
 /// Minimal GLB made from controlled triangle geometry, with independently editable parts.
-pub fn model_glb(design: &scene::car_glb::Design) -> Vec<u8> {
+pub fn model_glb(design: &car_glb::Design) -> Vec<u8> {
     use serde_json::json;
     let mut binary = Vec::new();
     let mut views = Vec::new();
@@ -320,7 +322,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     )
     .unwrap();
     let assets = CityAsset::new(directory.to_path_buf());
-    let world = world::CompiledLocation::load(&assets).unwrap();
+    let world = world_preparation::CompiledLocation::load(&assets).unwrap();
     build_scene::build_scene(
         &world,
         None,

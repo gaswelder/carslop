@@ -1,6 +1,6 @@
 //! Compile mapped wall and fence ways, leaving openings at mapped gates.
-use crate::asset_codecs;
 use crate::build_surfaces;
+use crate::codec_barriers;
 use crate::error::Result;
 use crate::geometry;
 use crate::geometry::XZ;
@@ -152,7 +152,7 @@ pub fn build_barriers(
 ) -> Result<()> {
     let records = extract(source, map, surfaces);
     println!("  Writing {} mapped wall/fence segments...", records.len());
-    asset_codecs::barriers::write(
+    codec_barriers::write(
         &mut std::io::BufWriter::new(fs::File::create(path)?),
         &records,
     )?;

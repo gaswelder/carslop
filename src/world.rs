@@ -5,20 +5,11 @@ use crate::landscape;
 use crate::map_details;
 use crate::track;
 use crate::vehicle_location;
-
-mod barriers;
-mod buildings;
-mod mapped_objects;
-mod preparation;
-mod raised_roads;
-mod roads;
-pub mod spatial;
-mod transport;
-use barriers::Barriers;
-use buildings::Buildings;
-pub use preparation::CompiledLocation;
-use raised_roads::RaisedRoads;
-use roads::RoadNetwork;
+use crate::world_barriers::Barriers;
+use crate::world_buildings::Buildings;
+use crate::world_raised_roads::RaisedRoads;
+use crate::world_roads::RoadNetwork;
+use crate::world_spatial;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,24 +49,24 @@ pub struct Entrance<T = f32> {
 #[derive(Debug)]
 pub struct WorldLocation {
     pub id: LocationId,
-    assets: Option<city_assets::CityAsset>,
+    pub assets: Option<city_assets::CityAsset>,
     pub display_name: String,
 
     /// Defines the location's size, in meters.
-    bounding_box: BoundingBoxXZ<f32>,
+    pub bounding_box: BoundingBoxXZ<f32>,
     /// Geographic position corresponding to local X = 0, Z = 0, when known.
     pub origin: Option<LatLon>,
 
     /// Turns the flat area into slopes and hills.
-    elevation: Option<HeightField>,
+    pub elevation: Option<HeightField>,
 
-    roads: RoadNetwork,
-    ground: landscape::GroundCover,
-    buildings: Buildings,
+    pub roads: RoadNetwork,
+    pub ground: landscape::GroundCover,
+    pub buildings: Buildings,
     pub details: map_details::Prepared,
-    entrances: HashMap<u64, Vec<XZ<f32>>>,
-    barriers: Barriers,
-    raised_roads: RaisedRoads,
+    pub entrances: HashMap<u64, Vec<XZ<f32>>>,
+    pub barriers: Barriers,
+    pub raised_roads: RaisedRoads,
 
     /// Traffic lights and road signs and stuff like that.
     pub furniture: Vec<Furniture>,
@@ -84,10 +75,10 @@ pub struct WorldLocation {
     //
     //
     /// Street labels keyed by source OSM way ID.
-    street_names: HashMap<i64, String>,
+    pub street_names: HashMap<i64, String>,
     /// Building labels keyed by source building ID.
-    building_names: HashMap<u64, String>,
-    storefront_names: HashMap<u64, Vec<String>>,
+    pub building_names: HashMap<u64, String>,
+    pub storefront_names: HashMap<u64, Vec<String>>,
 }
 
 /// Regular terrain grid whose cells are triangulated for consistent height and contact queries.
@@ -113,9 +104,9 @@ pub struct Road {
     /// Source OSM way ID, or a generated way ID for an authored circuit.
     pub osm_way_id: Option<i64>,
     /// Full road width at the start of this segment in metres.
-    road_width_start_meters: f32,
+    pub road_width_start_meters: f32,
     /// Full road width at the end; equals the start width for constant-width roads.
-    road_width_end_meters: f32,
+    pub road_width_end_meters: f32,
     /// Permitted travel: 0 for both directions, 1 from start to end, -1 in reverse.
     pub direction: i8,
     /// Horizontal centreline length in metres; populated at runtime.
@@ -125,7 +116,7 @@ pub struct Road {
     /// Centreline samples in local metres; populated at runtime.
     pub path: Vec<XYZ>,
     /// Cumulative horizontal distances from the first path sample; populated at runtime.
-    path_distances: Vec<f32>,
+    pub path_distances: Vec<f32>,
 }
 
 /// Position and local road frame returned by road sampling or nearest-road projection.
@@ -327,7 +318,7 @@ impl Building {
             for i in 0..ring.len() {
                 let a = ring[i];
                 let b = ring[(i + 1) % ring.len()];
-                let q = spatial::nearest_edge(p, a, b);
+                let q = world_spatial::nearest_edge(p, a, b);
                 let distance = (p.x - q.x).hypot(p.z - q.z);
                 if distance < best.2 {
                     let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
@@ -347,7 +338,7 @@ impl Building {
 }
 
 impl WorldLocation {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             roads: RoadNetwork::empty(),
             id: LocationId::Compact,
@@ -508,7 +499,7 @@ impl RoadSample {
 
 impl Road {
     /// Create a constant-width, two-way road before its runtime path is sampled.
-    fn new(ends: [usize; 2], width_meters: f32) -> Self {
+    pub fn new(ends: [usize; 2], width_meters: f32) -> Self {
         Self {
             ends,
             osm_way_id: None,
@@ -560,6 +551,3 @@ impl WorldLocation {
         self.bounding_box
     }
 }
-
-#[cfg(test)]
-pub use roads::test_support;

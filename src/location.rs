@@ -1,13 +1,17 @@
 //! The persisted, playable location. No spatial indexes, terrain fitting, OSM
 //! objects, compiler provenance, or derived query bounds live in these records.
 use crate::aerial;
-use crate::asset_codecs;
 use crate::city_assets;
+use crate::codec_barriers;
+use crate::codec_city;
+use crate::codec_landscape;
+use crate::codec_road_rises;
 use crate::error;
 use crate::geometry::{BoundingBoxXZ, LatLon, XZ};
 use crate::map_details;
 use crate::source_location;
 use crate::street_surface;
+use crate::street_surface_binary;
 use crate::world;
 use crate::world::{Curb, FurnitureKind, HeightField, Tree, Triangle};
 use std::{
@@ -132,7 +136,7 @@ impl Location {
     fn read_inner(directory: &Path) -> Result<Self, String> {
         let assets = city_assets::CityAsset::new(directory.to_path_buf());
         let source = assets.get_city().map_err(|e| format!("city.txt: {e}"))?;
-        let streets = street_surface::binary::load_geometry(directory, source.road_lines.len())
+        let streets = street_surface_binary::load_geometry(directory, source.road_lines.len())
             .map_err(|e| format!("streets.bin: {e}"))?;
         let manifest = assets
             .get_manifest()
@@ -221,14 +225,16 @@ impl Location {
                 })
                 .collect(),
             barriers: match fs::read_to_string(directory.join("barriers.txt")) {
-                Ok(text) => asset_codecs::barriers::parse(&text)
-                    .map_err(|e| format!("barriers.txt: {e}"))?,
+                Ok(text) => {
+                    codec_barriers::parse(&text).map_err(|e| format!("barriers.txt: {e}"))?
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(e) => return Err(format!("barriers.txt: {e}")),
             },
             road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
-                Ok(text) => asset_codecs::road_rises::parse(&text)
-                    .map_err(|e| format!("road-rises.txt: {e}"))?,
+                Ok(text) => {
+                    codec_road_rises::parse(&text).map_err(|e| format!("road-rises.txt: {e}"))?
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(e) => return Err(format!("road-rises.txt: {e}")),
             },
@@ -281,12 +287,12 @@ impl Location {
                     write!(city, " {} {}", p.x, p.z)?;
                 }
                 writeln!(city)?;
-                asset_codecs::city::write_volume(
+                codec_city::write_volume(
                     &mut city,
                     index,
                     b.min_height_meters,
                     &b.holes,
-                    asset_codecs::city::Precision::Authored,
+                    codec_city::Precision::Authored,
                 )?;
             }
             for entrance in &self.entrances {
@@ -324,9 +330,9 @@ impl Location {
                 writeln!(elevation)?;
             }
             elevation.flush()?;
-            let mut landscape = asset_codecs::landscape::Writer::new(
+            let mut landscape = codec_landscape::Writer::new(
                 BufWriter::new(fs::File::create(directory.join("landscape.txt"))?),
-                asset_codecs::landscape::Precision::Authored,
+                codec_landscape::Precision::Authored,
             )?;
             for t in &self.ground {
                 if t.usage != world::TriangleUsage::Ground {
@@ -354,15 +360,15 @@ impl Location {
                 )?;
             }
             furniture.flush()?;
-            asset_codecs::barriers::write(
+            codec_barriers::write(
                 &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
                 &self.barriers,
             )?;
-            asset_codecs::road_rises::write(
+            codec_road_rises::write(
                 &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
                 &self.road_rises,
             )?;
-            street_surface::binary::write_geometry(&directory.join("streets.bin"), &self.streets)?;
+            street_surface_binary::write_geometry(&directory.join("streets.bin"), &self.streets)?;
             Ok(())
         };
         write().map_err(|e| e.to_string())?;
@@ -537,9 +543,10 @@ mod tests {
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
             assert_eq!(manifest.as_object().unwrap().len(), 1);
-            let world =
-                world::WorldLocation::load(&city_assets::CityAsset::new(output.path().to_path_buf()))
-                    .unwrap();
+            let world = world::WorldLocation::load(&city_assets::CityAsset::new(
+                output.path().to_path_buf(),
+            ))
+            .unwrap();
             assert!(world.has_compiled_roads());
             assert!(reread.labels.streets.contains(&(1, "Road & Square".into())));
             assert!(reread

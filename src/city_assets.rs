@@ -1,5 +1,6 @@
 use crate::aerial;
-use crate::asset_codecs;
+use crate::codec_furniture;
+use crate::codec_landscape;
 use crate::elevation;
 use crate::geometry::XZ;
 use crate::landscape;
@@ -65,7 +66,7 @@ impl CityAsset {
 
     // Returns the city's furniture - signs and traffic lights.
     pub fn get_furniture(&self) -> Result<Vec<traffic::Furniture>, String> {
-        asset_codecs::furniture::parse(&self.read_text("furniture.txt")?)
+        codec_furniture::parse(&self.read_text("furniture.txt")?)
     }
 
     pub fn get_heightfield(&self) -> Result<elevation::HeightField, String> {
@@ -84,15 +85,16 @@ impl CityAsset {
             };
             let mut file_ground = Vec::new();
             let mut file_trees = Vec::new();
-            asset_codecs::landscape::read::<f32>(input, |record| {
+            codec_landscape::read::<f32>(input, |record| {
                 match record {
-                    asset_codecs::landscape::Record::Ground { material, points } => file_ground
-                        .push(Triangle {
+                    codec_landscape::Record::Ground { material, points } => {
+                        file_ground.push(Triangle {
                             material,
                             usage: world::TriangleUsage::Ground,
                             points,
-                        }),
-                    asset_codecs::landscape::Record::Tree(tree) => file_trees.push(tree),
+                        })
+                    }
+                    codec_landscape::Record::Tree(tree) => file_trees.push(tree),
                 }
                 Ok(())
             })?;

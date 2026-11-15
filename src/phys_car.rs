@@ -1,11 +1,10 @@
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::RoadSurface;
+use crate::phys_tire;
 use crate::vehicle_location;
 use crate::world::Material;
 use crate::{asset_car, phys_powertrain, track};
 use std::time::Duration;
-
-mod tire;
 
 // Keep zero for reverse and 1..=N for forward ratios.
 pub const NEUTRAL_GEAR: u8 = u8::MAX;
@@ -487,7 +486,7 @@ impl Vehicle {
                 } else {
                     capacity
                 };
-                tire::Contact {
+                phys_tire::Contact {
                     offset: if axle == 0 { a } else { -b },
                     sin: if axle == 0 { sin } else { 0.0 },
                     cos: if axle == 0 { cos } else { 1.0 },
@@ -521,14 +520,14 @@ impl Vehicle {
                 })
                 .map(|(_, contact)| contact.brake_force)
                 .sum();
-            let motion = tire::Motion {
+            let motion = phys_tire::Motion {
                 longitudinal,
                 lateral,
                 yaw_rate: self.yaw_rate,
             };
-            let solved = tire::solve(
+            let solved = phys_tire::solve(
                 motion,
-                tire::Motion {
+                phys_tire::Motion {
                     longitudinal: longitudinal + dot(gravity, forward) * seconds,
                     lateral: lateral + dot(gravity, right) * seconds,
                     ..motion
@@ -1036,7 +1035,7 @@ fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset_codecs;
+    use crate::codec_road_rises;
     use crate::test_support;
     use crate::world;
 
@@ -1051,7 +1050,7 @@ mod tests {
         let run = |hz: u32| {
             let folder = tempfile::tempdir().unwrap();
             let assets = test_support::stored_location(folder.path(), false);
-            asset_codecs::road_rises::write(
+            codec_road_rises::write(
                 &mut std::fs::File::create(folder.path().join("road-rises.txt")).unwrap(),
                 &test_support::speed_table_rises(),
             )

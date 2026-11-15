@@ -1,7 +1,7 @@
 //! Compile mapped road controls into furniture assets.
-use crate::asset_codecs;
 use crate::build_surfaces;
 use crate::build_surfaces::Surfaces;
+use crate::codec_furniture;
 use crate::error::Result;
 use crate::geometry::XZ;
 use crate::geometry::{add, along, dist, dot, mul, path_length, project, sub, unit};
@@ -48,10 +48,7 @@ fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<XZ>) {
                 .iter()
                 .position(|v| *v == value)
                 .map(|i| i as f64 * 45.0);
-            if let Some(angle) = cardinal
-                .or_else(|| osm::number(value))
-                .map(f64::to_radians)
-            {
+            if let Some(angle) = cardinal.or_else(|| osm::number(value)).map(f64::to_radians) {
                 (
                     vec![],
                     false,
@@ -75,7 +72,7 @@ pub fn build_furniture(
 ) -> Result<()> {
     let placements = place_furniture(source, map, s);
     let mut file = BufWriter::new(fs::File::create(output_path)?);
-    asset_codecs::furniture::write(&mut file, &placements)?;
+    codec_furniture::write(&mut file, &placements)?;
     file.flush()?;
     Ok(())
 }
@@ -85,7 +82,7 @@ fn place_furniture(
     source: &OSMMap,
     map: &SourceLocation<f64>,
     s: &Surfaces,
-) -> Vec<asset_codecs::furniture::FurnitureRecord> {
+) -> Vec<codec_furniture::FurnitureRecord> {
     let tree = build_surfaces::index(&s.paths);
     let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
     let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
@@ -135,8 +132,7 @@ fn place_furniture(
             continue;
         }
         let value = if kind == 3 {
-            let Some(v) =
-                osm::number(e.tag("maxspeed")).filter(|v| *v >= 5.0 && *v <= 150.0)
+            let Some(v) = osm::number(e.tag("maxspeed")).filter(|v| *v >= 5.0 && *v <= 150.0)
             else {
                 continue;
             };
@@ -344,7 +340,7 @@ fn place_furniture(
     use world::FurnitureKind;
     unique
         .into_iter()
-        .map(|f| asset_codecs::furniture::FurnitureRecord {
+        .map(|f| codec_furniture::FurnitureRecord {
             source_id: f.id,
             kind: match f.kind {
                 0 => FurnitureKind::Signal,

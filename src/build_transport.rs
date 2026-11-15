@@ -1,7 +1,7 @@
 //! Grade-separated carriageways. Layer supplies ordering; absent surveys use a 5 m clearance.
-use crate::asset_codecs;
 use crate::build_details;
 use crate::build_surfaces;
+use crate::codec_road_rises;
 use crate::error::Result;
 use crate::geometry;
 use crate::geometry::XZ;
@@ -259,7 +259,7 @@ pub fn build(
     // Partition overlapping approach ramps so joins have a single height plane.
     let result = partition_ramps(&ramps)?;
     println!("  Writing {} approach ramp triangles...", result.len());
-    asset_codecs::road_rises::write(&mut fs::File::create(rises_path)?, &result)?;
+    codec_road_rises::write(&mut fs::File::create(rises_path)?, &result)?;
     Ok(())
 }
 
@@ -470,8 +470,8 @@ mod tests {
             .sum();
         assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
         let mut bytes = vec![];
-        asset_codecs::road_rises::write(&mut bytes, &result).unwrap();
-        asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        codec_road_rises::write(&mut bytes, &result).unwrap();
+        codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
     }
 
     #[test]
@@ -506,8 +506,8 @@ mod tests {
                 }
             }
             let mut bytes = vec![];
-            asset_codecs::road_rises::write(&mut bytes, &actual).unwrap();
-            asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+            codec_road_rises::write(&mut bytes, &actual).unwrap();
+            codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
         }
     }
 
@@ -549,7 +549,7 @@ mod tests {
         let mut rises = Vec::new();
         emit(&sliver, &plane, &mut rises).unwrap();
         let mut bytes = Vec::new();
-        asset_codecs::road_rises::write(&mut bytes, &rises).unwrap();
-        assert!(asset_codecs::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).is_ok());
+        codec_road_rises::write(&mut bytes, &rises).unwrap();
+        assert!(codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).is_ok());
     }
 }

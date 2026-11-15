@@ -1,4 +1,5 @@
-use crate::asset_codecs;
+use crate::codec_city;
+use crate::codec_landscape;
 use crate::geometry::XZ;
 use crate::{
     error::{invalid, Result},
@@ -14,18 +15,15 @@ pub struct LandscapeItem {
 
 pub fn read_landscape_file(path: PathBuf) -> Result<Vec<LandscapeItem>> {
     let mut items = Vec::new();
-    asset_codecs::landscape::read::<f64>(
-        std::io::BufReader::new(fs::File::open(path)?),
-        |record| {
-            if let asset_codecs::landscape::Record::Tree(tree) = record {
-                items.push(LandscapeItem {
-                    id: tree.id,
-                    coords: tree.coords,
-                });
-            }
-            Ok(())
-        },
-    )
+    codec_landscape::read::<f64>(std::io::BufReader::new(fs::File::open(path)?), |record| {
+        if let codec_landscape::Record::Tree(tree) = record {
+            items.push(LandscapeItem {
+                id: tree.id,
+                coords: tree.coords,
+            });
+        }
+        Ok(())
+    })
     .map_err(invalid)?;
     Ok(items)
 }
@@ -40,11 +38,7 @@ pub fn write_city_txt(
 ) -> Result<WriteCityResult> {
     use std::io::{BufWriter, Write};
     let mut file = BufWriter::new(fs::File::create(path_city_txt)?);
-    asset_codecs::city::write(
-        &mut file,
-        location_map,
-        asset_codecs::city::Precision::Imported,
-    )?;
+    codec_city::write(&mut file, location_map, codec_city::Precision::Imported)?;
     file.flush()?;
     let city =
         SourceLocation::<f32>::parse(&fs::read_to_string(path_city_txt)?).map_err(invalid)?;

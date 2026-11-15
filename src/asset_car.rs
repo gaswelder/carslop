@@ -1,6 +1,6 @@
+use crate::car_glb;
 use crate::geometry::XYZ;
 use crate::phys_car;
-use crate::scene;
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,7 +16,7 @@ pub struct CarSpec {
     pub redline_rpm: f32,
     pub gearbox: Gearbox,
     //
-    pub design: std::sync::Arc<scene::car_glb::Design>,
+    pub design: std::sync::Arc<car_glb::Design>,
     pub top_speed: f32,
     pub brake_force: f32,
     pub wheelbase: f32,
@@ -364,9 +364,9 @@ fn model_rolling_radius(radii: [f32; 4], drive_bias: f32) -> Result<f32, String>
     Ok(rear * (1.0 - drive_bias) + front * drive_bias)
 }
 
-fn load_model(path: &std::path::Path) -> Result<std::sync::Arc<scene::car_glb::Design>, String> {
+fn load_model(path: &std::path::Path) -> Result<std::sync::Arc<car_glb::Design>, String> {
     let model = path.with_file_name("model.glb");
-    scene::car_glb::load(&model)
+    car_glb::load(&model)
         .map(std::sync::Arc::new)
         .map_err(|e| e.to_string())
 }

@@ -1,8 +1,8 @@
 //! Compile mapped ground cover and trees into landscape assets.
-use crate::asset_codecs;
 use crate::build_details;
 use crate::build_surfaces;
 use crate::build_surfaces::{union, Surfaces};
+use crate::codec_landscape;
 use crate::error::{invalid, Result};
 use crate::geometry;
 use crate::geometry::XZ;
@@ -285,9 +285,9 @@ pub fn build_landscape(
             groups[kind].push(geometry);
         }
     }
-    let mut file = asset_codecs::landscape::Writer::new(
+    let mut file = codec_landscape::Writer::new(
         BufWriter::new(fs::File::create(landscape_path)?),
-        asset_codecs::landscape::Precision::Imported,
+        codec_landscape::Precision::Imported,
     )?;
     let mut covered = empty();
     let mut emit = |kind: usize, regions: &[MultiPolygon<f64>]| -> Result<()> {

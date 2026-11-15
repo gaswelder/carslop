@@ -1,5 +1,5 @@
 //! Shared static GLB validation and triangle decoding for cars and scenery.
-use super::Vertex;
+use crate::scene::Vertex;
 use glam::{Mat3, Mat4, Vec3};
 use std::{io, path::Path};
 
@@ -7,7 +7,7 @@ fn invalid(message: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
 
-pub(super) fn with_scene<T>(
+pub fn with_scene<T>(
     bytes: &[u8],
     visit: impl FnOnce(gltf::Scene<'_>, &[u8]) -> io::Result<T>,
 ) -> io::Result<T> {
@@ -71,13 +71,13 @@ pub(super) fn with_scene<T>(
     visit(scene, blob)
 }
 
-pub(super) struct Mesh {
+pub struct Mesh {
     pub name: String,
     pub vertices: Vec<Vertex>,
 }
 
 /// Load static mesh nodes in scene coordinates, retaining names for tint roles.
-pub(super) fn load(path: &Path) -> io::Result<Vec<Mesh>> {
+pub fn load(path: &Path) -> io::Result<Vec<Mesh>> {
     std::fs::read(path)
         .and_then(|bytes| {
             with_scene(&bytes, |scene, blob| {
@@ -131,7 +131,7 @@ fn node_meshes(
     Ok(())
 }
 
-pub(super) fn primitive(
+pub fn primitive(
     blob: &[u8],
     primitive: gltf::Primitive<'_>,
     transform: Mat4,

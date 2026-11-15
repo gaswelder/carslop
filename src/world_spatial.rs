@@ -7,11 +7,7 @@ pub const CELL: f32 = 32.0;
 pub fn cell(p: XZ<f32>) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32)
 }
-pub fn insert(
-    grid: &mut HashMap<(i32, i32), Vec<usize>>,
-    bounds: BoundingBoxXZ<f32>,
-    id: usize,
-) {
+pub fn insert(grid: &mut HashMap<(i32, i32), Vec<usize>>, bounds: BoundingBoxXZ<f32>, id: usize) {
     let a = cell(XZ {
         x: bounds.min.x,
         z: bounds.min.z,

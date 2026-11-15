@@ -1,9 +1,9 @@
-use crate::asset_codecs;
 use crate::build_barriers;
 use crate::build_buildings;
 use crate::build_details;
 use crate::build_transport;
 use crate::city_assets;
+use crate::codec_landscape;
 use crate::geometry::{add, cross, dist, dot, length, line, mul, polygon, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
 use crate::location;
@@ -12,6 +12,7 @@ use crate::source_location;
 use crate::source_location::Sidewalks;
 use crate::tree_obstacles;
 use crate::world;
+use crate::world_preparation;
 use crate::{
     add_location_download, add_location_trees,
     build_collision::build_collisions,
@@ -355,9 +356,9 @@ fn compile_imagery(
 
     // Start output
     let tree_file = fs::File::create(&paths.trees)?;
-    let mut tree_output = asset_codecs::landscape::Writer::new(
+    let mut tree_output = codec_landscape::Writer::new(
         std::io::BufWriter::new(tree_file),
-        asset_codecs::landscape::Precision::Imported,
+        codec_landscape::Precision::Imported,
     )?;
 
     let mut count = 0;
@@ -418,14 +419,14 @@ fn compile_imagery(
     Ok(())
 }
 
-fn prepare(paths: &ImportPaths) -> Result<world::CompiledLocation> {
-    world::CompiledLocation::load(&city_assets::CityAsset::new(paths.output.clone()))
+fn prepare(paths: &ImportPaths) -> Result<world_preparation::CompiledLocation> {
+    world_preparation::CompiledLocation::load(&city_assets::CityAsset::new(paths.output.clone()))
         .map_err(|e| invalid(format!("preparing staged import: {e}")))
 }
 
 fn bake(
     paths: &ImportPaths,
-    city: &world::CompiledLocation,
+    city: &world_preparation::CompiledLocation,
     boundary: Option<&osm::OSMArea>,
 ) -> Result<()> {
     build_scene(

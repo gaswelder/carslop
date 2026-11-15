@@ -1,7 +1,7 @@
 //! Raised road triangles and their spatial index share one owner.
-use super::{HeightField, WorldLocation, RoadRise};
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
+use crate::world::{HeightField, RoadRise, WorldLocation};
 use geo::{BooleanOps, MultiPolygon, TriangulateEarcut};
 use rstar::{RTree, RTreeObject, AABB};
 
@@ -63,7 +63,7 @@ fn polygon(points: [XZ<f32>; 3]) -> MultiPolygon<f64> {
     MultiPolygon(vec![geometry::polygon(&points.map(|p| p.map(f64::from)))])
 }
 impl RaisedRoads {
-    pub(super) fn lowered_footprints(&self) -> impl Iterator<Item = geo::Polygon<f64>> + '_ {
+    pub fn lowered_footprints(&self) -> impl Iterator<Item = geo::Polygon<f64>> + '_ {
         self.triangles
             .iter()
             .filter(|rise| rise.points.iter().any(|p| p.y < -0.03))

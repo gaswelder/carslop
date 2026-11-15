@@ -9,9 +9,9 @@ use crate::osm;
 use crate::track::CAR_RADIUS;
 #[cfg(test)]
 use crate::vehicle_location::deflect;
-#[cfg(test)]
-use crate::world::spatial::*;
 pub use crate::world::Building;
+#[cfg(test)]
+use crate::world_spatial::*;
 use std::collections::HashMap;
 
 /// Source labels and businesses associated with their containing building.

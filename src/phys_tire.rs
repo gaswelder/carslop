@@ -369,9 +369,7 @@ mod tests {
         let along = 20.0;
         let corner = 60000.0;
         let capacity = 6000.0;
-        let force = |alpha: f32| {
-            lateral_stiffness(along, corner, capacity, along * alpha) * alpha
-        };
+        let force = |alpha: f32| lateral_stiffness(along, corner, capacity, along * alpha) * alpha;
         let peak = capacity / corner;
         assert!((force(peak) - capacity).abs() < 1.0);
         assert!(force(peak * 0.5) < capacity);

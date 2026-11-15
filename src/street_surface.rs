@@ -2,9 +2,11 @@
 use crate::geometry::{XYZ, XZ};
 use crate::location;
 #[cfg(test)]
-use crate::test_support;
+use crate::street_surface_binary;
 pub use crate::world::{Curb, Triangle};
-use crate::world::{CurbStyle, WorldLocation, Material, TriangleUsage};
+use crate::world::{CurbStyle, Material, TriangleUsage, WorldLocation};
+#[cfg(test)]
+use crate::world_spatial;
 use std::collections::HashMap;
 
 /// Runtime centrelines in local metres, indexed like Location::road_lines.
@@ -12,16 +14,13 @@ pub type RoadPaths = Vec<Vec<XYZ>>;
 
 pub const DEFAULT_PAVEMENT_HEIGHT: f32 = 0.14;
 
-#[path = "street_surface_binary.rs"]
-pub mod binary;
-
 const CELL: f32 = 32.0;
 
 fn cell(p: XZ<f32>) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32)
 }
 
-fn index(grid: &mut HashMap<(i32, i32), Vec<usize>>, points: &[XZ<f32>], id: usize, pad: f32) {
+pub fn index(grid: &mut HashMap<(i32, i32), Vec<usize>>, points: &[XZ<f32>], id: usize, pad: f32) {
     let lo = cell(XZ::from_fn(|i| {
         points
             .iter()
@@ -43,7 +42,7 @@ fn index(grid: &mut HashMap<(i32, i32), Vec<usize>>, points: &[XZ<f32>], id: usi
     }
 }
 
-fn cross(a: XZ<f32>, b: XZ<f32>, p: XZ<f32>) -> f32 {
+pub fn cross(a: XZ<f32>, b: XZ<f32>, p: XZ<f32>) -> f32 {
     (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
 }
 
@@ -52,13 +51,13 @@ fn cross(a: XZ<f32>, b: XZ<f32>, p: XZ<f32>) -> f32 {
 pub struct StreetSurface {
     pavement_height_meters: f32,
     /// Road, marking and pavement triangles.
-    road_triangles: Vec<Triangle>,
+    pub road_triangles: Vec<Triangle>,
     /// Road-edge segments used for clearance and crossing queries.
-    curbs: Vec<Curb>,
+    pub curbs: Vec<Curb>,
     /// 32 m [X, Z] grid cells mapped to candidate triangle indices.
-    triangles_grid: HashMap<(i32, i32), Vec<usize>>,
+    pub triangles_grid: HashMap<(i32, i32), Vec<usize>>,
     /// 32 m [X, Z] grid cells mapped to candidate curb indices.
-    curbs_grid: HashMap<(i32, i32), Vec<usize>>,
+    pub curbs_grid: HashMap<(i32, i32), Vec<usize>>,
 }
 
 impl StreetSurface {
@@ -218,15 +217,6 @@ impl StreetSurface {
     }
 }
 
-impl StreetSurface {
-    #[cfg(test)]
-    fn into_test_location(self) -> WorldLocation {
-        let mut location = test_support::empty_world();
-        test_support::install_surfaces(&mut location, self);
-        location
-    }
-}
-
 impl TryFrom<usize> for CurbStyle {
     type Error = &'static str;
 
@@ -285,7 +275,7 @@ impl TriangleUsage {
 }
 
 impl Triangle {
-    fn from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Self, &'static str> {
+    pub fn from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Self, &'static str> {
         let usage = TriangleUsage::from_street_id(id)?;
         Ok(Self {
             material: match id {
@@ -299,7 +289,7 @@ impl Triangle {
         })
     }
 
-    fn street_id(&self) -> Result<usize, &'static str> {
+    pub fn street_id(&self) -> Result<usize, &'static str> {
         if let TriangleUsage::Road(style) = self.usage {
             let base = match self.material {
                 Material::Concrete => Some(8),
@@ -433,7 +423,6 @@ impl StreetSurface {
 mod index_tests {
     use super::*;
     use crate::geometry;
-    use crate::world;
     use geo::{Intersects, Point};
 
     #[test]
@@ -444,13 +433,13 @@ mod index_tests {
                 "STREETS 1 1\np 0 2 0 0 20 0\nt {id} 0 -4 20 -4 20 4\nc 1 0 -4 20 -4 0 1\n"
             );
             let (surface, paths) = StreetSurface::load(&text, 1).unwrap();
-            binary::write_binary_street_surface(
+            street_surface_binary::write_binary_street_surface(
                 &folder.path().join("streets.bin"),
                 &surface,
                 &paths,
             )
             .unwrap();
-            let stored = binary::load_geometry(folder.path(), 1).unwrap();
+            let stored = street_surface_binary::load_geometry(folder.path(), 1).unwrap();
             assert_eq!(stored.triangles, surface.road_triangles());
             assert_eq!(stored.triangles[0].street_id().unwrap(), id);
         }
@@ -490,7 +479,7 @@ mod index_tests {
                     .curbs()
                     .iter()
                     .map(|c| {
-                        let q = world::spatial::nearest_edge(p, c.ends[0], c.ends[1]);
+                        let q = world_spatial::nearest_edge(p, c.ends[0], c.ends[1]);
                         (q, c.inward, (q.x - p.x).hypot(q.z - p.z))
                     })
                     .min_by(|a, b| a.2.total_cmp(&b.2))

@@ -1,7 +1,7 @@
 //! Compile render geometry from prepared location assets.
 use crate::chunks;
 use crate::scene;
-use crate::world;
+use crate::world_preparation;
 use crate::{
     osm::OSMArea,
     scene_archive::{write_spooled, Archive},
@@ -9,7 +9,7 @@ use crate::{
 use std::path::Path;
 
 pub fn build_scene(
-    city: &world::CompiledLocation,
+    city: &world_preparation::CompiledLocation,
     boundary: Option<&OSMArea>,
     decorations_path: &Path,
     output_path: &Path,

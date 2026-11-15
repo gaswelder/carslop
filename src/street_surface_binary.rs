@@ -229,8 +229,12 @@ mod tests {
             assert_eq!(a.ends, b.ends);
             assert_eq!(a.inward, b.inward);
         }
-        let expected = expected.into_test_location();
-        let actual = actual.into_test_location();
+        let mut expected_world = test_support::empty_world();
+        test_support::install_surfaces(&mut expected_world, expected);
+        let expected = expected_world;
+        let mut actual_world = test_support::empty_world();
+        test_support::install_surfaces(&mut actual_world, actual);
+        let actual = actual_world;
         for x in -2..24 {
             for z in -2..24 {
                 let p = XZ {

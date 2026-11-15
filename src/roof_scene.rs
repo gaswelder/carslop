@@ -1,12 +1,12 @@
 //! Mapped roof profiles clipped to the surveyed footprint, including holes.
-use super::{Builder, Surface};
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{BuildingStyle, RoofShape};
+use crate::scene::{Builder, Surface};
 use crate::world::Building;
 use geo::{BooleanOps, BoundingRect, MultiPolygon, TriangulateEarcut};
 
-pub(super) fn build(
+pub fn build(
     b: &mut Builder,
     building: &Building,
     style: &BuildingStyle,

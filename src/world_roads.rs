@@ -1,14 +1,18 @@
 //! Road geometry and the grid derived from its prepared paths are one owner.
-use super::*;
+use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::location;
 #[cfg(test)]
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::street_surface;
 use crate::street_surface::{RoadPaths, StreetSurface};
-use crate::world;
+use crate::world::{Curb, HeightField, Road, RoadSample, Triangle, WorldLocation};
+#[cfg(test)]
+use crate::world_buildings::Buildings;
+use crate::world_spatial;
+use std::collections::HashMap;
 
 #[derive(Debug)]
-pub(super) struct RoadNetwork {
+pub struct RoadNetwork {
     nodes: Vec<XYZ>,
     lines: Vec<Road>,
     grid: HashMap<(i32, i32), Vec<usize>>,
@@ -21,7 +25,7 @@ enum RoadGeometry {
 }
 
 impl RoadNetwork {
-    pub(super) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             nodes: vec![],
             lines: vec![],
@@ -29,7 +33,7 @@ impl RoadNetwork {
             geometry: RoadGeometry::Centreline,
         }
     }
-    pub(super) fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<location::Road>) -> Self {
+    pub fn from_stored(nodes: Vec<XZ<f32>>, roads: Vec<location::Road>) -> Self {
         Self::from_roads(
             nodes.into_iter().map(|p| p.at_height(0.0)).collect(),
             roads
@@ -77,9 +81,9 @@ impl RoadNetwork {
                 path_distances: vec![0.0, length],
             });
             distance += length;
-            world::spatial::insert(
+            world_spatial::insert(
                 &mut grid,
-                world::spatial::bounds(lines[i].ends.iter().map(|&node| nodes[node].xz()), 32.0),
+                world_spatial::bounds(lines[i].ends.iter().map(|&node| nodes[node].xz()), 32.0),
                 i,
             );
         }
@@ -90,7 +94,7 @@ impl RoadNetwork {
             geometry: RoadGeometry::Centreline,
         }
     }
-    pub(super) fn authored(nodes: Vec<XYZ>, widths: Vec<f32>) -> Result<Self, String> {
+    pub fn authored(nodes: Vec<XYZ>, widths: Vec<f32>) -> Result<Self, String> {
         let mut lines = Vec::new();
         let mut grid = HashMap::new();
         let mut distance = 0.0;
@@ -111,9 +115,9 @@ impl RoadNetwork {
                 ..Road::new([i, j], widths[i])
             });
             distance += length;
-            world::spatial::insert(
+            world_spatial::insert(
                 &mut grid,
-                world::spatial::bounds([a, b].into_iter().map(|p| p.xz()), 32.0),
+                world_spatial::bounds([a, b].into_iter().map(|p| p.xz()), 32.0),
                 i,
             );
         }
@@ -124,7 +128,7 @@ impl RoadNetwork {
             geometry: RoadGeometry::Centreline,
         })
     }
-    pub(super) fn with_compiled(
+    pub fn with_compiled(
         mut self,
         surfaces: StreetSurface,
         paths: RoadPaths,
@@ -150,9 +154,9 @@ impl RoadNetwork {
             }
             street.distance = distance;
             distance += street.length;
-            world::spatial::insert(
+            world_spatial::insert(
                 &mut grid,
-                world::spatial::bounds(street.path.iter().map(|p| p.xz()), 32.0),
+                world_spatial::bounds(street.path.iter().map(|p| p.xz()), 32.0),
                 i,
             );
         }
@@ -230,11 +234,11 @@ impl WorldLocation {
         }
     }
     fn street_ids_in(&self, bounds: BoundingBoxXZ<f32>) -> Vec<usize> {
-        let a = world::spatial::cell(XZ {
+        let a = world_spatial::cell(XZ {
             x: bounds.min.x,
             z: bounds.min.z,
         });
-        let b = world::spatial::cell(XZ {
+        let b = world_spatial::cell(XZ {
             x: bounds.max.x,
             z: bounds.max.z,
         });
@@ -260,14 +264,14 @@ impl WorldLocation {
         if let Some(ids) = self
             .roads
             .grid
-            .get(&world::spatial::cell(XZ { x: p.x, z: p.z }))
+            .get(&world_spatial::cell(XZ { x: p.x, z: p.z }))
         {
             return Box::new(ids.iter().copied());
         }
         for radius in [
             1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0,
         ] {
-            let d = radius * world::spatial::CELL;
+            let d = radius * world_spatial::CELL;
             let ids = self.street_ids_in(BoundingBoxXZ {
                 min: XZ {
                     x: p.x - d,
@@ -299,7 +303,7 @@ impl WorldLocation {
                     x: pair[1].x,
                     z: pair[1].z,
                 };
-                let q = world::spatial::nearest_edge(point, a, b);
+                let q = world_spatial::nearest_edge(point, a, b);
                 let along = (q.x - a.x).hypot(q.z - a.z);
                 let mut s = self.sample_distance(index, r.path_distances[i] + along);
                 let delta = XZ {
@@ -317,14 +321,14 @@ impl WorldLocation {
     }
     /// Nearest road index and its local geometric frame.
     pub fn nearest_road(&self, p: XYZ) -> (usize, RoadSample) {
-        let origin = world::spatial::cell(XZ { x: p.x, z: p.z });
+        let origin = world_spatial::cell(XZ { x: p.x, z: p.z });
         let mut seen = std::collections::HashSet::new();
         let mut best: Option<(f32, usize, RoadSample)> = None;
         let limit = ([self.bounding_box.min, self.bounding_box.max]
             .iter()
             .flat_map(|b| [(b.x - p.x).abs(), (b.z - p.z).abs()])
             .fold(0.0_f32, f32::max)
-            / world::spatial::CELL)
+            / world_spatial::CELL)
             .ceil() as i32
             + 2;
         for radius in 0..=limit {
@@ -352,7 +356,7 @@ impl WorldLocation {
             }
             // Indexed path bounds carry a 32 m margin, so unvisited cells
             // cannot hide a closer road once this distance is reached.
-            if best.is_some_and(|b| b.0 <= (radius + 1) as f32 * world::spatial::CELL) {
+            if best.is_some_and(|b| b.0 <= (radius + 1) as f32 * world_spatial::CELL) {
                 let (_, index, road) = best.unwrap();
                 return (index, road);
             }
@@ -456,7 +460,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../world_test_support.rs"]
+#[path = "world_test_support.rs"]
 pub mod test_support;
 
 #[cfg(test)]
