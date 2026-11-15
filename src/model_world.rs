@@ -1,5 +1,4 @@
 use crate::model_map_details;
-use crate::physics_vehicle_location;
 use crate::storage_city_assets;
 use crate::util_geometry;
 use crate::util_geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
@@ -7,16 +6,12 @@ use crate::world_barriers;
 use crate::world_barriers::Barriers;
 use crate::world_buildings;
 use crate::world_buildings::Buildings;
-use crate::world_elevation;
 use crate::world_landscape;
-use crate::world_locations;
+use crate::world_map_details;
 use crate::world_raised_roads;
 use crate::world_raised_roads::RaisedRoads;
 use crate::world_roads;
 use crate::world_roads::RoadNetwork;
-use crate::world_spatial;
-use crate::world_street_surface;
-use crate::world_transport;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,7 +65,7 @@ pub struct WorldLocation {
     pub roads: RoadNetwork,
     pub ground: world_landscape::GroundCover,
     pub buildings: Buildings,
-    pub details: model_map_details::Prepared,
+    pub details: world_map_details::Prepared,
     pub entrances: HashMap<u64, Vec<XZ<f32>>>,
     pub barriers: Barriers,
     pub raised_roads: RaisedRoads,
@@ -302,50 +297,6 @@ pub fn footprint<T: Copy + Into<f64>>(building: &Building<T>) -> geo::Polygon<f6
     )
 }
 
-pub fn contains(building: &Building, p: XZ<f32>) -> bool {
-    fn inside(ring: &[XZ<f32>], p: XZ<f32>) -> bool {
-        let mut inside = false;
-        for i in 0..ring.len() {
-            let a = ring[i];
-            let b = ring[(i + 1) % ring.len()];
-            if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x {
-                inside = !inside;
-            }
-        }
-        inside
-    }
-    inside(&building.ground_outline, p) && !building.holes.iter().any(|hole| inside(hole, p))
-}
-pub fn overlaps_vehicle(building: &Building, position: XYZ, height: f32) -> bool {
-    let bottom = position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT + 0.05;
-    bottom <= building.base_y + building.height_meters
-        && (building.min_height_meters == 0.0
-            || bottom + height >= building.base_y + building.min_height_meters)
-}
-pub fn nearest(building: &Building, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
-    let mut best = (XZ::<f32>::default(), XZ::<f32>::default(), f32::INFINITY);
-    for ring in rings(building) {
-        for i in 0..ring.len() {
-            let a = ring[i];
-            let b = ring[(i + 1) % ring.len()];
-            let q = world_spatial::nearest_edge(p, a, b);
-            let distance = (p.x - q.x).hypot(p.z - q.z);
-            if distance < best.2 {
-                let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
-                best = (
-                    (q),
-                    XZ {
-                        x: (b.z - a.z) / len,
-                        z: -(b.x - a.x) / len,
-                    },
-                    distance,
-                );
-            }
-        }
-    }
-    best
-}
-
 pub fn empty() -> WorldLocation {
     WorldLocation {
         roads: world_roads::empty(),
@@ -354,7 +305,7 @@ pub fn empty() -> WorldLocation {
         display_name: String::new(),
         origin: None,
         buildings: world_buildings::new(Vec::new()),
-        details: model_map_details::new(model_map_details::Data::default()),
+        details: world_map_details::new(model_map_details::Data::default()),
         entrances: HashMap::new(),
         barriers: world_barriers::new(Vec::new()),
         raised_roads: world_raised_roads::new(Vec::new()),
@@ -369,64 +320,15 @@ pub fn empty() -> WorldLocation {
 }
 
 pub fn map_details(world: &WorldLocation) -> &model_map_details::Data {
-    model_map_details::data(&world.details)
+    world_map_details::data(&world.details)
 }
 pub fn tree_kind(world: &WorldLocation, id: u64) -> Option<model_map_details::TreeKind> {
-    model_map_details::tree(&world.details, id).map(|style| style.kind)
+    world_map_details::tree(&world.details, id).map(|style| style.kind)
 }
 pub fn tree_evergreen(world: &WorldLocation, id: u64) -> bool {
-    model_map_details::tree(&world.details, id).is_some_and(|style| style.evergreen)
+    world_map_details::tree(&world.details, id).is_some_and(|style| style.evergreen)
 }
-pub fn height(world: &WorldLocation, p: XZ<f32>) -> f32 {
-    world.elevation.as_ref().map_or_else(
-        || {
-            if world_roads::road_lines(world).is_empty() {
-                0.0
-            } else {
-                world_roads::project(
-                    world,
-                    XYZ {
-                        x: p.x,
-                        y: 0.0,
-                        z: p.z,
-                    },
-                )
-                .point
-                .y
-            }
-        },
-        |field| world_elevation::height(field, p),
-    )
-}
-pub fn ground_segment(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Vec<XYZ> {
-    world.elevation.as_ref().map_or_else(
-        || {
-            vec![
-                util_geometry::at_height(a, 0.0),
-                util_geometry::at_height(b, 0.0),
-            ]
-        },
-        |f| world_elevation::segment(f, a, b),
-    )
-}
-/// Distance to the union of street capsules, including shared junction nodes.
-pub fn road_clearance(world: &WorldLocation, p: XYZ) -> f32 {
-    if let Some(height) = world_transport::deck_height(world, util_geometry::xz(p), p.y) {
-        if (height - p.y).abs() < 1. {
-            let road = world_roads::project(world, p);
-            return road.offset.abs() - road.width / 2.;
-        }
-    }
-    if world_street_surface::has_compiled_roads(world) {
-        return world_street_surface::surface_clearance(world, XZ { x: p.x, z: p.z });
-    }
-    world_roads::candidates(world, p)
-        .map(|i| {
-            let (d, s) = world_roads::projected(world, i, p);
-            d - s.width * 0.5
-        })
-        .fold(f32::INFINITY, f32::min)
-}
+
 pub fn building_name(world: &WorldLocation, id: u64) -> Option<&str> {
     world.building_names.get(&id).map(String::as_str)
 }
@@ -445,49 +347,6 @@ pub fn storefront_names(world: &WorldLocation, id: u64) -> Vec<&str> {
         }
     }
     names
-}
-
-pub fn terrain_bounds(world: &WorldLocation) -> BoundingBoxXZ<f32> {
-    if let Some(field) = world.elevation.as_ref() {
-        BoundingBoxXZ {
-            min: XZ {
-                x: field.origin.x,
-                z: field.origin.z,
-            },
-            max: XZ {
-                x: field.origin.x + (field.columns - 1) as f32 * field.step,
-                z: field.origin.z + (field.rows - 1) as f32 * field.step,
-            },
-        }
-    } else {
-        let bounds = world.bounding_box;
-        BoundingBoxXZ {
-            min: XZ {
-                x: bounds.min.x - world_locations::TERRAIN_PADDING,
-                z: bounds.min.z - world_locations::TERRAIN_PADDING,
-            },
-            max: XZ {
-                x: bounds.max.x + world_locations::TERRAIN_PADDING,
-                z: bounds.max.z + world_locations::TERRAIN_PADDING,
-            },
-        }
-    }
-}
-
-/// Ground rise per horizontal metre, excluding discrete curb impacts.
-pub fn ground_gradient(world: &WorldLocation, position: XYZ) -> XZ<f32> {
-    let height = |x, z| {
-        world_transport::drive_height_near(
-            world,
-            XZ { x, z },
-            position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT,
-        )
-    };
-    let XYZ { x, z, .. } = position;
-    XZ {
-        x: height(x + 0.5, z) - height(x - 0.5, z),
-        z: height(x, z + 0.5) - height(x, z - 0.5),
-    }
 }
 
 pub fn normal(road_sample: RoadSample) -> XZ<f32> {

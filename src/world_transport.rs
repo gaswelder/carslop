@@ -1,12 +1,12 @@
 //! Vertical road support and edge contact without joining crossing road levels.
 
-use crate::model_map_details;
 use crate::model_map_details::RoadSurface;
 use crate::model_world::WorldLocation;
 use crate::physics_vehicle_location;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_locations;
+use crate::world_map_details;
 use crate::world_raised_roads;
 use crate::world_street_surface;
 
@@ -21,9 +21,9 @@ pub fn tunnel_openings(world: &WorldLocation) -> geo::MultiPolygon<f64> {
 
 pub fn paved_near(world: &WorldLocation, p: XYZ) -> bool {
     let reference = p.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-    model_map_details::nearby_decks(&world.details, util_geometry::xz(p))
+    world_map_details::nearby_decks(&world.details, util_geometry::xz(p))
         .find(|deck| {
-            model_map_details::height_on(deck, util_geometry::xz(p))
+            world_map_details::height_on(deck, util_geometry::xz(p))
                 .is_some_and(|h| (h - reference).abs() < 1.5)
         })
         .map_or_else(
@@ -32,7 +32,7 @@ pub fn paved_near(world: &WorldLocation, p: XYZ) -> bool {
         )
 }
 pub fn deck_height(world: &WorldLocation, p: XZ<f32>, reference: f32) -> Option<f32> {
-    model_map_details::deck_height(&world.details, p, reference)
+    world_map_details::deck_height(&world.details, p, reference)
 }
 pub fn drive_height_near(world: &WorldLocation, p: XZ<f32>, reference: f32) -> f32 {
     let ground = physics_vehicle_location::drive_height(world, p);
@@ -46,7 +46,7 @@ pub fn constrain_transport(
     velocity: &mut XZ<f32>,
 ) -> f32 {
     let mut impact: f32 = 0.;
-    for deck in model_map_details::nearby_decks(&world.details, util_geometry::xz(*position)) {
+    for deck in world_map_details::nearby_decks(&world.details, util_geometry::xz(*position)) {
         for pair in deck.path.windows(2) {
             let a = XZ {
                 x: pair[0][0],
@@ -88,10 +88,10 @@ pub fn constrain_transport(
     impact
 }
 pub fn tunnel_ceiling(world: &WorldLocation, p: XZ<f32>, reference: f32) -> Option<f32> {
-    model_map_details::nearby_decks(&world.details, p)
+    world_map_details::nearby_decks(&world.details, p)
         .filter(|deck| deck.grade < 0)
         .filter_map(|deck| {
-            model_map_details::height_on(deck, p)
+            world_map_details::height_on(deck, p)
                 .filter(|h| (h - reference).abs() < 3.)
                 .map(|h| h + 4.5)
         })
@@ -126,7 +126,7 @@ mod tests {
             path: vec![[0., 2., 12.], [20., 2., 12.]],
             surface: RoadSurface::Asphalt,
         });
-        city.details = model_map_details::new(data);
+        city.details = world_map_details::new(data);
         let mut position = XYZ {
             x: 12.,
             y: 2.48,
@@ -206,7 +206,7 @@ mod tests {
                 path: vec![[0., grade as f32 * 5., 0.], [20., grade as f32 * 5., 0.]],
                 surface: RoadSurface::Asphalt,
             });
-            city.details = model_map_details::new(data);
+            city.details = world_map_details::new(data);
             let p = XZ { x: 10., z: 0. };
             assert!(world_transport::drive_height_near(&(city), p, 0.).abs() < 0.001);
             assert!(

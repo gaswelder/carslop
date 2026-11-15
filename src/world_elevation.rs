@@ -1,9 +1,11 @@
 //! A single triangulated height surface for terrain, pavement and ground contact.
 
+use crate::model_world;
 pub use crate::model_world::HeightField;
 use crate::util_geometry;
 use crate::util_geometry::{BoundingBoxXZ, XYZ, XZ};
-use crate::world_elevation;
+use crate::world_locations;
+use crate::world_roads;
 pub const SEA_LEVEL: f32 = -3.35;
 fn clip(polygon: &[XZ<f32>], distance: impl Fn(XZ<f32>) -> f32) -> Vec<XZ<f32>> {
     let mut result = Vec::new();
@@ -209,7 +211,7 @@ pub fn drape(height_field: &HeightField, points: [XZ<f32>; 3], mut emit: impl Fn
                 (1, z, 1.0),
                 (1, z + height_field.step, -1.0),
             ] {
-                polygon = world_elevation::clip(&polygon, |p| {
+                polygon = clip(&polygon, |p| {
                     (util_geometry::xz_component(p, axis) - value) * sign
                 });
                 if polygon.len() < 3 {
@@ -220,7 +222,7 @@ pub fn drape(height_field: &HeightField, points: [XZ<f32>; 3], mut emit: impl Fn
                 continue;
             }
             for side in [-1.0, 1.0] {
-                let part = world_elevation::clip(&polygon, |p| ((p.x - x) - (p.z - z)) * side);
+                let part = clip(&polygon, |p| ((p.x - x) - (p.z - z)) * side);
                 for i in 1..part.len().saturating_sub(1) {
                     let tri = [part[0], part[i], part[i + 1]];
                     emit(tri.map(|p| util_geometry::at_height(p, height(height_field, p))));
@@ -230,10 +232,70 @@ pub fn drape(height_field: &HeightField, points: [XZ<f32>; 3], mut emit: impl Fn
     }
 }
 
+pub fn world_height(world: &model_world::WorldLocation, p: XZ<f32>) -> f32 {
+    world.elevation.as_ref().map_or_else(
+        || {
+            if world_roads::road_lines(world).is_empty() {
+                0.0
+            } else {
+                world_roads::project(
+                    world,
+                    XYZ {
+                        x: p.x,
+                        y: 0.0,
+                        z: p.z,
+                    },
+                )
+                .point
+                .y
+            }
+        },
+        |field| height(field, p),
+    )
+}
+
+pub fn ground_segment(world: &model_world::WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Vec<XYZ> {
+    world.elevation.as_ref().map_or_else(
+        || {
+            vec![
+                util_geometry::at_height(a, 0.0),
+                util_geometry::at_height(b, 0.0),
+            ]
+        },
+        |f| segment(f, a, b),
+    )
+}
+
+pub fn terrain_bounds(world: &model_world::WorldLocation) -> BoundingBoxXZ<f32> {
+    if let Some(field) = world.elevation.as_ref() {
+        BoundingBoxXZ {
+            min: XZ {
+                x: field.origin.x,
+                z: field.origin.z,
+            },
+            max: XZ {
+                x: field.origin.x + (field.columns - 1) as f32 * field.step,
+                z: field.origin.z + (field.rows - 1) as f32 * field.step,
+            },
+        }
+    } else {
+        let bounds = world.bounding_box;
+        BoundingBoxXZ {
+            min: XZ {
+                x: bounds.min.x - world_locations::TERRAIN_PADDING,
+                z: bounds.min.z - world_locations::TERRAIN_PADDING,
+            },
+            max: XZ {
+                x: bounds.max.x + world_locations::TERRAIN_PADDING,
+                z: bounds.max.z + world_locations::TERRAIN_PADDING,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::util_geometry;
-    use crate::world_elevation;
 
     use super::*;
     fn grid() -> HeightField {
@@ -248,17 +310,14 @@ mod tests {
     #[test]
     fn sampling_and_draping_use_the_same_planes_across_cells() {
         let grid = grid();
-        assert_eq!(
-            world_elevation::height(&(grid), XZ { x: 10.0, z: 10.0 }),
-            6.0
-        );
+        assert_eq!(height(&(grid), XZ { x: 10.0, z: 10.0 }), 6.0);
         let points = [
             XZ { x: 1.0, z: 1.0 },
             XZ { x: 19.0, z: 3.0 },
             XZ { x: 3.0, z: 19.0 },
         ];
         let mut area = 0.0;
-        world_elevation::drape(&grid, points, |tri| {
+        drape(&grid, points, |tri| {
             let a = tri[0];
             let b = tri[1];
             let c = tri[2];
@@ -271,7 +330,7 @@ mod tests {
             });
             assert!(
                 (center.y
-                    - world_elevation::height(
+                    - height(
                         &(grid),
                         XZ {
                             x: center.x,
@@ -283,8 +342,7 @@ mod tests {
             );
         });
         assert!((area - 160.0).abs() < 0.001);
-        let points =
-            world_elevation::segment(&grid, XZ { x: 1.0, z: 2.0 }, XZ { x: 19.0, z: 14.0 });
+        let points = segment(&grid, XZ { x: 1.0, z: 2.0 }, XZ { x: 19.0, z: 14.0 });
         assert!(points.len() > 3);
         for pair in points.windows(2) {
             let p: XYZ = util_geometry::xyz_from_fn(|i| {
@@ -292,7 +350,7 @@ mod tests {
                     + util_geometry::xyz_component(pair[1], i))
                     * 0.5
             });
-            assert!((p.y - world_elevation::height(&(grid), XZ { x: p.x, z: p.z })).abs() < 0.0001);
+            assert!((p.y - height(&(grid), XZ { x: p.x, z: p.z })).abs() < 0.0001);
         }
     }
 }

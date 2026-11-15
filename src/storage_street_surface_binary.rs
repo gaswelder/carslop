@@ -1,5 +1,6 @@
 use crate::model_location;
 use crate::model_world;
+use crate::storage_codec_streets;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_street_surface;
@@ -139,7 +140,7 @@ pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<model_locatio
             return Err(invalid("invalid cached surface triangle"));
         }
         triangles
-            .push(world_street_surface::triangle_from_street_id(style, points).map_err(invalid)?);
+            .push(storage_codec_streets::triangle_from_street_id(style, points).map_err(invalid)?);
     }
     let n = count(&mut r, 28)?;
     let mut curbs = reserve(n)?;
@@ -403,7 +404,7 @@ pub fn write_binary_street_surface(
     for t in &surfaces.road_triangles {
         number(
             &mut out,
-            world_street_surface::triangle_street_id(t).map_err(invalid)?,
+            storage_codec_streets::triangle_street_id(t).map_err(invalid)?,
         )?;
         for p in t.points {
             for x in [p.x, p.z] {
@@ -455,7 +456,7 @@ pub fn write_geometry(path: &Path, data: &model_location::Streets) -> io::Result
     for t in &data.triangles {
         number(
             &mut out,
-            world_street_surface::triangle_street_id(t).map_err(invalid)?,
+            storage_codec_streets::triangle_street_id(t).map_err(invalid)?,
         )?;
         for p in t.points {
             io::Write::write_all(&mut out, &p.x.to_le_bytes())?;

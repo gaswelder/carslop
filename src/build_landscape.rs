@@ -13,7 +13,6 @@ use crate::util_error::{invalid, Result};
 use crate::util_geometry;
 use crate::util_geometry::XZ;
 use crate::util_geometry::{empty, line, polygon};
-use crate::world_landscape;
 use geo::algorithm::buffer;
 use geo::MultiPolygon;
 use geo::{
@@ -305,7 +304,7 @@ pub fn build_landscape(
     let mut emit = |kind: usize, regions: &[MultiPolygon<f64>]| -> Result<()> {
         let geometry = union(regions).difference(&covered);
         covered = covered.union(&geometry);
-        let material = world_landscape::from_ground_id(kind).map_err(invalid)?;
+        let material = storage_codec_landscape::from_ground_id(kind).map_err(invalid)?;
         build_surfaces::triangulate(&geometry, |points| {
             storage_codec_landscape::ground(&mut file, material, points)?;
             Ok(())

@@ -1,14 +1,18 @@
-//! Offline OSM street network. Geometry, collision, recovery and minimap share it.
+//! Extract playable street, building, and storefront labels from source OSM.
 
 use crate::build_buildings;
 use crate::build_osm;
 pub use crate::model_world::Building;
 #[cfg(test)]
 use crate::physics_vehicle_location::deflect;
+use crate::storage_legacy_labels;
+use crate::util_error;
 use crate::util_geometry;
 #[cfg(test)]
 use crate::util_geometry::BoundingBoxXZ;
 use crate::util_geometry::XZ;
+#[cfg(test)]
+use crate::world_elevation;
 #[cfg(test)]
 use crate::world_locations::CAR_RADIUS;
 #[cfg(test)]
@@ -173,6 +177,17 @@ fn osm_labels(map: &build_osm::OSMMap) -> OsmLabels {
     labels
 }
 
+/// Build-stage adapter: reduce source tags to playable labels on every rebuild.
+pub fn write_labels(directory: &std::path::Path) -> util_error::Result<()> {
+    std::fs::write(
+        directory.join("labels.json"),
+        serde_json::to_vec(
+            &storage_legacy_labels::read_legacy_labels(directory).map_err(util_error::invalid)?,
+        )?,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::physics_vehicle_location;
@@ -183,7 +198,6 @@ mod tests {
 
     use super::*;
     use crate::model_location;
-    use crate::model_source_location;
     use crate::model_world;
     use crate::test_support;
     use crate::util_geometry;
@@ -227,7 +241,7 @@ mod tests {
     #[test]
     #[ignore = "requires the downloaded Engomi OSM extract; exports labels to /tmp/carslop-engomi-labels.json"]
     fn downloaded_engomi_businesses_have_storefronts() {
-        let labels = model_source_location::read_legacy_labels(std::path::Path::new(
+        let labels = storage_legacy_labels::read_legacy_labels(std::path::Path::new(
             "src-locations/relation-17716182",
         ))
         .unwrap();
@@ -307,7 +321,7 @@ mod tests {
             }
         }
         assert!(
-            model_world::road_clearance(
+            world_roads::road_clearance(
                 &(city),
                 util_geometry::XYZ {
                     x: 25.0,
@@ -339,7 +353,7 @@ mod tests {
             physics_vehicle_location::constrain(&(collision), &mut position, &mut velocity, 1.7)
                 > 0.0
         );
-        assert!(!model_world::contains(
+        assert!(!world_buildings::contains(
             &(world_buildings::buildings(&(collision))[0]),
             XZ {
                 x: position.x,
@@ -348,8 +362,8 @@ mod tests {
         ));
         let city = test_support::parse_world(CROSS).unwrap();
         let b = &world_buildings::buildings(&city)[0];
-        assert!(model_world::contains(b, XZ { x: 10.0, z: 10.0 }));
-        assert!(!model_world::contains(b, XZ { x: 7.0, z: 10.0 }));
+        assert!(world_buildings::contains(b, XZ { x: 10.0, z: 10.0 }));
+        assert!(!world_buildings::contains(b, XZ { x: 7.0, z: 10.0 }));
         let eye = render_camera::camera_eye(
             &city,
             util_geometry::XYZ {
@@ -398,7 +412,7 @@ mod tests {
                 max = max.max(sample.point.y);
                 assert!(
                     (sample.point.y
-                        - model_world::height(
+                        - world_elevation::world_height(
                             city,
                             XZ {
                                 x: sample.point.x,
@@ -422,7 +436,7 @@ mod tests {
         for prop in &city.furniture {
             assert!(
                 (prop.coords.y
-                    - model_world::height(
+                    - world_elevation::world_height(
                         city,
                         XZ {
                             x: prop.coords.x,
@@ -435,7 +449,7 @@ mod tests {
         }
         for building in world_buildings::buildings(city) {
             for i in 0..building.ground_outline.len() {
-                for p in model_world::ground_segment(
+                for p in world_elevation::ground_segment(
                     city,
                     building.ground_outline[i],
                     building.ground_outline[(i + 1) % building.ground_outline.len()],
@@ -485,12 +499,12 @@ mod tests {
             );
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(
-                (p.y - model_world::height(city, q)
+                (p.y - world_elevation::world_height(city, q)
                     - (0.48 + world_roads::pavement_height_meters(city) - 0.05))
                     .abs()
                     < 0.001,
                 "q={q:?} offset={} style={:?}",
-                p.y - model_world::height(city, q),
+                p.y - world_elevation::world_height(city, q),
                 triangle.usage
             );
             assert!(world_street_surface::paved(city, q));

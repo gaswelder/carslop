@@ -3,7 +3,6 @@
 use crate::build_authoring;
 use crate::build_authoring::Circuit;
 use crate::model_location;
-use crate::model_map_details;
 use crate::model_world;
 use crate::model_world::{Building, Furniture, LocationId, WorldLocation};
 use crate::render_scene;
@@ -15,6 +14,7 @@ use crate::world_buildings;
 use crate::world_elevation;
 use crate::world_landscape;
 use crate::world_locations;
+use crate::world_map_details;
 use crate::world_raised_roads;
 use crate::world_roads;
 use crate::world_spatial;
@@ -122,7 +122,7 @@ fn load_assets(assets: &storage_city_assets::CityAsset) -> Result<WorldLocation,
             phase: f.phase,
         })
         .collect();
-    city.details = model_map_details::new(stored.details);
+    city.details = world_map_details::new(stored.details);
     city.barriers = world_barriers::new(stored.barriers);
     city.raised_roads = world_raised_roads::new(stored.road_rises);
     city.ground = world_landscape::new(stored.ground, stored.trees);
@@ -137,7 +137,7 @@ pub fn prepare_authored(circuit: &Circuit, id: LocationId) -> Result<WorldLocati
     let mut location = from_circuit(circuit, id == LocationId::Compact)?;
     location.id = id;
     location.display_name = "COASTAL LOOP".into();
-    let terrain_bounds = model_world::terrain_bounds(&location);
+    let terrain_bounds = world_elevation::terrain_bounds(&location);
     location.elevation = Some(world_elevation::generate(terrain_bounds, |position| {
         let road = world_roads::project(
             &location,

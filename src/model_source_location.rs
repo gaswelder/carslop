@@ -1,11 +1,8 @@
 //! Compiler geometry and parsed CITY records, without runtime layers or indexes.
 //! Importers and generators keep f64 geometry. CITY parsing deliberately retains
 //! the existing f32 quantization; writers retain their existing decimal precision.
-use crate::build_osm_labels;
-use crate::model_location;
 use crate::model_world::{Building, Entrance};
 use crate::storage_codec_city;
-use crate::util_error;
 use crate::util_geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use geo::{Intersects, MultiPolygon, Point};
 
@@ -95,39 +92,4 @@ pub fn contains(source_location: &SourceLocation<f64>, p: XZ) -> bool {
 
 pub fn parse(text: &str) -> Result<SourceLocation<f32>, String> {
     storage_codec_city::parse(text)
-}
-
-/// Compatibility for old asset folders; build inputs never enter stored Location.
-pub fn read_legacy_labels(directory: &std::path::Path) -> Result<model_location::Labels, String> {
-    let labels = match std::fs::File::open(directory.join("source.osm")) {
-        Ok(file) => match build_osm_labels::read_osm_labels(std::io::BufReader::new(file)) {
-            Ok(labels) => labels,
-            Err(e) => {
-                log::warn!("Cannot load legacy labels: {e}");
-                return Ok(model_location::Labels::default());
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(model_location::Labels::default())
-        }
-        Err(e) => return Err(format!("source.osm labels: {e}")),
-    };
-    let mut streets: Vec<_> = labels.streets.into_iter().collect();
-    let mut buildings: Vec<_> = labels.buildings.into_iter().collect();
-    streets.sort();
-    buildings.sort();
-    Ok(model_location::Labels {
-        streets,
-        buildings,
-        storefronts: labels.storefronts,
-    })
-}
-
-/// Build-stage adapter: reduce source tags to playable labels on every rebuild.
-pub fn write_labels(directory: &std::path::Path) -> util_error::Result<()> {
-    std::fs::write(
-        directory.join("labels.json"),
-        serde_json::to_vec(&read_legacy_labels(directory).map_err(util_error::invalid)?)?,
-    )?;
-    Ok(())
 }

@@ -6,6 +6,7 @@ use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_barriers;
 use crate::world_buildings;
+use crate::world_elevation;
 use crate::world_locations;
 use crate::world_mapped_objects;
 use crate::world_raised_roads;
@@ -20,7 +21,7 @@ pub const VEHICLE_ORIGIN_HEIGHT: f32 = 0.48;
 /// surfaces retain their rendered heights rather than burying the wheels.
 pub fn drive_height(world: &WorldLocation, p: XZ<f32>) -> f32 {
     if !world_street_surface::has_compiled_roads(world) {
-        let height = model_world::height(world, p);
+        let height = world_elevation::world_height(world, p);
         if model_world::elevation(world).is_none() {
             return height;
         }
@@ -46,12 +47,12 @@ pub fn drive_height(world: &WorldLocation, p: XZ<f32>) -> f32 {
             -0.02
         }
     });
-    model_world::height(world, p) + lift - 0.05 + world_raised_roads::road_rise(world, p)
+    world_elevation::world_height(world, p) + lift - 0.05 + world_raised_roads::road_rise(world, p)
 }
 
 fn clear_for_car(world: &WorldLocation, p: XYZ) -> bool {
     if world_street_surface::has_compiled_roads(world)
-        && model_world::road_clearance(world, p) > -world_locations::CAR_RADIUS - 0.15
+        && world_roads::road_clearance(world, p) > -world_locations::CAR_RADIUS - 0.15
     {
         return false;
     }
@@ -167,8 +168,8 @@ pub fn constrain(
         },
     ) {
         if position.y - VEHICLE_ORIGIN_HEIGHT + vehicle_height
-            < model_world::height(world, util_geometry::xz(*position)) - 0.2
-            || !model_world::overlaps_vehicle(b, *position, vehicle_height)
+            < world_elevation::world_height(world, util_geometry::xz(*position)) - 0.2
+            || !overlaps_vehicle(b, *position, vehicle_height)
         {
             continue;
         }
@@ -176,8 +177,8 @@ pub fn constrain(
             x: position.x,
             z: position.z,
         };
-        let (q, outward, distance) = model_world::nearest(b, p);
-        let inside = model_world::contains(b, p);
+        let (q, outward, distance) = world_buildings::nearest(b, p);
+        let inside = world_buildings::contains(b, p);
         if inside || distance < world_locations::CAR_RADIUS {
             let n = if inside || distance < 0.0001 {
                 outward
@@ -294,5 +295,24 @@ pub fn deflect(velocity: &mut XZ<f32>, normal: XZ<f32>) -> f32 {
         outward
     } else {
         0.0
+    }
+}
+
+pub fn overlaps_vehicle(building: &model_world::Building, position: XYZ, height: f32) -> bool {
+    let bottom = position.y - VEHICLE_ORIGIN_HEIGHT + 0.05;
+    bottom <= building.base_y + building.height_meters
+        && (building.min_height_meters == 0.0
+            || bottom + height >= building.base_y + building.min_height_meters)
+}
+
+/// Ground rise per horizontal metre, excluding discrete curb impacts.
+pub fn ground_gradient(world: &WorldLocation, position: XYZ) -> XZ<f32> {
+    let height = |x, z| {
+        world_transport::drive_height_near(world, XZ { x, z }, position.y - VEHICLE_ORIGIN_HEIGHT)
+    };
+    let XYZ { x, z, .. } = position;
+    XZ {
+        x: height(x + 0.5, z) - height(x - 0.5, z),
+        z: height(x, z + 0.5) - height(x, z - 0.5),
     }
 }

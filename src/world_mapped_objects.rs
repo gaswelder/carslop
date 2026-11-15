@@ -1,16 +1,16 @@
 //! Contact with the same mapped street objects used by the scene builder.
 
-use crate::model_map_details;
 use crate::model_map_details::{MapObject, ObjectKind};
 use crate::model_world::WorldLocation;
 use crate::physics_vehicle_location;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_locations;
+use crate::world_map_details;
 use crate::world_spatial;
 
 pub fn mapped_object_clearance(world: &WorldLocation, p: XZ<f32>) -> f32 {
-    model_map_details::nearby_objects(&world.details, p)
+    world_map_details::nearby_objects(&world.details, p)
         .flat_map(capsules)
         .map(|capsule| {
             let q = world_spatial::nearest_edge(p, capsule.ends[0], capsule.ends[1]);
@@ -25,7 +25,7 @@ pub fn constrain_mapped_objects(
 ) -> f32 {
     let p = util_geometry::xz(*position);
     let mut impact: f32 = 0.;
-    for object in model_map_details::nearby_objects(&world.details, p) {
+    for object in world_map_details::nearby_objects(&world.details, p) {
         let ground = physics_vehicle_location::drive_height(
             world,
             XZ {
@@ -175,7 +175,7 @@ mod tests {
                 text: String::new(),
                 locked,
             });
-            city.details = model_map_details::new(data);
+            city.details = world_map_details::new(data);
             let mut p = XYZ {
                 x: 0.,
                 y: 0.48,

@@ -1,12 +1,12 @@
 use crate::asset_car_glb;
-use crate::model_map_details;
 use crate::model_map_details::RoadSurface;
-use crate::model_world;
 use crate::model_world::Material;
 use crate::physics_tire;
 use crate::physics_vehicle_location;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
+use crate::world_map_details;
 use crate::world_street_surface;
 use crate::world_transport;
 use crate::{model_car, physics_powertrain, world_locations};
@@ -382,7 +382,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             x: vehicle.heading.cos(),
             z: -vehicle.heading.sin(),
         };
-        let gradient = model_world::ground_gradient(&vehicle.track, vehicle.position);
+        let gradient = physics_vehicle_location::ground_gradient(&vehicle.track, vehicle.position);
         // Horizontal component of gravity projected onto y = h(x, z).
         // Velocity is stored in XZ, so divide by 1 + |gradient|².
         let gravity =
@@ -431,9 +431,9 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             let position = vehicle.position;
 
             let reference = position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-            let deck = model_map_details::nearby_decks(&loc.details, util_geometry::xz(position))
+            let deck = world_map_details::nearby_decks(&loc.details, util_geometry::xz(position))
                 .find(|deck| {
-                    model_map_details::height_on(deck, util_geometry::xz(position))
+                    world_map_details::height_on(deck, util_geometry::xz(position))
                         .is_some_and(|h| (h - reference).abs() < 1.5)
                 });
 
@@ -931,7 +931,7 @@ fn resolve_road(vehicle: &mut Vehicle) -> f32 {
             asset_car_glb::height(&vehicle.spec.design),
         );
     }
-    let bounds = model_world::terrain_bounds(&vehicle.track);
+    let bounds = world_elevation::terrain_bounds(&vehicle.track);
     let mut impact = 0.0_f32;
     for (axis, (coordinate, min, max)) in [
         (0, bounds.min.x, bounds.max.x),
@@ -1074,7 +1074,6 @@ mod tests {
     use crate::physics_car;
     use crate::physics_vehicle_location;
     use crate::util_geometry;
-    use crate::world_locations;
     use crate::world_preparation;
     use crate::world_roads;
     use crate::world_street_surface;
@@ -1191,15 +1190,19 @@ mod tests {
         let road = (0..200)
             .map(|i| world_locations::at_distance(&route, i as f32 * 10.0))
             .max_by(|a, b| {
-                dot(model_world::ground_gradient(&route, a.point), a.tangent).total_cmp(&dot(
-                    model_world::ground_gradient(&route, b.point),
+                dot(
+                    physics_vehicle_location::ground_gradient(&route, a.point),
+                    a.tangent,
+                )
+                .total_cmp(&dot(
+                    physics_vehicle_location::ground_gradient(&route, b.point),
                     b.tangent,
                 ))
             })
             .unwrap();
         assert!(
             dot(
-                model_world::ground_gradient(&route, road.point),
+                physics_vehicle_location::ground_gradient(&route, road.point),
                 road.tangent
             ) > 0.04
         );
@@ -2119,7 +2122,7 @@ mod tests {
     #[test]
     fn outer_terrain_boundary_preserves_tangential_motion_and_ground_height() {
         let track = world_locations::try_track(&world_locations::LocationId::Compact).unwrap();
-        let bounds = model_world::terrain_bounds(&track);
+        let bounds = world_elevation::terrain_bounds(&track);
         let mut car = physics_car::on_track(
             XYZ {
                 x: bounds.min.x - 1.0,

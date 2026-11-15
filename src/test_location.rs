@@ -20,6 +20,7 @@ use crate::util_geometry;
 use crate::util_geometry::{cross, polygon, sub, unit};
 use crate::util_geometry::{BoundingBox, BoundingBoxXZ, XZ};
 use crate::world_elevation;
+use crate::world_map_details;
 use crate::world_preparation;
 use crate::world_raised_roads;
 use crate::world_roads;
@@ -1483,9 +1484,9 @@ fn separated_roads_keep_source_topology_and_join_graded_approaches() {
         assert_eq!(data.decks.len(), 2);
         let height = data.decks[0].path[0][1];
         assert!((height.abs() - 5.).abs() < 0.001);
-        let prepared = model_map_details::new(data);
+        let prepared = world_map_details::new(data);
         assert!(
-            (model_map_details::deck_height(&(prepared), XZ { x: 0., z: 0. }, height).unwrap()
+            (world_map_details::deck_height(&(prepared), XZ { x: 0., z: 0. }, height).unwrap()
                 - height)
                 .abs()
                 < 0.001

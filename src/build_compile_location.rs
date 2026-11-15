@@ -1,6 +1,7 @@
 use crate::build_barriers;
 use crate::build_buildings;
 use crate::build_details;
+use crate::build_osm_labels;
 use crate::build_transport;
 use crate::build_tree_obstacles;
 use crate::model_location;
@@ -264,7 +265,7 @@ fn generate_assets(
     )?;
 
     println!("building labels");
-    model_source_location::write_labels(paths.manifest.parent().unwrap())?;
+    build_osm_labels::write_labels(paths.manifest.parent().unwrap())?;
 
     println!("building collision data");
     let streets_txt_source = std::fs::read_to_string(&paths.streets)?;

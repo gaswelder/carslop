@@ -1,12 +1,12 @@
 //! Terrain-following walls and open metal, chain-link, or wooden fence panels.
 
-use crate::model_world;
 use crate::model_world::{BarrierKind, WorldLocation};
 use crate::render_scene;
 use crate::render_scene::{Builder, Surface};
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_barriers;
+use crate::world_elevation;
 use crate::world_street_surface;
 
 fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surface) {
@@ -54,7 +54,7 @@ fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surf
 fn support(city: &WorldLocation, point: XZ<f32>) -> XYZ {
     util_geometry::at_height(
         point,
-        model_world::height(city, point)
+        world_elevation::world_height(city, point)
             + world_street_surface::paving_height(city, point).unwrap_or(0.0),
     )
 }
@@ -74,7 +74,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
             barrier.kind,
             BarrierKind::Wall | BarrierKind::RetainingWall | BarrierKind::Hedge
         ) {
-            for pair in model_world::ground_segment(city, a, c).windows(2) {
+            for pair in world_elevation::ground_segment(city, a, c).windows(2) {
                 let a = support(city, util_geometry::xz(pair[0]));
                 let c = support(city, util_geometry::xz(pair[1]));
                 prism(b, a, c, width, height, surface);
@@ -276,7 +276,7 @@ mod tests {
                         x: vertex.position[0],
                         z: vertex.position[2],
                     };
-                    let height = vertex.position[1] - model_world::height(&city, point);
+                    let height = vertex.position[1] - world_elevation::world_height(&city, point);
                     assert!(
                         (-0.03..=2.03).contains(&height),
                         "height {height} for {kind:?}"

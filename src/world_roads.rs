@@ -1,7 +1,6 @@
 //! Road geometry and the grid derived from its prepared paths are one owner.
 
 use crate::model_location;
-use crate::model_map_details;
 #[cfg(test)]
 use crate::model_source_location::{SourceLocation, SourceRoad};
 use crate::model_world;
@@ -11,10 +10,12 @@ use crate::util_geometry::{BoundingBoxXZ, XYZ, XZ};
 #[cfg(test)]
 use crate::world_buildings;
 use crate::world_elevation;
+use crate::world_map_details;
 use crate::world_raised_roads;
 use crate::world_spatial;
 use crate::world_street_surface;
 use crate::world_street_surface::{RoadPaths, StreetSurface};
+use crate::world_transport;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -214,7 +215,7 @@ pub fn sample(world: &WorldLocation, index: usize, t: f32) -> RoadSample {
 }
 
 pub fn sample_distance(world: &WorldLocation, index: usize, distance: f32) -> RoadSample {
-    let deck = model_map_details::road_deck(&world.details, index);
+    let deck = world_map_details::road_deck(&world.details, index);
     let r = &world.roads.lines[index];
     let distance = distance.clamp(0.0, r.length);
     let index = r
@@ -232,7 +233,7 @@ pub fn sample_distance(world: &WorldLocation, index: usize, distance: f32) -> Ro
     });
     // Compiled road surfaces are draped over the heightfield between path knots.
     if let Some(deck) = deck {
-        if let Some(height) = model_map_details::height_on(deck, util_geometry::xz(point)) {
+        if let Some(height) = world_map_details::height_on(deck, util_geometry::xz(point)) {
             point.y = height;
         }
     } else if world_street_surface::has_compiled_roads(world) {
@@ -413,11 +414,29 @@ pub fn pavement_height_meters(world: &WorldLocation) -> f32 {
     })
 }
 
+/// Distance to the union of street capsules, including shared junction nodes.
+pub fn road_clearance(world: &WorldLocation, p: XYZ) -> f32 {
+    if let Some(height) = world_transport::deck_height(world, util_geometry::xz(p), p.y) {
+        if (height - p.y).abs() < 1. {
+            let road = project(world, p);
+            return road.offset.abs() - road.width / 2.;
+        }
+    }
+    if world_street_surface::has_compiled_roads(world) {
+        return world_street_surface::surface_clearance(world, XZ { x: p.x, z: p.z });
+    }
+    candidates(world, p)
+        .map(|i| {
+            let (d, s) = projected(world, i, p);
+            d - s.width * 0.5
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::util_geometry;
     use crate::world_elevation;
-    use crate::world_roads;
     use crate::world_street_surface;
 
     use super::*;
@@ -441,10 +460,9 @@ mod tests {
                 let (surfaces, paths) = world_street_surface::load(text, 2).unwrap();
                 let field =
                     world_elevation::generate(world.bounding_box, |p| p.x * 0.01 + p.z * 0.02);
-                world.roads =
-                    world_roads::with_compiled(world.roads, surfaces, paths, &field).unwrap();
+                world.roads = with_compiled(world.roads, surfaces, paths, &field).unwrap();
                 world.elevation = Some(field);
-                assert_eq!(world_roads::road_lines(&(world))[0].path.len(), 3);
+                assert_eq!(road_lines(&(world))[0].path.len(), 3);
             }
             for x in (-200..=200).step_by(13) {
                 for z in (-200..=200).step_by(17) {
@@ -455,12 +473,11 @@ mod tests {
                         },
                         0.,
                     );
-                    let (expected_index, (_, expected)) = (0..world_roads::road_lines(&world)
-                        .len())
-                        .map(|i| (i, world_roads::projected(&world, i, point)))
+                    let (expected_index, (_, expected)) = (0..road_lines(&world).len())
+                        .map(|i| (i, projected(&world, i, point)))
                         .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0).then(a.0.cmp(&b.0)))
                         .unwrap();
-                    let (index, actual) = world_roads::nearest_road(&world, point);
+                    let (index, actual) = nearest_road(&world, point);
                     assert_eq!(
                         index, expected_index,
                         "compiled={compiled}, point={point:?}"
@@ -472,13 +489,13 @@ mod tests {
                 }
             }
             // Minimap candidates retain stored path order and compiled bends.
-            let segments = world_roads::road_segments_in(&world, world.bounding_box);
-            let all: Vec<_> = world_roads::road_lines(&world)
+            let segments = road_segments_in(&world, world.bounding_box);
+            let all: Vec<_> = road_lines(&world)
                 .iter()
                 .flat_map(|r| r.path.windows(2).map(|p| (p[0], p[1])))
                 .collect();
             assert_eq!(segments, all);
-            assert!(world_roads::road_segments_in(
+            assert!(road_segments_in(
                 &(world),
                 BoundingBoxXZ {
                     min: XZ { x: 1000., z: 1000. },

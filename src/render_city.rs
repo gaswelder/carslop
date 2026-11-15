@@ -210,7 +210,7 @@ pub fn ground_mesh(
     let opening_index = (!openings.0.is_empty()).then_some(&opening_index);
     // Retain the terrain extent used for imports without an explicit area boundary.
     let terrain_boundary = (boundary.is_none() && opening_index.is_some()).then(|| {
-        let bounds = model_world::terrain_bounds(city);
+        let bounds = world_elevation::terrain_bounds(city);
         geo::MultiPolygon(vec![util_geometry::polygon(&[
             util_geometry::xz_map(bounds.min, f64::from),
             XZ {
@@ -313,13 +313,13 @@ pub fn ground_mesh(
                         },
                         XYZ {
                             x: c.x,
-                            y: (model_world::height(city, util_geometry::xz(c)) + top)
+                            y: (world_elevation::world_height(city, util_geometry::xz(c)) + top)
                                 .max(c.y + 0.05),
                             z: c.z,
                         },
                         XYZ {
                             x: a.x,
-                            y: (model_world::height(city, util_geometry::xz(a)) + top)
+                            y: (world_elevation::world_height(city, util_geometry::xz(a)) + top)
                                 .max(a.y + 0.05),
                             z: a.z,
                         },
@@ -446,7 +446,7 @@ fn door_placements(
                     placement: Door {
                         wall,
                         center,
-                        bottom: model_world::height(city, point)
+                        bottom: world_elevation::world_height(city, point)
                             + world_street_surface::paving_height(city, point).unwrap_or(0.02)
                             + 0.01,
                     },
@@ -530,7 +530,7 @@ fn building_mesh(
         for i in 0..ring.len() {
             let a = ring[i];
             let c = ring[(i + 1) % ring.len()];
-            for pair in model_world::ground_segment(city, a, c).windows(2) {
+            for pair in world_elevation::ground_segment(city, a, c).windows(2) {
                 let a = pair[0];
                 let c = pair[1];
                 let a_bottom = if building.min_height_meters > 0.0 {
@@ -871,7 +871,7 @@ fn canopy_quad(
 
 fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world_landscape::Tree) {
     let XZ { x, z } = tree.coords;
-    let y = model_world::height(city, XZ { x, z });
+    let y = world_elevation::world_height(city, XZ { x, z });
     let h = tree.height_meters;
     let r = tree.crown_radius_meters;
     let id = tree.id;
@@ -1150,7 +1150,9 @@ mod tests {
             assert!(world_buildings::building_entrances(&(city), 1)
                 .iter()
                 .any(|entry| (entry.x - p.x).hypot(entry.z - p.z) < 0.0001));
-            assert!((door.bottom - model_world::height(&(city), p) - 0.03).abs() < 0.0001);
+            assert!(
+                (door.bottom - world_elevation::world_height(&(city), p) - 0.03).abs() < 0.0001
+            );
             let mut expected = Builder::default();
             render_building_parts::place(
                 &models.entrance,

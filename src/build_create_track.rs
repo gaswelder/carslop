@@ -1,6 +1,7 @@
 //! Compile authored points into the same assets used by imported cities.
 
 use crate::build_collision;
+use crate::build_osm_labels;
 use crate::build_scene;
 use crate::model_source_location;
 use crate::model_source_location::{SourceLocation, SourceRoad};
@@ -12,6 +13,7 @@ use crate::storage_city_assets;
 use crate::storage_codec_city;
 use crate::storage_codec_furniture;
 use crate::storage_codec_landscape;
+use crate::storage_codec_streets;
 use crate::util_error::{invalid, Result};
 use crate::util_geometry;
 use crate::util_geometry::{BoundingBoxXZ, XZ};
@@ -21,7 +23,6 @@ use crate::world_landscape;
 use crate::world_locations;
 use crate::world_preparation;
 use crate::world_roads;
-use crate::world_street_surface;
 use std::fs;
 use std::path::Path;
 use std::{
@@ -80,7 +81,7 @@ fn compile(source: &Path, track: &world_locations::WorldLocation, output: &Path)
         })
         .collect();
     let city = track;
-    let bounds = model_world::terrain_bounds(track);
+    let bounds = world_elevation::terrain_bounds(track);
     let map = SourceLocation {
         boundary: None,
         // Authored locations have local coordinates, with no geographic origin.
@@ -175,7 +176,7 @@ fn compile(source: &Path, track: &world_locations::WorldLocation, output: &Path)
         &model_source_location::parse(&city_txt_source).map_err(invalid)?,
         streets_txt_source,
     )?;
-    model_source_location::write_labels(output)?;
+    build_osm_labels::write_labels(output)?;
     // Validate using the regular runtime loader before publishing the directory.
     let loaded =
         world_preparation::compiled_location_load(&storage_city_assets::new(output.to_path_buf()))
@@ -215,7 +216,7 @@ fn write_streets(samples: &[world_locations::RoadSample], output: &Path) -> Resu
         writeln!(
             file,
             "t {} {} {} {} {} {} {}",
-            world_street_surface::triangle_usage_street_id(usage).map_err(invalid)?,
+            storage_codec_streets::triangle_usage_street_id(usage).map_err(invalid)?,
             p[0].x,
             p[0].z,
             p[1].x,

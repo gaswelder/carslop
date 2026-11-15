@@ -10,6 +10,7 @@ use crate::util_geometry::BoundingBoxXZ;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_elevation;
 use crate::world_locations;
+use crate::world_map_details;
 use crate::world_spatial;
 use geo::Area;
 use std::collections::HashMap;
@@ -73,7 +74,7 @@ pub fn building_style<'a>(
         .get(&building.id)?
         .iter()
         .find(|i| std::ptr::eq(&world.buildings.items[**i], building))
-        .and_then(|i| model_map_details::building(&world.details, *i))
+        .and_then(|i| world_map_details::building(&world.details, *i))
 }
 pub fn primary_building_volume(world: &WorldLocation, id: u64) -> Option<&Building> {
     world
@@ -104,9 +105,9 @@ pub fn entrance_building_volume(
         .map(|i| &world.buildings.items[*i])
         .filter(|building| building.min_height_meters == 0.0)
         .min_by(|a, b| {
-            model_world::nearest(a, point)
+            nearest(a, point)
                 .2
-                .total_cmp(&model_world::nearest(b, point).2)
+                .total_cmp(&nearest(b, point).2)
                 .then_with(|| {
                     model_world::footprint(b)
                         .unsigned_area()
@@ -133,7 +134,7 @@ pub fn nearby_buildings(world: &WorldLocation, p: XZ<f32>) -> impl Iterator<Item
 pub fn building_clearance(world: &WorldLocation, p: XZ<f32>) -> f32 {
     building_clearance_at(
         world,
-        util_geometry::at_height(p, model_world::height(world, p) + 0.48),
+        util_geometry::at_height(p, world_elevation::world_height(world, p) + 0.48),
     )
 }
 pub fn building_clearance_at(world: &WorldLocation, position: XYZ) -> f32 {
@@ -146,29 +147,65 @@ pub fn building_clearance_at(world: &WorldLocation, position: XYZ) -> f32 {
             ids.iter()
                 .filter(|i| {
                     position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT + 1.7
-                        >= model_world::height(world, p) - 0.2
-                        && model_world::overlaps_vehicle(&world.buildings.items[**i], position, 1.7)
+                        >= world_elevation::world_height(world, p) - 0.2
+                        && physics_vehicle_location::overlaps_vehicle(
+                            &world.buildings.items[**i],
+                            position,
+                            1.7,
+                        )
                 })
                 .map(|i| {
                     let b = &world.buildings.items[*i];
-                    model_world::nearest(b, p).2
-                        * if model_world::contains(b, p) {
-                            -1.0
-                        } else {
-                            1.0
-                        }
+                    nearest(b, p).2 * if contains(b, p) { -1.0 } else { 1.0 }
                 })
                 .fold(f32::INFINITY, f32::min)
         })
 }
 
+pub fn contains(building: &Building, p: XZ<f32>) -> bool {
+    fn inside(ring: &[XZ<f32>], p: XZ<f32>) -> bool {
+        let mut inside = false;
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+    inside(&building.ground_outline, p) && !building.holes.iter().any(|hole| inside(hole, p))
+}
+
+pub fn nearest(building: &Building, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
+    let mut best = (XZ::<f32>::default(), XZ::<f32>::default(), f32::INFINITY);
+    for ring in model_world::rings(building) {
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            let q = world_spatial::nearest_edge(p, a, b);
+            let distance = (p.x - q.x).hypot(p.z - q.z);
+            if distance < best.2 {
+                let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
+                best = (
+                    (q),
+                    XZ {
+                        x: (b.z - a.z) / len,
+                        z: -(b.x - a.x) / len,
+                    },
+                    distance,
+                );
+            }
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::model_world;
     use crate::physics_vehicle_location;
     use crate::render_camera;
     use crate::util_geometry;
-    use crate::world_buildings;
     use crate::world_elevation;
 
     use super::*;
@@ -207,7 +244,7 @@ mod tests {
         let mut position = start;
         physics_vehicle_location::constrain(&city, &mut position, &mut XZ { x: 0., z: 4. }, 1.4);
         assert_eq!(position, start);
-        assert!(world_buildings::building_clearance(&(city), util_geometry::xz(position)) > 1.4);
+        assert!(building_clearance(&(city), util_geometry::xz(position)) > 1.4);
         let eye = util_geometry::at_height(XZ { x: 10., z: 15. }, 1.5);
         assert_eq!(
             render_camera::camera_eye(
@@ -224,7 +261,7 @@ mod tests {
     #[test]
     fn footprint_owner_preserves_clearance_candidates_and_terrain_fitting() {
         let mut world = test_support::empty_world();
-        world.buildings = world_buildings::new(vec![
+        world.buildings = new(vec![
             building(1, -36., -36.),
             building(2, 28., 28.),
             building(3, 40., 28.),
@@ -236,7 +273,7 @@ mod tests {
             },
             |p| p.x * 0.1 + p.z * 0.2,
         );
-        let probes: Vec<_> = world_buildings::buildings(&world)
+        let probes: Vec<_> = buildings(&world)
             .iter()
             .flat_map(|b| {
                 let p = b.ground_outline[0];
@@ -257,42 +294,31 @@ mod tests {
             })
             .collect();
         for p in &probes {
-            let expected = world_buildings::buildings(&world)
+            let expected = buildings(&world)
                 .iter()
-                .map(|b| {
-                    model_world::nearest(b, *p).2
-                        * if model_world::contains(b, *p) {
-                            -1.
-                        } else {
-                            1.
-                        }
-                })
+                .map(|b| nearest(b, *p).2 * if contains(b, *p) { -1. } else { 1. })
                 .fold(f32::INFINITY, f32::min);
-            assert_eq!(
-                world_buildings::building_clearance(&(world), *p),
-                expected,
-                "{p:?}"
-            );
+            assert_eq!(building_clearance(&(world), *p), expected, "{p:?}");
         }
         let before: Vec<_> = probes
             .iter()
             .map(|&p| {
-                world_buildings::nearby_buildings(&world, p)
+                nearby_buildings(&world, p)
                     .map(|b| b.id)
                     .collect::<Vec<_>>()
             })
             .collect();
-        world.buildings = world_buildings::with_terrain(world.buildings, &field);
+        world.buildings = with_terrain(world.buildings, &field);
         let after: Vec<_> = probes
             .iter()
             .map(|&p| {
-                world_buildings::nearby_buildings(&world, p)
+                nearby_buildings(&world, p)
                     .map(|b| b.id)
                     .collect::<Vec<_>>()
             })
             .collect();
         assert_eq!(before, after);
-        for b in world_buildings::buildings(&world) {
+        for b in buildings(&world) {
             let max_height = b
                 .ground_outline
                 .iter()
@@ -301,10 +327,8 @@ mod tests {
             assert!((b.base_y - max_height - 0.02).abs() < 0.0001);
         }
         // Replacing the owner discards every candidate from the previous geometry.
-        world.buildings = world_buildings::new(vec![building(4, 128., 128.)]);
-        assert!(world_buildings::nearby_buildings(&(world), probes[0])
-            .next()
-            .is_none());
-        assert!(world_buildings::building_clearance(&(world), probes[0]).is_infinite());
+        world.buildings = new(vec![building(4, 128., 128.)]);
+        assert!(nearby_buildings(&(world), probes[0]).next().is_none());
+        assert!(building_clearance(&(world), probes[0]).is_infinite());
     }
 }

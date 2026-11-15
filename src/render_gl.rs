@@ -2488,7 +2488,7 @@ mod renderer_tests {
         s.state = GameState::Driving;
         assert!(recover(&mut (s)));
         assert_eq!(session_track(&(s)).id, test_support::city_id());
-        assert!(model_world::road_clearance(session_track(&(s)), s.car.position) < 0.0);
+        assert!(world_roads::road_clearance(session_track(&(s)), s.car.position) < 0.0);
     }
 
     #[test]

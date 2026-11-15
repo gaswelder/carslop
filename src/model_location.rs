@@ -2,15 +2,15 @@
 //! objects, compiler provenance, or derived query bounds live in these records.
 
 use crate::model_map_details;
-use crate::model_source_location;
 use crate::model_world;
 use crate::model_world::{Curb, FurnitureKind, HeightField, Tree, Triangle};
-use crate::render_aerial;
+use crate::storage_aerial;
 use crate::storage_city_assets;
 use crate::storage_codec_barriers;
 use crate::storage_codec_city;
 use crate::storage_codec_landscape;
 use crate::storage_codec_road_rises;
+use crate::storage_legacy_labels;
 use crate::storage_street_surface_binary;
 use crate::util_error;
 use crate::util_geometry;
@@ -158,7 +158,7 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
     // Keep only the catalog, tiles, and attribution used by the renderer.
     // Service requests and download/build metadata are not location data.
     if directory.join("aerial/tiles.txt").is_file() {
-        let catalog = render_aerial::tile_filenames(
+        let catalog = storage_aerial::tile_filenames(
             &fs::read_to_string(directory.join("aerial/tiles.txt")).map_err(|e| e.to_string())?,
         )?;
         let mut files = vec![PathBuf::from("aerial/tiles.txt")];
@@ -389,7 +389,7 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
     // Remove only files referenced by the previous renderer catalog.
     let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
         .ok()
-        .and_then(|text| render_aerial::tile_filenames(&text).ok())
+        .and_then(|text| storage_aerial::tile_filenames(&text).ok())
         .unwrap_or_default();
     let previous_files = previous_tiles
         .into_iter()
@@ -422,7 +422,7 @@ fn read_labels(directory: &Path) -> Result<Labels, String> {
     match fs::read(directory.join("labels.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("labels.json: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            model_source_location::read_legacy_labels(directory)
+            storage_legacy_labels::read_legacy_labels(directory)
         }
         Err(e) => Err(format!("labels.json: {e}")),
     }

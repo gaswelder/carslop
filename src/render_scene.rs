@@ -270,7 +270,7 @@ fn terrain(b: &mut Builder, track: &world_locations::WorldLocation) {
 
 fn water(b: &mut Builder, track: &world_locations::WorldLocation) {
     let sea = world_elevation::SEA_LEVEL;
-    let BoundingBoxXZ { min, max } = model_world::terrain_bounds(track);
+    let BoundingBoxXZ { min, max } = world_elevation::terrain_bounds(track);
     quad(
         b,
         [
@@ -303,7 +303,7 @@ fn water(b: &mut Builder, track: &world_locations::WorldLocation) {
 }
 
 fn perimeter_fence(b: &mut Builder, track: &world_locations::WorldLocation) {
-    let BoundingBoxXZ { min, max } = model_world::terrain_bounds(track);
+    let BoundingBoxXZ { min, max } = world_elevation::terrain_bounds(track);
     let field = model_world::elevation(track).expect("authored track terrain");
     // Fence only the outer terrain perimeter, leaving both verges open.
     let corners = [
@@ -925,14 +925,12 @@ pub fn road_color(world: &world_locations::WorldLocation, p: XZ<f32>) -> [f32; 3
 }
 
 fn world_location_terrain_height(world: &world_locations::WorldLocation, position: XZ<f32>) -> f32 {
-    model_world::height(world, position) - 0.02
+    world_elevation::world_height(world, position) - 0.02
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::model_world;
     use crate::render_scene;
-    use crate::world_locations;
     use crate::world_roads;
 
     use crate::render_chunks;
@@ -954,7 +952,7 @@ mod tests {
             assert!(sample.offset.abs() - sample.width * 0.5 < 0.03);
             assert!(
                 (vertex.position[1]
-                    - model_world::height(
+                    - world_elevation::world_height(
                         &track,
                         XZ {
                             x: vertex.position[0],
@@ -1029,7 +1027,7 @@ mod tests {
                 assert!(v.normal[1] > 0.9);
                 assert!(
                     (v.position[1]
-                        - model_world::height(
+                        - world_elevation::world_height(
                             &route,
                             XZ {
                                 x: v.position[0],

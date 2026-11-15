@@ -1,10 +1,10 @@
 //! Mapped barriers and their collision grid share one owner.
 
-use crate::model_world;
 use crate::model_world::{Barrier, WorldLocation};
 use crate::physics_vehicle_location;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
 use crate::world_locations;
 use crate::world_spatial;
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ pub fn constrain_barriers(
 ) -> f32 {
     let mut impact: f32 = 0.0;
     for barrier in nearby(&world.barriers, util_geometry::xz(*position)) {
-        let base = model_world::height(world, util_geometry::xz(*position));
+        let base = world_elevation::world_height(world, util_geometry::xz(*position));
         let bottom = position.y - physics_vehicle_location::VEHICLE_ORIGIN_HEIGHT;
         if bottom > base + barrier.height_meters || position.y + 1. < base {
             continue;

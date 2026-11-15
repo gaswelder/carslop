@@ -8,6 +8,7 @@ use crate::render_scene;
 use crate::render_scene::{Builder, Surface};
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
 use crate::world_raised_roads;
 use crate::world_street_surface;
 use glam::Vec3;
@@ -545,7 +546,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
             x: object.position[0],
             z: object.position[1],
         };
-        let y = model_world::height(city, origin)
+        let y = world_elevation::world_height(city, origin)
             + world_raised_roads::road_rise(city, origin)
             + world_street_surface::paving_height(city, origin).unwrap_or(0.0);
         let (sin, cos) = object.angle.sin_cos();
@@ -580,8 +581,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 z: pair[1][1],
             };
             if line.kind == LineKind::Cliff {
-                let a = util_geometry::at_height(a, model_world::height(city, a));
-                let c = util_geometry::at_height(c, model_world::height(city, c));
+                let a = util_geometry::at_height(a, world_elevation::world_height(city, a));
+                let c = util_geometry::at_height(c, world_elevation::world_height(city, c));
                 render_scene::quad(
                     b,
                     [
@@ -611,8 +612,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         };
                         util_geometry::at_height(
                             p,
-                            model_world::height(city, a) * (1. - t)
-                                + model_world::height(city, c) * t
+                            world_elevation::world_height(city, a) * (1. - t)
+                                + world_elevation::world_height(city, c) * t
                                 + line.height
                                 - length.mul_add(0.035, 0.0).min(4.) * 4. * t * (1. - t),
                         )

@@ -33,37 +33,6 @@ pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(
     Ok(())
 }
 
-/// Decode the material IDs used by landscape.txt.
-pub fn from_ground_id(id: usize) -> Result<Material, &'static str> {
-    match id {
-        0 => Ok(Material::Grass),
-        1 => Ok(Material::Park),
-        2 => Ok(Material::Scrub),
-        3 => Ok(Material::Asphalt),
-        4 => Ok(Material::Paving),
-        5 => Ok(Material::Concrete),
-        6 => Ok(Material::BareGround),
-        7 => Ok(Material::Sports),
-        8 => Ok(Material::Water),
-        _ => Err("unknown ground material"),
-    }
-}
-
-pub fn ground_id(material: Material) -> Result<usize, &'static str> {
-    match material {
-        Material::Grass => Ok(0),
-        Material::Park => Ok(1),
-        Material::Scrub => Ok(2),
-        Material::Asphalt => Ok(3),
-        Material::Paving => Ok(4),
-        Material::Concrete => Ok(5),
-        Material::BareGround => Ok(6),
-        Material::Sports => Ok(7),
-        Material::Water => Ok(8),
-        Material::Paint => Err("landscape format does not support paint"),
-    }
-}
-
 /// Prepared cover and its ground-query grid, constructed together.
 #[derive(Debug)]
 pub struct GroundCover {

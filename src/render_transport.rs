@@ -1,6 +1,5 @@
 //! Bridge decks, edge rails and tunnel interiors share their contact footprint.
 
-use crate::model_map_details;
 use crate::model_map_details::RoadSurface;
 use crate::model_world;
 use crate::model_world::WorldLocation;
@@ -9,6 +8,8 @@ use crate::render_scene;
 use crate::render_scene::Builder;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
+use crate::world_elevation;
+use crate::world_map_details;
 use crate::world_street_surface;
 
 pub fn build(builder: &mut Builder, city: &WorldLocation) {
@@ -21,7 +22,7 @@ pub fn build(builder: &mut Builder, city: &WorldLocation) {
             RoadSurface::Paving => [0.55, 0.51, 0.45],
             RoadSurface::Unpaved => [0.52, 0.45, 0.34],
         };
-        for triangle in model_map_details::deck_triangles(deck) {
+        for triangle in world_map_details::deck_triangles(deck) {
             let p = triangle.points.map(|mut p| {
                 p.y += 0.05;
                 p
@@ -104,7 +105,7 @@ pub fn build(builder: &mut Builder, city: &WorldLocation) {
                     if world_street_surface::contains_road(city, util_geometry::xz(p)) {
                         continue;
                     }
-                    let ground = model_world::height(city, util_geometry::xz(p));
+                    let ground = world_elevation::world_height(city, util_geometry::xz(p));
                     if p.y - ground > 2. {
                         render_details::beam(
                             builder,

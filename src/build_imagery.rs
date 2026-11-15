@@ -1,7 +1,6 @@
 //! Resumable city-wide aerial preparation. Downloads are explicit; gameplay is offline.
 
 use crate::build_tree_proposals;
-use crate::render_aerial;
 use crate::util_error::Result;
 use crate::util_file_io;
 use crate::util_geometry::XZ;
@@ -175,7 +174,7 @@ pub fn process_tiles(
             )
             .to_image()
             .into_raw();
-            let raw = render_aerial::encode_jpeg(&raw, TILE + 2 * GUTTER, TILE + 2 * GUTTER)?;
+            let raw = encode_jpeg(&raw, TILE + 2 * GUTTER, TILE + 2 * GUTTER)?;
             let name = format!("{}_{}_{}_{}.jpg", b.x, b.y, x, z);
             util_file_io::write_file(&aerial.join(&name), &raw)?;
             let nw = local(
@@ -201,6 +200,18 @@ pub fn process_tiles(
     };
     util_file_io::write_file(&meta_path, &serde_json::to_vec(&value)?)?;
     Ok(value)
+}
+
+/// All aerial builders use the same JPEG quality.
+fn encode_jpeg(rgb: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80).encode(
+        rgb,
+        width,
+        height,
+        image::ExtendedColorType::Rgb8,
+    )?;
+    Ok(bytes)
 }
 
 #[cfg(test)]

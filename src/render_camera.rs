@@ -1,10 +1,10 @@
 //! Render-only chase-camera tuning. Never writes vehicle state.
 
-use crate::model_world;
 use crate::render_gl;
 use crate::util_geometry;
 use crate::util_geometry::{XYZ, XZ};
 use crate::world_buildings;
+use crate::world_elevation;
 use crate::world_street_surface;
 use crate::world_transport;
 use crate::{physics_car::Vehicle, world_locations};
@@ -242,11 +242,11 @@ pub fn camera_eye(world: &world_locations::WorldLocation, anchor: XYZ, eye: XYZ)
                     * t
         });
         let blocked = world_buildings::nearby_buildings(world, XZ { x: p.x, z: p.z }).any(|b| {
-            p.y >= model_world::height(world, util_geometry::xz(p)) - 0.5
+            p.y >= world_elevation::world_height(world, util_geometry::xz(p)) - 0.5
                 && p.y < b.base_y + b.height_meters + 0.5
                 && (b.min_height_meters == 0.0 || p.y >= b.base_y + b.min_height_meters - 0.5)
-                && (model_world::contains(b, XZ { x: p.x, z: p.z })
-                    || model_world::nearest(b, XZ { x: p.x, z: p.z }).2 < 0.5)
+                && (world_buildings::contains(b, XZ { x: p.x, z: p.z })
+                    || world_buildings::nearest(b, XZ { x: p.x, z: p.z }).2 < 0.5)
         });
         if blocked
             || p.y
@@ -269,7 +269,6 @@ mod tests {
     use crate::physics_vehicle_location;
     use crate::render_camera;
     use crate::util_geometry;
-    use crate::world_locations;
 
     use super::*;
     use crate::test_support;
@@ -403,7 +402,7 @@ mod tests {
                     .all(|x| x.is_finite()));
                 assert!(
                     pose.eye.y
-                        >= model_world::height(
+                        >= world_elevation::world_height(
                             &test_support::compact_track(),
                             XZ {
                                 x: pose.eye.x,

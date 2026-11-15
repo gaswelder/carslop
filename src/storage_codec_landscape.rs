@@ -4,7 +4,6 @@
 use crate::model_world::{Material, Tree};
 use crate::storage_codec_number;
 use crate::util_geometry::XZ;
-use crate::world_landscape;
 use std::{fmt::Display, io, str::FromStr};
 
 pub enum Record<T> {
@@ -51,9 +50,7 @@ where
         };
         let record = match f.first().copied() {
             Some("a") if f.len() == 8 => Record::Ground {
-                material: world_landscape::from_ground_id(
-                    f[1].parse().map_err(|_| "invalid landscape style")?,
-                )?,
+                material: from_ground_id(f[1].parse().map_err(|_| "invalid landscape style")?)?,
                 points: [
                     XZ {
                         x: value(2)?,
@@ -127,7 +124,7 @@ pub fn ground<W: io::Write, T: Copy + Display>(
     write!(
         writer.output,
         "a {}",
-        world_landscape::ground_id(material).map_err(io::Error::other)?
+        ground_id(material).map_err(io::Error::other)?
     )?;
     for p in points {
         write!(
@@ -176,6 +173,37 @@ pub fn tree_fields<W: io::Write, T: Copy + Display>(
 }
 pub fn flush<W: io::Write>(writer: &mut Writer<W>) -> io::Result<()> {
     writer.output.flush()
+}
+
+/// Decode the material IDs used by landscape.txt.
+pub fn from_ground_id(id: usize) -> Result<Material, &'static str> {
+    match id {
+        0 => Ok(Material::Grass),
+        1 => Ok(Material::Park),
+        2 => Ok(Material::Scrub),
+        3 => Ok(Material::Asphalt),
+        4 => Ok(Material::Paving),
+        5 => Ok(Material::Concrete),
+        6 => Ok(Material::BareGround),
+        7 => Ok(Material::Sports),
+        8 => Ok(Material::Water),
+        _ => Err("unknown ground material"),
+    }
+}
+
+fn ground_id(material: Material) -> Result<usize, &'static str> {
+    match material {
+        Material::Grass => Ok(0),
+        Material::Park => Ok(1),
+        Material::Scrub => Ok(2),
+        Material::Asphalt => Ok(3),
+        Material::Paving => Ok(4),
+        Material::Concrete => Ok(5),
+        Material::BareGround => Ok(6),
+        Material::Sports => Ok(7),
+        Material::Water => Ok(8),
+        Material::Paint => Err("landscape format does not support paint"),
+    }
 }
 
 #[cfg(test)]

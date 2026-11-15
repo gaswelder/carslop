@@ -3,7 +3,7 @@ use crate::model_source_location::SourceLocation;
 use crate::model_traffic_controls;
 use crate::model_world;
 use crate::model_world::HeightField;
-use crate::render_aerial;
+use crate::storage_aerial;
 use crate::storage_codec_furniture;
 use crate::storage_codec_landscape;
 use crate::util_geometry::XZ;
@@ -23,7 +23,7 @@ pub struct CityAsset {
 
 pub fn new(directory: PathBuf) -> CityAsset {
     let name = load_name(&directory);
-    let aerial_attribution = render_aerial::attribution_label(&directory);
+    let aerial_attribution = storage_aerial::attribution_label(&directory);
     CityAsset {
         directory,
         name,
