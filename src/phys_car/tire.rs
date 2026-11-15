@@ -1,9 +1,36 @@
 //! Planar, two-axle tire contact. Forces are solved implicitly in wheel space.
-//! Rolling tires have lateral damping C_alpha / |v_long|. A bounded brake
-//! opposes wheel motion, with the same static-friction limit at zero speed.
-//! The coupled impulse is constrained by the contact's friction circle.
-//! Foot braking approximates a rolling wheel under ideal ABS; a handbraked
-//! rear axle instead uses sliding Coulomb friction in both directions.
+//! Rolling tires have lateral damping C_alpha / |v_long|, with a secant
+//! stiffness that falls once the tire is past its peak so slides decay. A
+//! bounded brake opposes wheel motion, with the same static-friction limit at
+//! zero speed. The coupled impulse is constrained by the contact's friction
+//! circle. Foot braking approximates a rolling wheel under ideal ABS; a
+//! handbraked rear axle instead uses sliding Coulomb friction in both
+//! directions.
+
+// Slip speed below which the tire is treated as gripping, matching the
+// zero-speed no-slip constraint that holds a parked car.
+const MIN_SLIP_SPEED: f32 = 0.5;
+// Fraction of lateral force lost once the tire is fully past its peak.
+const SLIP_FALLOFF: f32 = 0.20;
+// Extra slip angle (radians) over which that loss is reached.
+const SLIP_FALLOFF_RANGE: f32 = 0.35;
+
+/// Secant lateral stiffness at a given slip angle. Up to saturation this is the
+/// authored cornering stiffness, so the linear region is unchanged. Past the
+/// peak the force declines instead of holding a flat plateau, which lets a
+/// slide decay when the driver unwinds rather than staying fully developed.
+fn lateral_stiffness(along: f32, corner_stiffness: f32, capacity: f32, lateral: f32) -> f32 {
+    if along <= MIN_SLIP_SPEED || capacity <= 0.0 {
+        return corner_stiffness;
+    }
+    let alpha = lateral.abs() / along;
+    let saturated = capacity / corner_stiffness;
+    if alpha <= saturated {
+        return corner_stiffness;
+    }
+    let drop = SLIP_FALLOFF * ((alpha - saturated) / SLIP_FALLOFF_RANGE).clamp(0.0, 1.0);
+    (capacity * (1.0 - drop) / alpha).max(corner_stiffness * 0.02)
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct Motion {
@@ -71,7 +98,8 @@ struct Constraint {
 
 impl Constraint {
     fn new(contact: &Contact, motion: Motion, mass: f32, inertia: f32, dt: f32) -> Self {
-        let along = contact.velocity(motion).longitudinal.abs();
+        let wheel = contact.velocity(motion);
+        let along = wheel.longitudinal.abs();
         let radius = contact.capacity * dt;
         let drive = contact.drive_force * dt;
         let brake = contact.brake_force * dt;
@@ -96,7 +124,13 @@ impl Constraint {
             side_compliance: if contact.locked {
                 0.0
             } else {
-                along / (contact.corner_stiffness * dt)
+                let stiffness = lateral_stiffness(
+                    along,
+                    contact.corner_stiffness,
+                    contact.capacity,
+                    wheel.lateral,
+                );
+                along / (stiffness * dt)
             },
             drive,
             minimum: (drive - brake).clamp(-limit, limit),
@@ -328,5 +362,26 @@ mod tests {
             );
             assert!(result.motion.longitudinal > DT);
         }
+    }
+
+    #[test]
+    fn lateral_force_peaks_at_saturation_then_falls_off() {
+        let along = 20.0;
+        let corner = 60000.0;
+        let capacity = 6000.0;
+        let force = |alpha: f32| {
+            lateral_stiffness(along, corner, capacity, along * alpha) * alpha
+        };
+        let peak = capacity / corner;
+        assert!((force(peak) - capacity).abs() < 1.0);
+        assert!(force(peak * 0.5) < capacity);
+        assert!(force(peak * 2.0) < force(peak));
+        assert!(force(peak * 4.0) < force(peak * 2.0));
+        assert!((force(1e-4) - corner * 1e-4).abs() < 0.5);
+        // A stationary tire keeps its full no-slip stiffness.
+        assert_eq!(
+            lateral_stiffness(MIN_SLIP_SPEED, corner, capacity, 5.0),
+            corner
+        );
     }
 }
