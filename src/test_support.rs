@@ -1,16 +1,19 @@
 //! Shared fixture builders and controlled inputs for module tests.
+
 use crate::asset_car;
 use crate::build_collision;
 use crate::build_scene;
 use crate::build_surfaces;
 use crate::car_glb;
 use crate::chunks;
+use crate::city_assets;
 use crate::city_assets::CityAsset;
-use crate::geometry::{polygon, BoundingBoxXZ, LatLon, XYZ, XZ};
+use crate::geometry;
+use crate::geometry::{polygon, BoundingBoxXZ, XYZ, XZ};
 use crate::osm;
 use crate::phys_car;
 use crate::scene;
-use crate::source_location::{SourceLocation, SourceRoad};
+use crate::source_location;
 use crate::src_files;
 use crate::street_surface;
 use crate::track;
@@ -24,10 +27,9 @@ use std::sync::{Arc, OnceLock};
 
 pub fn road_footprint(surface: &street_surface::StreetSurface) -> MultiPolygon<f64> {
     build_surfaces::union(
-        &surface
-            .road_triangles()
+        &street_surface::road_triangles(surface)
             .iter()
-            .filter(|triangle| triangle.usage.is_road())
+            .filter(|triangle| world::is_road(triangle.usage))
             .map(|triangle| {
                 MultiPolygon(vec![polygon(&triangle.points.map(|point| XZ {
                     x: point.x as f64,
@@ -115,7 +117,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
             ],
             wheel_radii: [0.32; 4],
         });
-        let frontal_area_m2 = design.frontal_area_m2();
+        let frontal_area_m2 = car_glb::frontal_area_m2(&design);
         asset_car::CarSpec {
             design,
             name: "TEST VEHICLE".into(),
@@ -173,11 +175,7 @@ pub fn car_spec() -> &'static asset_car::CarSpec {
 pub fn track() -> Arc<track::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Module test road","scenery":"coastal","points":[[0,3,0,8],[400,6,0,8],[400,5,400,8],[0,3,400,8]]}"#).unwrap();
-    track::register_file(file.path())
-        .unwrap()
-        .0
-        .try_track()
-        .unwrap()
+    track::try_track(&track::register_file(file.path()).unwrap().0).unwrap()
 }
 
 pub fn car_definition() -> serde_json::Value {
@@ -187,7 +185,7 @@ pub fn car_definition() -> serde_json::Value {
         "weight_kg": s.weight_kg, "brake_force": s.brake_force,
         "engine_power_hp": s.engine_power_watts / asset_car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
-        "cg_height_fraction": s.cg_height / s.design.height(), "yaw_inertia": s.yaw_inertia,
+        "cg_height_fraction": s.cg_height / car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
         "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine_max_torque_nm,
         "engine_torque_curve": s.engine_torque_curve.iter().map(|point|
@@ -301,7 +299,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     .unwrap();
     build_collision::build_collisions(
         &directory.join("streets.bin"),
-        &SourceLocation::<f32>::parse(city).unwrap(),
+        &source_location::parse(city).unwrap(),
         "STREETS 1 1\np 0 2 0 0 20 0\nt 1 0 -4 20 -4 20 4\nt 1 0 -4 20 4 0 4\nc 1 0 -4 20 -4 0 1\n"
             .into(),
     )
@@ -321,8 +319,8 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
         serde_json::json!({"source":provider, "provider":provider}).to_string(),
     )
     .unwrap();
-    let assets = CityAsset::new(directory.to_path_buf());
-    let world = world_preparation::CompiledLocation::load(&assets).unwrap();
+    let assets = city_assets::new(directory.to_path_buf());
+    let world = world_preparation::compiled_location_load(&assets).unwrap();
     build_scene::build_scene(
         &world,
         None,
@@ -347,7 +345,7 @@ pub fn scenic_id() -> track::LocationId {
 }
 
 pub fn nicosia_id() -> track::LocationId {
-    track::LocationId::asset("data/locations/nicosia").expect("bundled Nicosia assets")
+    track::asset("data/locations/nicosia").expect("bundled Nicosia assets")
 }
 
 pub fn location_ids() -> [track::LocationId; 3] {
@@ -357,11 +355,7 @@ pub fn location_ids() -> [track::LocationId; 3] {
 pub fn variable_width_track() -> Arc<track::WorldLocation> {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
-    track::register_file(file.path())
-        .unwrap()
-        .0
-        .try_track()
-        .unwrap()
+    track::try_track(&track::register_file(file.path()).unwrap().0).unwrap()
 }
 
 pub fn angle(value: f32) -> f32 {
@@ -371,7 +365,7 @@ pub fn angle(value: f32) -> f32 {
 pub fn compact_track() -> Arc<track::WorldLocation> {
     static TRACK: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
     TRACK
-        .get_or_init(|| track::LocationId::Compact.try_track().unwrap())
+        .get_or_init(|| track::try_track(&track::LocationId::Compact).unwrap())
         .clone()
 }
 
@@ -380,28 +374,27 @@ pub fn vehicle(
     heading: f32,
     model: std::sync::Arc<asset_car::CarSpec>,
 ) -> phys_car::Vehicle {
-    phys_car::Vehicle::on_track(position, heading, model, compact_track())
+    phys_car::on_track(position, heading, model, compact_track())
 }
 
 pub fn partition(vertices: Vec<scene::Vertex>) -> Vec<chunks::Chunk> {
     let mut builder = chunks::ChunkBuilder::default();
     for triangle in vertices.as_chunks::<3>().0 {
-        builder.push(*triangle);
+        chunks::push(&mut builder, *triangle);
     }
-    builder.finish()
+    chunks::finish(builder)
 }
 
 pub struct Temp {
     pub directory: std::path::PathBuf,
     _lifetime: tempfile::TempDir,
 }
-impl Temp {
-    pub fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        Self {
-            directory: dir.path().to_path_buf(),
-            _lifetime: dir,
-        }
+
+pub fn new() -> Temp {
+    let dir = tempfile::tempdir().unwrap();
+    Temp {
+        directory: dir.path().to_path_buf(),
+        _lifetime: dir,
     }
 }
 
@@ -439,22 +432,22 @@ pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
 pub fn nicosia_world() -> Arc<track::WorldLocation> {
     static WORLD: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
     WORLD
-        .get_or_init(|| nicosia_id().try_track().unwrap())
+        .get_or_init(|| track::try_track(&nicosia_id()).unwrap())
         .clone()
 }
 
 pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
-    let mut source = SourceLocation::<f64>::empty();
-    source.origin = Some(LatLon::new(34.7, 33.0));
+    let mut source = source_location::empty::<f64>();
+    source.origin = Some(geometry::new(34.7, 33.0));
     source.bounding_box = BoundingBoxXZ {
         min: XZ { x: -10.0, z: -10.0 },
         max: XZ { x: 30.0, z: 30.0 },
     };
     source.road_nodes = vec![
-        XZ { x: 0.0, z: 0.0 }.at_height(0.0),
-        XZ { x: 20.0, z: 0.0 }.at_height(0.0),
+        geometry::at_height(XZ { x: 0.0, z: 0.0 }, 0.0),
+        geometry::at_height(XZ { x: 20.0, z: 0.0 }, 0.0),
     ];
-    let mut road = SourceRoad::new([0, 1], 8.0);
+    let mut road = source_location::new([0, 1], 8.0);
     road.osm_way_id = Some(1);
     source.road_lines.push(road);
     if populated {
@@ -513,7 +506,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
         )
         .unwrap();
     }
-    CityAsset::new(directory.to_path_buf())
+    city_assets::new(directory.to_path_buf())
 }
 
 /// A four-metre speed table on the straight part of the stored-location fixture.
@@ -536,26 +529,34 @@ pub fn speed_table_rises() -> Vec<world::RoadRise> {
     ];
     let mut rises = Vec::new();
     for pair in sections.windows(2) {
-        let a = XZ {
-            x: pair[0].x,
-            z: -1.,
-        }
-        .at_height(pair[0].height);
-        let b = XZ {
-            x: pair[0].x,
-            z: 1.,
-        }
-        .at_height(pair[0].height);
-        let c = XZ {
-            x: pair[1].x,
-            z: 1.,
-        }
-        .at_height(pair[1].height);
-        let d = XZ {
-            x: pair[1].x,
-            z: -1.,
-        }
-        .at_height(pair[1].height);
+        let a = geometry::at_height(
+            XZ {
+                x: pair[0].x,
+                z: -1.,
+            },
+            pair[0].height,
+        );
+        let b = geometry::at_height(
+            XZ {
+                x: pair[0].x,
+                z: 1.,
+            },
+            pair[0].height,
+        );
+        let c = geometry::at_height(
+            XZ {
+                x: pair[1].x,
+                z: 1.,
+            },
+            pair[1].height,
+        );
+        let d = geometry::at_height(
+            XZ {
+                x: pair[1].x,
+                z: -1.,
+            },
+            pair[1].height,
+        );
         rises.extend([
             world::RoadRise { points: [a, b, c] },
             world::RoadRise { points: [a, c, d] },

@@ -1,5 +1,6 @@
 //! The persisted, playable location. No spatial indexes, terrain fitting, OSM
 //! objects, compiler provenance, or derived query bounds live in these records.
+
 use crate::aerial;
 use crate::city_assets;
 use crate::codec_barriers;
@@ -7,6 +8,7 @@ use crate::codec_city;
 use crate::codec_landscape;
 use crate::codec_road_rises;
 use crate::error;
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, LatLon, XZ};
 use crate::map_details;
 use crate::source_location;
@@ -100,308 +102,306 @@ struct Payload {
     source: PathBuf,
     relative: PathBuf,
 }
-impl Payload {
-    fn read(root: &Path, relative: PathBuf) -> Result<Self, String> {
-        let source = root
-            .join(&relative)
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", relative.display()))?;
-        Ok(Self { source, relative })
+
+fn payload_read(root: &Path, relative: PathBuf) -> Result<Payload, String> {
+    let source = root
+        .join(&relative)
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", relative.display()))?;
+    Ok(Payload { source, relative })
+}
+fn payload_write(payload: &Payload, root: &Path) -> Result<(), String> {
+    let target = root.join(&payload.relative);
+    if target.canonicalize().ok().as_ref() == Some(&payload.source) {
+        return Ok(());
     }
-    fn write(&self, root: &Path) -> Result<(), String> {
-        let target = root.join(&self.relative);
-        if target.canonicalize().ok().as_ref() == Some(&self.source) {
-            return Ok(());
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::copy(&self.source, target).map_err(|e| e.to_string())?;
-        Ok(())
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    fs::copy(&payload.source, target).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-impl Location {
-    pub fn from_compilation(workspace: tempfile::TempDir) -> Result<Self, String> {
-        let mut location = Self::read(workspace.path())?;
-        location.media.workspace = Some(workspace);
-        Ok(location)
-    }
+pub fn from_compilation(workspace: tempfile::TempDir) -> Result<Location, String> {
+    let mut location = location_read(workspace.path())?;
+    location.media.workspace = Some(workspace);
+    Ok(location)
+}
 
-    pub fn read(dirpath: impl AsRef<Path>) -> Result<Self, String> {
-        let directory = dirpath.as_ref();
-        Self::read_inner(directory).map_err(|e| format!("location {}: {e}", directory.display()))
-    }
+pub fn location_read(dirpath: impl AsRef<Path>) -> Result<Location, String> {
+    let directory = dirpath.as_ref();
+    read_inner(directory).map_err(|e| format!("location {}: {e}", directory.display()))
+}
 
-    fn read_inner(directory: &Path) -> Result<Self, String> {
-        let assets = city_assets::CityAsset::new(directory.to_path_buf());
-        let source = assets.get_city().map_err(|e| format!("city.txt: {e}"))?;
-        let streets = street_surface_binary::load_geometry(directory, source.road_lines.len())
-            .map_err(|e| format!("streets.bin: {e}"))?;
-        let manifest = assets
-            .get_manifest()
-            .map_err(|e| format!("manifest.json: {e}"))?;
-        let pavement_height_meters = match manifest.get("pavement_height_metres") {
-            Some(v) => v
-                .as_f64()
-                .filter(|h| (0.08..=0.25).contains(h))
-                .ok_or("manifest.json: pavement_height_metres must be between 0.08 and 0.25")?
-                as f32,
-            None => street_surface::DEFAULT_PAVEMENT_HEIGHT,
-        };
-        let (ground, trees) = assets.get_landscape_data()?;
-        let details =
-            map_details::Data::read(directory, source.buildings.len(), source.road_lines.len())?;
-        let mut media = Media::default();
-        if directory.join("scene.pack").exists() {
-            media.scene = Some(Payload::read(directory, "scene.pack".into())?);
+fn read_inner(directory: &Path) -> Result<Location, String> {
+    let assets = city_assets::new(directory.to_path_buf());
+    let source = city_assets::get_city(&assets).map_err(|e| format!("city.txt: {e}"))?;
+    let streets = street_surface_binary::load_geometry(directory, source.road_lines.len())
+        .map_err(|e| format!("streets.bin: {e}"))?;
+    let manifest = city_assets::get_manifest(&assets).map_err(|e| format!("manifest.json: {e}"))?;
+    let pavement_height_meters = match manifest.get("pavement_height_metres") {
+        Some(v) => v
+            .as_f64()
+            .filter(|h| (0.08..=0.25).contains(h))
+            .ok_or("manifest.json: pavement_height_metres must be between 0.08 and 0.25")?
+            as f32,
+        None => street_surface::DEFAULT_PAVEMENT_HEIGHT,
+    };
+    let (ground, trees) = city_assets::get_landscape_data(&assets)?;
+    let details = map_details::read(directory, source.buildings.len(), source.road_lines.len())?;
+    let mut media = Media::default();
+    if directory.join("scene.pack").exists() {
+        media.scene = Some(payload_read(directory, "scene.pack".into())?);
+    }
+    // Keep only the catalog, tiles, and attribution used by the renderer.
+    // Service requests and download/build metadata are not location data.
+    if directory.join("aerial/tiles.txt").is_file() {
+        let catalog = aerial::tile_filenames(
+            &fs::read_to_string(directory.join("aerial/tiles.txt")).map_err(|e| e.to_string())?,
+        )?;
+        let mut files = vec![PathBuf::from("aerial/tiles.txt")];
+        for name in catalog {
+            files.push(PathBuf::from("aerial").join(name));
         }
-        // Keep only the catalog, tiles, and attribution used by the renderer.
-        // Service requests and download/build metadata are not location data.
-        if directory.join("aerial/tiles.txt").is_file() {
-            let catalog = aerial::tile_filenames(
-                &fs::read_to_string(directory.join("aerial/tiles.txt"))
-                    .map_err(|e| e.to_string())?,
-            )?;
-            let mut files = vec![PathBuf::from("aerial/tiles.txt")];
-            for name in catalog {
-                files.push(PathBuf::from("aerial").join(name));
-            }
-            if directory.join("aerial/source.json").exists() {
-                files.push("aerial/source.json".into());
-            }
-            files.sort();
-            files.dedup();
-            media.aerial = files
-                .into_iter()
-                .map(|file| Payload::read(directory, file))
-                .collect::<Result<_, _>>()?;
+        if directory.join("aerial/source.json").exists() {
+            files.push("aerial/source.json".into());
         }
-        Ok(Self {
-            name: assets.name().to_owned(),
-            origin: source.origin,
-            extent: source.bounding_box,
-            road_nodes: source.road_nodes.into_iter().map(|p| p.xz()).collect(),
-            roads: source
-                .road_lines
-                .into_iter()
-                .map(|r| Road {
-                    ends: r.ends,
-                    way_id: r.osm_way_id,
-                    width_meters: r.road_width_start_meters,
-                    direction: r.direction,
-                })
-                .collect(),
-            buildings: source
-                .buildings
-                .into_iter()
-                .map(|b| Building {
-                    id: b.id,
-                    outline: b.ground_outline,
-                    holes: b.holes,
-                    min_height_meters: b.min_height_meters,
-                    height_meters: b.height_meters,
-                })
-                .collect(),
-            entrances: source.entrances,
-            streets,
-            pavement_height_meters,
-            elevation: assets
-                .get_heightfield()
-                .map_err(|e| format!("elevation/heightfield.txt: {e}"))?,
-            ground,
-            trees,
-            furniture: assets
-                .get_furniture()
-                .map_err(|e| format!("furniture.txt: {e}"))?
-                .into_iter()
-                .map(|f| Furniture {
-                    id: f._source_id,
-                    kind: f.kind,
-                    position: f.coords.xz(),
-                    travel: f.travel,
-                    value: f.value,
-                    phase: f.phase,
-                })
-                .collect(),
-            barriers: match fs::read_to_string(directory.join("barriers.txt")) {
-                Ok(text) => {
-                    codec_barriers::parse(&text).map_err(|e| format!("barriers.txt: {e}"))?
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(e) => return Err(format!("barriers.txt: {e}")),
-            },
-            road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
-                Ok(text) => {
-                    codec_road_rises::parse(&text).map_err(|e| format!("road-rises.txt: {e}"))?
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(e) => return Err(format!("road-rises.txt: {e}")),
-            },
-            labels: read_labels(directory)?,
-            details,
-            media,
-        })
+        files.sort();
+        files.dedup();
+        media.aerial = files
+            .into_iter()
+            .map(|file| payload_read(directory, file))
+            .collect::<Result<_, _>>()?;
     }
-
-    pub fn write(&self, dirpath: impl AsRef<Path>) -> Result<(), String> {
-        let directory = dirpath.as_ref();
-        self.details
-            .validate(self.buildings.len(), self.roads.len())?;
-        self.write_inner(directory)
-            .map_err(|e| format!("location {}: {e}", directory.display()))
-    }
-
-    fn write_inner(&self, directory: &Path) -> Result<(), String> {
-        fs::create_dir_all(directory.join("elevation")).map_err(|e| e.to_string())?;
-        let write = || -> error::Result<()> {
-            let mut city = BufWriter::new(fs::File::create(directory.join("city.txt"))?);
-            writeln!(city, "CITY 2")?;
-            if let Some(p) = self.origin {
-                writeln!(city, "origin {} {}", p.lat, p.lon)?;
+    Ok(Location {
+        name: city_assets::name(&assets).to_owned(),
+        origin: source.origin,
+        extent: source.bounding_box,
+        road_nodes: source
+            .road_nodes
+            .into_iter()
+            .map(|p| geometry::xz(p))
+            .collect(),
+        roads: source
+            .road_lines
+            .into_iter()
+            .map(|r| Road {
+                ends: r.ends,
+                way_id: r.osm_way_id,
+                width_meters: r.road_width_start_meters,
+                direction: r.direction,
+            })
+            .collect(),
+        buildings: source
+            .buildings
+            .into_iter()
+            .map(|b| Building {
+                id: b.id,
+                outline: b.ground_outline,
+                holes: b.holes,
+                min_height_meters: b.min_height_meters,
+                height_meters: b.height_meters,
+            })
+            .collect(),
+        entrances: source.entrances,
+        streets,
+        pavement_height_meters,
+        elevation: city_assets::get_heightfield(&assets)
+            .map_err(|e| format!("elevation/heightfield.txt: {e}"))?,
+        ground,
+        trees,
+        furniture: city_assets::get_furniture(&assets)
+            .map_err(|e| format!("furniture.txt: {e}"))?
+            .into_iter()
+            .map(|f| Furniture {
+                id: f._source_id,
+                kind: f.kind,
+                position: geometry::xz(f.coords),
+                travel: f.travel,
+                value: f.value,
+                phase: f.phase,
+            })
+            .collect(),
+        barriers: match fs::read_to_string(directory.join("barriers.txt")) {
+            Ok(text) => codec_barriers::parse(&text).map_err(|e| format!("barriers.txt: {e}"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("barriers.txt: {e}")),
+        },
+        road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
+            Ok(text) => {
+                codec_road_rises::parse(&text).map_err(|e| format!("road-rises.txt: {e}"))?
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("road-rises.txt: {e}")),
+        },
+        labels: read_labels(directory)?,
+        details,
+        media,
+    })
+}
+
+pub fn location_write(location: &Location, dirpath: impl AsRef<Path>) -> Result<(), String> {
+    let directory = dirpath.as_ref();
+    map_details::validate(
+        &location.details,
+        location.buildings.len(),
+        location.roads.len(),
+    )?;
+    write_inner(location, directory).map_err(|e| format!("location {}: {e}", directory.display()))
+}
+
+fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory.join("elevation")).map_err(|e| e.to_string())?;
+    let write = || -> error::Result<()> {
+        let mut city = BufWriter::new(fs::File::create(directory.join("city.txt"))?);
+        writeln!(city, "CITY 2")?;
+        if let Some(p) = location.origin {
+            writeln!(city, "origin {} {}", p.lat, p.lon)?;
+        }
+        writeln!(
+            city,
+            "bounds {} {} {} {}",
+            location.extent.min.x,
+            location.extent.min.z,
+            location.extent.max.x,
+            location.extent.max.z
+        )?;
+        for p in &location.road_nodes {
+            writeln!(city, "n {} {}", p.x, p.z)?;
+        }
+        for r in &location.roads {
             writeln!(
                 city,
-                "bounds {} {} {} {}",
-                self.extent.min.x, self.extent.min.z, self.extent.max.x, self.extent.max.z
+                "r {} {} {} {} {}",
+                r.ends[0],
+                r.ends[1],
+                r.width_meters,
+                r.direction,
+                r.way_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".into())
             )?;
-            for p in &self.road_nodes {
-                writeln!(city, "n {} {}", p.x, p.z)?;
+        }
+        for (index, b) in location.buildings.iter().enumerate() {
+            write!(city, "b {} {} 0 {}", b.id, b.height_meters, b.outline.len())?;
+            for p in &b.outline {
+                write!(city, " {} {}", p.x, p.z)?;
             }
-            for r in &self.roads {
-                writeln!(
-                    city,
-                    "r {} {} {} {} {}",
-                    r.ends[0],
-                    r.ends[1],
-                    r.width_meters,
-                    r.direction,
-                    r.way_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_else(|| "-".into())
-                )?;
-            }
-            for (index, b) in self.buildings.iter().enumerate() {
-                write!(city, "b {} {} 0 {}", b.id, b.height_meters, b.outline.len())?;
-                for p in &b.outline {
-                    write!(city, " {} {}", p.x, p.z)?;
-                }
-                writeln!(city)?;
-                codec_city::write_volume(
-                    &mut city,
-                    index,
-                    b.min_height_meters,
-                    &b.holes,
-                    codec_city::Precision::Authored,
-                )?;
-            }
-            for entrance in &self.entrances {
-                writeln!(
-                    city,
-                    "e {} {} {}",
-                    entrance.building_id, entrance.position.x, entrance.position.z,
-                )?;
-            }
-            city.flush()?;
-            fs::write(
-                directory.join("manifest.json"),
-                serde_json::to_vec_pretty(&serde_json::json!({
-                    "pavement_height_metres": self.pavement_height_meters,
-                }))?,
+            writeln!(city)?;
+            codec_city::write_volume(
+                &mut city,
+                index,
+                b.min_height_meters,
+                &b.holes,
+                codec_city::Precision::Authored,
             )?;
-            fs::write(
-                directory.join("labels.json"),
-                serde_json::to_vec(&self.labels)?,
-            )?;
-            // Serialize at full f32 precision; compiler writers deliberately quantize.
-            let mut elevation = BufWriter::new(fs::File::create(
-                directory.join("elevation/heightfield.txt"),
-            )?);
-            let f = &self.elevation;
+        }
+        for entrance in &location.entrances {
             writeln!(
-                elevation,
-                "ELEVATION 1\ngrid {} {} {} {} {} 0",
-                f.columns, f.rows, f.origin.x, f.origin.z, f.step
+                city,
+                "e {} {} {}",
+                entrance.building_id, entrance.position.x, entrance.position.z,
             )?;
-            for row in f.values.chunks(f.columns) {
-                for v in row {
-                    write!(elevation, "{v} ")?;
-                }
-                writeln!(elevation)?;
-            }
-            elevation.flush()?;
-            let mut landscape = codec_landscape::Writer::new(
-                BufWriter::new(fs::File::create(directory.join("landscape.txt"))?),
-                codec_landscape::Precision::Authored,
-            )?;
-            for t in &self.ground {
-                if t.usage != world::TriangleUsage::Ground {
-                    return Err(error::invalid("ground layer contains street geometry"));
-                }
-                landscape.ground(t.material, t.points)?;
-            }
-            for t in &self.trees {
-                landscape.tree(t)?;
-            }
-            landscape.flush()?;
-            let mut furniture = BufWriter::new(fs::File::create(directory.join("furniture.txt"))?);
-            writeln!(furniture, "FURNITURE 3")?;
-            for f in &self.furniture {
-                let kind = match f.kind {
-                    FurnitureKind::Signal => "signal",
-                    FurnitureKind::Stop => "stop",
-                    FurnitureKind::Yield => "yield",
-                    FurnitureKind::Speed => "speed_limit",
-                };
-                writeln!(
-                    furniture,
-                    "{} {kind} {} {} {} {} {} {}",
-                    f.id, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
-                )?;
-            }
-            furniture.flush()?;
-            codec_barriers::write(
-                &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
-                &self.barriers,
-            )?;
-            codec_road_rises::write(
-                &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
-                &self.road_rises,
-            )?;
-            street_surface_binary::write_geometry(&directory.join("streets.bin"), &self.streets)?;
-            Ok(())
-        };
-        write().map_err(|e| e.to_string())?;
-        // Imagery trees are merged into the ordinary vegetation layer on read.
-        remove_optional(&directory.join("imagery-trees.txt"))?;
-        if let Some(scene) = &self.media.scene {
-            scene.write(directory)?;
-        } else {
-            remove_optional(&directory.join("scene.pack"))?;
         }
-        // Remove only files referenced by the previous renderer catalog.
-        let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
-            .ok()
-            .and_then(|text| aerial::tile_filenames(&text).ok())
-            .unwrap_or_default();
-        let previous_files = previous_tiles
-            .into_iter()
-            .map(|name| PathBuf::from("aerial").join(name))
-            .chain([
-                PathBuf::from("aerial/tiles.txt"),
-                PathBuf::from("aerial/source.json"),
-            ]);
-        for relative in previous_files {
-            if !self.media.aerial.iter().any(|p| p.relative == relative) {
-                remove_optional(&directory.join(relative))?;
+        city.flush()?;
+        fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "pavement_height_metres": location.pavement_height_meters,
+            }))?,
+        )?;
+        fs::write(
+            directory.join("labels.json"),
+            serde_json::to_vec(&location.labels)?,
+        )?;
+        // Serialize at full f32 precision; compiler writers deliberately quantize.
+        let mut elevation = BufWriter::new(fs::File::create(
+            directory.join("elevation/heightfield.txt"),
+        )?);
+        let f = &location.elevation;
+        writeln!(
+            elevation,
+            "ELEVATION 1\ngrid {} {} {} {} {} 0",
+            f.columns, f.rows, f.origin.x, f.origin.z, f.step
+        )?;
+        for row in f.values.chunks(f.columns) {
+            for v in row {
+                write!(elevation, "{v} ")?;
             }
+            writeln!(elevation)?;
         }
-        self.details.write(directory)?;
-        for payload in &self.media.aerial {
-            payload.write(directory)?;
+        elevation.flush()?;
+        let mut landscape = codec_landscape::new(
+            BufWriter::new(fs::File::create(directory.join("landscape.txt"))?),
+            codec_landscape::Precision::Authored,
+        )?;
+        for t in &location.ground {
+            if t.usage != world::TriangleUsage::Ground {
+                return Err(error::invalid("ground layer contains street geometry"));
+            }
+            codec_landscape::ground(&mut landscape, t.material, t.points)?;
         }
+        for t in &location.trees {
+            codec_landscape::tree(&mut landscape, t)?;
+        }
+        codec_landscape::flush(&mut landscape)?;
+        let mut furniture = BufWriter::new(fs::File::create(directory.join("furniture.txt"))?);
+        writeln!(furniture, "FURNITURE 3")?;
+        for f in &location.furniture {
+            let kind = match f.kind {
+                FurnitureKind::Signal => "signal",
+                FurnitureKind::Stop => "stop",
+                FurnitureKind::Yield => "yield",
+                FurnitureKind::Speed => "speed_limit",
+            };
+            writeln!(
+                furniture,
+                "{} {kind} {} {} {} {} {} {}",
+                f.id, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
+            )?;
+        }
+        furniture.flush()?;
+        codec_barriers::write(
+            &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
+            &location.barriers,
+        )?;
+        codec_road_rises::write(
+            &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
+            &location.road_rises,
+        )?;
+        street_surface_binary::write_geometry(&directory.join("streets.bin"), &location.streets)?;
         Ok(())
+    };
+    write().map_err(|e| e.to_string())?;
+    // Imagery trees are merged into the ordinary vegetation layer on read.
+    remove_optional(&directory.join("imagery-trees.txt"))?;
+    if let Some(scene) = &location.media.scene {
+        payload_write(scene, directory)?;
+    } else {
+        remove_optional(&directory.join("scene.pack"))?;
     }
+    // Remove only files referenced by the previous renderer catalog.
+    let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
+        .ok()
+        .and_then(|text| aerial::tile_filenames(&text).ok())
+        .unwrap_or_default();
+    let previous_files = previous_tiles
+        .into_iter()
+        .map(|name| PathBuf::from("aerial").join(name))
+        .chain([
+            PathBuf::from("aerial/tiles.txt"),
+            PathBuf::from("aerial/source.json"),
+        ]);
+    for relative in previous_files {
+        if !location.media.aerial.iter().any(|p| p.relative == relative) {
+            remove_optional(&directory.join(relative))?;
+        }
+    }
+    map_details::write(&location.details, directory)?;
+    for payload in &location.media.aerial {
+        payload_write(payload, directory)?;
+    }
+    Ok(())
 }
 
 fn remove_optional(path: &Path) -> Result<(), String> {
@@ -424,6 +424,12 @@ fn read_labels(directory: &Path) -> Result<Labels, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::location;
+    use crate::street_surface;
+    use crate::world_preparation;
+    use crate::world_roads;
+
     use super::*;
     use crate::city_assets;
     use crate::test_support;
@@ -456,7 +462,7 @@ mod tests {
             test_support::stored_location(input.path(), populated);
             fs::write(input.path().join("source.osm"), r#"<osm><way id="1"><tag k="name" v="Road &amp; Square"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
             fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
-            let mut location = Location::read(input.path()).unwrap();
+            let mut location = location::location_read(input.path()).unwrap();
             location.pavement_height_meters = 0.17345679;
             location.roads[0].way_id = None;
             location.roads[0].width_meters = 8.123457;
@@ -500,9 +506,9 @@ mod tests {
                 });
                 location.road_rises.push(world::RoadRise {
                     points: [
-                        XZ { x: 0., z: 0. }.at_height(0.),
-                        XZ { x: 1., z: 0. }.at_height(0.1234567),
-                        XZ { x: 0., z: 1. }.at_height(0.),
+                        geometry::at_height(XZ { x: 0., z: 0. }, 0.),
+                        geometry::at_height(XZ { x: 1., z: 0. }, 0.1234567),
+                        geometry::at_height(XZ { x: 0., z: 1. }, 0.),
                     ],
                 });
                 location.barriers.push(world::Barrier {
@@ -529,8 +535,8 @@ mod tests {
                 location.furniture[0].position.x = 5.1234565;
                 location.trees[0].coords.x = -5.1234565;
             }
-            location.write(output.path()).unwrap();
-            let reread = Location::read(output.path()).unwrap();
+            location::location_write(&location, output.path()).unwrap();
+            let reread = location::location_read(output.path()).unwrap();
             assert_data_equal(&location, &reread);
             assert_eq!(
                 reread.name,
@@ -543,22 +549,24 @@ mod tests {
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
             assert_eq!(manifest.as_object().unwrap().len(), 1);
-            let world = world::WorldLocation::load(&city_assets::CityAsset::new(
+            let world = world_preparation::world_location_load(&city_assets::new(
                 output.path().to_path_buf(),
             ))
             .unwrap();
-            assert!(world.has_compiled_roads());
+            assert!(street_surface::has_compiled_roads(&(world)));
             assert!(reread.labels.streets.contains(&(1, "Road & Square".into())));
             assert!(reread
                 .labels
                 .buildings
                 .contains(&(1, "Road & Square".into())));
-            assert_eq!(world.road_lines()[0].path.len(), 3);
-            assert!(world.road_lines()[0].length > 20.0);
-            assert!(world.road_lines().iter().all(|r| r.path[0].y != 0.0));
+            assert_eq!(world_roads::road_lines(&(world))[0].path.len(), 3);
+            assert!(world_roads::road_lines(&(world))[0].length > 20.0);
+            assert!(world_roads::road_lines(&(world))
+                .iter()
+                .all(|r| r.path[0].y != 0.0));
             // Writing in place neither duplicates the optional trees nor rounds data.
-            reread.write(output.path()).unwrap();
-            assert_data_equal(&location, &Location::read(output.path()).unwrap());
+            location::location_write(&reread, output.path()).unwrap();
+            assert_data_equal(&location, &location::location_read(output.path()).unwrap());
         }
     }
 
@@ -581,8 +589,8 @@ mod tests {
         )
         .unwrap();
         fs::write(input.path().join("aerial/service.json"), b"build-only").unwrap();
-        let mut location = Location::read(input.path()).unwrap();
-        location.write(output.path()).unwrap();
+        let mut location = location::location_read(input.path()).unwrap();
+        location::location_write(&location, output.path()).unwrap();
         for file in [
             "scene.pack",
             "aerial/tiles.txt",
@@ -595,12 +603,19 @@ mod tests {
             );
         }
         assert!(!output.path().join("aerial/service.json").exists());
-        assert_eq!(Location::read(output.path()).unwrap().media.aerial.len(), 3);
-        location.write(input.path()).unwrap();
+        assert_eq!(
+            location::location_read(output.path())
+                .unwrap()
+                .media
+                .aerial
+                .len(),
+            3
+        );
+        location::location_write(&location, input.path()).unwrap();
         location.media = Media::default();
         fs::write(output.path().join("imagery-trees.txt"), "stale").unwrap();
-        location.write(output.path()).unwrap();
-        let reread = Location::read(output.path()).unwrap();
+        location::location_write(&location, output.path()).unwrap();
+        let reread = location::location_read(output.path()).unwrap();
         assert!(reread.media.scene.is_none());
         assert!(reread.media.aerial.is_empty());
         assert!(!output.path().join("aerial/tile.rgb").exists());

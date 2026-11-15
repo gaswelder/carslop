@@ -1,8 +1,15 @@
 //! Procedural geometry for mapped street objects and linear scenery.
+
+use crate::chunks;
+use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{LineKind, ObjectKind};
+use crate::scene;
 use crate::scene::{Builder, Surface};
+use crate::street_surface;
+use crate::world;
 use crate::world::WorldLocation;
+use crate::world_raised_roads;
 use glam::Vec3;
 
 pub fn beam(b: &mut Builder, a: XYZ, c: XYZ, width: f32, surface: Surface) {
@@ -43,7 +50,7 @@ pub fn beam(b: &mut Builder, a: XYZ, c: XYZ, width: f32, surface: Surface) {
         [0, 3, 7, 4],
         [5, 6, 2, 1],
     ] {
-        b.quad(face.map(|i| p[i]), surface);
+        scene::quad(b, face.map(|i| p[i]), surface);
     }
 }
 fn cylinder(b: &mut Builder, x: f32, z: f32, radius: f32, bottom: f32, top: f32, surface: Surface) {
@@ -55,8 +62,13 @@ fn cylinder(b: &mut Builder, x: f32, z: f32, radius: f32, bottom: f32, top: f32,
             y,
             z: z + angle.sin() * radius,
         };
-        b.quad([p(c, bottom), p(a, bottom), p(a, top), p(c, top)], surface);
-        b.upward_quad(
+        scene::quad(
+            b,
+            [p(c, bottom), p(a, bottom), p(a, top), p(c, top)],
+            surface,
+        );
+        scene::upward_quad(
+            b,
             [
                 XYZ { x, y: top, z },
                 p(a, top),
@@ -68,16 +80,17 @@ fn cylinder(b: &mut Builder, x: f32, z: f32, radius: f32, bottom: f32, top: f32,
     }
 }
 pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
-    let metal = Surface::matte([0.28, 0.32, 0.32]);
-    let wood = Surface::matte([0.43, 0.31, 0.20]);
-    let stone = Surface::matte([0.66, 0.64, 0.57]);
-    for object in &city.map_details().objects {
+    let metal = scene::matte([0.28, 0.32, 0.32]);
+    let wood = scene::matte([0.43, 0.31, 0.20]);
+    let stone = scene::matte([0.66, 0.64, 0.57]);
+    for object in &world::map_details(city).objects {
         let mut local = Builder::default();
         let h = object.height;
         let w = object.width;
         match object.kind {
             ObjectKind::Bench => {
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w / 2.,
                         y: 0.40,
@@ -90,7 +103,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                     },
                     wood,
                 );
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w / 2.,
                         y: 0.53,
@@ -104,7 +118,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                     wood,
                 );
                 for x in [-w * 0.34, w * 0.34] {
-                    local.cuboid(
+                    scene::cuboid(
+                        &mut local,
                         XYZ {
                             x: x - 0.04,
                             y: 0.,
@@ -120,7 +135,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 }
             }
             ObjectKind::Bin => {
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w / 2.,
                         y: 0.,
@@ -131,9 +147,10 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         y: h,
                         z: w / 2.,
                     },
-                    Surface::matte([0.18, 0.29, 0.22]),
+                    scene::matte([0.18, 0.29, 0.22]),
                 );
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w * 0.56,
                         y: h,
@@ -165,7 +182,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         0.07,
                         metal,
                     );
-                    local.cuboid(
+                    scene::cuboid(
+                        &mut local,
                         XYZ {
                             x: -0.16,
                             y: h - 0.18,
@@ -176,7 +194,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                             y: h,
                             z: 1.0,
                         },
-                        Surface::matte([0.88, 0.88, 0.70]),
+                        scene::matte([0.88, 0.88, 0.70]),
                     );
                 } else {
                     beam(
@@ -197,7 +215,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 }
             }
             ObjectKind::Shelter => {
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w / 2. - 0.08,
                         y: h - 0.12,
@@ -216,7 +235,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                     }
                 }
                 if detailed {
-                    local.cuboid(
+                    scene::cuboid(
+                        &mut local,
                         XYZ {
                             x: -w / 2.,
                             y: 0.25,
@@ -233,7 +253,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         },
                     );
                 }
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w * 0.35,
                         y: 0.42,
@@ -249,7 +270,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
             }
             ObjectKind::Bollard => {
                 if w > 0.6 {
-                    local.cuboid(
+                    scene::cuboid(
+                        &mut local,
                         XYZ {
                             x: -w / 2.,
                             y: 0.,
@@ -271,7 +293,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         w * 0.52,
                         h * 0.72,
                         h * 0.87,
-                        Surface::matte([0.92, 0.91, 0.82]),
+                        scene::matte([0.92, 0.91, 0.82]),
                     );
                 }
             }
@@ -372,7 +394,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 }
             }
             ObjectKind::Monument => {
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w * 0.6,
                         y: 0.,
@@ -398,7 +421,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 );
             }
             ObjectKind::Planter => {
-                local.cuboid(
+                scene::cuboid(
+                    &mut local,
                     XYZ {
                         x: -w / 2.,
                         y: 0.,
@@ -418,7 +442,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                     w * 0.39,
                     h,
                     h + w * 0.4,
-                    Surface::matte([0.24, 0.37, 0.17]),
+                    scene::matte([0.24, 0.37, 0.17]),
                 );
             }
             ObjectKind::TurnSign => {
@@ -428,7 +452,8 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 for i in 0..16 {
                     let a = i as f32 * std::f32::consts::TAU / 16.;
                     let c = (i + 1) as f32 * std::f32::consts::TAU / 16.;
-                    local.triangle(
+                    scene::emit_triangle(
+                        &mut local,
                         [
                             XYZ {
                                 x: 0.,
@@ -446,14 +471,14 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                                 z: 0.04,
                             },
                         ],
-                        Surface::matte(if only {
+                        scene::matte(if only {
                             [0.10, 0.27, 0.65]
                         } else {
                             [0.91, 0.90, 0.83]
                         }),
                     );
                 }
-                let ink = Surface::matte(if only {
+                let ink = scene::matte(if only {
                     [0.95, 0.95, 0.91]
                 } else {
                     [0.05, 0.06, 0.06]
@@ -511,7 +536,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                             z: 0.08,
                         },
                         0.04,
-                        Surface::matte([0.79, 0.05, 0.03]),
+                        scene::matte([0.79, 0.05, 0.03]),
                     );
                 }
             }
@@ -520,9 +545,9 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
             x: object.position[0],
             z: object.position[1],
         };
-        let y = city.height(origin)
-            + city.road_rise(origin)
-            + city.paving_height(origin).unwrap_or(0.0);
+        let y = world::height(city, origin)
+            + world_raised_roads::road_rise(city, origin)
+            + street_surface::paving_height(city, origin).unwrap_or(0.0);
         let (sin, cos) = object.angle.sin_cos();
         for triangle in local.vertices.chunks_exact(3) {
             let vertices = std::array::from_fn(|i| {
@@ -538,13 +563,13 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 v
             });
             if let Some(chunks) = &mut b.chunks {
-                chunks.push(vertices);
+                chunks::push(chunks, vertices);
             } else {
                 b.vertices.extend(vertices);
             }
         }
     }
-    for line in &city.map_details().lines {
+    for line in &world::map_details(city).lines {
         for pair in line.points.windows(2) {
             let a = XZ {
                 x: pair[0][0],
@@ -555,9 +580,10 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                 z: pair[1][1],
             };
             if line.kind == LineKind::Cliff {
-                let a = a.at_height(city.height(a));
-                let c = c.at_height(city.height(c));
-                b.quad(
+                let a = geometry::at_height(a, world::height(city, a));
+                let c = geometry::at_height(c, world::height(city, c));
+                scene::quad(
+                    b,
                     [
                         XYZ {
                             y: c.y - line.height,
@@ -570,7 +596,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         a,
                         c,
                     ],
-                    Surface::matte([0.52, 0.50, 0.43]),
+                    scene::matte([0.52, 0.50, 0.43]),
                 );
             } else {
                 let length = (c.x - a.x).hypot(c.z - a.z);
@@ -583,8 +609,11 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                             x: a.x + (c.x - a.x) * t - (c.z - a.z) / length * cable * 0.5,
                             z: a.z + (c.z - a.z) * t + (c.x - a.x) / length * cable * 0.5,
                         };
-                        p.at_height(
-                            city.height(a) * (1. - t) + city.height(c) * t + line.height
+                        geometry::at_height(
+                            p,
+                            world::height(city, a) * (1. - t)
+                                + world::height(city, c) * t
+                                + line.height
                                 - length.mul_add(0.035, 0.0).min(4.) * 4. * t * (1. - t),
                         )
                     };

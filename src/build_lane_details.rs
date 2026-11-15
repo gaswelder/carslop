@@ -1,4 +1,5 @@
 //! Explicit lane directions and roadside lane paint, clipped to the surveyed carriageway.
+
 use crate::build_details;
 use crate::build_surfaces;
 use crate::build_transport;
@@ -6,6 +7,7 @@ use crate::geometry;
 use crate::geometry::XZ;
 use crate::map_details::RoadSurface;
 use crate::osm;
+use crate::source_location;
 use crate::source_location::SourceLocation;
 use geo::{BooleanOps, MultiPolygon};
 
@@ -45,7 +47,7 @@ pub fn paint(
             continue;
         };
         if build_transport::grade(way) != 0
-            || build_details::road_surface(way.tag("surface")) == RoadSurface::Unpaved
+            || build_details::road_surface(osm::tag(way, "surface")) == RoadSurface::Unpaved
         {
             continue;
         }
@@ -55,9 +57,9 @@ pub fn paint(
             (-1., "cycleway:left", "parking:lane:left"),
             (1., "cycleway:right", "parking:lane:right"),
         ] {
-            if way.tag(key) == "lane"
-                || way.tag("cycleway:both") == "lane"
-                || way.tag("cycleway") == "lane"
+            if osm::tag(way, key) == "lane"
+                || osm::tag(way, "cycleway:both") == "lane"
+                || osm::tag(way, "cycleway") == "lane"
             {
                 pieces.push(strip(
                     path,
@@ -70,8 +72,10 @@ pub fn paint(
             } else {
                 "parking:right"
             };
-            if matches!(way.tag(old), "parallel" | "diagonal" | "perpendicular")
-                || matches!(way.tag(key), "lane" | "street_side")
+            if matches!(
+                osm::tag(way, old),
+                "parallel" | "diagonal" | "perpendicular"
+            ) || matches!(osm::tag(way, key), "lane" | "street_side")
             {
                 let offset = side * (line.road_width_start_meters / 2. - 2.);
                 let mut station = 3.;
@@ -94,10 +98,10 @@ pub fn paint(
             } else {
                 "turn:lanes:forward"
             };
-            let tag = if way.tag(key).is_empty() && line.direction != 0 {
-                way.tag("turn:lanes")
+            let tag = if osm::tag(way, key).is_empty() && line.direction != 0 {
+                osm::tag(way, "turn:lanes")
             } else {
-                way.tag(key)
+                osm::tag(way, key)
             };
             if tag.is_empty() {
                 continue;
@@ -110,7 +114,7 @@ pub fn paint(
             let Some(end) = terminal
                 .and_then(|id| source.nodes.get(id))
                 .and_then(|n| n.coord)
-                .map(|p| map.metres(p))
+                .map(|p| source_location::metres(map, p))
             else {
                 continue;
             };

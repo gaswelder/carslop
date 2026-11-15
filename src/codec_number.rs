@@ -6,10 +6,9 @@ pub struct Number<T> {
     value: T,
     precision: Option<usize>,
 }
-impl<T> Number<T> {
-    pub fn new(value: T, precision: Option<usize>) -> Self {
-        Self { value, precision }
-    }
+
+pub fn new<T>(value: T, precision: Option<usize>) -> Number<T> {
+    Number::<T> { value, precision }
 }
 
 impl<T: fmt::Display> fmt::Display for Number<T> {

@@ -48,61 +48,53 @@ impl Default for Sidewalks {
     }
 }
 
-impl<T: Copy> SourceRoad<T> {
-    pub fn new(ends: [usize; 2], width: T) -> Self {
-        Self {
-            ends,
-            osm_way_id: None,
-            road_width_start_meters: width,
-            direction: 0,
-            kind: 1,
-            lanes: 2,
-            sidewalks: Sidewalks::default(),
-        }
+pub fn new<T: Copy>(ends: [usize; 2], width: T) -> SourceRoad<T> {
+    SourceRoad::<T> {
+        ends,
+        osm_way_id: None,
+        road_width_start_meters: width,
+        direction: 0,
+        kind: 1,
+        lanes: 2,
+        sidewalks: Sidewalks::default(),
     }
 }
 
-impl<T: Default> SourceLocation<T> {
-    pub fn empty() -> Self {
-        Self {
-            bounding_box: BoundingBoxXZ::default(),
-            origin: None,
-            boundary: None,
-            road_nodes: Vec::new(),
-            road_lines: Vec::new(),
-            buildings: Vec::new(),
-            entrances: Vec::new(),
-        }
+pub fn empty<T: Default>() -> SourceLocation<T> {
+    SourceLocation::<T> {
+        bounding_box: BoundingBoxXZ::default(),
+        origin: None,
+        boundary: None,
+        road_nodes: Vec::new(),
+        road_lines: Vec::new(),
+        buildings: Vec::new(),
+        entrances: Vec::new(),
     }
 }
 
-impl SourceLocation<f64> {
-    /// Project a geographic position into local metres; requires a geographic origin.
-    pub fn metres(&self, p: LatLon) -> XZ {
-        let origin = self
-            .origin
-            .expect("geographic projection requires a location origin");
-        XZ {
-            x: (p.lon - origin.lon).to_radians() * 6371000.0 * origin.lat.to_radians().cos(),
-            z: -(p.lat - origin.lat).to_radians() * 6371000.0,
-        }
-    }
-    pub fn contains(&self, p: XZ) -> bool {
-        p.x >= self.bounding_box.min.x
-            && p.x <= self.bounding_box.max.x
-            && p.z >= self.bounding_box.min.z
-            && p.z <= self.bounding_box.max.z
-            && self
-                .boundary
-                .as_ref()
-                .is_none_or(|b| b.intersects(&Point::new(p.x, p.z)))
+/// Project a geographic position into local metres; requires a geographic origin.
+pub fn metres(source_location: &SourceLocation<f64>, p: LatLon) -> XZ {
+    let origin = source_location
+        .origin
+        .expect("geographic projection requires a location origin");
+    XZ {
+        x: (p.lon - origin.lon).to_radians() * 6371000.0 * origin.lat.to_radians().cos(),
+        z: -(p.lat - origin.lat).to_radians() * 6371000.0,
     }
 }
+pub fn contains(source_location: &SourceLocation<f64>, p: XZ) -> bool {
+    p.x >= source_location.bounding_box.min.x
+        && p.x <= source_location.bounding_box.max.x
+        && p.z >= source_location.bounding_box.min.z
+        && p.z <= source_location.bounding_box.max.z
+        && source_location
+            .boundary
+            .as_ref()
+            .is_none_or(|b| b.intersects(&Point::new(p.x, p.z)))
+}
 
-impl SourceLocation<f32> {
-    pub fn parse(text: &str) -> Result<Self, String> {
-        codec_city::parse(text)
-    }
+pub fn parse(text: &str) -> Result<SourceLocation<f32>, String> {
+    codec_city::parse(text)
 }
 
 /// Compatibility for old asset folders; build inputs never enter stored Location.

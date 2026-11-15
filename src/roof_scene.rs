@@ -1,8 +1,11 @@
 //! Mapped roof profiles clipped to the surveyed footprint, including holes.
+
 use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::map_details::{BuildingStyle, RoofShape};
+use crate::scene;
 use crate::scene::{Builder, Surface};
+use crate::world;
 use crate::world::Building;
 use geo::{BooleanOps, BoundingRect, MultiPolygon, TriangulateEarcut};
 
@@ -104,24 +107,24 @@ pub fn build(
                     let p = XZ { x: p.x, z: p.y };
                     world(p, profile(p))
                 });
-                b.upward_quad([p[0], p[1], p[2], p[0]], roof);
+                scene::upward_quad(b, [p[0], p[1], p[2], p[0]], roof);
             }
         }
     }
-    for ring in building.rings() {
+    for ring in world::rings(building) {
         for i in 0..ring.len() {
             let a = local(ring[i]);
             let c = local(ring[(i + 1) % ring.len()]);
             let mut stations = vec![0.0, 1.0];
             for axis in 0..2 {
-                let delta = c.component(axis) - a.component(axis);
+                let delta = geometry::xz_component(c, axis) - geometry::xz_component(a, axis);
                 if delta.abs() < 0.00000001 {
                     continue;
                 }
                 for step in 1..cells {
-                    let line =
-                        min.component(axis) + size.component(axis) * step as f64 / cells as f64;
-                    let station = (line - a.component(axis)) / delta;
+                    let line = geometry::xz_component(min, axis)
+                        + geometry::xz_component(size, axis) * step as f64 / cells as f64;
+                    let station = (line - geometry::xz_component(a, axis)) / delta;
                     if station > 0. && station < 1. {
                         stations.push(station);
                     }
@@ -132,7 +135,8 @@ pub fn build(
             for pair in stations.windows(2) {
                 let start = geometry::add(a, geometry::mul(geometry::sub(c, a), pair[0]));
                 let end = geometry::add(a, geometry::mul(geometry::sub(c, a), pair[1]));
-                b.quad(
+                scene::quad(
+                    b,
                     [
                         world(end, base),
                         world(start, base),
@@ -148,6 +152,8 @@ pub fn build(
 
 #[cfg(test)]
 mod tests {
+    use crate::scene;
+
     use super::*;
     #[test]
     fn roof_profiles_keep_total_height_and_courtyard_openings() {
@@ -190,8 +196,8 @@ mod tests {
                 &mut builder,
                 &building,
                 &style,
-                Surface::matte([0.8, 0.2, 0.2]),
-                Surface::matte([0.5; 3]),
+                scene::matte([0.8, 0.2, 0.2]),
+                scene::matte([0.5; 3]),
             );
             assert!(!builder.vertices.is_empty());
             let max = builder

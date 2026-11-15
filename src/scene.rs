@@ -4,11 +4,15 @@ use crate::city;
 use crate::city_scene;
 use crate::detail_scene;
 use crate::elevation;
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::landscape;
 use crate::scene_archive;
+use crate::street_surface;
 use crate::transport_scene;
 use crate::world;
+use crate::world_buildings;
+use crate::world_roads;
 use crate::{asset_car, track, world::Material};
 use std::f32::consts::TAU;
 use std::ops::Range;
@@ -31,18 +35,16 @@ pub struct Surface {
     pub material: [f32; 2],
 }
 
-impl Surface {
-    pub fn matte(color: [f32; 3]) -> Self {
-        Self {
-            color,
-            material: [0.0, 0.0],
-        }
+pub fn matte(color: [f32; 3]) -> Surface {
+    Surface {
+        color,
+        material: [0.0, 0.0],
     }
-    pub fn road(color: [f32; 3]) -> Self {
-        Self {
-            color,
-            material: [-1.0, 0.0],
-        }
+}
+pub fn surface_road(color: [f32; 3]) -> Surface {
+    Surface {
+        color,
+        material: [-1.0, 0.0],
     }
 }
 
@@ -52,105 +54,107 @@ pub struct Builder {
     pub chunks: Option<chunks::ChunkBuilder>,
 }
 
-impl Builder {
-    pub fn triangle(&mut self, points: [XYZ; 3], surface: Surface) {
-        let a: XYZ = XYZ::from_fn(|i| points[1].component(i) - points[0].component(i));
-        let b: XYZ = XYZ::from_fn(|i| points[2].component(i) - points[0].component(i));
-        let n = XYZ {
-            x: a.y * b.z - a.z * b.y,
-            y: a.z * b.x - a.x * b.z,
-            z: a.x * b.y - a.y * b.x,
-        };
-        let length = n.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if length < 0.00001 {
-            return;
-        }
-        let normal = n.map(|x| x / length);
-        let vertices = points.map(|position| Vertex {
-            position: (position).into(),
-            normal: normal.into(),
-            color: surface.color,
-            material: surface.material,
-        });
-        if let Some(chunks) = &mut self.chunks {
-            chunks.push(vertices);
-        } else {
-            self.vertices.extend(vertices);
-        }
+pub fn emit_triangle(builder: &mut Builder, points: [XYZ; 3], surface: Surface) {
+    let a: XYZ = geometry::xyz_from_fn(|i| {
+        geometry::xyz_component(points[1], i) - geometry::xyz_component(points[0], i)
+    });
+    let b: XYZ = geometry::xyz_from_fn(|i| {
+        geometry::xyz_component(points[2], i) - geometry::xyz_component(points[0], i)
+    });
+    let n = XYZ {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x,
+    };
+    let length = geometry::iter(&n).map(|x| x * x).sum::<f32>().sqrt();
+    if length < 0.00001 {
+        return;
     }
-
-    pub fn quad(&mut self, p: [XYZ; 4], surface: Surface) {
-        self.triangle([p[0], p[1], p[2]], surface);
-        self.triangle([p[0], p[2], p[3]], surface);
+    let normal = geometry::xyz_map(n, |x| x / length);
+    let vertices = points.map(|position| Vertex {
+        position: (position).into(),
+        normal: normal.into(),
+        color: surface.color,
+        material: surface.material,
+    });
+    if let Some(chunks) = &mut builder.chunks {
+        chunks::push(chunks, vertices);
+    } else {
+        builder.vertices.extend(vertices);
     }
+}
 
-    pub fn upward_quad(&mut self, p: [XYZ; 4], surface: Surface) {
-        // Offset edges can fold locally where piecewise track tangents change.
-        // Orient each triangle separately so road tops never acquire underside lighting.
-        for mut triangle in [[p[0], p[1], p[2]], [p[0], p[2], p[3]]] {
-            let a = triangle[0];
-            let c = triangle[1];
-            let d = triangle[2];
-            if (c.z - a.z) * (d.x - a.x) - (c.x - a.x) * (d.z - a.z) < 0.0 {
-                triangle.swap(1, 2);
-            }
-            self.triangle(triangle, surface);
+pub fn quad(builder: &mut Builder, p: [XYZ; 4], surface: Surface) {
+    emit_triangle(builder, [p[0], p[1], p[2]], surface);
+    emit_triangle(builder, [p[0], p[2], p[3]], surface);
+}
+
+pub fn upward_quad(builder: &mut Builder, p: [XYZ; 4], surface: Surface) {
+    // Offset edges can fold locally where piecewise track tangents change.
+    // Orient each triangle separately so road tops never acquire underside lighting.
+    for mut triangle in [[p[0], p[1], p[2]], [p[0], p[2], p[3]]] {
+        let a = triangle[0];
+        let c = triangle[1];
+        let d = triangle[2];
+        if (c.z - a.z) * (d.x - a.x) - (c.x - a.x) * (d.z - a.z) < 0.0 {
+            triangle.swap(1, 2);
         }
+        emit_triangle(builder, triangle, surface);
     }
+}
 
-    pub fn cuboid(&mut self, min: XYZ, max: XYZ, surface: Surface) {
-        let p = [
-            XYZ {
-                x: min.x,
-                y: min.y,
-                z: min.z,
-            },
-            XYZ {
-                x: max.x,
-                y: min.y,
-                z: min.z,
-            },
-            XYZ {
-                x: max.x,
-                y: max.y,
-                z: min.z,
-            },
-            XYZ {
-                x: min.x,
-                y: max.y,
-                z: min.z,
-            },
-            XYZ {
-                x: min.x,
-                y: min.y,
-                z: max.z,
-            },
-            XYZ {
-                x: max.x,
-                y: min.y,
-                z: max.z,
-            },
-            XYZ {
-                x: max.x,
-                y: max.y,
-                z: max.z,
-            },
-            XYZ {
-                x: min.x,
-                y: max.y,
-                z: max.z,
-            },
-        ];
-        for [a, b, c, d] in [
-            [3, 2, 1, 0],
-            [5, 6, 7, 4],
-            [1, 5, 4, 0],
-            [7, 6, 2, 3],
-            [4, 7, 3, 0],
-            [2, 6, 5, 1],
-        ] {
-            self.quad([(p[a]), (p[b]), (p[c]), (p[d])], surface);
-        }
+pub fn cuboid(builder: &mut Builder, min: XYZ, max: XYZ, surface: Surface) {
+    let p = [
+        XYZ {
+            x: min.x,
+            y: min.y,
+            z: min.z,
+        },
+        XYZ {
+            x: max.x,
+            y: min.y,
+            z: min.z,
+        },
+        XYZ {
+            x: max.x,
+            y: max.y,
+            z: min.z,
+        },
+        XYZ {
+            x: min.x,
+            y: max.y,
+            z: min.z,
+        },
+        XYZ {
+            x: min.x,
+            y: min.y,
+            z: max.z,
+        },
+        XYZ {
+            x: max.x,
+            y: min.y,
+            z: max.z,
+        },
+        XYZ {
+            x: max.x,
+            y: max.y,
+            z: max.z,
+        },
+        XYZ {
+            x: min.x,
+            y: max.y,
+            z: max.z,
+        },
+    ];
+    for [a, b, c, d] in [
+        [3, 2, 1, 0],
+        [5, 6, 7, 4],
+        [1, 5, 4, 0],
+        [7, 6, 2, 3],
+        [4, 7, 3, 0],
+        [2, 6, 5, 1],
+    ] {
+        quad(builder, [(p[a]), (p[b]), (p[c]), (p[d])], surface);
     }
 }
 
@@ -165,7 +169,7 @@ pub fn build(
     track: &track::WorldLocation,
     cars: &[std::sync::Arc<asset_car::CarSpec>],
 ) -> Geometry {
-    if track.has_compiled_roads() {
+    if street_surface::has_compiled_roads(track) {
         let city = track;
         let mut b = Builder::default();
         city_scene::storefront_signs(&mut b, city);
@@ -193,7 +197,7 @@ pub fn city_layer_spooled(
     boundary: Option<&geo::MultiPolygon<f64>>,
 ) -> std::io::Result<scene_archive::Spool> {
     let mut b = Builder {
-        chunks: Some(chunks::ChunkBuilder::spooled(temporary_directory)?),
+        chunks: Some(chunks::spooled(temporary_directory)?),
         ..Builder::default()
     };
     if layer == 0 {
@@ -206,7 +210,7 @@ pub fn city_layer_spooled(
         barrier_scene::build(&mut b, city, layer == 1);
         detail_scene::build(&mut b, city, layer == 1);
     }
-    b.chunks.unwrap().finish_spooled()
+    chunks::finish_spooled(b.chunks.unwrap())
 }
 
 fn finish(mut b: Builder, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geometry {
@@ -247,26 +251,28 @@ fn finish(mut b: Builder, cars: &[std::sync::Arc<asset_car::CarSpec>]) -> Geomet
 }
 
 fn terrain_height(track: &track::WorldLocation, x: f32, z: f32) -> f32 {
-    track.terrain_height(XZ { x, z })
+    world_location_terrain_height(track, XZ { x, z })
 }
 
 fn terrain(b: &mut Builder, track: &track::WorldLocation) {
-    for triangle in track.ground_triangles() {
-        let color = triangle.material.color();
+    for triangle in world::ground_triangles(track) {
+        let color = color(triangle.material);
         let points = triangle
             .points
-            .map(|p| p.at_height(track.terrain_height(p) - 0.02));
-        b.upward_quad(
+            .map(|p| geometry::at_height(p, world_location_terrain_height(track, p) - 0.02));
+        upward_quad(
+            b,
             [(points[0]), (points[1]), (points[2]), (points[0])],
-            Surface::road(color),
+            surface_road(color),
         );
     }
 }
 
 fn water(b: &mut Builder, track: &track::WorldLocation) {
     let sea = elevation::SEA_LEVEL;
-    let BoundingBoxXZ { min, max } = track.terrain_bounds();
-    b.quad(
+    let BoundingBoxXZ { min, max } = world::terrain_bounds(track);
+    quad(
+        b,
         [
             XYZ {
                 x: min.x - 700.0,
@@ -297,8 +303,8 @@ fn water(b: &mut Builder, track: &track::WorldLocation) {
 }
 
 fn perimeter_fence(b: &mut Builder, track: &track::WorldLocation) {
-    let BoundingBoxXZ { min, max } = track.terrain_bounds();
-    let field = track.elevation().expect("authored track terrain");
+    let BoundingBoxXZ { min, max } = world::terrain_bounds(track);
+    let field = world::elevation(track).expect("authored track terrain");
     // Fence only the outer terrain perimeter, leaving both verges open.
     let corners = [
         XZ { x: min.x, z: min.z },
@@ -311,13 +317,13 @@ fn perimeter_fence(b: &mut Builder, track: &track::WorldLocation) {
         material: [0.0, 0.2],
     };
     for edge in 0..4 {
-        for (i, pair) in field
-            .segment(corners[edge], corners[(edge + 1) % 4])
+        for (i, pair) in elevation::segment(field, corners[edge], corners[(edge + 1) % 4])
             .windows(2)
             .enumerate()
         {
             let [a, c] = [pair[0], pair[1]];
-            b.quad(
+            quad(
+                b,
                 [
                     XYZ {
                         x: a.x,
@@ -343,7 +349,8 @@ fn perimeter_fence(b: &mut Builder, track: &track::WorldLocation) {
                 metal,
             );
             if i % 3 == 0 {
-                b.cuboid(
+                cuboid(
+                    b,
                     XYZ {
                         x: a.x - 0.06,
                         y: a.y - 0.02,
@@ -368,20 +375,25 @@ fn road_quad(
     lift: f32,
     surface: Surface,
 ) {
-    if let Some(field) = track.elevation() {
+    if let Some(field) = world::elevation(track) {
         for indices in [[0, 1, 2], [0, 2, 3]] {
-            field.drape(indices.map(|i| points[i].xz()), |mut triangle| {
-                for point in &mut triangle {
-                    point.y += lift;
-                }
-                b.upward_quad(
-                    [triangle[0], triangle[1], triangle[2], triangle[0]],
-                    surface,
-                );
-            });
+            elevation::drape(
+                field,
+                indices.map(|i| geometry::xz(points[i])),
+                |mut triangle| {
+                    for point in &mut triangle {
+                        point.y += lift;
+                    }
+                    upward_quad(
+                        b,
+                        [triangle[0], triangle[1], triangle[2], triangle[0]],
+                        surface,
+                    );
+                },
+            );
         }
     } else {
-        b.upward_quad(points, surface);
+        upward_quad(b, points, surface);
     }
 }
 
@@ -390,14 +402,20 @@ fn road(b: &mut Builder, track: &track::WorldLocation) {
 }
 
 fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
-    let count = (track.sampling_length() / 0.7).ceil() as usize;
+    let count = (track::sampling_length(track) / 0.7).ceil() as usize;
     for i in 0..count {
-        let a = track.at_distance(track.sampling_length() * i as f32 / count as f32);
-        let c = track.at_distance(track.sampling_length() * (i + 1) as f32 / count as f32);
+        let a = track::at_distance(
+            track,
+            track::sampling_length(track) * i as f32 / count as f32,
+        );
+        let c = track::at_distance(
+            track,
+            track::sampling_length(track) * (i + 1) as f32 / count as f32,
+        );
         let half_a = a.width * 0.5;
         let half_c = c.width * 0.5;
         let point = |s: track::RoadSample, offset: f32, height: f32| {
-            let n = s.normal();
+            let n = world::normal(s);
             XYZ {
                 x: s.point.x + n.x * offset,
                 y: s.point.y + height,
@@ -415,7 +433,7 @@ fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
                     (point(c, edge_c.x, y)),
                 ],
                 y,
-                Surface::road(color),
+                surface_road(color),
             );
         };
         strip(
@@ -520,9 +538,9 @@ fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
     if coastal {
         return;
     }
-    let start = track.at_distance(0.0);
+    let start = track::at_distance(track, 0.0);
     let half = start.width * 0.5;
-    let n = start.normal();
+    let n = world::normal(start);
     for row in 0..2 {
         for col in 0..12 {
             let point = |x: f32, z: f32| {
@@ -544,7 +562,7 @@ fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
                     (point(0.0, 1.0)),
                 ],
                 0.09,
-                Surface::road(if (row + col) % 2 == 0 {
+                surface_road(if (row + col) % 2 == 0 {
                     [0.95; 3]
                 } else {
                     [0.04; 3]
@@ -556,7 +574,8 @@ fn bake_road(b: &mut Builder, track: &track::WorldLocation, coastal: bool) {
 
 fn tree(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32, scale: f32) {
     let y = terrain_height(track, x, z) - 0.15;
-    b.cuboid(
+    cuboid(
+        b,
         XYZ {
             x: x - 0.14,
             y,
@@ -567,7 +586,7 @@ fn tree(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32, scale: f3
             y: y + 2.2 * scale,
             z: z + 0.14,
         },
-        Surface::matte([0.28, 0.22, 0.14]),
+        matte([0.28, 0.22, 0.14]),
     );
     for layer in 0..3 {
         let base = y + (1.1 + layer as f32 * 0.8) * scale;
@@ -575,7 +594,8 @@ fn tree(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32, scale: f3
         for i in 0..7 {
             let a = i as f32 * TAU / 7.0;
             let c = (i + 1) as f32 * TAU / 7.0;
-            b.triangle(
+            emit_triangle(
+                b,
                 [
                     XYZ {
                         x: x + radius * a.cos(),
@@ -593,7 +613,7 @@ fn tree(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32, scale: f3
                         z: z + radius * c.sin(),
                     },
                 ],
-                Surface::matte([
+                matte([
                     0.12 + layer as f32 * 0.025,
                     0.27 + layer as f32 * 0.025,
                     0.16,
@@ -609,9 +629,10 @@ fn house(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32) {
         .flat_map(|dx| [-2.0, 2.0].map(|dz| terrain_height(track, x + dx, z + dz)))
         .fold(f32::INFINITY, f32::min)
         - 0.15;
-    let wall = Surface::matte([0.78, 0.72, 0.55]);
-    let roof = Surface::matte([0.46, 0.23, 0.15]);
-    b.cuboid(
+    let wall = matte([0.78, 0.72, 0.55]);
+    let roof = matte([0.46, 0.23, 0.15]);
+    cuboid(
+        b,
         XYZ {
             x: x - 2.0,
             y,
@@ -656,11 +677,12 @@ fn house(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32) {
             z: z + 2.3,
         },
     ];
-    b.quad([(p[3]), (p[5]), (p[2]), (p[0])], roof);
-    b.quad([(p[5]), (p[4]), (p[1]), (p[2])], roof);
-    b.triangle([(p[2]), (p[1]), (p[0])], wall);
-    b.triangle([(p[4]), (p[5]), (p[3])], wall);
-    b.cuboid(
+    quad(b, [(p[3]), (p[5]), (p[2]), (p[0])], roof);
+    quad(b, [(p[5]), (p[4]), (p[1]), (p[2])], roof);
+    emit_triangle(b, [(p[2]), (p[1]), (p[0])], wall);
+    emit_triangle(b, [(p[4]), (p[5]), (p[3])], wall);
+    cuboid(
+        b,
         XYZ {
             x: x + 0.8,
             y: y + 3.5,
@@ -676,7 +698,8 @@ fn house(b: &mut Builder, track: &track::WorldLocation, x: f32, z: f32) {
     for dx in [-1.0, 1.0] {
         for side in [-1.0, 1.0] {
             let z = z + side * 2.015;
-            b.cuboid(
+            cuboid(
+                b,
                 XYZ {
                     x: x + dx - 0.34,
                     y: y + 1.6,
@@ -714,26 +737,27 @@ pub fn authored_scenery(track: &track::WorldLocation, coastal: bool) -> Authored
     };
     if coastal {
         for i in 0..18 {
-            let sample = track.at_distance(24.0 + i as f32 * 16.0);
-            let p = sample.lane_position(sample.width * 0.5 + 9.0 + (i % 3) as f32 * 1.5);
-            let nearest = track.project(p);
+            let sample = track::at_distance(track, 24.0 + i as f32 * 16.0);
+            let p = world::lane_position(sample, sample.width * 0.5 + 9.0 + (i % 3) as f32 * 1.5);
+            let nearest = world_roads::project(track, p);
             if (p.x - nearest.point.x).hypot(p.z - nearest.point.z) > nearest.width * 0.5 + 6.0 {
                 add_tree(p, 1.15 + (i % 4) as f32 * 0.13);
             }
         }
     } else {
         for i in 0..42 {
-            let sample = track.at_distance(i as f32 * track.sampling_length() / 42.0);
-            let p = sample.lane_position(
+            let sample = track::at_distance(track, i as f32 * track::sampling_length(track) / 42.0);
+            let p = world::lane_position(
+                sample,
                 sample.width * 0.5 + (7.5 - track::ROAD_WIDTH * 0.5) + (i % 3) as f32 * 1.5,
             );
-            let nearest = track.project(p);
+            let nearest = world_roads::project(track, p);
             if (p.x - nearest.point.x).hypot(p.z - nearest.point.z) > nearest.width * 0.5 + 2.1 {
                 add_tree(p, 0.8 + (i % 4) as f32 * 0.12);
             }
         }
         for [x, z] in [[-9.0, -7.0], [-4.0, 4.0], [8.0, 9.0], [11.0, -7.0]] {
-            let sample = track.project(XYZ { x, y: 0.0, z });
+            let sample = world_roads::project(track, XYZ { x, y: 0.0, z });
             if (x - sample.point.x).hypot(z - sample.point.z) > sample.width * 0.5 + 3.5 {
                 buildings.push(city::Building {
                     id: buildings.len() as u64 + 1,
@@ -768,10 +792,10 @@ pub fn authored_scenery(track: &track::WorldLocation, coastal: bool) -> Authored
 }
 
 fn scenery(b: &mut Builder, track: &track::WorldLocation) {
-    for t in track.trees() {
+    for t in world::trees(track) {
         tree(b, track, t.coords.x, t.coords.z, t.height_meters / 4.3);
     }
-    for building in track.buildings() {
+    for building in world_buildings::buildings(track) {
         house(
             b,
             track,
@@ -788,7 +812,8 @@ fn rocks(b: &mut Builder) {
         for i in 0..7 {
             let a = i as f32 * TAU / 7.0;
             let c = (i + 1) as f32 * TAU / 7.0;
-            b.triangle(
+            emit_triangle(
+                b,
                 [
                     XYZ {
                         x: x + a.cos() * 3.5,
@@ -806,7 +831,7 @@ fn rocks(b: &mut Builder) {
                         z: z + c.sin() * 3.5,
                     },
                 ],
-                Surface::matte([0.52, 0.49, 0.38]),
+                matte([0.52, 0.49, 0.38]),
             );
         }
     }
@@ -816,17 +841,17 @@ pub fn bake_authored_landscape(
     track: &track::WorldLocation,
     coastal: bool,
 ) -> Vec<world::Triangle> {
-    let field = track.elevation().expect("authored track terrain");
+    let field = world::elevation(track).expect("authored track terrain");
     let mut ground = Vec::new();
     for row in 0..field.rows - 1 {
         for col in 0..field.columns - 1 {
             let points = [
-                field.point(col, row),
-                field.point(col + 1, row),
-                field.point(col + 1, row + 1),
-                field.point(col, row + 1),
+                elevation::point(field, col, row),
+                elevation::point(field, col + 1, row),
+                elevation::point(field, col + 1, row + 1),
+                elevation::point(field, col, row + 1),
             ];
-            let material = if coastal && track.project(points[0]).offset < 0.0 {
+            let material = if coastal && world_roads::project(track, points[0]).offset < 0.0 {
                 Material::BareGround
             } else if (col + row * 2) % 5 == 0 {
                 Material::Park
@@ -864,45 +889,46 @@ pub fn authored_decorations(
     decorations(&mut builder, track, coastal);
     let mut chunks = chunks::ChunkBuilder::default();
     for triangle in builder.vertices.as_chunks::<3>().0 {
-        chunks.push(*triangle);
+        chunks::push(&mut chunks, *triangle);
     }
-    [chunks.finish(), Vec::new(), Vec::new()]
+    [chunks::finish(chunks), Vec::new(), Vec::new()]
 }
 
 fn car(b: &mut Builder, model: &std::sync::Arc<asset_car::CarSpec>) {
     b.vertices.extend_from_slice(&model.design.body);
 }
 
-impl Material {
-    pub fn color(self) -> [f32; 3] {
-        match self {
-            Self::Grass => [0.39, 0.48, 0.25],
-            Self::Park => [0.43, 0.53, 0.30],
-            Self::Scrub => [0.40, 0.46, 0.28],
-            Self::Asphalt => [0.25, 0.26, 0.26],
-            Self::Paving => [0.68, 0.69, 0.66],
-            Self::Concrete => [0.72, 0.73, 0.70],
-            Self::BareGround => [0.62, 0.58, 0.46],
-            Self::Sports => [0.29, 0.48, 0.35],
-            Self::Water => [0.21, 0.57, 0.67],
-            Self::Paint => [0.88, 0.88, 0.80],
-        }
+pub fn color(material: Material) -> [f32; 3] {
+    match material {
+        Material::Grass => [0.39, 0.48, 0.25],
+        Material::Park => [0.43, 0.53, 0.30],
+        Material::Scrub => [0.40, 0.46, 0.28],
+        Material::Asphalt => [0.25, 0.26, 0.26],
+        Material::Paving => [0.68, 0.69, 0.66],
+        Material::Concrete => [0.72, 0.73, 0.70],
+        Material::BareGround => [0.62, 0.58, 0.46],
+        Material::Sports => [0.29, 0.48, 0.35],
+        Material::Water => [0.21, 0.57, 0.67],
+        Material::Paint => [0.88, 0.88, 0.80],
     }
 }
 
-impl track::WorldLocation {
-    pub fn road_color(&self, p: XZ<f32>) -> [f32; 3] {
-        self.triangle_at(p, false)
-            .map_or([0.23, 0.25, 0.26], |t| t.material.color())
-    }
+pub fn road_color(world: &track::WorldLocation, p: XZ<f32>) -> [f32; 3] {
+    street_surface::world_location_triangle_at(world, p, false)
+        .map_or([0.23, 0.25, 0.26], |t| color(t.material))
+}
 
-    fn terrain_height(&self, position: XZ<f32>) -> f32 {
-        self.height(position) - 0.02
-    }
+fn world_location_terrain_height(world: &track::WorldLocation, position: XZ<f32>) -> f32 {
+    world::height(world, position) - 0.02
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::scene;
+    use crate::track;
+    use crate::world;
+    use crate::world_roads;
+
     use crate::chunks;
     use crate::test_support;
 
@@ -918,14 +944,17 @@ mod tests {
             .iter()
             .filter(|v| v.color == [0.23, 0.25, 0.26])
         {
-            let sample = track.project((vertex.position).into());
+            let sample = world_roads::project(&track, (vertex.position).into());
             assert!(sample.offset.abs() - sample.width * 0.5 < 0.03);
             assert!(
                 (vertex.position[1]
-                    - track.height(XZ {
-                        x: vertex.position[0],
-                        z: vertex.position[2]
-                    })
+                    - world::height(
+                        &track,
+                        XZ {
+                            x: vertex.position[0],
+                            z: vertex.position[2]
+                        }
+                    )
                     - 0.05)
                     .abs()
                     < 0.001
@@ -957,12 +986,12 @@ mod tests {
                 },
                 XYZ { x: x, y: 0., z: 2. },
             ];
-            let surface = super::Surface::matte([0.2, 0.4, 0.2]);
-            regular.triangle(points, surface);
-            streamed.triangle(points, surface);
+            let surface = scene::matte([0.2, 0.4, 0.2]);
+            scene::emit_triangle(&mut regular, points, surface);
+            scene::emit_triangle(&mut streamed, points, surface);
         }
         assert!(streamed.vertices.is_empty());
-        let got = streamed.chunks.unwrap().finish();
+        let got = chunks::finish(streamed.chunks.unwrap());
         let expected = test_support::partition(regular.vertices);
         assert_eq!(got.len(), expected.len());
         for (a, b) in got.iter().zip(&expected) {
@@ -975,7 +1004,7 @@ mod tests {
 
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
-        let route = test_support::scenic_id().try_track().unwrap();
+        let route = track::try_track(&test_support::scenic_id()).unwrap();
         let geometry = build(&route, &test_support::cars());
         assert!(
             geometry.world_count > 100_000 && geometry.world_count < 1_800_000,
@@ -994,10 +1023,13 @@ mod tests {
                 assert!(v.normal[1] > 0.9);
                 assert!(
                     (v.position[1]
-                        - route.height(XZ {
-                            x: v.position[0],
-                            z: v.position[2]
-                        })
+                        - world::height(
+                            &route,
+                            XZ {
+                                x: v.position[0],
+                                z: v.position[2]
+                            }
+                        )
                         - 0.05)
                         .abs()
                         < 0.001

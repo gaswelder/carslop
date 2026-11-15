@@ -14,17 +14,15 @@ pub struct ContactShadow {
     pub axes: [f32; 4],
 }
 
-impl ContactShadow {
-    pub fn new(car: &Vehicle) -> Self {
-        let wheel = car.spec.design.mounts[0];
-        Self {
-            origin: car.position,
-            axes: [
-                car.heading.sin(),
-                car.heading.cos(),
-                wheel.x.abs() + 0.45,
-                car.spec.wheelbase * 0.5 + 1.05,
-            ],
-        }
+pub fn new(car: &Vehicle) -> ContactShadow {
+    let wheel = car.spec.design.mounts[0];
+    ContactShadow {
+        origin: car.position,
+        axes: [
+            car.heading.sin(),
+            car.heading.cos(),
+            wheel.x.abs() + 0.45,
+            car.spec.wheelbase * 0.5 + 1.05,
+        ],
     }
 }

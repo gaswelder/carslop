@@ -9,41 +9,39 @@ pub struct XZ<T = f64> {
     pub z: T, // Southward coordinate or displacement in metres.
 }
 
-impl<T: Copy> XZ<T> {
-    pub fn from_fn(mut f: impl FnMut(usize) -> T) -> Self {
-        Self { x: f(0), z: f(1) }
-    }
+pub fn xz_from_fn<T: Copy>(mut f: impl FnMut(usize) -> T) -> XZ<T> {
+    XZ::<T> { x: f(0), z: f(1) }
+}
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        [&mut self.x, &mut self.z].into_iter()
-    }
+pub fn xz_iter_mut<T: Copy>(point: &mut XZ<T>) -> impl Iterator<Item = &mut T> {
+    [&mut point.x, &mut point.z].into_iter()
+}
 
-    pub fn component(self, axis: usize) -> T {
-        match axis {
-            0 => self.x,
-            1 => self.z,
-            _ => panic!("XZ axis out of bounds: {axis}"),
-        }
+pub fn xz_component<T: Copy>(point: XZ<T>, axis: usize) -> T {
+    match axis {
+        0 => point.x,
+        1 => point.z,
+        _ => panic!("XZ axis out of bounds: {axis}"),
     }
-    pub fn component_mut(&mut self, axis: usize) -> &mut T {
-        match axis {
-            0 => &mut self.x,
-            1 => &mut self.z,
-            _ => panic!("XZ axis out of bounds: {axis}"),
-        }
+}
+pub fn xz_component_mut<T: Copy>(point: &mut XZ<T>, axis: usize) -> &mut T {
+    match axis {
+        0 => &mut point.x,
+        1 => &mut point.z,
+        _ => panic!("XZ axis out of bounds: {axis}"),
     }
-    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> XZ<U> {
-        XZ {
-            x: f(self.x),
-            z: f(self.z),
-        }
+}
+pub fn xz_map<T: Copy, U>(point: XZ<T>, mut f: impl FnMut(T) -> U) -> XZ<U> {
+    XZ {
+        x: f(point.x),
+        z: f(point.z),
     }
-    pub fn at_height(self, y: T) -> XYZ<T> {
-        XYZ {
-            x: self.x,
-            y,
-            z: self.z,
-        }
+}
+pub fn at_height<T: Copy>(point: XZ<T>, y: T) -> XYZ<T> {
+    XYZ {
+        x: point.x,
+        y,
+        z: point.z,
     }
 }
 
@@ -63,49 +61,47 @@ pub struct XYZ<T = f32> {
     pub z: T,
 }
 
-impl<T: Copy> XYZ<T> {
-    pub fn from_fn(mut f: impl FnMut(usize) -> T) -> Self {
-        Self {
-            x: f(0),
-            y: f(1),
-            z: f(2),
-        }
+pub fn xyz_from_fn<T: Copy>(mut f: impl FnMut(usize) -> T) -> XYZ<T> {
+    XYZ::<T> {
+        x: f(0),
+        y: f(1),
+        z: f(2),
     }
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        [&self.x, &self.y, &self.z].into_iter()
-    }
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        [&mut self.x, &mut self.y, &mut self.z].into_iter()
-    }
+}
+pub fn iter<T: Copy>(point: &XYZ<T>) -> impl Iterator<Item = &T> {
+    [&point.x, &point.y, &point.z].into_iter()
+}
+pub fn xyz_iter_mut<T: Copy>(point: &mut XYZ<T>) -> impl Iterator<Item = &mut T> {
+    [&mut point.x, &mut point.y, &mut point.z].into_iter()
+}
 
-    pub fn component(self, axis: usize) -> T {
-        match axis {
-            0 => self.x,
-            1 => self.y,
-            2 => self.z,
-            _ => panic!("XYZ axis out of bounds: {axis}"),
-        }
+pub fn xyz_component<T: Copy>(point: XYZ<T>, axis: usize) -> T {
+    match axis {
+        0 => point.x,
+        1 => point.y,
+        2 => point.z,
+        _ => panic!("XYZ axis out of bounds: {axis}"),
     }
-    pub fn component_mut(&mut self, axis: usize) -> &mut T {
-        match axis {
-            0 => &mut self.x,
-            1 => &mut self.y,
-            2 => &mut self.z,
-            _ => panic!("XYZ axis out of bounds: {axis}"),
-        }
+}
+pub fn xyz_component_mut<T: Copy>(point: &mut XYZ<T>, axis: usize) -> &mut T {
+    match axis {
+        0 => &mut point.x,
+        1 => &mut point.y,
+        2 => &mut point.z,
+        _ => panic!("XYZ axis out of bounds: {axis}"),
     }
-    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> XYZ<U> {
-        XYZ {
-            x: f(self.x),
-            y: f(self.y),
-            z: f(self.z),
-        }
+}
+pub fn xyz_map<T: Copy, U>(point: XYZ<T>, mut f: impl FnMut(T) -> U) -> XYZ<U> {
+    XYZ {
+        x: f(point.x),
+        y: f(point.y),
+        z: f(point.z),
     }
-    pub fn xz(self) -> XZ<T> {
-        XZ {
-            x: self.x,
-            z: self.z,
-        }
+}
+pub fn xz<T: Copy>(point: XYZ<T>) -> XZ<T> {
+    XZ {
+        x: point.x,
+        z: point.z,
     }
 }
 
@@ -138,11 +134,9 @@ pub struct BoundingBoxXZ<T = f64> {
     pub max: XZ<T>,
 }
 
-impl<T> BoundingBoxXZ<T> {
-    /// Ordering used by the location manifest and external geometry records.
-    pub fn to_array(self) -> [T; 4] {
-        [self.min.x, self.min.z, self.max.x, self.max.z]
-    }
+/// Ordering used by the location manifest and external geometry records.
+pub fn bounding_box_xz_to_array<T>(bounds: BoundingBoxXZ<T>) -> [T; 4] {
+    [bounds.min.x, bounds.min.z, bounds.max.x, bounds.max.z]
 }
 
 /// Geographic position in latitude and longitude degrees.
@@ -165,32 +159,33 @@ pub struct BoundingBox {
     pub max_lon: f64,
 }
 
-impl BoundingBox {
-    pub fn is_valid(&self) -> bool {
-        self.to_array().iter().all(|v| v.is_finite())
-            && self.min_lat < self.max_lat
-            && self.min_lon < self.max_lon
-            && self.min_lat >= -90.0
-            && self.max_lat <= 90.0
-            && self.min_lon >= -180.0
-            && self.max_lon <= 180.0
-    }
-
-    /// Apply the imagery pipeline's conservative Web Mercator latitude limit.
-    pub fn is_valid_for_imagery(&self) -> bool {
-        self.is_valid() && self.min_lat >= -85.0 && self.max_lat <= 85.0
-    }
-
-    /// Ordering used by the existing OSM extraction and compiler APIs.
-    pub fn to_array(self) -> [f64; 4] {
-        [self.min_lat, self.min_lon, self.max_lat, self.max_lon]
-    }
+pub fn is_valid(bounds: &BoundingBox) -> bool {
+    bounding_box_to_array(*bounds).iter().all(|v| v.is_finite())
+        && bounds.min_lat < bounds.max_lat
+        && bounds.min_lon < bounds.max_lon
+        && bounds.min_lat >= -90.0
+        && bounds.max_lat <= 90.0
+        && bounds.min_lon >= -180.0
+        && bounds.max_lon <= 180.0
 }
 
-impl LatLon {
-    pub const fn new(lat: f64, lon: f64) -> Self {
-        Self { lat, lon }
-    }
+/// Apply the imagery pipeline's conservative Web Mercator latitude limit.
+pub fn is_valid_for_imagery(bounds: &BoundingBox) -> bool {
+    is_valid(bounds) && bounds.min_lat >= -85.0 && bounds.max_lat <= 85.0
+}
+
+/// Ordering used by the existing OSM extraction and compiler APIs.
+pub fn bounding_box_to_array(bounds: BoundingBox) -> [f64; 4] {
+    [
+        bounds.min_lat,
+        bounds.min_lon,
+        bounds.max_lat,
+        bounds.max_lon,
+    ]
+}
+
+pub const fn new(lat: f64, lon: f64) -> LatLon {
+    LatLon { lat, lon }
 }
 
 // Spatial indices operate directly on local points, keeping geographic coordinates out.
@@ -222,43 +217,49 @@ impl rstar::Point for XZ {
     }
 }
 
-impl world::WorldLocation {
-    /// Convert local metres (east +X, south +Z) to geographic coordinates.
-    pub fn geographic_position(&self, position: XYZ) -> Option<LatLon> {
-        let LatLon { lat, lon } = self.origin?;
-        let longitude_scale = lat.to_radians().cos();
-        if longitude_scale.abs() < 1e-9 || !position.x.is_finite() || !position.z.is_finite() {
-            return None;
-        }
-        Some(LatLon::new(
-            lat - (position.z as f64 / 6371000.0).to_degrees(),
-            lon + (position.x as f64 / (6371000.0 * longitude_scale)).to_degrees(),
-        ))
+/// Convert local metres (east +X, south +Z) to geographic coordinates.
+pub fn geographic_position(world: &world::WorldLocation, position: XYZ) -> Option<LatLon> {
+    let LatLon { lat, lon } = world.origin?;
+    let longitude_scale = lat.to_radians().cos();
+    if longitude_scale.abs() < 1e-9 || !position.x.is_finite() || !position.z.is_finite() {
+        return None;
     }
+    Some(new(
+        lat - (position.z as f64 / 6371000.0).to_degrees(),
+        lon + (position.x as f64 / (6371000.0 * longitude_scale)).to_degrees(),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+
     use super::*;
     use crate::source_location;
     use crate::test_support;
 
     #[test]
     fn geographic_positions_round_trip_through_local_metres() {
-        let origin = LatLon::new(35.1654321, 33.3256789);
-        let mut compiled = source_location::SourceLocation::<f64>::empty();
+        let origin = geometry::new(35.1654321, 33.3256789);
+        let mut compiled = source_location::empty::<f64>();
         compiled.origin = Some(origin);
         let mut runtime = test_support::empty_world();
         runtime.origin = Some(origin);
-        for target in [origin, LatLon::new(35.17, 33.34), LatLon::new(35.15, 33.31)] {
-            let local = compiled.metres(target);
-            let result = runtime
-                .geographic_position(XYZ {
+        for target in [
+            origin,
+            geometry::new(35.17, 33.34),
+            geometry::new(35.15, 33.31),
+        ] {
+            let local = source_location::metres(&compiled, target);
+            let result = geometry::geographic_position(
+                &runtime,
+                XYZ {
                     x: local.x as f32,
                     y: 123.0,
                     z: local.z as f32,
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             assert!((result.lat - target.lat).abs() < 1e-8);
             assert!((result.lon - target.lon).abs() < 1e-8);
         }

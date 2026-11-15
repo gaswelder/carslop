@@ -1,25 +1,30 @@
 //! Shared world fixtures. Private world and road state stays inside its owner.
+
 use super::*;
 use crate::authoring;
-use crate::city_assets::CityAsset;
+use crate::city_assets;
 use crate::landscape;
-use crate::source_location::SourceLocation;
+use crate::source_location;
 use crate::street_surface;
+use crate::track;
+use crate::world;
+use crate::world_roads;
 
 pub fn empty_world() -> WorldLocation {
-    WorldLocation::empty()
+    world::empty()
 }
 
 pub fn parse_world(text: &str) -> Result<WorldLocation, String> {
-    WorldLocation::from_source(SourceLocation::<f32>::parse(text)?)
+    world_roads::world_location_from_source(source_location::parse(text)?)
 }
 
 pub fn landscape(text: &str) -> Result<WorldLocation, String> {
     let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
     std::fs::write(folder.path().join("landscape.txt"), text).map_err(|e| e.to_string())?;
-    let (ground, trees) = CityAsset::new(folder.path().to_path_buf()).get_landscape_data()?;
+    let (ground, trees) =
+        city_assets::get_landscape_data(&city_assets::new(folder.path().to_path_buf()))?;
     let mut world = empty_world();
-    world.ground = landscape::GroundCover::new(ground, trees);
+    world.ground = landscape::new(ground, trees);
     Ok(world)
 }
 
@@ -32,16 +37,18 @@ pub fn install_surfaces(world: &mut WorldLocation, surfaces: street_surface::Str
 }
 
 pub fn flat_track(world: &WorldLocation) -> WorldLocation {
-    let mut track = authoring::Circuit {
-        control_points: FLAT_POINTS
-            .map(|p| authoring::ControlPoint {
-                position: XYZ { y: 0.0, ..p },
-                width: world.at_distance(50.0).width,
-            })
-            .to_vec(),
-        coastal: false,
-    }
-    .build(world.id.clone())
+    let mut track = authoring::circuit_build(
+        &authoring::Circuit {
+            control_points: FLAT_POINTS
+                .map(|p| authoring::ControlPoint {
+                    position: XYZ { y: 0.0, ..p },
+                    width: track::at_distance(world, 50.0).width,
+                })
+                .to_vec(),
+            coastal: false,
+        },
+        world.id.clone(),
+    )
     .unwrap();
     track.elevation = None;
     track
@@ -49,7 +56,7 @@ pub fn flat_track(world: &WorldLocation) -> WorldLocation {
 
 pub fn bumpy_track(world: &WorldLocation) -> WorldLocation {
     let mut track = flat_track(world);
-    track.roads.bump();
+    world_roads::bump(&mut track.roads);
     track
 }
 const FLAT_POINTS: [XYZ; 12] = [

@@ -1,4 +1,5 @@
 //! Compile mapped ground cover and trees into landscape assets.
+
 use crate::build_details;
 use crate::build_surfaces;
 use crate::build_surfaces::{union, Surfaces};
@@ -7,11 +8,12 @@ use crate::error::{invalid, Result};
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::geometry::{empty, line, polygon};
+use crate::landscape;
 use crate::map_details::TreeStyle;
 use crate::osm;
 use crate::osm::{OSMElement, OSMMap};
+use crate::source_location;
 use crate::source_location::SourceLocation;
-use crate::world;
 use geo::algorithm::buffer;
 use geo::MultiPolygon;
 use geo::{
@@ -22,39 +24,39 @@ use std::io::BufWriter;
 use std::path::Path;
 
 fn style(e: &OSMElement) -> Option<usize> {
-    let surface = e.tag("surface");
-    if e.tag("leisure") == "swimming_pool"
-        || e.tag("natural") == "water"
-        || !e.tag("waterway").is_empty()
+    let surface = osm::tag(e, "surface");
+    if osm::tag(e, "leisure") == "swimming_pool"
+        || osm::tag(e, "natural") == "water"
+        || !osm::tag(e, "waterway").is_empty()
     {
         Some(8)
-    } else if matches!(e.tag("leisure"), "pitch" | "track") {
+    } else if matches!(osm::tag(e, "leisure"), "pitch" | "track") {
         Some(7)
-    } else if e.tag("amenity") == "parking" {
+    } else if osm::tag(e, "amenity") == "parking" {
         Some(match surface {
             "gravel" | "dirt" | "ground" | "unpaved" => 6,
             "paving_stones" => 4,
             "concrete" => 5,
             _ => 3,
         })
-    } else if matches!(e.tag("highway"), "pedestrian" | "footway" | "path")
-        || !e.tag("area:highway").is_empty()
+    } else if matches!(osm::tag(e, "highway"), "pedestrian" | "footway" | "path")
+        || !osm::tag(e, "area:highway").is_empty()
     {
         Some(path_style(surface))
-    } else if e.tag("natural") == "scrub" {
+    } else if osm::tag(e, "natural") == "scrub" {
         Some(2)
     } else if matches!(
-        e.tag("landuse"),
+        osm::tag(e, "landuse"),
         "grass" | "meadow" | "forest" | "orchard" | "vineyard" | "farmland"
-    ) || matches!(e.tag("natural"), "grassland" | "wood")
+    ) || matches!(osm::tag(e, "natural"), "grassland" | "wood")
     {
         Some(0)
     } else if matches!(
-        e.tag("leisure"),
+        osm::tag(e, "leisure"),
         "park" | "garden" | "common" | "playground"
     ) {
         Some(1)
-    } else if matches!(e.tag("landuse"), "greenfield" | "construction") {
+    } else if matches!(osm::tag(e, "landuse"), "greenfield" | "construction") {
         Some(6)
     } else {
         None
@@ -71,17 +73,17 @@ fn path_style(surface: &str) -> usize {
 
 // Closed highway ways are still paths unless explicitly mapped as areas.
 fn path_width(way: &OSMElement) -> Option<f64> {
-    let default = match way.tag("highway") {
+    let default = match osm::tag(way, "highway") {
         "footway" => 1.8,
         "path" => 1.2,
         "pedestrian" => 3.0,
         _ => return None,
     };
-    if way.tag("area") == "yes" || !way.tag("area:highway").is_empty() {
+    if osm::tag(way, "area") == "yes" || !osm::tag(way, "area:highway").is_empty() {
         return None;
     }
     Some(
-        osm::number(way.tag("width"))
+        osm::number(osm::tag(way, "width"))
             .filter(|width| *width > 0.0)
             .unwrap_or(default)
             .clamp(0.4, 12.0),
@@ -116,7 +118,8 @@ struct VegetationArea<'a> {
     geometry: MultiPolygon<f64>,
 }
 fn wooded(element: &OSMElement) -> bool {
-    element.tag("natural") == "wood" || matches!(element.tag("landuse"), "forest" | "orchard")
+    osm::tag(element, "natural") == "wood"
+        || matches!(osm::tag(element, "landuse"), "forest" | "orchard")
 }
 fn vegetation_id(source: i64, sequence: u64) -> u64 {
     let mut hash = (source as u64)
@@ -132,13 +135,18 @@ pub fn build_landscape(
     s: &Surfaces,
     landscape_path: &Path,
 ) -> Result<Vec<TreeStyle>> {
-    let coord = |id: &i64| source.nodes.get(id).map(|e| map.metres(e.coord.unwrap()));
+    let coord = |id: &i64| {
+        source
+            .nodes
+            .get(id)
+            .map(|e| source_location::metres(map, e.coord.unwrap()))
+    };
     let mut groups: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
     let mut vegetation = Vec::new();
     let mut tree_styles = Vec::new();
     let mut consumed = std::collections::BTreeSet::new();
     let mut paths: Vec<Vec<MultiPolygon<f64>>> = vec![vec![]; 9];
-    let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
+    let obstacles = build_surfaces::new(&s.obstacles);
     let crop = map.boundary.clone().unwrap_or_else(|| {
         MultiPolygon(vec![polygon(&[
             XZ {
@@ -163,7 +171,7 @@ pub fn build_landscape(
         let Some(kind) = style(relation) else {
             continue;
         };
-        if relation.tag("type") != "multipolygon" {
+        if osm::tag(relation, "type") != "multipolygon" {
             continue;
         }
         let mut outer = vec![];
@@ -228,32 +236,32 @@ pub fn build_landscape(
         if consumed.contains(&way.id) {
             continue;
         }
-        if matches!(way.tag("highway"), "footway" | "path" | "pedestrian")
+        if matches!(osm::tag(way, "highway"), "footway" | "path" | "pedestrian")
             && (["bridge", "tunnel"]
                 .iter()
-                .any(|key| !matches!(way.tag(key), "" | "no"))
-                || !matches!(way.tag("layer"), "" | "0"))
+                .any(|key| !matches!(osm::tag(way, key), "" | "no"))
+                || !matches!(osm::tag(way, "layer"), "" | "0"))
         {
             continue;
         }
         let Some(mut points) = way.nodes.iter().map(&coord).collect::<Option<Vec<_>>>() else {
             continue;
         };
-        if !way.tag("waterway").is_empty()
-            && way.tag("waterway") != "riverbank"
-            && way.tag("area") != "yes"
+        if !osm::tag(way, "waterway").is_empty()
+            && osm::tag(way, "waterway") != "riverbank"
+            && osm::tag(way, "area") != "yes"
         {
             points.dedup();
             if points.len() < 2 {
                 continue;
             }
-            let width = osm::number(way.tag("width")).filter(|v| *v > 0.).unwrap_or(
-                match way.tag("waterway") {
+            let width = osm::number(osm::tag(way, "width"))
+                .filter(|v| *v > 0.)
+                .unwrap_or(match osm::tag(way, "waterway") {
                     "river" => 8.,
                     "ditch" | "drain" => 1.,
                     _ => 2.,
-                },
-            );
+                });
             groups[8].push(
                 line(&points)
                     .buffer(width.clamp(0.3, 100.) / 2.)
@@ -272,7 +280,7 @@ pub fn build_landscape(
                 )
                 .intersection(&crop);
             let geometry = exclude_obstacles(&geometry, &obstacles);
-            paths[path_style(way.tag("surface"))].push(geometry);
+            paths[path_style(osm::tag(way, "surface"))].push(geometry);
         } else if points.len() >= 4 && way.nodes.first() == way.nodes.last() {
             let geometry = polygon(&points).intersection(&crop);
             if wooded(way) {
@@ -285,7 +293,7 @@ pub fn build_landscape(
             groups[kind].push(geometry);
         }
     }
-    let mut file = codec_landscape::Writer::new(
+    let mut file = codec_landscape::new(
         BufWriter::new(fs::File::create(landscape_path)?),
         codec_landscape::Precision::Imported,
     )?;
@@ -293,9 +301,9 @@ pub fn build_landscape(
     let mut emit = |kind: usize, regions: &[MultiPolygon<f64>]| -> Result<()> {
         let geometry = union(regions).difference(&covered);
         covered = covered.union(&geometry);
-        let material = world::Material::from_ground_id(kind).map_err(invalid)?;
+        let material = landscape::from_ground_id(kind).map_err(invalid)?;
         build_surfaces::triangulate(&geometry, |points| {
-            file.ground(material, points)?;
+            codec_landscape::ground(&mut file, material, points)?;
             Ok(())
         })?;
         Ok(())
@@ -317,35 +325,41 @@ pub fn build_landscape(
             .flat_map(|geometry| geometry.0)
             .collect(),
     );
-    let path_obstacles = build_surfaces::PolygonIndex::new(&path_geometry);
-    let conflicts =
-        |probe: &MultiPolygon<f64>| obstacles.intersects(probe) || path_obstacles.intersects(probe);
-    for node in source.nodes.values().filter(|n| n.tag("natural") == "tree") {
-        let p = map.metres(node.coord.unwrap());
-        if !map.contains(p) {
+    let path_obstacles = build_surfaces::new(&path_geometry);
+    let conflicts = |probe: &MultiPolygon<f64>| {
+        build_surfaces::intersects(&obstacles, probe)
+            || build_surfaces::intersects(&path_obstacles, probe)
+    };
+    for node in source
+        .nodes
+        .values()
+        .filter(|n| osm::tag(n, "natural") == "tree")
+    {
+        let p = source_location::metres(map, node.coord.unwrap());
+        if !source_location::contains(map, p) {
             continue;
         }
         if conflicts(&Point::new(p.x, p.z).buffer(0.35)) {
             continue;
         }
-        let height = osm::number(node.tag("height"))
+        let height = osm::number(osm::tag(node, "height"))
             .filter(|n| *n > 0.0)
             .unwrap_or(4.8 + node.id.rem_euclid(7) as f64 * 0.3)
             .clamp(2.5, 18.0);
-        let radius = osm::number(node.tag("diameter_crown"))
+        let radius = osm::number(osm::tag(node, "diameter_crown"))
             .filter(|n| *n > 0.0)
             .map(|n| n / 2.0)
             .unwrap_or(height * 0.32)
             .clamp(0.7, 4.5);
-        file.tree_fields(node.id, p, height, radius)?;
+        codec_landscape::tree_fields(&mut file, node.id, p, height, radius)?;
         tree_styles.push(build_details::tree_style(node.id as u64, node));
     }
     let mapped = rstar::RTree::bulk_load(
         source
             .nodes
             .values()
-            .filter(|node| node.tag("natural") == "tree")
-            .filter_map(|node| node.coord.map(|p| map.metres(p)))
+            .filter(|node| osm::tag(node, "natural") == "tree")
+            .filter_map(|node| node.coord.map(|p| source_location::metres(map, p)))
             .collect(),
     );
     let paved_cover = union(
@@ -354,7 +368,7 @@ pub fn build_landscape(
             .flat_map(|kind| groups[kind].iter().cloned())
             .collect::<Vec<_>>(),
     );
-    let paved_index = build_surfaces::PolygonIndex::new(&paved_cover);
+    let paved_index = build_surfaces::new(&paved_cover);
     let mut count = 0;
     let mut accepted = rstar::RTree::new();
     let mut append = |id: u64, p: XZ, element: &OSMElement, default_height: f64| -> Result<()> {
@@ -362,25 +376,25 @@ pub fn build_landscape(
             .nearest_neighbor(&p)
             .is_some_and(|tree| geometry::dist(*tree, p) < 2.5)
             || count >= 50_000
-            || !map.contains(p)
+            || !source_location::contains(map, p)
             || conflicts(&Point::new(p.x, p.z).buffer(0.35))
-            || paved_index.intersects(&Point::new(p.x, p.z).buffer(0.35))
+            || build_surfaces::intersects(&paved_index, &Point::new(p.x, p.z).buffer(0.35))
             || mapped
                 .nearest_neighbor(&p)
                 .is_some_and(|tree| geometry::dist(*tree, p) < 2.5)
         {
             return Ok(());
         }
-        let height = osm::number(element.tag("height"))
+        let height = osm::number(osm::tag(element, "height"))
             .filter(|v| *v > 0.)
             .unwrap_or(default_height)
             .clamp(2.5, 18.);
-        let radius = osm::number(element.tag("diameter_crown"))
+        let radius = osm::number(osm::tag(element, "diameter_crown"))
             .filter(|v| *v > 0.)
             .map(|v| v / 2.)
             .unwrap_or(height * 0.29)
             .clamp(0.7, 4.5);
-        file.tree_fields(id as i64, p, height, radius)?;
+        codec_landscape::tree_fields(&mut file, id as i64, p, height, radius)?;
         tree_styles.push(build_details::tree_style(id, element));
         accepted.insert(p);
         count += 1;
@@ -389,7 +403,7 @@ pub fn build_landscape(
     for way in source
         .ways
         .values()
-        .filter(|way| way.tag("natural") == "tree_row")
+        .filter(|way| osm::tag(way, "natural") == "tree_row")
     {
         let Some(points) = way.nodes.iter().map(&coord).collect::<Option<Vec<_>>>() else {
             continue;
@@ -398,7 +412,7 @@ pub fn build_landscape(
             continue;
         }
         let length = geometry::path_length(&points);
-        let spacing = osm::number(way.tag("tree_row:spacing"))
+        let spacing = osm::number(osm::tag(way, "tree_row:spacing"))
             .filter(|v| *v > 0.)
             .unwrap_or(5.)
             .clamp(2., 30.);
@@ -416,7 +430,7 @@ pub fn build_landscape(
         let Some(bounds) = area.geometry.bounding_rect() else {
             continue;
         };
-        let orchard = area.element.tag("landuse") == "orchard";
+        let orchard = osm::tag(area.element, "landuse") == "orchard";
         let spacing = if orchard { 6.0 } else { 10.0 };
         let mut row = 0;
         let mut z = bounds.min().y + spacing * 0.5;
@@ -444,7 +458,7 @@ pub fn build_landscape(
             z += spacing;
         }
     }
-    file.flush()?;
+    codec_landscape::flush(&mut file)?;
     Ok(tree_styles)
 }
 
@@ -455,12 +469,14 @@ fn exclude_obstacles(
     // The index stores overlapping road and building pieces. Boolean difference
     // requires a valid MultiPolygon: merge those pieces before subtracting them.
     // Normalize winding first because building footprints may use either direction.
-    let nearby = obstacles.nearby(geometry).orient(Direction::Default);
+    let nearby = build_surfaces::nearby(obstacles, geometry).orient(Direction::Default);
     geometry.difference(&union(&[nearby]))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::build_surfaces;
+
     use super::*;
     use geo::{Area, Coord, Rect};
 
@@ -477,7 +493,7 @@ mod tests {
                 .orient(Direction::Reversed),
             Rect::new(Coord { x: 4.0, y: -1.0 }, Coord { x: 8.0, y: 3.0 }).to_polygon(),
         ]);
-        let result = exclude_obstacles(&path, &build_surfaces::PolygonIndex::new(&obstacles));
+        let result = exclude_obstacles(&path, &build_surfaces::new(&obstacles));
         assert!((result.unsigned_area() - 8.0).abs() < 1e-8);
         for obstacle in &obstacles.0 {
             assert!(result.intersection(obstacle).unsigned_area() < 1e-8);
@@ -505,7 +521,7 @@ mod tests {
         );
         let road = Rect::new(Coord { x: 5.0, y: -1.0 }, Coord { x: 6.0, y: 3.0 }).to_polygon();
         let obstacles = MultiPolygon(vec![building, road]);
-        let result = exclude_obstacles(&path, &build_surfaces::PolygonIndex::new(&obstacles));
+        let result = exclude_obstacles(&path, &build_surfaces::new(&obstacles));
         assert!((result.unsigned_area() - 11.0).abs() < 1e-8);
         assert!(result.contains(&Point::new(4.0, 1.0)));
         assert!(!result.contains(&Point::new(5.5, 1.0)));

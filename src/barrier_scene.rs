@@ -1,7 +1,13 @@
 //! Terrain-following walls and open metal, chain-link, or wooden fence panels.
+
+use crate::geometry;
 use crate::geometry::{XYZ, XZ};
+use crate::scene;
 use crate::scene::{Builder, Surface};
+use crate::street_surface;
+use crate::world;
 use crate::world::{BarrierKind, WorldLocation};
+use crate::world_barriers;
 
 fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surface) {
     let length = (c.x - a.x).hypot(c.z - a.z);
@@ -38,22 +44,25 @@ fn prism(b: &mut Builder, a: XYZ, c: XYZ, width: f32, height: f32, surface: Surf
         y: point.y + height,
         ..point
     });
-    b.quad([p[1], p[0], top[0], top[1]], surface);
-    b.quad([p[3], p[2], top[2], top[3]], surface);
-    b.quad([p[0], p[3], top[3], top[0]], surface);
-    b.quad([p[2], p[1], top[1], top[2]], surface);
-    b.upward_quad(top, surface);
+    scene::quad(b, [p[1], p[0], top[0], top[1]], surface);
+    scene::quad(b, [p[3], p[2], top[2], top[3]], surface);
+    scene::quad(b, [p[0], p[3], top[3], top[0]], surface);
+    scene::quad(b, [p[2], p[1], top[1], top[2]], surface);
+    scene::upward_quad(b, top, surface);
 }
 
 fn support(city: &WorldLocation, point: XZ<f32>) -> XYZ {
-    point.at_height(city.height(point) + city.paving_height(point).unwrap_or(0.0))
+    geometry::at_height(
+        point,
+        world::height(city, point) + street_surface::paving_height(city, point).unwrap_or(0.0),
+    )
 }
 
 pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
-    for barrier in city.barriers() {
+    for barrier in world_barriers::barriers(city) {
         let height = barrier.height_meters;
         let width = barrier.width_meters;
-        let surface = Surface::matte(match barrier.kind {
+        let surface = scene::matte(match barrier.kind {
             BarrierKind::Wall | BarrierKind::RetainingWall => [0.72, 0.70, 0.62],
             BarrierKind::Hedge => [0.25, 0.36, 0.20],
             BarrierKind::WoodFence => [0.43, 0.34, 0.23],
@@ -64,9 +73,9 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
             barrier.kind,
             BarrierKind::Wall | BarrierKind::RetainingWall | BarrierKind::Hedge
         ) {
-            for pair in city.ground_segment(a, c).windows(2) {
-                let a = support(city, pair[0].xz());
-                let c = support(city, pair[1].xz());
+            for pair in world::ground_segment(city, a, c).windows(2) {
+                let a = support(city, geometry::xz(pair[0]));
+                let c = support(city, geometry::xz(pair[1]));
                 prism(b, a, c, width, height, surface);
                 if detailed && barrier.kind != BarrierKind::Hedge {
                     prism(
@@ -81,7 +90,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                         },
                         width + 0.04,
                         0.07,
-                        Surface::matte([0.79, 0.77, 0.69]),
+                        scene::matte([0.79, 0.77, 0.69]),
                     );
                 }
             }
@@ -216,6 +225,9 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
 
 #[cfg(test)]
 mod tests {
+    use crate::elevation;
+    use crate::world_preparation;
+
     use super::*;
     use crate::codec_barriers;
     use crate::test_support;
@@ -243,8 +255,8 @@ mod tests {
                 &barriers,
             )
             .unwrap();
-            let mut city = world::WorldLocation::load(&assets).unwrap();
-            let field = world::HeightField::generate(city.bounding_box(), |p| 7.0 + p.x * 0.1);
+            let mut city = world_preparation::world_location_load(&assets).unwrap();
+            let field = elevation::generate(world::bounding_box(&city), |p| 7.0 + p.x * 0.1);
             test_support::set_elevation(&mut city, Some(field));
             for detailed in [false, true] {
                 let mut builder = Builder::default();
@@ -262,7 +274,7 @@ mod tests {
                         x: vertex.position[0],
                         z: vertex.position[2],
                     };
-                    let height = vertex.position[1] - city.height(point);
+                    let height = vertex.position[1] - world::height(&city, point);
                     assert!(
                         (-0.03..=2.03).contains(&height),
                         "height {height} for {kind:?}"

@@ -1,4 +1,5 @@
 //! Reduce mapped appearance and street objects to source-independent playable records.
+
 use crate::build_buildings;
 use crate::build_surfaces;
 use crate::geometry;
@@ -8,7 +9,9 @@ use crate::map_details::{
     TreeKind, TreeStyle, TurnRestriction,
 };
 use crate::osm;
+use crate::source_location;
 use crate::source_location::SourceLocation;
+use crate::world;
 use crate::world::Building;
 use geo::{Area, BoundingRect, Contains, Point, Polygon, Rect};
 use std::collections::BTreeMap;
@@ -76,7 +79,7 @@ fn direction(value: &str) -> Option<f32> {
     Some(angle.to_radians())
 }
 fn style(way: &osm::OSMElement, volume: usize, building: &Building<f64>) -> BuildingStyle {
-    let shape = match way.tag("roof:shape") {
+    let shape = match osm::tag(way, "roof:shape") {
         "gabled" => RoofShape::Gabled,
         "hipped" => RoofShape::Hipped,
         "pyramidal" | "pyramid" => RoofShape::Pyramidal,
@@ -91,17 +94,17 @@ fn style(way: &osm::OSMElement, volume: usize, building: &Building<f64>) -> Buil
         .take(building.ground_outline.len())
         .max_by(|(a, b), (c, d)| geometry::dist(**a, **b).total_cmp(&geometry::dist(**c, **d)));
     let mut angle = edge.map_or(0., |(a, b)| (b.z - a.z).atan2(b.x - a.x) as f32);
-    if way.tag("roof:orientation") == "across" {
+    if osm::tag(way, "roof:orientation") == "across" {
         angle += std::f32::consts::FRAC_PI_2;
     }
-    if let Some(direction) = direction(way.tag("roof:direction")) {
+    if let Some(direction) = direction(osm::tag(way, "roof:direction")) {
         angle = std::f32::consts::PI - direction;
     }
     let roof_height = if shape == RoofShape::Flat {
         0.
     } else {
-        osm::number(way.tag("roof:height"))
-            .or_else(|| osm::number(way.tag("roof:levels")).map(|levels| levels * 3.1))
+        osm::number(osm::tag(way, "roof:height"))
+            .or_else(|| osm::number(osm::tag(way, "roof:levels")).map(|levels| levels * 3.1))
             .unwrap_or(2.0)
             .clamp(0.2, 30.0)
             .min((building.height_meters - building.min_height_meters - 0.3).max(0.0))
@@ -112,9 +115,10 @@ fn style(way: &osm::OSMElement, volume: usize, building: &Building<f64>) -> Buil
         shape,
         roof_height,
         angle,
-        wall_color: color(way.tag("building:colour"))
-            .or_else(|| color(way.tag("building:material"))),
-        roof_color: color(way.tag("roof:colour")).or_else(|| color(way.tag("roof:material"))),
+        wall_color: color(osm::tag(way, "building:colour"))
+            .or_else(|| color(osm::tag(way, "building:material"))),
+        roof_color: color(osm::tag(way, "roof:colour"))
+            .or_else(|| color(osm::tag(way, "roof:material"))),
     }
 }
 struct StyledPart<'a> {
@@ -125,10 +129,10 @@ struct StyledPart<'a> {
 pub fn tree_style(id: u64, element: &osm::OSMElement) -> TreeStyle {
     let species = format!(
         "{} {} {} {}",
-        element.tag("species"),
-        element.tag("genus"),
-        element.tag("leaf_type"),
-        element.tag("type")
+        osm::tag(element, "species"),
+        osm::tag(element, "genus"),
+        osm::tag(element, "leaf_type"),
+        osm::tag(element, "type")
     )
     .to_ascii_lowercase();
     let kind = if species.contains("palm")
@@ -151,7 +155,7 @@ pub fn tree_style(id: u64, element: &osm::OSMElement) -> TreeStyle {
     TreeStyle {
         id,
         kind,
-        evergreen: element.tag("leaf_cycle") == "evergreen",
+        evergreen: osm::tag(element, "leaf_cycle") == "evergreen",
     }
 }
 
@@ -164,7 +168,7 @@ pub fn build(
     let mut parts: Vec<_> = source
         .ways
         .values()
-        .filter(|way| !matches!(way.tag("building:part"), "" | "no"))
+        .filter(|way| !matches!(osm::tag(way, "building:part"), "" | "no"))
         .filter_map(|way| {
             if way.nodes.len() < 4 || way.nodes.first() != way.nodes.last() {
                 return None;
@@ -177,7 +181,7 @@ pub fn build(
                         .nodes
                         .get(id)
                         .and_then(|node| node.coord)
-                        .map(|p| map.metres(p))
+                        .map(|p| source_location::metres(map, p))
                 })
                 .collect();
             {
@@ -194,11 +198,11 @@ pub fn build(
     for relation in source
         .relations
         .iter()
-        .filter(|relation| !matches!(relation.tag("building:part"), "" | "no"))
+        .filter(|relation| !matches!(osm::tag(relation, "building:part"), "" | "no"))
     {
-        if let Some(geometry) =
-            build_buildings::relation_geometry(source, relation, |p| map.metres(p))
-        {
+        if let Some(geometry) = build_buildings::relation_geometry(source, relation, |p| {
+            source_location::metres(map, p)
+        }) {
             for footprint in geometry.0 {
                 if let Some(bounds) = footprint.bounding_rect() {
                     parts.push(StyledPart {
@@ -212,7 +216,7 @@ pub fn build(
     }
     for (volume, building) in map.buildings.iter().enumerate() {
         let parent = osm::building_source(source, building.id);
-        let footprint = building.footprint();
+        let footprint = world::footprint(building);
         let bounds = footprint.bounding_rect().expect("valid building footprint");
         let child = parts
             .iter()
@@ -244,13 +248,13 @@ pub fn build(
             data.buildings.push(appearance);
         }
     }
-    let obstacles = build_surfaces::PolygonIndex::new(&surfaces.obstacles);
+    let obstacles = build_surfaces::new(&surfaces.obstacles);
     let road_index = build_surfaces::index(&surfaces.paths);
     let mut gate_angles = BTreeMap::new();
     for way in source
         .ways
         .values()
-        .filter(|way| !way.tag("barrier").is_empty())
+        .filter(|way| !osm::tag(way, "barrier").is_empty())
     {
         for pair in way.nodes.windows(2) {
             let (Some(a), Some(b)) = (
@@ -259,8 +263,8 @@ pub fn build(
             ) else {
                 continue;
             };
-            let a = map.metres(a);
-            let b = map.metres(b);
+            let a = source_location::metres(map, a);
+            let b = source_location::metres(map, b);
             let angle = (b.z - a.z).atan2(b.x - a.x) as f32;
             gate_angles.entry(pair[0]).or_insert(angle);
             gate_angles.entry(pair[1]).or_insert(angle);
@@ -270,44 +274,47 @@ pub fn build(
         let Some(coord) = node.coord else {
             continue;
         };
-        let p = map.metres(coord);
-        if !map.contains(p) {
+        let p = source_location::metres(map, coord);
+        if !source_location::contains(map, p) {
             continue;
         }
-        if node.tag("indoor") == "yes" || !matches!(node.tag("level"), "" | "0") {
+        if osm::tag(node, "indoor") == "yes" || !matches!(osm::tag(node, "level"), "" | "0") {
             continue;
         }
-        let kind = match node.tag("amenity") {
+        let kind = match osm::tag(node, "amenity") {
             "bench" => Some(ObjectKind::Bench),
             "waste_basket" | "waste_disposal" => Some(ObjectKind::Bin),
             "shelter" => Some(ObjectKind::Shelter),
             _ => None,
         }
-        .or_else(|| match node.tag("highway") {
+        .or_else(|| match osm::tag(node, "highway") {
             "street_lamp" => Some(ObjectKind::Lamp),
-            "bus_stop" if node.tag("shelter") == "yes" => Some(ObjectKind::Shelter),
+            "bus_stop" if osm::tag(node, "shelter") == "yes" => Some(ObjectKind::Shelter),
             _ => None,
         })
-        .or_else(|| match node.tag("barrier") {
+        .or_else(|| match osm::tag(node, "barrier") {
             "bollard" | "block" => Some(ObjectKind::Bollard),
             "gate" | "lift_gate" | "swing_gate" => Some(ObjectKind::Gate),
             _ => None,
         })
-        .or_else(|| match node.tag("power") {
+        .or_else(|| match osm::tag(node, "power") {
             "pole" => Some(ObjectKind::PowerPole),
             "tower" => Some(ObjectKind::PowerTower),
             _ => None,
         })
-        .or_else(|| match node.tag("historic") {
+        .or_else(|| match osm::tag(node, "historic") {
             "monument" | "memorial" | "wayside_cross" => Some(ObjectKind::Monument),
             _ => None,
         })
-        .or_else(|| (node.tag("man_made") == "planter").then_some(ObjectKind::Planter));
+        .or_else(|| (osm::tag(node, "man_made") == "planter").then_some(ObjectKind::Planter));
         let Some(kind) = kind else {
             continue;
         };
         if !matches!(kind, ObjectKind::Bollard | ObjectKind::Gate)
-            && obstacles.intersects(&geo::Buffer::buffer(&Point::new(p.x, p.z), 0.08))
+            && build_surfaces::intersects(
+                &obstacles,
+                &geo::Buffer::buffer(&Point::new(p.x, p.z), 0.08),
+            )
         {
             continue;
         }
@@ -328,7 +335,7 @@ pub fn build(
                 height: 2.5,
                 width: 3.0,
             },
-            ObjectKind::Bollard if node.tag("barrier") == "block" => ObjectDimensions {
+            ObjectKind::Bollard if osm::tag(node, "barrier") == "block" => ObjectDimensions {
                 height: 0.8,
                 width: 1.0,
             },
@@ -361,7 +368,7 @@ pub fn build(
                 width: 0.6,
             },
         };
-        let angle = direction(node.tag("direction"))
+        let angle = direction(osm::tag(node, "direction"))
             .map(|bearing| -bearing)
             .or_else(|| gate_angles.get(&node.id).copied())
             .unwrap_or_else(|| {
@@ -379,22 +386,22 @@ pub fn build(
             kind,
             position: [p.x as f32, p.z as f32],
             angle,
-            height: osm::number(node.tag("height"))
+            height: osm::number(osm::tag(node, "height"))
                 .filter(|v| *v > 0.)
                 .unwrap_or(defaults.height)
                 .clamp(0.1, 100.0) as f32,
-            width: osm::number(node.tag("width"))
+            width: osm::number(osm::tag(node, "width"))
                 .filter(|v| *v > 0.)
                 .unwrap_or(defaults.width)
                 .clamp(0.02, 30.0) as f32,
-            text: node.tag("name").chars().take(128).collect(),
-            locked: node.tag("locked") == "yes",
+            text: osm::tag(node, "name").chars().take(128).collect(),
+            locked: osm::tag(node, "locked") == "yes",
         });
     }
     for way in source.ways.values() {
-        let kind = if matches!(way.tag("power"), "line" | "minor_line") {
+        let kind = if matches!(osm::tag(way, "power"), "line" | "minor_line") {
             Some(LineKind::Power)
-        } else if way.tag("natural") == "cliff" {
+        } else if osm::tag(way, "natural") == "cliff" {
             Some(LineKind::Cliff)
         } else {
             None
@@ -410,7 +417,7 @@ pub fn build(
                     .nodes
                     .get(id)
                     .and_then(|node| node.coord)
-                    .map(|p| map.metres(p))
+                    .map(|p| source_location::metres(map, p))
             })
             .collect::<Option<Vec<_>>>()
         else {
@@ -420,13 +427,13 @@ pub fn build(
             let Some((a, b)) = osm::clip(pair[0], pair[1], map.bounding_box) else {
                 continue;
             };
-            if !map.contains(a) || !map.contains(b) {
+            if !source_location::contains(map, a) || !source_location::contains(map, b) {
                 continue;
             }
             data.lines.push(SceneryLine {
                 kind,
                 points: vec![[a.x as f32, a.z as f32], [b.x as f32, b.z as f32]],
-                height: osm::number(way.tag("height"))
+                height: osm::number(osm::tag(way, "height"))
                     .unwrap_or(if kind == LineKind::Power { 10.0 } else { 3.0 })
                     .clamp(0.1, 100.0) as f32,
             });
@@ -435,10 +442,9 @@ pub fn build(
     for relation in source
         .relations
         .iter()
-        .filter(|relation| relation.tag("type") == "restriction")
+        .filter(|relation| osm::tag(relation, "type") == "restriction")
     {
-        if relation
-            .tag("except")
+        if osm::tag(relation, "except")
             .split(';')
             .any(|value| matches!(value, "motorcar" | "motor_vehicle"))
         {
@@ -462,10 +468,10 @@ pub fn build(
         let (Some(from), Some(to), Some(via)) = (from, to, via) else {
             continue;
         };
-        let rule = if relation.tag("restriction:motorcar").is_empty() {
-            relation.tag("restriction")
+        let rule = if osm::tag(relation, "restriction:motorcar").is_empty() {
+            osm::tag(relation, "restriction")
         } else {
-            relation.tag("restriction:motorcar")
+            osm::tag(relation, "restriction:motorcar")
         };
         if rule.is_empty() {
             continue;
@@ -479,7 +485,7 @@ pub fn build(
         let Some(node) = source.nodes.get(&via).and_then(|node| node.coord) else {
             continue;
         };
-        let p = map.metres(node);
+        let p = source_location::metres(map, node);
         let Some(road) = map
             .road_lines
             .iter()
@@ -498,7 +504,7 @@ pub fn build(
         let Some(a) = other
             .and_then(|id| source.nodes.get(id))
             .and_then(|node| node.coord)
-            .map(|p| map.metres(p))
+            .map(|p| source_location::metres(map, p))
         else {
             continue;
         };
@@ -511,11 +517,11 @@ pub fn build(
             geometry::sub(p, geometry::mul(travel, 6.0)),
             geometry::mul(left, road.road_width_start_meters / 2.0 + 0.5),
         );
-        if map.contains(position)
-            && !obstacles.intersects(&geo::Buffer::buffer(
-                &Point::new(position.x, position.z),
-                0.08,
-            ))
+        if source_location::contains(map, position)
+            && !build_surfaces::intersects(
+                &obstacles,
+                &geo::Buffer::buffer(&Point::new(position.x, position.z), 0.08),
+            )
         {
             data.objects.push(MapObject {
                 kind: ObjectKind::TurnSign,

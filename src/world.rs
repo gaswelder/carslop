@@ -1,15 +1,22 @@
 use crate::city_assets;
+use crate::elevation;
 use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
 use crate::landscape;
 use crate::map_details;
+use crate::street_surface;
 use crate::track;
 use crate::vehicle_location;
+use crate::world_barriers;
 use crate::world_barriers::Barriers;
+use crate::world_buildings;
 use crate::world_buildings::Buildings;
+use crate::world_raised_roads;
 use crate::world_raised_roads::RaisedRoads;
+use crate::world_roads;
 use crate::world_roads::RoadNetwork;
 use crate::world_spatial;
+use crate::world_transport;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -250,267 +257,265 @@ pub enum TriangleUsage {
 //---------------------------------------------
 //
 
-impl TriangleUsage {
-    pub fn is_road(self) -> bool {
-        matches!(self, Self::Road(_) | Self::Gutter)
-    }
+pub fn is_road(triangle_usage: TriangleUsage) -> bool {
+    matches!(
+        triangle_usage,
+        TriangleUsage::Road(_) | TriangleUsage::Gutter
+    )
+}
 
-    pub fn support_height(self, pavement_height: f32) -> f32 {
-        match self {
-            Self::Ground => 0.005,
-            Self::Pavement(CurbStyle::ServiceRoad) => 0.08,
-            Self::Pavement(_) => pavement_height,
-            _ => 0.05,
-        }
+pub fn support_height(triangle_usage: TriangleUsage, pavement_height: f32) -> f32 {
+    match triangle_usage {
+        TriangleUsage::Ground => 0.005,
+        TriangleUsage::Pavement(CurbStyle::ServiceRoad) => 0.08,
+        TriangleUsage::Pavement(_) => pavement_height,
+        _ => 0.05,
     }
 }
 
-impl<T> Building<T> {
-    pub fn rings(&self) -> impl Iterator<Item = &[XZ<T>]> {
-        std::iter::once(self.ground_outline.as_slice()).chain(self.holes.iter().map(Vec::as_slice))
-    }
+pub fn rings<T>(building: &Building<T>) -> impl Iterator<Item = &[XZ<T>]> {
+    std::iter::once(building.ground_outline.as_slice())
+        .chain(building.holes.iter().map(Vec::as_slice))
 }
-impl<T: Copy + Into<f64>> Building<T> {
-    pub fn footprint(&self) -> geo::Polygon<f64> {
-        geo::Polygon::new(
-            geometry::line(
-                &self
-                    .ground_outline
-                    .iter()
-                    .map(|p| p.map(Into::into))
-                    .collect::<Vec<_>>(),
-            ),
-            self.holes
+
+pub fn footprint<T: Copy + Into<f64>>(building: &Building<T>) -> geo::Polygon<f64> {
+    geo::Polygon::new(
+        geometry::line(
+            &building
+                .ground_outline
                 .iter()
-                .map(|ring| {
-                    geometry::line(&ring.iter().map(|p| p.map(Into::into)).collect::<Vec<_>>())
-                })
-                .collect(),
-        )
-    }
+                .map(|p| geometry::xz_map(*p, Into::into))
+                .collect::<Vec<_>>(),
+        ),
+        building
+            .holes
+            .iter()
+            .map(|ring| {
+                geometry::line(
+                    &ring
+                        .iter()
+                        .map(|p| geometry::xz_map(*p, Into::into))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+    )
 }
 
-impl Building {
-    pub fn contains(&self, p: XZ<f32>) -> bool {
-        fn inside(ring: &[XZ<f32>], p: XZ<f32>) -> bool {
-            let mut inside = false;
-            for i in 0..ring.len() {
-                let a = ring[i];
-                let b = ring[(i + 1) % ring.len()];
-                if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x
-                {
-                    inside = !inside;
-                }
-            }
-            inside
-        }
-        inside(&self.ground_outline, p) && !self.holes.iter().any(|hole| inside(hole, p))
-    }
-    pub fn overlaps_vehicle(&self, position: XYZ, height: f32) -> bool {
-        let bottom = position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT + 0.05;
-        bottom <= self.base_y + self.height_meters
-            && (self.min_height_meters == 0.0
-                || bottom + height >= self.base_y + self.min_height_meters)
-    }
-    pub fn nearest(&self, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
-        let mut best = (XZ::<f32>::default(), XZ::<f32>::default(), f32::INFINITY);
-        for ring in self.rings() {
-            for i in 0..ring.len() {
-                let a = ring[i];
-                let b = ring[(i + 1) % ring.len()];
-                let q = world_spatial::nearest_edge(p, a, b);
-                let distance = (p.x - q.x).hypot(p.z - q.z);
-                if distance < best.2 {
-                    let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
-                    best = (
-                        (q),
-                        XZ {
-                            x: (b.z - a.z) / len,
-                            z: -(b.x - a.x) / len,
-                        },
-                        distance,
-                    );
-                }
+pub fn contains(building: &Building, p: XZ<f32>) -> bool {
+    fn inside(ring: &[XZ<f32>], p: XZ<f32>) -> bool {
+        let mut inside = false;
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            if (a.z > p.z) != (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x {
+                inside = !inside;
             }
         }
-        best
+        inside
     }
+    inside(&building.ground_outline, p) && !building.holes.iter().any(|hole| inside(hole, p))
 }
-
-impl WorldLocation {
-    pub fn empty() -> Self {
-        Self {
-            roads: RoadNetwork::empty(),
-            id: LocationId::Compact,
-            assets: None,
-            display_name: String::new(),
-            origin: None,
-            buildings: Buildings::new(Vec::new()),
-            details: map_details::Prepared::new(map_details::Data::default()),
-            entrances: HashMap::new(),
-            barriers: Barriers::new(Vec::new()),
-            raised_roads: RaisedRoads::new(Vec::new()),
-            furniture: Vec::new(),
-            bounding_box: BoundingBoxXZ::default(),
-            elevation: None,
-            ground: landscape::GroundCover::new(Vec::new(), Vec::new()),
-            street_names: HashMap::new(),
-            building_names: HashMap::new(),
-            storefront_names: HashMap::new(),
+pub fn overlaps_vehicle(building: &Building, position: XYZ, height: f32) -> bool {
+    let bottom = position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT + 0.05;
+    bottom <= building.base_y + building.height_meters
+        && (building.min_height_meters == 0.0
+            || bottom + height >= building.base_y + building.min_height_meters)
+}
+pub fn nearest(building: &Building, p: XZ<f32>) -> (XZ<f32>, XZ<f32>, f32) {
+    let mut best = (XZ::<f32>::default(), XZ::<f32>::default(), f32::INFINITY);
+    for ring in rings(building) {
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            let q = world_spatial::nearest_edge(p, a, b);
+            let distance = (p.x - q.x).hypot(p.z - q.z);
+            if distance < best.2 {
+                let len = (b.x - a.x).hypot(b.z - a.z).max(0.0001);
+                best = (
+                    (q),
+                    XZ {
+                        x: (b.z - a.z) / len,
+                        z: -(b.x - a.x) / len,
+                    },
+                    distance,
+                );
+            }
         }
     }
+    best
 }
 
-impl WorldLocation {
-    pub fn map_details(&self) -> &map_details::Data {
-        self.details.data()
+pub fn empty() -> WorldLocation {
+    WorldLocation {
+        roads: world_roads::empty(),
+        id: LocationId::Compact,
+        assets: None,
+        display_name: String::new(),
+        origin: None,
+        buildings: world_buildings::new(Vec::new()),
+        details: map_details::new(map_details::Data::default()),
+        entrances: HashMap::new(),
+        barriers: world_barriers::new(Vec::new()),
+        raised_roads: world_raised_roads::new(Vec::new()),
+        furniture: Vec::new(),
+        bounding_box: BoundingBoxXZ::default(),
+        elevation: None,
+        ground: landscape::new(Vec::new(), Vec::new()),
+        street_names: HashMap::new(),
+        building_names: HashMap::new(),
+        storefront_names: HashMap::new(),
     }
-    pub fn tree_kind(&self, id: u64) -> Option<map_details::TreeKind> {
-        self.details.tree(id).map(|style| style.kind)
-    }
-    pub fn tree_evergreen(&self, id: u64) -> bool {
-        self.details.tree(id).is_some_and(|style| style.evergreen)
-    }
-    pub fn height(&self, p: XZ<f32>) -> f32 {
-        self.elevation.as_ref().map_or_else(
-            || {
-                if self.road_lines().is_empty() {
-                    0.0
-                } else {
-                    self.project(XYZ {
+}
+
+pub fn map_details(world: &WorldLocation) -> &map_details::Data {
+    map_details::data(&world.details)
+}
+pub fn tree_kind(world: &WorldLocation, id: u64) -> Option<map_details::TreeKind> {
+    map_details::tree(&world.details, id).map(|style| style.kind)
+}
+pub fn tree_evergreen(world: &WorldLocation, id: u64) -> bool {
+    map_details::tree(&world.details, id).is_some_and(|style| style.evergreen)
+}
+pub fn height(world: &WorldLocation, p: XZ<f32>) -> f32 {
+    world.elevation.as_ref().map_or_else(
+        || {
+            if world_roads::road_lines(world).is_empty() {
+                0.0
+            } else {
+                world_roads::project(
+                    world,
+                    XYZ {
                         x: p.x,
                         y: 0.0,
                         z: p.z,
-                    })
-                    .point
-                    .y
-                }
+                    },
+                )
+                .point
+                .y
+            }
+        },
+        |field| elevation::height(field, p),
+    )
+}
+pub fn ground_segment(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Vec<XYZ> {
+    world.elevation.as_ref().map_or_else(
+        || vec![geometry::at_height(a, 0.0), geometry::at_height(b, 0.0)],
+        |f| elevation::segment(f, a, b),
+    )
+}
+/// Distance to the union of street capsules, including shared junction nodes.
+pub fn road_clearance(world: &WorldLocation, p: XYZ) -> f32 {
+    if let Some(height) = world_transport::deck_height(world, geometry::xz(p), p.y) {
+        if (height - p.y).abs() < 1. {
+            let road = world_roads::project(world, p);
+            return road.offset.abs() - road.width / 2.;
+        }
+    }
+    if street_surface::has_compiled_roads(world) {
+        return street_surface::surface_clearance(world, XZ { x: p.x, z: p.z });
+    }
+    world_roads::candidates(world, p)
+        .map(|i| {
+            let (d, s) = world_roads::projected(world, i, p);
+            d - s.width * 0.5
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+pub fn building_name(world: &WorldLocation, id: u64) -> Option<&str> {
+    world.building_names.get(&id).map(String::as_str)
+}
+
+pub fn storefront_names(world: &WorldLocation, id: u64) -> Vec<&str> {
+    let mut names: Vec<_> = world
+        .storefront_names
+        .get(&id)
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    if let Some(name) = building_name(world, id) {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            names.insert(0, name);
+        }
+    }
+    names
+}
+
+pub fn terrain_bounds(world: &WorldLocation) -> BoundingBoxXZ<f32> {
+    if let Some(field) = world.elevation.as_ref() {
+        BoundingBoxXZ {
+            min: XZ {
+                x: field.origin.x,
+                z: field.origin.z,
             },
-            |field| field.height(p),
-        )
-    }
-    pub fn ground_segment(&self, a: XZ<f32>, b: XZ<f32>) -> Vec<XYZ> {
-        self.elevation.as_ref().map_or_else(
-            || vec![a.at_height(0.0), b.at_height(0.0)],
-            |f| f.segment(a, b),
-        )
-    }
-    /// Distance to the union of street capsules, including shared junction nodes.
-    pub fn road_clearance(&self, p: XYZ) -> f32 {
-        if let Some(height) = self.deck_height(p.xz(), p.y) {
-            if (height - p.y).abs() < 1. {
-                let road = self.project(p);
-                return road.offset.abs() - road.width / 2.;
-            }
+            max: XZ {
+                x: field.origin.x + (field.columns - 1) as f32 * field.step,
+                z: field.origin.z + (field.rows - 1) as f32 * field.step,
+            },
         }
-        if self.has_compiled_roads() {
-            return self.surface_clearance(XZ { x: p.x, z: p.z });
-        }
-        self.candidates(p)
-            .map(|i| {
-                let (d, s) = self.projected(i, p);
-                d - s.width * 0.5
-            })
-            .fold(f32::INFINITY, f32::min)
-    }
-    pub fn building_name(&self, id: u64) -> Option<&str> {
-        self.building_names.get(&id).map(String::as_str)
-    }
-
-    pub fn storefront_names(&self, id: u64) -> Vec<&str> {
-        let mut names: Vec<_> = self
-            .storefront_names
-            .get(&id)
-            .into_iter()
-            .flatten()
-            .map(String::as_str)
-            .collect();
-        if let Some(name) = self.building_name(id) {
-            if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-                names.insert(0, name);
-            }
-        }
-        names
-    }
-
-    pub fn terrain_bounds(&self) -> BoundingBoxXZ<f32> {
-        if let Some(field) = self.elevation.as_ref() {
-            BoundingBoxXZ {
-                min: XZ {
-                    x: field.origin.x,
-                    z: field.origin.z,
-                },
-                max: XZ {
-                    x: field.origin.x + (field.columns - 1) as f32 * field.step,
-                    z: field.origin.z + (field.rows - 1) as f32 * field.step,
-                },
-            }
-        } else {
-            let bounds = self.bounding_box;
-            BoundingBoxXZ {
-                min: XZ {
-                    x: bounds.min.x - track::TERRAIN_PADDING,
-                    z: bounds.min.z - track::TERRAIN_PADDING,
-                },
-                max: XZ {
-                    x: bounds.max.x + track::TERRAIN_PADDING,
-                    z: bounds.max.z + track::TERRAIN_PADDING,
-                },
-            }
-        }
-    }
-
-    /// Ground rise per horizontal metre, excluding discrete curb impacts.
-    pub fn ground_gradient(&self, position: XYZ) -> XZ<f32> {
-        let height = |x, z| {
-            self.drive_height_near(
-                XZ { x, z },
-                position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
-            )
-        };
-        let XYZ { x, z, .. } = position;
-        XZ {
-            x: height(x + 0.5, z) - height(x - 0.5, z),
-            z: height(x, z + 0.5) - height(x, z - 0.5),
+    } else {
+        let bounds = world.bounding_box;
+        BoundingBoxXZ {
+            min: XZ {
+                x: bounds.min.x - track::TERRAIN_PADDING,
+                z: bounds.min.z - track::TERRAIN_PADDING,
+            },
+            max: XZ {
+                x: bounds.max.x + track::TERRAIN_PADDING,
+                z: bounds.max.z + track::TERRAIN_PADDING,
+            },
         }
     }
 }
 
-impl RoadSample {
-    pub fn normal(self) -> XZ<f32> {
-        XZ {
-            x: -self.tangent.z,
-            z: self.tangent.x,
-        }
-    }
-    /// Centreline position shifted laterally, retaining the road elevation.
-    pub fn lane_position(self, offset: f32) -> XYZ {
-        let normal = self.normal();
-        XYZ {
-            x: self.point.x + normal.x * offset,
-            y: self.point.y,
-            z: self.point.z + normal.z * offset,
-        }
-    }
-    pub fn heading(self) -> f32 {
-        self.tangent.x.atan2(self.tangent.z)
+/// Ground rise per horizontal metre, excluding discrete curb impacts.
+pub fn ground_gradient(world: &WorldLocation, position: XYZ) -> XZ<f32> {
+    let height = |x, z| {
+        world_transport::drive_height_near(
+            world,
+            XZ { x, z },
+            position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+        )
+    };
+    let XYZ { x, z, .. } = position;
+    XZ {
+        x: height(x + 0.5, z) - height(x - 0.5, z),
+        z: height(x, z + 0.5) - height(x, z - 0.5),
     }
 }
 
-impl Road {
-    /// Create a constant-width, two-way road before its runtime path is sampled.
-    pub fn new(ends: [usize; 2], width_meters: f32) -> Self {
-        Self {
-            ends,
-            osm_way_id: None,
-            road_width_start_meters: width_meters,
-            road_width_end_meters: width_meters,
-            direction: 0,
-            length: 0.0,
-            distance: 0.0,
-            path: Vec::new(),
-            path_distances: Vec::new(),
-        }
+pub fn normal(road_sample: RoadSample) -> XZ<f32> {
+    XZ {
+        x: -road_sample.tangent.z,
+        z: road_sample.tangent.x,
+    }
+}
+/// Centreline position shifted laterally, retaining the road elevation.
+pub fn lane_position(road_sample: RoadSample, offset: f32) -> XYZ {
+    let normal = normal(road_sample);
+    XYZ {
+        x: road_sample.point.x + normal.x * offset,
+        y: road_sample.point.y,
+        z: road_sample.point.z + normal.z * offset,
+    }
+}
+pub fn heading(road_sample: RoadSample) -> f32 {
+    road_sample.tangent.x.atan2(road_sample.tangent.z)
+}
+
+/// Create a constant-width, two-way road before its runtime path is sampled.
+pub fn new(ends: [usize; 2], width_meters: f32) -> Road {
+    Road {
+        ends,
+        osm_way_id: None,
+        road_width_start_meters: width_meters,
+        road_width_end_meters: width_meters,
+        direction: 0,
+        length: 0.0,
+        distance: 0.0,
+        path: Vec::new(),
+        path_distances: Vec::new(),
     }
 }
 
@@ -525,29 +530,23 @@ pub enum LocationId {
     File(usize),
 }
 
-impl WorldLocation {
-    pub fn assets(&self) -> Option<&city_assets::CityAsset> {
-        self.assets.as_ref()
-    }
+pub fn assets(world: &WorldLocation) -> Option<&city_assets::CityAsset> {
+    world.assets.as_ref()
 }
 
-impl WorldLocation {
-    pub fn elevation(&self) -> Option<&HeightField> {
-        self.elevation.as_ref()
-    }
-    pub fn ground_triangles(&self) -> &[Triangle] {
-        self.ground.triangles()
-    }
-    pub fn trees(&self) -> &[Tree] {
-        self.ground.trees()
-    }
-    pub fn ground_material(&self, p: XZ<f32>) -> Option<Material> {
-        self.ground.material(p)
-    }
+pub fn elevation(world: &WorldLocation) -> Option<&HeightField> {
+    world.elevation.as_ref()
+}
+pub fn ground_triangles(world: &WorldLocation) -> &[Triangle] {
+    landscape::triangles(&world.ground)
+}
+pub fn trees(world: &WorldLocation) -> &[Tree] {
+    landscape::trees(&world.ground)
+}
+pub fn ground_material(world: &WorldLocation, p: XZ<f32>) -> Option<Material> {
+    landscape::material(&world.ground, p)
 }
 
-impl WorldLocation {
-    pub fn bounding_box(&self) -> BoundingBoxXZ<f32> {
-        self.bounding_box
-    }
+pub fn bounding_box(world: &WorldLocation) -> BoundingBoxXZ<f32> {
+    world.bounding_box
 }

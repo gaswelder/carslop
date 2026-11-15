@@ -1,5 +1,7 @@
 //! Optional disk-backed aerial tiles, projected onto existing surface geometry.
+
 use crate::city_assets;
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use std::{
     collections::{HashSet, VecDeque},
@@ -36,76 +38,71 @@ struct Catalog {
     tiles: Vec<Tile>,
 }
 pub fn tile_filenames(text: &str) -> Result<Vec<String>, String> {
-    Catalog::parse(text).map(|catalog| catalog.tiles.into_iter().map(|tile| tile.name).collect())
+    parse(text).map(|catalog| catalog.tiles.into_iter().map(|tile| tile.name).collect())
 }
-impl Catalog {
-    fn parse(text: &str) -> Result<Self, String> {
-        let mut lines = text.lines();
-        if lines.next() != Some("AERIAL 1") {
-            return Err("unsupported aerial catalog".into());
-        }
-        let f: Vec<_> = lines
-            .next()
-            .ok_or("missing aerial dimensions")?
-            .split_whitespace()
-            .collect();
-        if f.len() != 3 || f[0] != "size" {
-            return Err("invalid aerial dimensions".into());
-        }
-        let size = f[1].parse::<usize>().map_err(|_| "invalid aerial size")?;
-        let gutter = f[2].parse::<usize>().map_err(|_| "invalid aerial gutter")?;
-        if !size.is_power_of_two() || !(64..=2048).contains(&size) || !(1..=32).contains(&gutter) {
-            return Err("unsupported aerial dimensions".into());
-        }
-        let mut tiles = Vec::new();
-        let mut names = HashSet::new();
-        for line in lines {
-            let f: Vec<_> = line.split_whitespace().collect();
-            if f.len() < 6 || f[0] != "tile" {
-                return Err("invalid aerial tile".into());
-            }
-            let mut bounds = [0.0; 4];
-            for i in 0..4 {
-                bounds[i] = f[i + 1]
-                    .parse::<f32>()
-                    .map_err(|_| "invalid aerial coordinate")?;
-            }
-            if !bounds.iter().all(|v| v.is_finite())
-                || bounds[0] >= bounds[2]
-                || bounds[1] >= bounds[3]
-            {
-                return Err("invalid aerial bounds".into());
-            }
-            if f[5].contains(['/', '\\'])
-                || f[5].starts_with('.')
-                || !names.insert(f[5].to_string())
-            {
-                return Err("invalid aerial filename".into());
-            }
-            tiles.push(Tile {
-                bounds: BoundingBoxXZ {
-                    min: XZ {
-                        x: bounds[0],
-                        z: bounds[1],
-                    },
-                    max: XZ {
-                        x: bounds[2],
-                        z: bounds[3],
-                    },
-                },
-                name: f[5].into(),
-            });
-        }
-        if tiles.is_empty() {
-            return Err("empty aerial catalog".into());
-        }
-        Ok(Self {
-            size,
-            gutter,
-            tiles,
-        })
+
+fn parse(text: &str) -> Result<Catalog, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("AERIAL 1") {
+        return Err("unsupported aerial catalog".into());
     }
+    let f: Vec<_> = lines
+        .next()
+        .ok_or("missing aerial dimensions")?
+        .split_whitespace()
+        .collect();
+    if f.len() != 3 || f[0] != "size" {
+        return Err("invalid aerial dimensions".into());
+    }
+    let size = f[1].parse::<usize>().map_err(|_| "invalid aerial size")?;
+    let gutter = f[2].parse::<usize>().map_err(|_| "invalid aerial gutter")?;
+    if !size.is_power_of_two() || !(64..=2048).contains(&size) || !(1..=32).contains(&gutter) {
+        return Err("unsupported aerial dimensions".into());
+    }
+    let mut tiles = Vec::new();
+    let mut names = HashSet::new();
+    for line in lines {
+        let f: Vec<_> = line.split_whitespace().collect();
+        if f.len() < 6 || f[0] != "tile" {
+            return Err("invalid aerial tile".into());
+        }
+        let mut bounds = [0.0; 4];
+        for i in 0..4 {
+            bounds[i] = f[i + 1]
+                .parse::<f32>()
+                .map_err(|_| "invalid aerial coordinate")?;
+        }
+        if !bounds.iter().all(|v| v.is_finite()) || bounds[0] >= bounds[2] || bounds[1] >= bounds[3]
+        {
+            return Err("invalid aerial bounds".into());
+        }
+        if f[5].contains(['/', '\\']) || f[5].starts_with('.') || !names.insert(f[5].to_string()) {
+            return Err("invalid aerial filename".into());
+        }
+        tiles.push(Tile {
+            bounds: BoundingBoxXZ {
+                min: XZ {
+                    x: bounds[0],
+                    z: bounds[1],
+                },
+                max: XZ {
+                    x: bounds[2],
+                    z: bounds[3],
+                },
+            },
+            name: f[5].into(),
+        });
+    }
+    if tiles.is_empty() {
+        return Err("empty aerial catalog".into());
+    }
+    Ok(Catalog {
+        size,
+        gutter,
+        tiles,
+    })
 }
+
 fn distance(bounds: BoundingBoxXZ<f32>, eye: XYZ) -> f32 {
     (eye.x - eye.x.clamp(bounds.min.x, bounds.max.x))
         .hypot(eye.z - eye.z.clamp(bounds.min.z, bounds.max.z))
@@ -165,47 +162,47 @@ struct TileLoader {
     queue: Arc<(Mutex<DecodeQueue>, Condvar)>,
     ready: mpsc::Receiver<DecodedTile>,
 }
-impl TileLoader {
-    fn new(directory: PathBuf, catalog: Catalog) -> Self {
-        let queue = Arc::new((Mutex::new(DecodeQueue::default()), Condvar::new()));
-        // Keep decoded CPU memory bounded even if the renderer stops polling.
-        let (sender, ready) = mpsc::sync_channel(2);
-        let worker_queue = queue.clone();
-        std::thread::spawn(move || loop {
-            let (lock, wake) = &*worker_queue;
-            let id = {
-                let mut q = lock.lock().unwrap();
-                while q.wanted.is_empty() && !q.stop {
-                    q = wake.wait(q).unwrap();
-                }
-                if q.stop {
-                    break;
-                }
-                let id = q.wanted.pop_front().unwrap();
-                q.active.insert(id);
-                id
-            };
-            if sender
-                .send((id, read_tile(&directory, &catalog, id)))
-                .is_err()
-            {
+
+fn new(directory: PathBuf, catalog: Catalog) -> TileLoader {
+    let queue = Arc::new((Mutex::new(DecodeQueue::default()), Condvar::new()));
+    // Keep decoded CPU memory bounded even if the renderer stops polling.
+    let (sender, ready) = mpsc::sync_channel(2);
+    let worker_queue = queue.clone();
+    std::thread::spawn(move || loop {
+        let (lock, wake) = &*worker_queue;
+        let id = {
+            let mut q = lock.lock().unwrap();
+            while q.wanted.is_empty() && !q.stop {
+                q = wake.wait(q).unwrap();
+            }
+            if q.stop {
                 break;
             }
-        });
-        Self { queue, ready }
-    }
-    fn request(&self, ids: impl Iterator<Item = usize>) {
-        let (lock, wake) = &*self.queue;
-        let mut q = lock.lock().unwrap();
-        q.wanted = ids.filter(|id| !q.active.contains(id)).collect();
-        wake.notify_one();
-    }
-    fn poll(&self) -> Option<DecodedTile> {
-        let result = self.ready.try_recv().ok()?;
-        self.queue.0.lock().unwrap().active.remove(&result.0);
-        Some(result)
-    }
+            let id = q.wanted.pop_front().unwrap();
+            q.active.insert(id);
+            id
+        };
+        if sender
+            .send((id, read_tile(&directory, &catalog, id)))
+            .is_err()
+        {
+            break;
+        }
+    });
+    TileLoader { queue, ready }
 }
+fn request(tile_loader: &TileLoader, ids: impl Iterator<Item = usize>) {
+    let (lock, wake) = &*tile_loader.queue;
+    let mut q = lock.lock().unwrap();
+    q.wanted = ids.filter(|id| !q.active.contains(id)).collect();
+    wake.notify_one();
+}
+fn poll(tile_loader: &TileLoader) -> Option<DecodedTile> {
+    let result = tile_loader.ready.try_recv().ok()?;
+    tile_loader.queue.0.lock().unwrap().active.remove(&result.0);
+    Some(result)
+}
+
 impl Drop for TileLoader {
     fn drop(&mut self) {
         let (lock, wake) = &*self.queue;
@@ -246,176 +243,179 @@ pub struct Aerial {
     slots: Vec<Option<usize>>,
     failed: HashSet<usize>,
 }
-impl Aerial {
-    pub fn open(assets: &city_assets::CityAsset) -> Option<Self> {
-        let directory = assets.directory().join("aerial");
-        let path = directory.join("tiles.txt");
-        if !path.is_file() {
+
+pub fn open(assets: &city_assets::CityAsset) -> Option<Aerial> {
+    let directory = city_assets::directory(assets).join("aerial");
+    let path = directory.join("tiles.txt");
+    if !path.is_file() {
+        return None;
+    }
+    let catalog = std::fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|s| parse(&s));
+    let catalog = match catalog {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Aerial imagery disabled: {e}");
             return None;
         }
-        let catalog = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|s| Catalog::parse(&s));
-        let catalog = match catalog {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("Aerial imagery disabled: {e}");
-                return None;
-            }
-        };
-        let capacity = capacity(&catalog);
-        let dimension = (catalog.size + 2 * catalog.gutter) as i32;
-        let mut texture = 0;
-        unsafe {
-            gl::GenTextures(1, &mut texture);
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, texture);
-            gl::TexImage3D(
-                gl::TEXTURE_2D_ARRAY,
-                0,
-                gl::RGBA8 as i32,
-                dimension,
-                dimension,
-                capacity as i32,
-                0,
-                gl::RGB,
-                gl::UNSIGNED_BYTE,
-                std::ptr::null(),
-            );
-            gl::TexParameteri(
-                gl::TEXTURE_2D_ARRAY,
-                gl::TEXTURE_MIN_FILTER,
-                gl::LINEAR_MIPMAP_LINEAR as i32,
-            );
-            gl::TexParameteri(
-                gl::TEXTURE_2D_ARRAY,
-                gl::TEXTURE_MAG_FILTER,
-                gl::NEAREST as i32,
-            );
-            for axis in [gl::TEXTURE_WRAP_S, gl::TEXTURE_WRAP_T] {
-                gl::TexParameteri(gl::TEXTURE_2D_ARRAY, axis, gl::CLAMP_TO_EDGE as i32);
-            }
-            let mut extensions = 0;
-            gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut extensions);
-            let supported = (0..extensions).any(|i| {
-                let p = gl::GetStringi(gl::EXTENSIONS, i as u32);
-                !p.is_null()
-                    && matches!(
-                        std::ffi::CStr::from_ptr(p.cast()).to_bytes(),
-                        b"GL_EXT_texture_filter_anisotropic" | b"GL_ARB_texture_filter_anisotropic"
-                    )
-            });
-            if supported {
-                // Anisotropic filtering may override NEAREST magnification.
-                // Keep it disabled for the nearest-neighbour comparison.
-                gl::TexParameterf(gl::TEXTURE_2D_ARRAY, 0x84FE, 1.0);
-            }
-        }
-        let loader = TileLoader::new(directory, catalog.clone());
-        Some(Self {
-            loader,
-            catalog,
-            texture,
-            slots: vec![None; capacity],
-            failed: HashSet::new(),
-        })
-    }
-    pub fn bind(&mut self, program: u32, eye: XYZ) {
-        let wanted = wanted(&self.catalog, eye, self.slots.len());
-        for slot in &mut self.slots {
-            if slot.is_some_and(|i| !wanted.contains(&i)) {
-                *slot = None;
-            }
-        }
-        let mut changed = false;
-        unsafe {
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
-            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-        }
-        // Upload at most two completed tiles per frame; disk I/O and decoding
-        // run entirely on the worker. Obsolete requests are replaced each frame.
-        for _ in 0..2 {
-            let Some((id, result)) = self.loader.poll() else {
-                break;
-            };
-            if !wanted.contains(&id) || self.slots.contains(&Some(id)) {
-                continue;
-            }
-            let Some(slot) = self.slots.iter().position(Option::is_none) else {
-                break;
-            };
-            match result {
-                Ok(bytes) => {
-                    let size = (self.catalog.size + 2 * self.catalog.gutter) as i32;
-                    unsafe {
-                        gl::TexSubImage3D(
-                            gl::TEXTURE_2D_ARRAY,
-                            0,
-                            0,
-                            0,
-                            slot as i32,
-                            size,
-                            size,
-                            1,
-                            gl::RGB,
-                            gl::UNSIGNED_BYTE,
-                            bytes.as_ptr().cast(),
-                        );
-                    }
-                    self.slots[slot] = Some(id);
-                    changed = true;
-                }
-                Err(e) => {
-                    log::warn!("Aerial tile unavailable; using procedural surface: {e}");
-                    self.failed.insert(id);
-                }
-            }
-        }
-        self.loader.request(
-            wanted
-                .iter()
-                .copied()
-                .filter(|id| !self.slots.contains(&Some(*id)) && !self.failed.contains(id)),
+    };
+    let capacity = capacity(&catalog);
+    let dimension = (catalog.size + 2 * catalog.gutter) as i32;
+    let mut texture = 0;
+    unsafe {
+        gl::GenTextures(1, &mut texture);
+        gl::ActiveTexture(gl::TEXTURE0);
+        gl::BindTexture(gl::TEXTURE_2D_ARRAY, texture);
+        gl::TexImage3D(
+            gl::TEXTURE_2D_ARRAY,
+            0,
+            gl::RGBA8 as i32,
+            dimension,
+            dimension,
+            capacity as i32,
+            0,
+            gl::RGB,
+            gl::UNSIGNED_BYTE,
+            std::ptr::null(),
         );
-        unsafe {
-            if changed {
-                gl::GenerateMipmap(gl::TEXTURE_2D_ARRAY);
-            }
-            let location = |name: &str| {
-                let name = CString::new(name).unwrap();
-                gl::GetUniformLocation(program, name.as_ptr())
-            };
-            let mut bounds = Vec::<f32>::new();
-            let mut layers = Vec::<i32>::new();
-            for (slot, id) in self.slots.iter().enumerate() {
-                if let Some(id) = id {
-                    bounds.extend(self.catalog.tiles[*id].bounds.to_array());
-                    layers.push(slot as i32);
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_MIN_FILTER,
+            gl::LINEAR_MIPMAP_LINEAR as i32,
+        );
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_MAG_FILTER,
+            gl::NEAREST as i32,
+        );
+        for axis in [gl::TEXTURE_WRAP_S, gl::TEXTURE_WRAP_T] {
+            gl::TexParameteri(gl::TEXTURE_2D_ARRAY, axis, gl::CLAMP_TO_EDGE as i32);
+        }
+        let mut extensions = 0;
+        gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut extensions);
+        let supported = (0..extensions).any(|i| {
+            let p = gl::GetStringi(gl::EXTENSIONS, i as u32);
+            !p.is_null()
+                && matches!(
+                    std::ffi::CStr::from_ptr(p.cast()).to_bytes(),
+                    b"GL_EXT_texture_filter_anisotropic" | b"GL_ARB_texture_filter_anisotropic"
+                )
+        });
+        if supported {
+            // Anisotropic filtering may override NEAREST magnification.
+            // Keep it disabled for the nearest-neighbour comparison.
+            gl::TexParameterf(gl::TEXTURE_2D_ARRAY, 0x84FE, 1.0);
+        }
+    }
+    let loader = new(directory, catalog.clone());
+    Some(Aerial {
+        loader,
+        catalog,
+        texture,
+        slots: vec![None; capacity],
+        failed: HashSet::new(),
+    })
+}
+pub fn bind(aerial: &mut Aerial, program: u32, eye: XYZ) {
+    let wanted = wanted(&aerial.catalog, eye, aerial.slots.len());
+    for slot in &mut aerial.slots {
+        if slot.is_some_and(|i| !wanted.contains(&i)) {
+            *slot = None;
+        }
+    }
+    let mut changed = false;
+    unsafe {
+        gl::ActiveTexture(gl::TEXTURE0);
+        gl::BindTexture(gl::TEXTURE_2D_ARRAY, aerial.texture);
+        gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+    }
+    // Upload at most two completed tiles per frame; disk I/O and decoding
+    // run entirely on the worker. Obsolete requests are replaced each frame.
+    for _ in 0..2 {
+        let Some((id, result)) = poll(&aerial.loader) else {
+            break;
+        };
+        if !wanted.contains(&id) || aerial.slots.contains(&Some(id)) {
+            continue;
+        }
+        let Some(slot) = aerial.slots.iter().position(Option::is_none) else {
+            break;
+        };
+        match result {
+            Ok(bytes) => {
+                let size = (aerial.catalog.size + 2 * aerial.catalog.gutter) as i32;
+                unsafe {
+                    gl::TexSubImage3D(
+                        gl::TEXTURE_2D_ARRAY,
+                        0,
+                        0,
+                        0,
+                        slot as i32,
+                        size,
+                        size,
+                        1,
+                        gl::RGB,
+                        gl::UNSIGNED_BYTE,
+                        bytes.as_ptr().cast(),
+                    );
                 }
+                aerial.slots[slot] = Some(id);
+                changed = true;
             }
-            gl::Uniform1i(location("u_aerial_count"), layers.len() as i32);
-            gl::Uniform1i(location("u_aerial"), 0);
-            gl::Uniform2f(
-                location("u_aerial_uv"),
-                self.catalog.gutter as f32 / (self.catalog.size + 2 * self.catalog.gutter) as f32,
-                self.catalog.size as f32 / (self.catalog.size + 2 * self.catalog.gutter) as f32,
+            Err(e) => {
+                log::warn!("Aerial tile unavailable; using procedural surface: {e}");
+                aerial.failed.insert(id);
+            }
+        }
+    }
+    request(
+        &aerial.loader,
+        wanted
+            .iter()
+            .copied()
+            .filter(|id| !aerial.slots.contains(&Some(*id)) && !aerial.failed.contains(id)),
+    );
+    unsafe {
+        if changed {
+            gl::GenerateMipmap(gl::TEXTURE_2D_ARRAY);
+        }
+        let location = |name: &str| {
+            let name = CString::new(name).unwrap();
+            gl::GetUniformLocation(program, name.as_ptr())
+        };
+        let mut bounds = Vec::<f32>::new();
+        let mut layers = Vec::<i32>::new();
+        for (slot, id) in aerial.slots.iter().enumerate() {
+            if let Some(id) = id {
+                bounds.extend(geometry::bounding_box_xz_to_array(
+                    aerial.catalog.tiles[*id].bounds,
+                ));
+                layers.push(slot as i32);
+            }
+        }
+        gl::Uniform1i(location("u_aerial_count"), layers.len() as i32);
+        gl::Uniform1i(location("u_aerial"), 0);
+        gl::Uniform2f(
+            location("u_aerial_uv"),
+            aerial.catalog.gutter as f32 / (aerial.catalog.size + 2 * aerial.catalog.gutter) as f32,
+            aerial.catalog.size as f32 / (aerial.catalog.size + 2 * aerial.catalog.gutter) as f32,
+        );
+        if !layers.is_empty() {
+            gl::Uniform4fv(
+                location("u_aerial_bounds[0]"),
+                layers.len() as i32,
+                bounds.as_ptr(),
             );
-            if !layers.is_empty() {
-                gl::Uniform4fv(
-                    location("u_aerial_bounds[0]"),
-                    layers.len() as i32,
-                    bounds.as_ptr(),
-                );
-                gl::Uniform1iv(
-                    location("u_aerial_layers[0]"),
-                    layers.len() as i32,
-                    layers.as_ptr(),
-                );
-            }
+            gl::Uniform1iv(
+                location("u_aerial_layers[0]"),
+                layers.len() as i32,
+                layers.as_ptr(),
+            );
         }
     }
 }
+
 impl Drop for Aerial {
     fn drop(&mut self) {
         unsafe {
@@ -426,26 +426,25 @@ impl Drop for Aerial {
 
 #[cfg(test)]
 mod tests {
+    use crate::aerial;
+    use crate::city_assets;
+
     use super::*;
     use crate::test_support;
     #[test]
     fn two_imagery_workers_and_attributions_stay_with_their_asset_directories() {
         let root = tempfile::tempdir().unwrap();
-        let first =
-            test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
-        let second = test_support::generated_location(
-            &root.path().join("second"),
-            13.0,
-            "arcgisonline.com",
-        );
+        let first = test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
+        let second =
+            test_support::generated_location(&root.path().join("second"), 13.0, "arcgisonline.com");
         let mut workers = Vec::new();
         for (assets, expected) in [(&first, 7), (&second, 13)] {
-            let directory = assets.directory().join("aerial");
+            let directory = city_assets::directory(assets).join("aerial");
             let catalog =
-                Catalog::parse(&std::fs::read_to_string(directory.join("tiles.txt")).unwrap())
+                aerial::parse(&std::fs::read_to_string(directory.join("tiles.txt")).unwrap())
                     .unwrap();
-            let loader = TileLoader::new(directory, catalog);
-            loader.request(std::iter::once(0));
+            let loader = aerial::new(directory, catalog);
+            aerial::request(&loader, std::iter::once(0));
             workers.push((loader, expected));
         }
         for (loader, expected) in workers {
@@ -458,13 +457,17 @@ mod tests {
             assert_eq!(pixels.len(), 66 * 66 * 3);
             assert!(pixels.iter().all(|&value| value == expected));
         }
-        assert!(first.aerial_attribution().unwrap().contains("CYPRUS DLS"));
-        assert!(second.aerial_attribution().unwrap().contains("ESRI"));
+        assert!(city_assets::aerial_attribution(&(first))
+            .unwrap()
+            .contains("CYPRUS DLS"));
+        assert!(city_assets::aerial_attribution(&(second))
+            .unwrap()
+            .contains("ESRI"));
     }
 
     #[test]
     fn catalog_validation_and_nearby_selection_are_bounded() {
-        let c=Catalog::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 a.rgb 00000000\ntile 100 0 200 100 b.rgb 00000000\n").unwrap();
+        let c=aerial::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 a.rgb 00000000\ntile 100 0 200 100 b.rgb 00000000\n").unwrap();
         assert_eq!(
             wanted(
                 &c,
@@ -489,10 +492,10 @@ mod tests {
         )
         .is_empty());
         assert!(
-            Catalog::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 ../a.rgb 00000000\n").is_err()
+            aerial::parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 ../a.rgb 00000000\n").is_err()
         );
         assert!(
-            Catalog::parse("AERIAL 1\nsize 512 8\ntile NaN 0 100 100 a.rgb 00000000\n").is_err()
+            aerial::parse("AERIAL 1\nsize 512 8\ntile NaN 0 100 100 a.rgb 00000000\n").is_err()
         );
         assert!(read_tile(Path::new("/missing-aerial-test"), &c, 0).is_err());
     }
@@ -510,15 +513,11 @@ mod tests {
                 ));
             }
         }
-        let catalog = Catalog::parse(&text).unwrap();
+        let catalog = aerial::parse(&text).unwrap();
         let slots = capacity(&catalog);
         for x in [0., 62., 124., 248.] {
             for z in [0., 62., 124., 248.] {
-                let all = wanted(
-                    &catalog,
-                    XYZ { x: x, y: 0., z: z },
-                    usize::MAX,
-                );
+                let all = wanted(&catalog, XYZ { x: x, y: 0., z: z }, usize::MAX);
                 assert!(
                     all.len() <= slots,
                     "nearby city coverage requires {} slots, only {slots} available",
@@ -533,12 +532,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bytes = encode_jpeg(&vec![127; 66 * 66 * 3], 66, 66).unwrap();
         std::fs::write(dir.path().join("a.jpg"), &bytes).unwrap();
-        let catalog = Catalog::parse(&format!(
+        let catalog = aerial::parse(&format!(
             "AERIAL 1\nsize 64 1\ntile 0 0 10 10 a.jpg {:08x}\ntile 10 0 20 10 missing.jpg 00000000\n",
             0
         )).unwrap();
-        let loader = TileLoader::new(dir.path().to_path_buf(), catalog.clone());
-        loader.request([0, 1].into_iter());
+        let loader = aerial::new(dir.path().to_path_buf(), catalog.clone());
+        aerial::request(&loader, [0, 1].into_iter());
         let (id, result) = loader
             .ready
             .recv_timeout(std::time::Duration::from_secs(5))

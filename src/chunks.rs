@@ -1,3 +1,4 @@
+use crate::geometry;
 use crate::geometry::XYZ;
 use crate::scene::Vertex;
 use crate::scene_archive;
@@ -18,98 +19,99 @@ pub struct ChunkBuilder {
     failure: Option<std::io::Error>,
 }
 
-impl ChunkBuilder {
-    pub fn spooled(directory: &std::path::Path) -> std::io::Result<Self> {
-        Ok(Self {
-            spool: Some(scene_archive::Spool::new(directory)?),
-            ..Self::default()
-        })
+pub fn spooled(directory: &std::path::Path) -> std::io::Result<ChunkBuilder> {
+    Ok(ChunkBuilder {
+        spool: Some(scene_archive::new(directory)?),
+        ..ChunkBuilder::default()
+    })
+}
+fn flush(chunk_builder: &mut ChunkBuilder) -> std::io::Result<()> {
+    if let Some(spool) = &mut chunk_builder.spool {
+        for chunk in std::mem::take(&mut chunk_builder.bins).into_values() {
+            scene_archive::append(spool, chunk)?;
+        }
+        chunk_builder.pending = 0;
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        if let Some(spool) = &mut self.spool {
-            for chunk in std::mem::take(&mut self.bins).into_values() {
-                spool.append(chunk)?;
-            }
-            self.pending = 0;
-        }
-        Ok(())
+    Ok(())
+}
+pub fn finish_spooled(mut chunk_builder: ChunkBuilder) -> std::io::Result<scene_archive::Spool> {
+    if let Some(error) = chunk_builder.failure.take() {
+        return Err(error);
     }
-    pub fn finish_spooled(mut self) -> std::io::Result<scene_archive::Spool> {
-        if let Some(error) = self.failure.take() {
-            return Err(error);
-        }
-        self.flush()?;
-        Ok(self.spool.take().expect("spooled builder"))
+    flush(&mut chunk_builder)?;
+    Ok(chunk_builder.spool.take().expect("spooled builder"))
+}
+pub fn push(chunk_builder: &mut ChunkBuilder, tri: [Vertex; 3]) {
+    if chunk_builder.failure.is_some() {
+        return;
     }
-    pub fn push(&mut self, tri: [Vertex; 3]) {
-        if self.failure.is_some() {
-            return;
-        }
-        let x = tri.iter().map(|v| v.position[0]).sum::<f32>() / 3.;
-        let z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.;
-        let cell = ((x / SIZE).floor() as i32, (z / SIZE).floor() as i32);
-        let chunk = self.bins.entry(cell).or_insert_with(|| Chunk {
-            cell: [cell.0, cell.1],
-            vertices: vec![],
-            bounds: [
-                XYZ {
-                    x: f32::INFINITY,
-                    y: f32::INFINITY,
-                    z: f32::INFINITY,
-                },
-                XYZ {
-                    x: f32::NEG_INFINITY,
-                    y: f32::NEG_INFINITY,
-                    z: f32::NEG_INFINITY,
-                },
-            ],
-        });
-        for v in &tri {
-            for axis in 0..3 {
-                *chunk.bounds[0].component_mut(axis) =
-                    chunk.bounds[0].component(axis).min(v.position[axis]);
-                *chunk.bounds[1].component_mut(axis) =
-                    chunk.bounds[1].component(axis).max(v.position[axis]);
-            }
-        }
-        chunk.vertices.extend_from_slice(&tri);
-        self.pending += 3;
-        // Bound live geometry independently of city size (about 12 MiB of vertices).
-        if self.spool.is_some() && self.pending >= 262_144 {
-            if let Err(error) = self.flush() {
-                self.failure = Some(error);
-            }
+    let x = tri.iter().map(|v| v.position[0]).sum::<f32>() / 3.;
+    let z = tri.iter().map(|v| v.position[2]).sum::<f32>() / 3.;
+    let cell = ((x / SIZE).floor() as i32, (z / SIZE).floor() as i32);
+    let chunk = chunk_builder.bins.entry(cell).or_insert_with(|| Chunk {
+        cell: [cell.0, cell.1],
+        vertices: vec![],
+        bounds: [
+            XYZ {
+                x: f32::INFINITY,
+                y: f32::INFINITY,
+                z: f32::INFINITY,
+            },
+            XYZ {
+                x: f32::NEG_INFINITY,
+                y: f32::NEG_INFINITY,
+                z: f32::NEG_INFINITY,
+            },
+        ],
+    });
+    for v in &tri {
+        for axis in 0..3 {
+            *geometry::xyz_component_mut(&mut chunk.bounds[0], axis) =
+                geometry::xyz_component(chunk.bounds[0], axis).min(v.position[axis]);
+            *geometry::xyz_component_mut(&mut chunk.bounds[1], axis) =
+                geometry::xyz_component(chunk.bounds[1], axis).max(v.position[axis]);
         }
     }
-    pub fn finish(self) -> Vec<Chunk> {
-        assert!(self.spool.is_none());
-        self.bins.into_values().collect()
+    chunk.vertices.extend_from_slice(&tri);
+    chunk_builder.pending += 3;
+    // Bound live geometry independently of city size (about 12 MiB of vertices).
+    if chunk_builder.spool.is_some() && chunk_builder.pending >= 262_144 {
+        if let Err(error) = flush(chunk_builder) {
+            chunk_builder.failure = Some(error);
+        }
     }
 }
+pub fn finish(chunk_builder: ChunkBuilder) -> Vec<Chunk> {
+    assert!(chunk_builder.spool.is_none());
+    chunk_builder.bins.into_values().collect()
+}
+
 #[cfg(test)]
 fn partition(vertices: Vec<Vertex>) -> Vec<Chunk> {
     assert_eq!(vertices.len() % 3, 0);
     let mut builder = ChunkBuilder::default();
     for tri in vertices.as_chunks::<3>().0 {
-        builder.push(*tri);
+        push(&mut builder, *tri);
     }
-    builder.finish()
+    finish(builder)
 }
 pub fn distance_squared(bounds: [XYZ; 2], eye: XYZ) -> f32 {
     [0, 2]
         .into_iter()
         .map(|i| {
-            (eye.component(i)
-                - eye
-                    .component(i)
-                    .clamp(bounds[0].component(i), bounds[1].component(i)))
+            (geometry::xyz_component(eye, i)
+                - geometry::xyz_component(eye, i).clamp(
+                    geometry::xyz_component(bounds[0], i),
+                    geometry::xyz_component(bounds[1], i),
+                ))
             .powi(2)
         })
         .sum()
 }
 pub fn visible(bounds: [XYZ; 2], matrix: [f32; 16]) -> bool {
     let corners: [[f32; 4]; 8] = std::array::from_fn(|i| {
-        let p: XYZ = XYZ::from_fn(|axis| bounds[(i >> axis) & 1].component(axis));
+        let p: XYZ =
+            geometry::xyz_from_fn(|axis| geometry::xyz_component(bounds[(i >> axis) & 1], axis));
         std::array::from_fn(|row| {
             matrix[row] * p.x + matrix[4 + row] * p.y + matrix[8 + row] * p.z + matrix[12 + row]
         })
@@ -120,6 +122,8 @@ pub fn visible(bounds: [XYZ; 2], matrix: [f32; 16]) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+
     use super::*;
     #[test]
     fn partition_keeps_triangles_whole_and_bounds_include_vertices_across_seams() {
@@ -143,8 +147,8 @@ mod tests {
             for v in &chunk.vertices {
                 for axis in 0..3 {
                     assert!(
-                        v.position[axis] >= chunk.bounds[0].component(axis)
-                            && v.position[axis] <= chunk.bounds[1].component(axis)
+                        v.position[axis] >= geometry::xyz_component(chunk.bounds[0], axis)
+                            && v.position[axis] <= geometry::xyz_component(chunk.bounds[1], axis)
                     );
                 }
             }

@@ -9,6 +9,7 @@ use crate::geometry::{
 };
 use crate::map_details::RoadSurface;
 use crate::osm;
+use crate::world;
 use crate::{
     error::{invalid, Result},
     source_location::{SourceLocation, SourceRoad},
@@ -42,63 +43,75 @@ pub struct PolygonIndex<'a> {
     polygons: &'a [Polygon<f64>],
     tree: rstar::RTree<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<XZ>, usize>>,
 }
-impl<'a> PolygonIndex<'a> {
-    pub fn new(geometry: &'a MultiPolygon<f64>) -> Self {
-        let items = geometry
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, p)| {
-                p.bounding_rect().map(|r| {
-                    rstar::primitives::GeomWithData::new(
-                        rstar::primitives::Rectangle::from_corners(
-                            XZ {
-                                x: r.min().x,
-                                z: r.min().y,
-                            },
-                            XZ {
-                                x: r.max().x,
-                                z: r.max().y,
-                            },
-                        ),
-                        i,
-                    )
-                })
+
+pub fn new<'a>(geometry: &'a MultiPolygon<f64>) -> PolygonIndex<'a> {
+    let items = geometry
+        .0
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            p.bounding_rect().map(|r| {
+                rstar::primitives::GeomWithData::new(
+                    rstar::primitives::Rectangle::from_corners(
+                        XZ {
+                            x: r.min().x,
+                            z: r.min().y,
+                        },
+                        XZ {
+                            x: r.max().x,
+                            z: r.max().y,
+                        },
+                    ),
+                    i,
+                )
             })
-            .collect();
-        Self {
-            polygons: &geometry.0,
-            tree: rstar::RTree::bulk_load(items),
-        }
-    }
-    fn candidates(&self, geometry: &MultiPolygon<f64>) -> Vec<&Polygon<f64>> {
-        let Some(r) = geometry.bounding_rect() else {
-            return vec![];
-        };
-        let envelope = rstar::AABB::from_corners(
-            XZ {
-                x: r.min().x,
-                z: r.min().y,
-            },
-            XZ {
-                x: r.max().x,
-                z: r.max().y,
-            },
-        );
-        self.tree
-            .locate_in_envelope_intersecting(&envelope)
-            .map(|item| &self.polygons[item.data])
-            .collect()
-    }
-    pub fn intersects(&self, geometry: &MultiPolygon<f64>) -> bool {
-        self.candidates(geometry)
-            .iter()
-            .any(|p| p.intersects(geometry))
-    }
-    pub fn nearby(&self, geometry: &MultiPolygon<f64>) -> MultiPolygon<f64> {
-        MultiPolygon(self.candidates(geometry).into_iter().cloned().collect())
+        })
+        .collect();
+    PolygonIndex::<'a> {
+        polygons: &geometry.0,
+        tree: rstar::RTree::bulk_load(items),
     }
 }
+fn candidates<'a, 'index>(
+    polygon_index: &'index PolygonIndex<'a>,
+    geometry: &MultiPolygon<f64>,
+) -> Vec<&'index Polygon<f64>> {
+    let Some(r) = geometry.bounding_rect() else {
+        return vec![];
+    };
+    let envelope = rstar::AABB::from_corners(
+        XZ {
+            x: r.min().x,
+            z: r.min().y,
+        },
+        XZ {
+            x: r.max().x,
+            z: r.max().y,
+        },
+    );
+    polygon_index
+        .tree
+        .locate_in_envelope_intersecting(&envelope)
+        .map(|item| &polygon_index.polygons[item.data])
+        .collect()
+}
+pub fn intersects<'a>(polygon_index: &PolygonIndex<'a>, geometry: &MultiPolygon<f64>) -> bool {
+    candidates(polygon_index, geometry)
+        .iter()
+        .any(|p| p.intersects(geometry))
+}
+pub fn nearby<'a>(
+    polygon_index: &PolygonIndex<'a>,
+    geometry: &MultiPolygon<f64>,
+) -> MultiPolygon<f64> {
+    MultiPolygon(
+        candidates(polygon_index, geometry)
+            .into_iter()
+            .cloned()
+            .collect(),
+    )
+}
+
 pub fn union(items: &[MultiPolygon<f64>]) -> MultiPolygon<f64> {
     if items.is_empty() {
         empty()
@@ -178,7 +191,7 @@ fn pavement_ribbon(
 
 fn paths(map: &SourceLocation<f64>, adjacency: &[Vec<usize>]) -> Vec<Vec<XZ>> {
     let end = |node: usize, other: usize| {
-        let p = map.road_nodes[node].xz();
+        let p = geometry::xz(map.road_nodes[node]);
         if adjacency[node].len() != 2 {
             return vec![p];
         }
@@ -189,16 +202,16 @@ fn paths(map: &SourceLocation<f64>, adjacency: &[Vec<usize>]) -> Vec<Vec<XZ>> {
         let Some(neighbor) = neighbor else {
             return vec![p];
         };
-        let a = unit(sub(map.road_nodes[other].xz(), p));
-        let b = unit(sub(map.road_nodes[neighbor].xz(), p));
+        let a = unit(sub(geometry::xz(map.road_nodes[other]), p));
+        let b = unit(sub(geometry::xz(map.road_nodes[neighbor]), p));
         let d = dot(a, b);
         if d > 0.5 || d < -0.9995 {
             return vec![p];
         }
         let displacement = length(add(a, b)) * 0.25;
         let trim = 2.0_f64
-            .min(dist(p, map.road_nodes[other].xz()) * 0.2)
-            .min(dist(p, map.road_nodes[neighbor].xz()) * 0.2)
+            .min(dist(p, geometry::xz(map.road_nodes[other])) * 0.2)
+            .min(dist(p, geometry::xz(map.road_nodes[neighbor])) * 0.2)
             .min(0.6 / displacement.max(0.001));
         let q0 = add(p, mul(a, trim));
         let q1 = add(p, mul(b, trim));
@@ -389,7 +402,7 @@ pub fn write_streets_txt(
         if elevated[i] {
             *path = map.road_lines[i]
                 .ends
-                .map(|n| map.road_nodes[n].xz())
+                .map(|n| geometry::xz(map.road_nodes[n]))
                 .to_vec();
         }
     }
@@ -397,24 +410,25 @@ pub fn write_streets_txt(
         &map.buildings
             .iter()
             .filter(|b| b.min_height_meters < 1.7)
-            .map(|b| b.footprint().buffer(0.1))
+            .map(|b| world::footprint(b).buffer(0.1))
             .collect::<Vec<_>>(),
     );
-    let building_index = PolygonIndex::new(&buildings);
+    let building_index = new(&buildings);
     let mut patches = Vec::new();
     let mut patch_kinds = Vec::new();
     let mut patch_nodes = Vec::new();
     let mut patch_pavement = Vec::new();
     for (node, arms) in adjacency.iter().enumerate().filter(|(_, a)| a.len() >= 3) {
-        let p = map.road_nodes[node].xz();
+        let p = geometry::xz(map.road_nodes[node]);
         let other = |i: usize| {
             let r = &map.road_lines[i];
-            map.road_nodes[if r.ends[0] == node {
-                r.ends[1]
-            } else {
-                r.ends[0]
-            }]
-            .xz()
+            geometry::xz(
+                map.road_nodes[if r.ends[0] == node {
+                    r.ends[1]
+                } else {
+                    r.ends[0]
+                }],
+            )
         };
         let mut arms = arms.clone();
         arms.sort_by(|a, b| {
@@ -468,7 +482,7 @@ pub fn write_streets_txt(
                 )
             }));
             let poly = MultiPolygon(vec![polygon(&points)]);
-            let poly = poly.difference(&building_index.nearby(&poly));
+            let poly = poly.difference(&nearby(&building_index, &poly));
             if !poly.0.is_empty() {
                 let has_pavement = |i: usize, outward: XZ| {
                     let road = &map.road_lines[i];
@@ -506,7 +520,7 @@ pub fn write_streets_txt(
             .iter()
             .map(|i| map.road_lines[*i].road_width_start_meters / 2.0)
             .fold(f64::INFINITY, f64::min);
-        let p = map.road_nodes[n].xz();
+        let p = geometry::xz(map.road_nodes[n]);
         cores.push(Point::new(p.x, p.z).buffer(width));
         core_kinds.push(arms.iter().map(|i| map.road_lines[*i].kind).min().unwrap());
     }
@@ -542,7 +556,7 @@ pub fn write_streets_txt(
                     road.osm_way_id
                         .and_then(|id| source.ways.get(&id))
                         .is_some_and(|way| {
-                            build_details::road_surface(way.tag("surface")) == material
+                            build_details::road_surface(osm::tag(way, "surface")) == material
                         })
                 })
                 .map(|(geometry, _)| geometry.clone())
@@ -617,13 +631,16 @@ pub fn write_streets_txt(
                     road.sidewalks.right = !left && r.sidewalks.right;
                     let tagged = way
                         .and_then(|way| {
-                            osm::number(way.tag(if left {
-                                "sidewalk:left:width"
-                            } else {
-                                "sidewalk:right:width"
-                            }))
-                            .or_else(|| osm::number(way.tag("sidewalk:both:width")))
-                            .or_else(|| osm::number(way.tag("sidewalk:width")))
+                            osm::number(osm::tag(
+                                way,
+                                if left {
+                                    "sidewalk:left:width"
+                                } else {
+                                    "sidewalk:right:width"
+                                },
+                            ))
+                            .or_else(|| osm::number(osm::tag(way, "sidewalk:both:width")))
+                            .or_else(|| osm::number(osm::tag(way, "sidewalk:width")))
                         })
                         .unwrap_or(width)
                         .clamp(0.2, 10.);
@@ -650,7 +667,7 @@ pub fn write_streets_txt(
             .enumerate()
             .filter(|(_, a)| a.len() > 2)
             .map(|(n, a)| {
-                let p = map.road_nodes[n].xz();
+                let p = geometry::xz(map.road_nodes[n]);
                 Point::new(p.x, p.z).buffer(
                     a.iter()
                         .map(|i| map.road_lines[*i].road_width_start_meters / 2.0)
@@ -720,7 +737,7 @@ pub fn write_streets_txt(
         if source
             .and_then(|source| r.osm_way_id.and_then(|id| source.ways.get(&id)))
             .is_some_and(|way| {
-                build_details::road_surface(way.tag("surface")) == RoadSurface::Unpaved
+                build_details::road_surface(osm::tag(way, "surface")) == RoadSurface::Unpaved
             })
         {
             continue;
@@ -736,10 +753,10 @@ pub fn write_streets_txt(
         let mut dashed = vec![];
         let way = source.and_then(|source| r.osm_way_id.and_then(|id| source.ways.get(&id)));
         let forward = way
-            .and_then(|w| osm::number(w.tag("lanes:forward")))
+            .and_then(|w| osm::number(osm::tag(w, "lanes:forward")))
             .map(|v| v as usize);
         let backward = way
-            .and_then(|w| osm::number(w.tag("lanes:backward")))
+            .and_then(|w| osm::number(osm::tag(w, "lanes:backward")))
             .map(|v| v as usize);
         if r.direction == 0 && (forward.is_some() || backward.is_some()) {
             let forward = forward
@@ -798,7 +815,8 @@ pub fn write_streets_txt(
         format_args!("STREETS 1 {}\n", map.road_lines.len()),
     )?;
     if let Some(n) = patch_nodes.iter().min_by(|a, b| {
-        length(map.road_nodes[**a].xz()).total_cmp(&length(map.road_nodes[**b].xz()))
+        length(geometry::xz(map.road_nodes[**a]))
+            .total_cmp(&length(geometry::xz(map.road_nodes[**b])))
     }) {
         io::Write::write_fmt(&mut file, format_args!("j {n}\n"))?;
     }
@@ -854,7 +872,8 @@ pub fn write_streets_txt(
 
     // Index the small input pieces, rather than a city-wide connected polygon.
     // A probe intersects their union exactly when it intersects any one piece.
-    let original_footprints = MultiPolygon(map.buildings.iter().map(|b| b.footprint()).collect());
+    let original_footprints =
+        MultiPolygon(map.buildings.iter().map(|b| world::footprint(b)).collect());
     let obstacles = MultiPolygon(
         buffers
             .into_iter()
@@ -876,9 +895,12 @@ pub fn write_streets_txt(
 
 #[cfg(test)]
 mod geometry_tests {
+    use crate::geometry;
+    use crate::source_location;
+
     use super::*;
     use crate::build_surfaces;
-    use crate::geometry::{project, BoundingBoxXZ, LatLon};
+    use crate::geometry::{project, BoundingBoxXZ};
     use crate::src_files;
     use crate::street_surface;
     use crate::test_support;
@@ -892,7 +914,7 @@ mod geometry_tests {
     ) -> SourceLocation<f64> {
         SourceLocation {
             boundary: None,
-            origin: Some(LatLon::new(35.162, 33.320)),
+            origin: Some(geometry::new(35.162, 33.320)),
             bounding_box: BoundingBoxXZ {
                 min: XZ {
                     x: -100.0,
@@ -900,7 +922,7 @@ mod geometry_tests {
                 },
                 max: XZ { x: 100.0, z: 100.0 },
             },
-            road_nodes: nodes.iter().map(|p| p.at_height(0.0)).collect(),
+            road_nodes: nodes.iter().map(|p| geometry::at_height(*p, 0.0)).collect(),
             road_lines: roads
                 .iter()
                 .enumerate()
@@ -909,7 +931,7 @@ mod geometry_tests {
                     direction: 0,
                     osm_way_id: Some(i as i64 + 1),
                     lanes: 2,
-                    ..SourceRoad::new([*a, *b], *width)
+                    ..source_location::new([*a, *b], *width)
                 })
                 .collect(),
             buildings: buildings
@@ -925,7 +947,7 @@ mod geometry_tests {
                     ground_outline: p.clone(),
                 })
                 .collect(),
-            ..SourceLocation::<f64>::empty()
+            ..source_location::empty::<f64>()
         }
     }
     fn surfaces(
@@ -935,11 +957,11 @@ mod geometry_tests {
         build_surfaces::Surfaces,
         street_surface::StreetSurface,
     ) {
-        let temp = Temp::new();
+        let temp = test_support::new();
         src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
         let s = build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None)
             .unwrap();
-        let loaded = street_surface::StreetSurface::load(
+        let loaded = street_surface::load(
             &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
             map.road_lines.len(),
         )
@@ -952,7 +974,7 @@ mod geometry_tests {
     }
     #[test]
     fn pavement_follows_left_side_through_a_bend_and_round_end_caps() {
-        let mut road = SourceRoad::new([0, 1], 8.0);
+        let mut road = source_location::new([0, 1], 8.0);
         road.sidewalks.right = false;
         let path = [
             XZ { x: -30., z: 0. },
@@ -999,8 +1021,7 @@ mod geometry_tests {
             road.sidewalks.right = false;
         }
         let (_, _, compiled) = surfaces(&m);
-        assert!(compiled
-            .road_triangles()
+        assert!(street_surface::road_triangles(&(compiled))
             .iter()
             .all(|t| !matches!(t.usage, world::TriangleUsage::Pavement(_))));
     }
@@ -1023,7 +1044,7 @@ mod geometry_tests {
         assert!(asphalt.contains(&point(XZ { x: 4.4, z: 3.4 })));
         let mut area = 0.;
         let mut styles = std::collections::BTreeSet::new();
-        for t in loaded.road_triangles() {
+        for t in street_surface::road_triangles(&loaded) {
             let p: Vec<XZ> = t
                 .points
                 .iter()
@@ -1033,7 +1054,7 @@ mod geometry_tests {
                 })
                 .collect();
             let poly = polygon(&p);
-            if t.usage.is_road() {
+            if world::is_road(t.usage) {
                 area += poly.unsigned_area();
             }
             if matches!(t.usage, world::TriangleUsage::Pavement(_)) {
@@ -1118,7 +1139,10 @@ mod geometry_tests {
         let (_temp, _, loaded) = surfaces(&m);
         let asphalt = test_support::road_footprint(&loaded);
         assert!(!asphalt.intersects(&point(XZ { x: 0., z: 0. })));
-        for t in loaded.road_triangles().iter().filter(|t| t.usage.is_road()) {
+        for t in street_surface::road_triangles(&loaded)
+            .iter()
+            .filter(|t| world::is_road(t.usage))
+        {
             let p: Vec<XZ> = t
                 .points
                 .iter()
@@ -1151,7 +1175,7 @@ mod geometry_tests {
         );
         let (_, s, loaded) = surfaces(&m);
         let asphalt = test_support::road_footprint(&loaded);
-        let index = build_surfaces::PolygonIndex::new(&s.obstacles);
+        let index = build_surfaces::new(&s.obstacles);
         let footprint = polygon(&building);
         for x in (-40..=40).step_by(4) {
             for z in (-40..=40).step_by(4) {
@@ -1161,7 +1185,7 @@ mod geometry_tests {
                 })
                 .buffer(0.18);
                 assert_eq!(
-                    index.intersects(&probe),
+                    build_surfaces::intersects(&(index), &probe),
                     asphalt.intersects(&probe) || footprint.intersects(&probe),
                     "mismatched collision at {x},{z}"
                 );
@@ -1275,12 +1299,15 @@ mod geometry_tests {
         );
         let (_, s, _) = surfaces(&m);
         assert!(dist(*s.paths[0].last().unwrap(), s.paths[1][0]) < 1e-6);
-        assert!(dist(s.paths[1][0], m.road_nodes[1].xz()) > 0.01);
+        assert!(dist(s.paths[1][0], geometry::xz(m.road_nodes[1])) > 0.01);
         for (r, path) in m.road_lines.iter().zip(&s.paths) {
             for p in path {
                 assert!(
                     project(
-                        &[m.road_nodes[r.ends[0]].xz(), m.road_nodes[r.ends[1]].xz()],
+                        &[
+                            geometry::xz(m.road_nodes[r.ends[0]]),
+                            geometry::xz(m.road_nodes[r.ends[1]])
+                        ],
                         *p
                     )
                     .0 <= 0.601

@@ -101,101 +101,99 @@ fn wav_pcm(bytes: &[u8]) -> io::Result<&[u8]> {
     pcm.ok_or_else(|| invalid("missing WAV data chunk"))
 }
 
-impl EngineSamples {
-    fn load(directory: &Path) -> io::Result<Self> {
-        fn read(directory: &Path, value: &serde_json::Value) -> io::Result<EngineLoop> {
-            let name = value["file"]
-                .as_str()
-                .filter(|name| {
-                    !name.contains(['/', '\\'])
-                        && Path::new(name).components().count() == 1
-                        && Path::new(name).extension().is_some_and(|e| e == "wav")
-                })
-                .ok_or_else(|| invalid("engine loop must name a local .wav file"))?;
-            let pulse_hz = value["pulse_hz"]
-                .as_f64()
-                .filter(|v| v.is_finite() && (10.0..=1500.0).contains(v))
-                .ok_or_else(|| invalid("invalid engine loop firing frequency"))?
-                as f32;
-            let overlap = value["overlap"]
-                .as_u64()
-                .filter(|v| (16..=24000).contains(v))
-                .ok_or_else(|| invalid("invalid engine loop overlap"))?
-                as usize;
-            let path = directory.join(name);
-            // At most ten seconds of mono 48 kHz s16le plus 64 KiB of WAV
-            // headers/metadata. The WAV reader handles editor RIFF chunks.
-            let mut bytes = Vec::new();
-            std::fs::File::open(&path)?
-                .take(1_025_537)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 1_025_536 {
-                return Err(invalid("engine WAV exceeds file size limit"));
-            }
-            let pcm =
-                wav_pcm(&bytes).map_err(|error| invalid(format!("{}: {error}", path.display())))?;
-            if pcm.len() % 2 != 0 || pcm.len() / 2 <= overlap * 2 || pcm.len() > 960_000 {
-                return Err(invalid(format!(
-                    "invalid WAV loop length: {}",
-                    path.display()
-                )));
-            }
-            Ok(EngineLoop {
-                pcm: pcm.to_vec(),
-                pulse_hz,
-                overlap,
+fn load(directory: &Path) -> io::Result<EngineSamples> {
+    fn read(directory: &Path, value: &serde_json::Value) -> io::Result<EngineLoop> {
+        let name = value["file"]
+            .as_str()
+            .filter(|name| {
+                !name.contains(['/', '\\'])
+                    && Path::new(name).components().count() == 1
+                    && Path::new(name).extension().is_some_and(|e| e == "wav")
             })
+            .ok_or_else(|| invalid("engine loop must name a local .wav file"))?;
+        let pulse_hz = value["pulse_hz"]
+            .as_f64()
+            .filter(|v| v.is_finite() && (10.0..=1500.0).contains(v))
+            .ok_or_else(|| invalid("invalid engine loop firing frequency"))?
+            as f32;
+        let overlap = value["overlap"]
+            .as_u64()
+            .filter(|v| (16..=24000).contains(v))
+            .ok_or_else(|| invalid("invalid engine loop overlap"))? as usize;
+        let path = directory.join(name);
+        // At most ten seconds of mono 48 kHz s16le plus 64 KiB of WAV
+        // headers/metadata. The WAV reader handles editor RIFF chunks.
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)?
+            .take(1_025_537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 1_025_536 {
+            return Err(invalid("engine WAV exceeds file size limit"));
         }
-        let mut manifest = Vec::new();
-        std::fs::File::open(directory.join("engine.json"))?
-            .take(65_537)
-            .read_to_end(&mut manifest)?;
-        if manifest.len() > 65_536 {
-            return Err(invalid("engine manifest exceeds 64 KiB"));
+        let pcm =
+            wav_pcm(&bytes).map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+        if pcm.len() % 2 != 0 || pcm.len() / 2 <= overlap * 2 || pcm.len() > 960_000 {
+            return Err(invalid(format!(
+                "invalid WAV loop length: {}",
+                path.display()
+            )));
         }
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&manifest).map_err(|e| invalid(e.to_string()))?;
-        if manifest["version"].as_u64() != Some(1)
-            || manifest["sample_rate"].as_u64() != Some(SAMPLE_RATE as u64)
-        {
-            return Err(invalid("unsupported engine bank version or sample rate"));
-        }
-        let values = manifest["bands"]
-            .as_array()
-            .filter(|v| (2..=16).contains(&v.len()))
-            .ok_or_else(|| invalid("engine bank requires 2 to 16 RPM bands"))?;
-        let mut bands = Vec::with_capacity(values.len());
-        let mut previous = 0.0;
-        for value in values {
-            let rpm = value["rpm"]
-                .as_f64()
-                .filter(|v| v.is_finite() && (300.0..=20000.0).contains(v))
-                .ok_or_else(|| invalid("invalid engine band RPM"))? as f32;
-            if rpm <= previous {
-                return Err(invalid("engine bands must have strictly increasing RPM"));
-            }
-            bands.push(RpmBand {
-                rpm,
-                load: read(directory, &value["load"])?,
-                coast: read(directory, &value["coast"])?,
-            });
-            previous = rpm;
-        }
-        Ok(Self { bands })
+        Ok(EngineLoop {
+            pcm: pcm.to_vec(),
+            pulse_hz,
+            overlap,
+        })
     }
+    let mut manifest = Vec::new();
+    std::fs::File::open(directory.join("engine.json"))?
+        .take(65_537)
+        .read_to_end(&mut manifest)?;
+    if manifest.len() > 65_536 {
+        return Err(invalid("engine manifest exceeds 64 KiB"));
+    }
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&manifest).map_err(|e| invalid(e.to_string()))?;
+    if manifest["version"].as_u64() != Some(1)
+        || manifest["sample_rate"].as_u64() != Some(SAMPLE_RATE as u64)
+    {
+        return Err(invalid("unsupported engine bank version or sample rate"));
+    }
+    let values = manifest["bands"]
+        .as_array()
+        .filter(|v| (2..=16).contains(&v.len()))
+        .ok_or_else(|| invalid("engine bank requires 2 to 16 RPM bands"))?;
+    let mut bands = Vec::with_capacity(values.len());
+    let mut previous = 0.0;
+    for value in values {
+        let rpm = value["rpm"]
+            .as_f64()
+            .filter(|v| v.is_finite() && (300.0..=20000.0).contains(v))
+            .ok_or_else(|| invalid("invalid engine band RPM"))? as f32;
+        if rpm <= previous {
+            return Err(invalid("engine bands must have strictly increasing RPM"));
+        }
+        bands.push(RpmBand {
+            rpm,
+            load: read(directory, &value["load"])?,
+            coast: read(directory, &value["coast"])?,
+        });
+        previous = rpm;
+    }
+    Ok(EngineSamples { bands })
+}
 
-    fn blend(&self, rpm: f32) -> (usize, usize, f32) {
-        let upper = self.bands.partition_point(|band| band.rpm < rpm);
-        if upper == 0 {
-            return (0, 0, 0.0);
-        }
-        if upper == self.bands.len() {
-            return (upper - 1, upper - 1, 0.0);
-        }
-        let lower = upper - 1;
-        let t = (rpm - self.bands[lower].rpm) / (self.bands[upper].rpm - self.bands[lower].rpm);
-        (lower, upper, t * t * (3.0 - 2.0 * t))
+fn blend(engine_samples: &EngineSamples, rpm: f32) -> (usize, usize, f32) {
+    let upper = engine_samples.bands.partition_point(|band| band.rpm < rpm);
+    if upper == 0 {
+        return (0, 0, 0.0);
     }
+    if upper == engine_samples.bands.len() {
+        return (upper - 1, upper - 1, 0.0);
+    }
+    let lower = upper - 1;
+    let t = (rpm - engine_samples.bands[lower].rpm)
+        / (engine_samples.bands[upper].rpm - engine_samples.bands[lower].rpm);
+    (lower, upper, t * t * (3.0 - 2.0 * t))
 }
 
 #[derive(Default)]
@@ -206,33 +204,37 @@ pub struct RecordedEngine {
     low: f32,
 }
 
-impl RecordedEngine {
-    pub fn select(&mut self, directory: Option<&Path>) {
-        if self.directory.as_deref() == directory {
-            return;
-        }
-        self.directory = directory.map(Path::to_owned);
-        self.samples = directory.and_then(|directory| {
-            SAMPLES
-                .get_or_init(Default::default)
-                .lock()
-                .unwrap()
-                .entry(directory.to_owned())
-                .or_insert_with(|| match EngineSamples::load(directory) {
-                    Ok(samples) => Some(Arc::new(samples)),
-                    Err(error) => {
-                        log::warn!(
-                            "Cannot load {}: {error}; using procedural engine",
-                            directory.display()
-                        );
-                        None
-                    }
-                })
-                .clone()
-        });
-        self.positions = vec![[0.0; 2]; self.samples.as_ref().map_or(0, |s| s.bands.len())];
-        self.low = 0.0;
+pub fn select(recorded_engine: &mut RecordedEngine, directory: Option<&Path>) {
+    if recorded_engine.directory.as_deref() == directory {
+        return;
     }
+    recorded_engine.directory = directory.map(Path::to_owned);
+    recorded_engine.samples = directory.and_then(|directory| {
+        SAMPLES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .entry(directory.to_owned())
+            .or_insert_with(|| match load(directory) {
+                Ok(samples) => Some(Arc::new(samples)),
+                Err(error) => {
+                    log::warn!(
+                        "Cannot load {}: {error}; using procedural engine",
+                        directory.display()
+                    );
+                    None
+                }
+            })
+            .clone()
+    });
+    recorded_engine.positions = vec![
+        [0.0; 2];
+        recorded_engine
+            .samples
+            .as_ref()
+            .map_or(0, |s| s.bands.len())
+    ];
+    recorded_engine.low = 0.0;
 }
 
 fn point(pcm: &[u8], index: usize) -> f32 {
@@ -260,54 +262,65 @@ fn loop_sample(pcm: &[u8], position: &mut f32, ratio: f32, overlap: usize) -> f3
     value
 }
 
-impl RecordedEngine {
-    pub fn available(&self) -> bool {
-        self.samples.is_some()
-    }
+pub fn available(recorded_engine: &RecordedEngine) -> bool {
+    recorded_engine.samples.is_some()
+}
 
-    pub fn sample(&mut self, rpm: f32, pulses_per_revolution: f32, load: f32) -> f32 {
-        let Some(samples) = &self.samples else {
-            return 0.0;
+pub fn sample(
+    recorded_engine: &mut RecordedEngine,
+    rpm: f32,
+    pulses_per_revolution: f32,
+    load: f32,
+) -> f32 {
+    let Some(samples) = &recorded_engine.samples else {
+        return 0.0;
+    };
+    let load = load.clamp(0.0, 1.0);
+    let pulse_hz = (rpm * pulses_per_revolution / 60.0).max(1.0);
+    let (lower, upper, blend) = blend(samples, rpm);
+    let mut value = 0.0;
+    for (i, (band, positions)) in samples
+        .bands
+        .iter()
+        .zip(&mut recorded_engine.positions)
+        .enumerate()
+    {
+        let weight = if lower == upper && i == lower {
+            1.0
+        } else if i == lower {
+            (1.0 - blend).sqrt()
+        } else if i == upper {
+            blend.sqrt()
+        } else {
+            0.0
         };
-        let load = load.clamp(0.0, 1.0);
-        let pulse_hz = (rpm * pulses_per_revolution / 60.0).max(1.0);
-        let (lower, upper, blend) = samples.blend(rpm);
-        let mut value = 0.0;
-        for (i, (band, positions)) in samples.bands.iter().zip(&mut self.positions).enumerate() {
-            let weight = if lower == upper && i == lower {
-                1.0
-            } else if i == lower {
-                (1.0 - blend).sqrt()
-            } else if i == upper {
-                blend.sqrt()
+        // Every loop advances even while inaudible. Crossing an RPM boundary
+        // or lifting the throttle never restarts its source recording.
+        for (state, clip) in [&band.load, &band.coast].into_iter().enumerate() {
+            let ratio = pulse_hz / clip.pulse_hz;
+            let position = &mut positions[state];
+            if weight > 0.0 {
+                let sample = loop_sample(&clip.pcm, position, ratio, clip.overlap);
+                let load_weight = if state == 0 { load } else { 1.0 - load };
+                value += sample * load_weight * weight;
             } else {
-                0.0
-            };
-            // Every loop advances even while inaudible. Crossing an RPM boundary
-            // or lifting the throttle never restarts its source recording.
-            for (state, clip) in [&band.load, &band.coast].into_iter().enumerate() {
-                let ratio = pulse_hz / clip.pulse_hz;
-                let position = &mut positions[state];
-                if weight > 0.0 {
-                    let sample = loop_sample(&clip.pcm, position, ratio, clip.overlap);
-                    let load_weight = if state == 0 { load } else { 1.0 - load };
-                    value += sample * load_weight * weight;
-                } else {
-                    let end = (clip.pcm.len() / 2 - clip.overlap) as f32;
-                    *position = (*position + ratio).rem_euclid(end);
-                }
+                let end = (clip.pcm.len() / 2 - clip.overlap) as f32;
+                *position = (*position + ratio).rem_euclid(end);
             }
         }
-        // Coasting emphasizes the body; throttle opens the upper engine texture.
-        let cutoff = 1800.0 + load * 4200.0 + (rpm / 6500.0).clamp(0.0, 1.0) * 2000.0;
-        let alpha = 1.0 - (-std::f32::consts::TAU * cutoff / SAMPLE_RATE).exp();
-        self.low += (value - self.low) * alpha;
-        (self.low + (value - self.low) * (0.22 + load * 0.50)) * (0.13 + load * 0.10)
     }
+    // Coasting emphasizes the body; throttle opens the upper engine texture.
+    let cutoff = 1800.0 + load * 4200.0 + (rpm / 6500.0).clamp(0.0, 1.0) * 2000.0;
+    let alpha = 1.0 - (-std::f32::consts::TAU * cutoff / SAMPLE_RATE).exp();
+    recorded_engine.low += (value - recorded_engine.low) * alpha;
+    (recorded_engine.low + (value - recorded_engine.low) * (0.22 + load * 0.50))
+        * (0.13 + load * 0.10)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::engine_sample;
+
     use super::*;
     use crate::test_support;
     fn audio_dir() -> &'static Path {
@@ -346,7 +359,7 @@ mod tests {
     }
     fn recorded() -> RecordedEngine {
         let mut engine = RecordedEngine::default();
-        engine.select(Some(audio_dir()));
+        engine_sample::select(&mut engine, Some(audio_dir()));
         engine
     }
 
@@ -360,26 +373,29 @@ mod tests {
             }
         }
         let mut engine = RecordedEngine::default();
-        assert!(!engine.available());
-        engine.select(Some(directory.path()));
-        assert!(engine.available());
-        let first = engine.sample(3000.0, 3.0, 1.0);
+        assert!(!engine_sample::available(&(engine)));
+        engine_sample::select(&mut engine, Some(directory.path()));
+        assert!(engine_sample::available(&(engine)));
+        let first = engine_sample::sample(&mut engine, 3000.0, 3.0, 1.0);
         for _ in 0..100 {
-            engine.sample(3000.0, 3.0, 1.0);
+            engine_sample::sample(&mut engine, 3000.0, 3.0, 1.0);
         }
-        engine.select(None);
-        assert!(!engine.available());
-        assert_eq!(engine.sample(3000.0, 3.0, 1.0), 0.0);
-        engine.select(Some(directory.path()));
-        assert_eq!(engine.sample(3000.0, 3.0, 1.0), first);
-        engine.select(Some(&directory.path().join("missing")));
-        assert!(!engine.available());
+        engine_sample::select(&mut engine, None);
+        assert!(!engine_sample::available(&(engine)));
+        assert_eq!(engine_sample::sample(&mut (engine), 3000.0, 3.0, 1.0), 0.0);
+        engine_sample::select(&mut engine, Some(directory.path()));
+        assert_eq!(
+            engine_sample::sample(&mut (engine), 3000.0, 3.0, 1.0),
+            first
+        );
+        engine_sample::select(&mut engine, Some(&directory.path().join("missing")));
+        assert!(!engine_sample::available(&(engine)));
     }
 
     #[test]
     fn missing_or_malformed_car_audio_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(EngineSamples::load(directory.path()).is_err());
+        assert!(engine_sample::load(directory.path()).is_err());
         let manifest = std::fs::read(audio_dir().join("engine.json")).unwrap();
         std::fs::write(directory.path().join("engine.json"), &manifest).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
@@ -397,13 +413,13 @@ mod tests {
         for name in &names {
             std::fs::copy(audio_dir().join(name), directory.path().join(name)).unwrap();
         }
-        assert!(EngineSamples::load(directory.path()).is_ok());
+        assert!(engine_sample::load(directory.path()).is_ok());
         for name in names {
             let path = directory.path().join(name);
             for bytes in [vec![], vec![0; 100], vec![0; 10_001]] {
                 std::fs::write(&path, bytes).unwrap();
                 assert!(
-                    EngineSamples::load(directory.path()).is_err(),
+                    engine_sample::load(directory.path()).is_err(),
                     "accepted {name}"
                 );
             }
@@ -441,13 +457,13 @@ mod tests {
             *manifest.pointer_mut(pointer).unwrap() = value;
             std::fs::write(directory.path().join("engine.json"), manifest.to_string()).unwrap();
             assert!(
-                EngineSamples::load(directory.path()).is_err(),
+                engine_sample::load(directory.path()).is_err(),
                 "accepted {pointer}"
             );
         }
         for bytes in [vec![b' '; 65_537], b"{invalid".to_vec()] {
             std::fs::write(directory.path().join("engine.json"), bytes).unwrap();
-            assert!(EngineSamples::load(directory.path()).is_err());
+            assert!(engine_sample::load(directory.path()).is_err());
         }
     }
 
@@ -467,7 +483,7 @@ mod tests {
         let size = (wav.len() as u32 - 8).to_le_bytes();
         wav[4..8].copy_from_slice(&size);
         std::fs::write(path, wav).unwrap();
-        let samples = EngineSamples::load(directory.path()).unwrap();
+        let samples = engine_sample::load(directory.path()).unwrap();
         assert_eq!(samples.bands[0].load.pcm, expected_pcm);
     }
 
@@ -550,18 +566,18 @@ mod tests {
             wav[32..34].copy_from_slice(&frame_bytes.to_le_bytes());
             wav[34..36].copy_from_slice(&format.bits_per_sample.to_le_bytes());
             std::fs::write(&path, wav).unwrap();
-            assert!(EngineSamples::load(directory.path()).is_err());
+            assert!(engine_sample::load(directory.path()).is_err());
         }
         for length in [0, 100, 1920, 960_002, 1_025_538] {
             std::fs::write(&path, test_support::engine_wav(&vec![0; length])).unwrap();
-            assert!(EngineSamples::load(directory.path()).is_err());
+            assert!(engine_sample::load(directory.path()).is_err());
         }
     }
 
     #[test]
     fn shipped_wav_banks_load() {
         for name in ["1964-kestrel", "1973-kestrel-turbo", "2016-pitsunda-2"] {
-            let samples = EngineSamples::load(&Path::new("data/cars").join(name).join("audio"))
+            let samples = engine_sample::load(&Path::new("data/cars").join(name).join("audio"))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert!(samples.bands.len() >= 2);
         }
@@ -569,7 +585,7 @@ mod tests {
 
     #[test]
     fn interpolation_handles_tail_offset_rounding_to_length() {
-        let samples = EngineSamples::load(audio_dir()).unwrap();
+        let samples = engine_sample::load(audio_dir()).unwrap();
         for clip in samples
             .bands
             .iter()
@@ -586,14 +602,14 @@ mod tests {
     #[test]
     fn recorded_layers_survive_seams_shifts_and_load_changes() {
         let mut engine = recorded();
-        assert!(engine.available());
+        assert!(engine_sample::available(&(engine)));
         let mut previous = 0.0_f32;
         let mut largest_step = 0.0_f32;
         for i in 0..480_000 {
             let seconds = i as f32 / SAMPLE_RATE;
             let rpm = 900.0 + (seconds % 3.0) / 3.0 * 5600.0;
             let load = if seconds % 4.0 < 2.0 { 1.0 } else { 0.0 };
-            let sample = engine.sample(rpm, 3.0, load);
+            let sample = engine_sample::sample(&mut engine, rpm, 3.0, load);
             assert!(sample.is_finite() && sample.abs() < 0.5);
             largest_step = largest_step.max((sample - previous).abs());
             previous = sample;
@@ -603,7 +619,7 @@ mod tests {
 
     #[test]
     fn rpm_sweep_keeps_level_across_recording_boundaries() {
-        let samples = EngineSamples::load(audio_dir()).unwrap();
+        let samples = engine_sample::load(audio_dir()).unwrap();
         let mut points = vec![900.0, 6500.0];
         for bands in samples.bands.windows(2) {
             points.extend([bands[0].rpm, (bands[0].rpm + bands[1].rpm) * 0.5]);
@@ -615,7 +631,7 @@ mod tests {
                 let mut engine = recorded();
                 let mut energy = 0.0;
                 for i in 0..24000 {
-                    let sample = engine.sample(*rpm, 3.0, load);
+                    let sample = engine_sample::sample(&mut engine, *rpm, 3.0, load);
                     if i >= 4000 {
                         energy += sample * sample;
                     }

@@ -1,3 +1,4 @@
+use crate::geometry;
 use crate::geometry::{add, mul, sub};
 use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon};
 use crate::{
@@ -24,87 +25,86 @@ pub struct ImportArea {
     pub height_km: f64,
 }
 
-impl ImportArea {
-    pub fn from_url(url: &str, width_km: f64, height_km: f64) -> Result<Self> {
-        let fragment = url
-            .trim()
-            .split_once('#')
-            .map(|(_, fragment)| fragment)
-            .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
-        let map = fragment
-            .split('&')
-            .find_map(|part| part.strip_prefix("map="))
-            .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
-        let parts: Vec<_> = map.split('/').collect();
-        if parts.len() != 3 {
-            return Err(invalid("expected #map=zoom/latitude/longitude in the URL"));
-        }
-        let area = Self {
-            latitude: parts[1].parse()?,
-            longitude: parts[2].parse()?,
-            width_km,
-            height_km,
-        };
-        area.geometry()?;
-        Ok(area)
+pub fn from_url(url: &str, width_km: f64, height_km: f64) -> Result<ImportArea> {
+    let fragment = url
+        .trim()
+        .split_once('#')
+        .map(|(_, fragment)| fragment)
+        .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
+    let map = fragment
+        .split('&')
+        .find_map(|part| part.strip_prefix("map="))
+        .ok_or_else(|| invalid("expected #map=zoom/latitude/longitude in the URL"))?;
+    let parts: Vec<_> = map.split('/').collect();
+    if parts.len() != 3 {
+        return Err(invalid("expected #map=zoom/latitude/longitude in the URL"));
     }
+    let area = ImportArea {
+        latitude: parts[1].parse()?,
+        longitude: parts[2].parse()?,
+        width_km,
+        height_km,
+    };
+    geometry(&area)?;
+    Ok(area)
+}
 
-    pub fn name(&self) -> String {
-        format!(
-            "location-{}-{}-{}x{}km",
-            self.latitude, self.longitude, self.width_km, self.height_km
+pub fn name(import_area: &ImportArea) -> String {
+    format!(
+        "location-{}-{}-{}x{}km",
+        import_area.latitude, import_area.longitude, import_area.width_km, import_area.height_km
+    )
+}
+
+pub fn geometry(import_area: &ImportArea) -> Result<OSMArea> {
+    if !import_area.latitude.is_finite()
+        || !import_area.longitude.is_finite()
+        || import_area.latitude.abs() > 85.0
+        || import_area.longitude.abs() > 180.0
+    {
+        return Err(invalid(
+            "invalid center coordinates; latitude must be within 85 degrees of the equator",
+        ));
+    }
+    if !import_area.width_km.is_finite()
+        || !import_area.height_km.is_finite()
+        || import_area.width_km <= 0.0
+        || import_area.height_km <= 0.0
+        || import_area.width_km > 80.0
+        || import_area.height_km > 80.0
+    {
+        return Err(invalid(
+            "width and height must be positive and at most 80 km",
+        ));
+    }
+    let half_lat = (import_area.height_km * 500.0 / 6371000.0).to_degrees();
+    let half_lon = (import_area.width_km * 500.0
+        / (6371000.0 * import_area.latitude.to_radians().cos()))
+    .to_degrees();
+    let bounds = BoundingBox {
+        min_lat: import_area.latitude - half_lat,
+        max_lat: import_area.latitude + half_lat,
+        min_lon: import_area.longitude - half_lon,
+        max_lon: import_area.longitude + half_lon,
+    };
+    if !geometry::is_valid_for_imagery(&bounds) {
+        return Err(invalid(
+            "requested rectangle crosses the antimeridian or the supported latitude limits",
+        ));
+    }
+    Ok(OSMArea {
+        geometry: MultiPolygon(vec![geo::Rect::new(
+            Coord {
+                x: bounds.min_lon,
+                y: bounds.min_lat,
+            },
+            Coord {
+                x: bounds.max_lon,
+                y: bounds.max_lat,
+            },
         )
-    }
-
-    pub fn geometry(&self) -> Result<OSMArea> {
-        if !self.latitude.is_finite()
-            || !self.longitude.is_finite()
-            || self.latitude.abs() > 85.0
-            || self.longitude.abs() > 180.0
-        {
-            return Err(invalid(
-                "invalid center coordinates; latitude must be within 85 degrees of the equator",
-            ));
-        }
-        if !self.width_km.is_finite()
-            || !self.height_km.is_finite()
-            || self.width_km <= 0.0
-            || self.height_km <= 0.0
-            || self.width_km > 80.0
-            || self.height_km > 80.0
-        {
-            return Err(invalid(
-                "width and height must be positive and at most 80 km",
-            ));
-        }
-        let half_lat = (self.height_km * 500.0 / 6371000.0).to_degrees();
-        let half_lon =
-            (self.width_km * 500.0 / (6371000.0 * self.latitude.to_radians().cos())).to_degrees();
-        let bounds = BoundingBox {
-            min_lat: self.latitude - half_lat,
-            max_lat: self.latitude + half_lat,
-            min_lon: self.longitude - half_lon,
-            max_lon: self.longitude + half_lon,
-        };
-        if !bounds.is_valid_for_imagery() {
-            return Err(invalid(
-                "requested rectangle crosses the antimeridian or the supported latitude limits",
-            ));
-        }
-        Ok(OSMArea {
-            geometry: MultiPolygon(vec![geo::Rect::new(
-                Coord {
-                    x: bounds.min_lon,
-                    y: bounds.min_lat,
-                },
-                Coord {
-                    x: bounds.max_lon,
-                    y: bounds.max_lat,
-                },
-            )
-            .to_polygon()]),
-        })
-    }
+        .to_polygon()]),
+    })
 }
 
 /// Source OSM node, way or relation; applicable fields depend on the element kind.
@@ -122,10 +122,8 @@ pub struct OSMElement {
     pub members: Vec<(String, i64, String)>,
 }
 
-impl OSMElement {
-    pub fn tag(&self, key: &str) -> &str {
-        self.tags.get(key).map(String::as_str).unwrap_or("")
-    }
+pub fn tag<'a>(osm_element: &'a OSMElement, key: &str) -> &'a str {
+    osm_element.tags.get(key).map(String::as_str).unwrap_or("")
 }
 
 /// Parsed OSM extract retaining source elements and optional geographic bounds.
@@ -146,36 +144,34 @@ pub struct OSMArea {
     pub geometry: MultiPolygon<f64>,
 }
 
-impl OSMArea {
-    pub fn bbox(&self) -> BoundingBox {
-        let b = self.geometry.bounding_rect().unwrap();
-        BoundingBox {
-            min_lat: b.min().y,
-            min_lon: b.min().x,
-            max_lat: b.max().y,
-            max_lon: b.max().x,
-        }
+pub fn bbox(osm_area: &OSMArea) -> BoundingBox {
+    let b = osm_area.geometry.bounding_rect().unwrap();
+    BoundingBox {
+        min_lat: b.min().y,
+        min_lon: b.min().x,
+        max_lat: b.max().y,
+        max_lon: b.max().x,
     }
-    pub fn local(&self, origin: LatLon) -> MultiPolygon<f64> {
-        self.geometry.map_coords(|c| Coord {
-            x: (c.x - origin.lon).to_radians() * 6371000.0 * origin.lat.to_radians().cos(),
-            y: -(c.y - origin.lat).to_radians() * 6371000.0,
+}
+pub fn local(osm_area: &OSMArea, origin: LatLon) -> MultiPolygon<f64> {
+    osm_area.geometry.map_coords(|c| Coord {
+        x: (c.x - origin.lon).to_radians() * 6371000.0 * origin.lat.to_radians().cos(),
+        y: -(c.y - origin.lat).to_radians() * 6371000.0,
+    })
+}
+pub fn to_geojson(osm_area: &OSMArea) -> Value {
+    let coordinates: Vec<Vec<Vec<[f64; 2]>>> = osm_area
+        .geometry
+        .0
+        .iter()
+        .map(|p| {
+            std::iter::once(p.exterior())
+                .chain(p.interiors())
+                .map(|r| r.0.iter().map(|c| [c.x, c.y]).collect())
+                .collect()
         })
-    }
-    pub fn to_geojson(&self) -> Value {
-        let coordinates: Vec<Vec<Vec<[f64; 2]>>> = self
-            .geometry
-            .0
-            .iter()
-            .map(|p| {
-                std::iter::once(p.exterior())
-                    .chain(p.interiors())
-                    .map(|r| r.0.iter().map(|c| [c.x, c.y]).collect())
-                    .collect()
-            })
-            .collect();
-        json!({"type":"Feature","properties":{},"geometry":{"type":"MultiPolygon","coordinates":coordinates}})
-    }
+        .collect();
+    json!({"type":"Feature","properties":{},"geometry":{"type":"MultiPolygon","coordinates":coordinates}})
 }
 
 fn attrs(e: &BytesStart<'_>) -> Result<BTreeMap<String, String>> {
@@ -259,7 +255,7 @@ pub fn read_xml(source: impl std::io::BufRead) -> Result<OSMMap> {
                         ));
                     }
                     let coord: Option<LatLon> = if name == "node" {
-                        Some(LatLon::new(
+                        Some(geometry::new(
                             a.get("lat")
                                 .ok_or_else(|| invalid("missing latitude"))?
                                 .parse()?,
@@ -395,6 +391,9 @@ pub fn clip(a: XZ, b: XZ, bounds: BoundingBoxXZ) -> Option<(XZ, XZ)> {
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::osm;
+
     use super::*;
 
     #[test]
@@ -404,7 +403,7 @@ mod tests {
             "https://www.openstreetmap.org/relation/1?foo=bar",
             "https://www.openstreetmap.org/",
         ] {
-            let area = ImportArea::from_url(
+            let area = osm::from_url(
                 &format!("{prefix}#map=19/35.165236/33.318712&layers=N"),
                 10.0,
                 5.0,
@@ -412,11 +411,11 @@ mod tests {
             .unwrap();
             assert_eq!(area.latitude, 35.165236);
             assert_eq!(area.longitude, 33.318712);
-            let geometry = area.geometry().unwrap();
-            let bounds = geometry.bbox();
+            let geometry = osm::geometry(&area).unwrap();
+            let bounds = osm::bbox(&geometry);
             assert!(((bounds.min_lat + bounds.max_lat) / 2.0 - area.latitude).abs() < 1e-12);
             assert!(((bounds.min_lon + bounds.max_lon) / 2.0 - area.longitude).abs() < 1e-12);
-            let local = geometry.local(LatLon::new(area.latitude, area.longitude));
+            let local = osm::local(&geometry, geometry::new(area.latitude, area.longitude));
             let rect = local.bounding_rect().unwrap();
             assert!((rect.width() - 10000.0).abs() < 1e-6);
             assert!((rect.height() - 5000.0).abs() < 1e-6);
@@ -440,7 +439,7 @@ mod tests {
             "#map=19/35/180",
         ] {
             assert!(
-                ImportArea::from_url(
+                osm::from_url(
                     &format!("https://www.openstreetmap.org/{fragment}"),
                     10.0,
                     5.0,
@@ -451,20 +450,17 @@ mod tests {
         }
         for invalid in [0.0, -1.0, 80.01, f64::NAN, f64::INFINITY] {
             let url = "https://www.openstreetmap.org/#map=19/35/33";
-            assert!(ImportArea::from_url(url, invalid, 5.0).is_err());
-            assert!(ImportArea::from_url(url, 10.0, invalid).is_err());
+            assert!(osm::from_url(url, invalid, 5.0).is_err());
+            assert!(osm::from_url(url, 10.0, invalid).is_err());
         }
-        assert!(
-            ImportArea::from_url("https://www.openstreetmap.org/#map=1/-35/-33", 80.0, 80.0,)
-                .is_ok()
-        );
+        assert!(osm::from_url("https://www.openstreetmap.org/#map=1/-35/-33", 80.0, 80.0,).is_ok());
     }
 }
 
 /// Roof storeys are separate from building:levels. Explicit height already includes them.
 pub fn roof_height(element: &OSMElement) -> f64 {
-    number(element.tag("roof:height"))
-        .or_else(|| number(element.tag("roof:levels")).map(|n| n * 3.1))
+    number(tag(element, "roof:height"))
+        .or_else(|| number(tag(element, "roof:levels")).map(|n| n * 3.1))
         .unwrap_or(0.)
         .clamp(0., 30.)
 }

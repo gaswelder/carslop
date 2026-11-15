@@ -4,18 +4,26 @@ use crate::build_furniture::build_furniture;
 use crate::build_landscape::build_landscape;
 use crate::codec_furniture;
 use crate::codec_road_rises;
+use crate::elevation;
 use crate::error::Result;
+use crate::geometry;
 use crate::geometry::{cross, polygon, sub, unit};
-use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
+use crate::geometry::{BoundingBox, BoundingBoxXZ, XZ};
 use crate::hgt;
+use crate::map_details;
 use crate::osm::{OSMArea, OSMElement, OSMMap};
+use crate::source_location;
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::sources::extract_osm_boundary;
 use crate::src_files;
 use crate::street_surface;
 use crate::test_support;
 use crate::traffic;
+use crate::vehicle_location;
 use crate::world;
+use crate::world_preparation;
+use crate::world_raised_roads;
+use crate::world_roads;
 use crate::{build_surfaces, build_terrain, osm};
 use geo::{Area, BooleanOps, Contains, MultiPolygon, Point, Polygon};
 use serde_json::json;
@@ -75,7 +83,7 @@ fn compile(options: TestOptions<'_>) -> Result<()> {
     fs::write(
         output.join("manifest.json"),
         serde_json::to_string_pretty(
-            &json!({"name": options.name, "boundary": boundary.to_geojson()}),
+            &json!({"name": options.name, "boundary": osm::to_geojson(&(boundary))}),
         )? + "\n",
     )?;
     build_collision::build_collisions(
@@ -107,7 +115,7 @@ const FIXTURE: &str = r#"<osm version="0.6" timestamp="2026-01-01T00:00:00Z">
 
 #[test]
 fn raceways_allow_restricted_circuit_access_without_opening_private_streets() {
-    let temp = Temp::new();
+    let temp = test_support::new();
     let source = temp.directory.join("circuit.osm");
     let mut xml = FIXTURE.to_owned();
     for (id, highway, access) in [
@@ -146,7 +154,7 @@ fn raceways_allow_restricted_circuit_access_without_opening_private_streets() {
 
 #[test]
 fn mapped_multipolygon_holes_stay_empty() {
-    let temp = Temp::new();
+    let temp = test_support::new();
     let tile = temp.directory.join("N35E033.hgt");
     fs::write(
         &tile,
@@ -177,8 +185,7 @@ fn mapped_multipolygon_holes_stay_empty() {
     let landscape =
         test_support::landscape(&fs::read_to_string(output.join("landscape.txt")).unwrap())
             .unwrap();
-    let area: f64 = landscape
-        .ground_triangles()
+    let area: f64 = world::ground_triangles(&landscape)
         .iter()
         .map(|t| {
             let p = t.points;
@@ -217,8 +224,7 @@ fn mapped_multipolygon_holes_stay_empty() {
         "expected courtyard area {expected}, got {area}"
     );
     assert!(
-        landscape
-            .ground_triangles()
+        world::ground_triangles(&(landscape))
             .iter()
             .all(|t| t.material == world::Material::Park),
         "relation members must not create their own ground cover"
@@ -262,7 +268,7 @@ fn map(
 ) -> SourceLocation<f64> {
     SourceLocation {
         boundary: None,
-        origin: Some(LatLon::new(35.162, 33.320)),
+        origin: Some(geometry::new(35.162, 33.320)),
         bounding_box: BoundingBoxXZ {
             min: XZ {
                 x: -100.0,
@@ -270,7 +276,7 @@ fn map(
             },
             max: XZ { x: 100.0, z: 100.0 },
         },
-        road_nodes: nodes.iter().map(|p| p.at_height(0.0)).collect(),
+        road_nodes: nodes.iter().map(|p| geometry::at_height(*p, 0.0)).collect(),
         road_lines: roads
             .iter()
             .enumerate()
@@ -279,7 +285,7 @@ fn map(
                 direction: 0,
                 osm_way_id: Some(i as i64 + 1),
                 lanes: 2,
-                ..SourceRoad::new([*a, *b], *width)
+                ..source_location::new([*a, *b], *width)
             })
             .collect(),
         buildings: buildings
@@ -295,7 +301,7 @@ fn map(
                 ground_outline: p.clone(),
             })
             .collect(),
-        ..SourceLocation::<f64>::empty()
+        ..source_location::empty::<f64>()
     }
 }
 fn surfaces(
@@ -305,11 +311,11 @@ fn surfaces(
     build_surfaces::Surfaces,
     street_surface::StreetSurface,
 ) {
-    let temp = Temp::new();
+    let temp = test_support::new();
     src_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
     let s =
         build_surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None).unwrap();
-    let loaded = street_surface::StreetSurface::load(
+    let loaded = street_surface::load(
         &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
         map.road_lines.len(),
     )
@@ -335,7 +341,7 @@ fn source() -> OSMMap {
 }
 fn node(s: &mut OSMMap, id: i64, p: XZ, tags: &[(&str, &str)]) {
     let mut e = element(id, tags);
-    e.coord = Some(LatLon::new(
+    e.coord = Some(geometry::new(
         35.162 - p.z.to_degrees() / 6371000.,
         33.320 + p.x.to_degrees() / 6371000. / 35.162_f64.to_radians().cos(),
     ));
@@ -423,10 +429,10 @@ fn landscape_priorities_crop_and_tree_conflicts_are_preserved() {
         &std::fs::read_to_string(temp.directory.join("landscape.txt")).unwrap(),
     )
     .unwrap();
-    assert_eq!(l.trees().len(), 1);
-    assert_eq!(l.trees()[0].height_meters, 8.);
+    assert_eq!(world::trees(&(l)).len(), 1);
+    assert_eq!(world::trees(&(l))[0].height_meters, 8.);
     let mut sports = 0.;
-    for t in l.ground_triangles() {
+    for t in world::ground_triangles(&l) {
         let points: Vec<XZ> = t
             .points
             .iter()
@@ -487,7 +493,7 @@ fn multipolygon_outers_with_opposite_winding_are_unioned_without_cancellation() 
 
 #[test]
 fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
-    let temp = Temp::new();
+    let temp = test_support::new();
     for (x, offset) in [(6, 0), (7, 8)] {
         let values: Vec<u8> = (0..9)
             .flat_map(|_| (0..9).flat_map(|c| (100_i16 + offset + c).to_be_bytes()))
@@ -496,7 +502,7 @@ fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
     }
     let map = SourceLocation {
         boundary: None,
-        origin: Some(LatLon::new(50.5, 7.0)),
+        origin: Some(geometry::new(50.5, 7.0)),
         bounding_box: BoundingBoxXZ {
             min: XZ {
                 x: -100.0,
@@ -507,14 +513,16 @@ fn adjacent_tiles_are_filtered_continuously_across_the_seam() {
         road_nodes: vec![],
         road_lines: vec![],
         buildings: vec![],
-        ..SourceLocation::<f64>::empty()
+        ..source_location::empty::<f64>()
     };
     let source = temp.directory.join("N50E006.hgt");
     let (dem, sources) = hgt::covering(&source, &map).unwrap();
     assert_eq!(sources.len(), 2);
     for longitude in [6.95, 7.0, 7.05] {
         let expected = 100.0 + (longitude - 6.0) * 8.0;
-        assert!((dem.sample(LatLon::new(50.5, longitude)).unwrap() - expected).abs() < 1e-9);
+        assert!(
+            (hgt::sample(&(dem), geometry::new(50.5, longitude)).unwrap() - expected).abs() < 1e-9
+        );
     }
     fs::remove_file(temp.directory.join("N50E007.hgt")).unwrap();
     assert!(hgt::covering(&source, &map).is_err());
@@ -640,7 +648,7 @@ fn check_extraction(incomplete_relation: bool) {
     );
     assert_eq!(source.relations.len(), 1);
     assert_eq!(source.relations[0].id, 20);
-    assert_eq!(source.nodes[&1].tag("name"), "A & B");
+    assert_eq!(osm::tag(&(source.nodes[&1]), "name"), "A & B");
     let xml = fs::read_to_string(&output).unwrap();
     assert!(xml.contains("version=\"7\""));
     assert!(xml.contains("A &amp; B"));
@@ -753,12 +761,12 @@ fn sidewalk_tags_reach_compiled_pavement_on_the_original_way_side() {
         let map = fixture_map(&source, None).unwrap();
         let (temp, _, compiled) = surfaces(&map);
         let parsed =
-            SourceLocation::parse(&fs::read_to_string(temp.directory.join("city.txt")).unwrap())
+            source_location::parse(&fs::read_to_string(temp.directory.join("city.txt")).unwrap())
                 .unwrap();
         assert_eq!(parsed.road_lines[0].sidewalks.left, case.left);
         assert_eq!(parsed.road_lines[0].sidewalks.right, case.right);
         let pavement_at = |z| {
-            compiled.road_triangles().iter().any(|t| {
+            street_surface::road_triangles(&compiled).iter().any(|t| {
                 matches!(t.usage, world::TriangleUsage::Pavement(_))
                     && polygon(&t.points.map(|p| XZ {
                         x: p.x as f64,
@@ -861,7 +869,7 @@ fn mapped_paths_preserve_width_surface_crop_and_clear_roads_and_buildings() {
     let path = temp.directory.join("landscape.txt");
     build_landscape(&source, &map, &surfaces, &path).unwrap();
     let landscape = test_support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
-    let material_at = |x, z| landscape.ground_material(XZ { x, z });
+    let material_at = |x, z| world::ground_material(&landscape, XZ { x, z });
     assert_eq!(material_at(20., 21.8), Some(world::Material::Paving));
     assert_eq!(material_at(20., 22.2), Some(world::Material::Park));
     assert_eq!(material_at(99., 20.), Some(world::Material::Paving));
@@ -875,15 +883,14 @@ fn mapped_paths_preserve_width_surface_crop_and_clear_roads_and_buildings() {
     assert_eq!(material_at(30., 10.), Some(world::Material::Asphalt));
     assert_eq!(material_at(60., 20.), Some(world::Material::Water));
     assert_eq!(
-        landscape
-            .trees()
+        world::trees(&(landscape))
             .iter()
             .map(|tree| tree.id)
             .collect::<Vec<_>>(),
         vec![2]
     );
     let mut area = 0.;
-    for triangle in landscape.ground_triangles() {
+    for triangle in world::ground_triangles(&landscape) {
         let geometry = polygon(&triangle.points.map(|p| XZ {
             x: p.x as f64,
             z: p.z as f64,
@@ -926,9 +933,12 @@ fn closed_paths_stay_rings_and_elevated_paths_are_not_flattened() {
         let path = temp.directory.join("landscape.txt");
         build_landscape(&source, &map, &surfaces, &path).unwrap();
         let landscape = test_support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(landscape.ground_material(XZ { x: 30., z: 30. }), None);
         assert_eq!(
-            landscape.ground_material(XZ { x: 30., z: 10. }),
+            world::ground_material(&(landscape), XZ { x: 30., z: 30. }),
+            None
+        );
+        assert_eq!(
+            world::ground_material(&(landscape), XZ { x: 30., z: 10. }),
             if tags.is_empty() {
                 Some(world::Material::Paving)
             } else {
@@ -1021,19 +1031,16 @@ fn mapped_crossing_styles_and_overrides_survive_street_export() {
         tags.extend([("highway", "footway"), ("footway", "crossing")]);
         way(&mut source, 101, &[4, 2, 5], &tags);
         let map = fixture_map(&source, None).unwrap();
-        let temp = Temp::new();
+        let temp = test_support::new();
         let path = temp.directory.join("streets.txt");
         build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-        let compiled = street_surface::StreetSurface::load(
-            &fs::read_to_string(path).unwrap(),
-            map.road_lines.len(),
-        )
-        .unwrap()
-        .0;
+        let compiled =
+            street_surface::load(&fs::read_to_string(path).unwrap(), map.road_lines.len())
+                .unwrap()
+                .0;
         let mut paint_area = 0.;
         let mut paint_polygons = Vec::new();
-        for triangle in compiled
-            .road_triangles()
+        for triangle in street_surface::road_triangles(&compiled)
             .iter()
             .filter(|triangle| triangle.usage == world::TriangleUsage::Marking)
         {
@@ -1106,25 +1113,22 @@ fn skew_crossing_paths_keep_their_angle_and_paint_near_junctions() {
         ],
     );
     let map = fixture_map(&source, None).unwrap();
-    let temp = Temp::new();
+    let temp = test_support::new();
     let path = temp.directory.join("streets.txt");
     build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-    let compiled = street_surface::StreetSurface::load(
-        &fs::read_to_string(path).unwrap(),
-        map.road_lines.len(),
-    )
-    .unwrap()
-    .0;
+    let compiled = street_surface::load(&fs::read_to_string(path).unwrap(), map.road_lines.len())
+        .unwrap()
+        .0;
     let mut paint = Vec::new();
     let mut road = Vec::new();
-    for triangle in compiled.road_triangles() {
+    for triangle in street_surface::road_triangles(&compiled) {
         let geometry = MultiPolygon(vec![polygon(&triangle.points.map(|p| XZ {
             x: p.x as f64,
             z: p.z as f64,
         }))]);
         if triangle.usage == world::TriangleUsage::Marking {
             paint.push(geometry);
-        } else if triangle.usage.is_road() {
+        } else if world::is_road(triangle.usage) {
             road.push(geometry);
         }
     }
@@ -1172,17 +1176,14 @@ fn excluded_crossing_roads_do_not_paint_nearby_parallel_streets() {
             &[("highway", "residential"), ("width", "7")],
         );
         let map = fixture_map(&source, None).unwrap();
-        let temp = Temp::new();
+        let temp = test_support::new();
         let path = temp.directory.join("streets.txt");
         build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-        let compiled = street_surface::StreetSurface::load(
-            &fs::read_to_string(path).unwrap(),
-            map.road_lines.len(),
-        )
-        .unwrap()
-        .0;
-        assert!(compiled
-            .road_triangles()
+        let compiled =
+            street_surface::load(&fs::read_to_string(path).unwrap(), map.road_lines.len())
+                .unwrap()
+                .0;
+        assert!(street_surface::road_triangles(&(compiled))
             .iter()
             .all(|triangle| triangle.usage != world::TriangleUsage::Marking));
     }
@@ -1283,7 +1284,7 @@ fn entrance_nodes_stay_with_their_buildings_when_footprint_winding_changes() {
     source.ways.get_mut(&100).unwrap().nodes.reverse();
     let reversed = fixture_map(&source, None).unwrap();
     assert_eq!(reversed.entrances, map.entrances);
-    let temp = Temp::new();
+    let temp = test_support::new();
     let parsed = src_files::write_city_txt(&map, &temp.directory.join("city.txt"))
         .unwrap()
         .city;
@@ -1381,7 +1382,7 @@ fn mapped_building_parts_replace_parent_roofs_and_keep_partial_coverage() {
         assert!(
             (map.buildings
                 .iter()
-                .map(|building| building.footprint().unsigned_area())
+                .map(|building| world::footprint(building).unsigned_area())
                 .sum::<f64>()
                 - 200.)
                 .abs()
@@ -1402,7 +1403,7 @@ fn mapped_building_parts_replace_parent_roofs_and_keep_partial_coverage() {
                 .iter()
                 .all(|building| building.height_meters < 10.));
         }
-        let temp = Temp::new();
+        let temp = test_support::new();
         let parsed = src_files::write_city_txt(&map, &temp.directory.join("city.txt"))
             .unwrap()
             .city;
@@ -1452,29 +1453,30 @@ fn separated_roads_keep_source_topology_and_join_graded_approaches() {
         .unwrap()
         .surfaces;
         let path = folder.path().join("road-rises.txt");
-        let field = world::HeightField::generate(
+        let field = elevation::generate(
             BoundingBoxXZ {
-                min: map.bounding_box.min.map(|v| v as f32),
-                max: map.bounding_box.max.map(|v| v as f32),
+                min: geometry::xz_map(map.bounding_box.min, |v| v as f32),
+                max: geometry::xz_map(map.bounding_box.max, |v| v as f32),
             },
             |_| 0.,
         );
         let mut data = build_details::build(&source, &map, &surfaces);
         build_transport::build(&source, &map, &surfaces, &field, 0., &mut data, &path).unwrap();
-        data.validate(map.buildings.len(), map.road_lines.len())
-            .unwrap();
+        map_details::validate(&data, map.buildings.len(), map.road_lines.len()).unwrap();
         assert_eq!(data.decks.len(), 2);
         let height = data.decks[0].path[0][1];
         assert!((height.abs() - 5.).abs() < 0.001);
-        let prepared = map_details::Prepared::new(data);
+        let prepared = map_details::new(data);
         assert!(
-            (prepared.deck_height(XZ { x: 0., z: 0. }, height).unwrap() - height).abs() < 0.001
+            (map_details::deck_height(&(prepared), XZ { x: 0., z: 0. }, height).unwrap() - height)
+                .abs()
+                < 0.001
         );
         let rises = codec_road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
         let lift = |p| {
             rises
                 .iter()
-                .filter_map(|r| r.offset(p))
+                .filter_map(|r| world_raised_roads::road_rise_offset(r, p))
                 .max_by(f32::total_cmp)
                 .unwrap_or(0.)
         };
@@ -1534,7 +1536,7 @@ fn building_passages_preserve_upper_floors_and_relation_courtyards() {
     let p = XZ { x: 0., z: 0. };
     let contains = |height: f64| {
         map.buildings.iter().any(|b| {
-            b.footprint().contains(&Point::new(p.x, p.z))
+            world::footprint(b).contains(&Point::new(p.x, p.z))
                 && b.min_height_meters <= height
                 && b.height_meters >= height
         })
@@ -1574,7 +1576,7 @@ fn building_passages_preserve_upper_floors_and_relation_courtyards() {
     let map = fixture_map(&source, None).unwrap();
     assert_eq!(map.buildings.len(), 1);
     assert_eq!(map.buildings[0].holes.len(), 1);
-    assert!(!map.buildings[0].footprint().contains(&Point::new(0., 0.)));
+    assert!(!world::footprint(&(map.buildings[0])).contains(&Point::new(0., 0.)));
     assert_eq!(map.buildings[0].id, osm::relation_feature_id(300));
 }
 
@@ -1633,17 +1635,15 @@ fn vegetation_uses_rows_species_and_waterway_exclusions_deterministically() {
     let styles = build_landscape(&source, &map, &surfaces, &path).unwrap();
     let bytes = fs::read(&path).unwrap();
     let cover = test_support::landscape(std::str::from_utf8(&bytes).unwrap()).unwrap();
-    assert!(cover.trees().len() > 80);
+    assert!(world::trees(&(cover)).len() > 80);
     assert!(styles.iter().any(|style| style.kind == TreeKind::Palm));
     assert!(styles
         .iter()
         .any(|style| style.kind == TreeKind::Conifer && style.evergreen));
-    assert!(cover
-        .trees()
+    assert!(world::trees(&(cover))
         .iter()
         .all(|tree| tree.coords.z.abs() > 4. && tree.coords.x.abs() > 3.));
-    assert!(cover
-        .ground_triangles()
+    assert!(world::ground_triangles(&(cover))
         .iter()
         .any(|triangle| triangle.material == world::Material::Water));
     build_landscape(&source, &map, &surfaces, &path).unwrap();
@@ -1675,12 +1675,9 @@ fn explicit_lane_turns_and_unpaved_materials_survive_compilation() {
     let surfaces = build_surfaces::write_streets_txt(&map, &path, Some(&source))
         .unwrap()
         .surfaces;
-    let compiled = street_surface::StreetSurface::load(
-        &fs::read_to_string(&path).unwrap(),
-        map.road_lines.len(),
-    )
-    .unwrap()
-    .0;
+    let compiled = street_surface::load(&fs::read_to_string(&path).unwrap(), map.road_lines.len())
+        .unwrap()
+        .0;
     let asphalt = test_support::road_footprint(&compiled);
     let paint = build_lane_details::paint(&source, &map, &surfaces.paths, &asphalt);
     assert!(paint.unsigned_area() > 1.);
@@ -1694,15 +1691,14 @@ fn explicit_lane_turns_and_unpaved_materials_survive_compilation() {
     );
     let map = fixture_map(&source, None).unwrap();
     build_surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-    let (surface, _) =
-        street_surface::StreetSurface::load(&fs::read_to_string(path).unwrap(), 1).unwrap();
-    assert!(surface.road_triangles().iter().any(|triangle| matches!(
-        triangle.usage,
-        world::TriangleUsage::Road(_)
-    ) && triangle.material
-        == world::Material::BareGround));
-    assert!(surface
-        .road_triangles()
+    let (surface, _) = street_surface::load(&fs::read_to_string(path).unwrap(), 1).unwrap();
+    assert!(street_surface::road_triangles(&(surface))
+        .iter()
+        .any(
+            |triangle| matches!(triangle.usage, world::TriangleUsage::Road(_))
+                && triangle.material == world::Material::BareGround
+        ));
+    assert!(street_surface::road_triangles(&(surface))
         .iter()
         .all(|triangle| triangle.usage != world::TriangleUsage::Marking));
 }
@@ -1733,27 +1729,29 @@ fn bridge_only_location_can_bake_collision_data_spawn_and_reload() {
         .unwrap()
         .surfaces;
     let rises = folder.path().join("road-rises.txt");
-    let field = assets.get_heightfield().unwrap();
+    let field = city_assets::get_heightfield(&assets).unwrap();
     let mut details = build_details::build(&source, &map, &surfaces);
     build_transport::build(&source, &map, &surfaces, &field, 0., &mut details, &rises).unwrap();
-    details.write(folder.path()).unwrap();
+    map_details::write(&details, folder.path()).unwrap();
     build_collision::build_collisions(
         &folder.path().join("streets.bin"),
         &city,
         fs::read_to_string(path).unwrap(),
     )
     .unwrap();
-    let prepared = world::WorldLocation::load(&assets).unwrap();
-    assert!(prepared.road_triangles().is_empty());
-    assert!((prepared.spawn().point.y - 12.).abs() < 0.001);
+    let prepared = world_preparation::world_location_load(&assets).unwrap();
+    assert!(world_roads::road_triangles(&(prepared)).is_empty());
+    assert!((vehicle_location::spawn(&(prepared)).point.y - 12.).abs() < 0.001);
     let output = tempfile::tempdir().unwrap();
-    location::Location::read(folder.path())
-        .unwrap()
-        .write(output.path())
-        .unwrap();
+    location::location_write(
+        &location::location_read(folder.path()).unwrap(),
+        output.path(),
+    )
+    .unwrap();
     let reread =
-        world::WorldLocation::load(&city_assets::CityAsset::new(output.path().to_owned())).unwrap();
-    assert!((reread.spawn().point.y - 12.).abs() < 0.001);
+        world_preparation::world_location_load(&city_assets::new(output.path().to_owned()))
+            .unwrap();
+    assert!((vehicle_location::spawn(&(reread)).point.y - 12.).abs() < 0.001);
 }
 
 #[test]
@@ -1777,10 +1775,10 @@ fn traffic_calming_tags_do_not_generate_or_preserve_raised_roads() {
     );
     let map = fixture_map(&source, None).unwrap();
     let (temp, surfaces, _) = surfaces(&map);
-    let field = world::HeightField::generate(
+    let field = elevation::generate(
         BoundingBoxXZ {
-            min: map.bounding_box.min.map(|v| v as f32),
-            max: map.bounding_box.max.map(|v| v as f32),
+            min: geometry::xz_map(map.bounding_box.min, |v| v as f32),
+            max: geometry::xz_map(map.bounding_box.max, |v| v as f32),
         },
         |_| 0.,
     );

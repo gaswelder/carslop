@@ -1,4 +1,6 @@
 //! Mapped ground cover and vegetation.
+
+use crate::geometry;
 use crate::geometry::XZ;
 use crate::world::Material;
 pub use crate::world::{Tree, Triangle};
@@ -15,14 +17,14 @@ pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(
     let crowns = rstar::RTree::bulk_load(
         extra
             .iter()
-            .map(|tree| tree.coords.map(f64::from))
+            .map(|tree| geometry::xz_map(tree.coords, f64::from))
             .collect(),
     );
     trees.retain(|tree| {
         tree.id & (1_u64 << 63) != 0
             || tree.id & (1_u64 << 62) == 0
             || crowns
-                .nearest_neighbor(&tree.coords.map(f64::from))
+                .nearest_neighbor(&geometry::xz_map(tree.coords, f64::from))
                 .is_none_or(|crown| {
                     (crown.x - tree.coords.x as f64).hypot(crown.z - tree.coords.z as f64) >= 3.0
                 })
@@ -31,36 +33,34 @@ pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(
     Ok(())
 }
 
-impl Material {
-    /// Decode the material IDs used by landscape.txt.
-    pub fn from_ground_id(id: usize) -> Result<Self, &'static str> {
-        match id {
-            0 => Ok(Self::Grass),
-            1 => Ok(Self::Park),
-            2 => Ok(Self::Scrub),
-            3 => Ok(Self::Asphalt),
-            4 => Ok(Self::Paving),
-            5 => Ok(Self::Concrete),
-            6 => Ok(Self::BareGround),
-            7 => Ok(Self::Sports),
-            8 => Ok(Self::Water),
-            _ => Err("unknown ground material"),
-        }
+/// Decode the material IDs used by landscape.txt.
+pub fn from_ground_id(id: usize) -> Result<Material, &'static str> {
+    match id {
+        0 => Ok(Material::Grass),
+        1 => Ok(Material::Park),
+        2 => Ok(Material::Scrub),
+        3 => Ok(Material::Asphalt),
+        4 => Ok(Material::Paving),
+        5 => Ok(Material::Concrete),
+        6 => Ok(Material::BareGround),
+        7 => Ok(Material::Sports),
+        8 => Ok(Material::Water),
+        _ => Err("unknown ground material"),
     }
+}
 
-    pub fn ground_id(self) -> Result<usize, &'static str> {
-        match self {
-            Self::Grass => Ok(0),
-            Self::Park => Ok(1),
-            Self::Scrub => Ok(2),
-            Self::Asphalt => Ok(3),
-            Self::Paving => Ok(4),
-            Self::Concrete => Ok(5),
-            Self::BareGround => Ok(6),
-            Self::Sports => Ok(7),
-            Self::Water => Ok(8),
-            Self::Paint => Err("landscape format does not support paint"),
-        }
+pub fn ground_id(material: Material) -> Result<usize, &'static str> {
+    match material {
+        Material::Grass => Ok(0),
+        Material::Park => Ok(1),
+        Material::Scrub => Ok(2),
+        Material::Asphalt => Ok(3),
+        Material::Paving => Ok(4),
+        Material::Concrete => Ok(5),
+        Material::BareGround => Ok(6),
+        Material::Sports => Ok(7),
+        Material::Water => Ok(8),
+        Material::Paint => Err("landscape format does not support paint"),
     }
 }
 
@@ -71,89 +71,90 @@ pub struct GroundCover {
     trees: Vec<Tree>,
     grid: std::collections::HashMap<(i32, i32), Vec<usize>>,
 }
-impl GroundCover {
-    pub fn new(triangles: Vec<Triangle>, trees: Vec<Tree>) -> Self {
-        let mut cover = Self {
-            triangles,
-            trees,
-            grid: Default::default(),
-        };
-        cover.index_ground();
-        cover
-    }
-    pub fn triangles(&self) -> &[Triangle] {
-        &self.triangles
-    }
-    pub fn trees(&self) -> &[Tree] {
-        &self.trees
-    }
+
+pub fn new(triangles: Vec<Triangle>, trees: Vec<Tree>) -> GroundCover {
+    let mut cover = GroundCover {
+        triangles,
+        trees,
+        grid: Default::default(),
+    };
+    index_ground(&mut cover);
+    cover
 }
-impl GroundCover {
-    fn index_ground(&mut self) {
-        self.grid.clear();
-        for (i, t) in self.triangles.iter().enumerate() {
-            let points = t.points;
-            let low: [i32; 2] = std::array::from_fn(|axis| {
-                (points
-                    .iter()
-                    .map(|p| p.component(axis))
-                    .fold(f32::INFINITY, f32::min)
-                    / 32.0)
-                    .floor() as i32
-            });
-            let high: [i32; 2] = std::array::from_fn(|axis| {
-                (points
-                    .iter()
-                    .map(|p| p.component(axis))
-                    .fold(f32::NEG_INFINITY, f32::max)
-                    / 32.0)
-                    .floor() as i32
-            });
-            for x in low[0]..=high[0] {
-                for z in low[1]..=high[1] {
-                    self.grid.entry((x, z)).or_default().push(i);
-                }
+pub fn triangles(ground_cover: &GroundCover) -> &[Triangle] {
+    &ground_cover.triangles
+}
+pub fn trees(ground_cover: &GroundCover) -> &[Tree] {
+    &ground_cover.trees
+}
+
+fn index_ground(ground_cover: &mut GroundCover) {
+    ground_cover.grid.clear();
+    for (i, t) in ground_cover.triangles.iter().enumerate() {
+        let points = t.points;
+        let low: [i32; 2] = std::array::from_fn(|axis| {
+            (points
+                .iter()
+                .map(|p| geometry::xz_component(*p, axis))
+                .fold(f32::INFINITY, f32::min)
+                / 32.0)
+                .floor() as i32
+        });
+        let high: [i32; 2] = std::array::from_fn(|axis| {
+            (points
+                .iter()
+                .map(|p| geometry::xz_component(*p, axis))
+                .fold(f32::NEG_INFINITY, f32::max)
+                / 32.0)
+                .floor() as i32
+        });
+        for x in low[0]..=high[0] {
+            for z in low[1]..=high[1] {
+                ground_cover.grid.entry((x, z)).or_default().push(i);
             }
         }
     }
-    pub fn material(&self, p: XZ<f32>) -> Option<Material> {
-        self.grid
-            .get(&((p.x / 32.0).floor() as i32, (p.z / 32.0).floor() as i32))?
-            .iter()
-            .map(|i| &self.triangles[*i])
-            .find(|t| {
-                let points = t.points;
-                if (0..2).any(|a| {
-                    p.component(a)
-                        < points
+}
+pub fn material(ground_cover: &GroundCover, p: XZ<f32>) -> Option<Material> {
+    ground_cover
+        .grid
+        .get(&((p.x / 32.0).floor() as i32, (p.z / 32.0).floor() as i32))?
+        .iter()
+        .map(|i| &ground_cover.triangles[*i])
+        .find(|t| {
+            let points = t.points;
+            if (0..2).any(|a| {
+                geometry::xz_component(p, a)
+                    < points
+                        .iter()
+                        .map(|q| geometry::xz_component(*q, a))
+                        .fold(f32::INFINITY, f32::min)
+                        - 0.001
+                    || geometry::xz_component(p, a)
+                        > points
                             .iter()
-                            .map(|q| q.component(a))
-                            .fold(f32::INFINITY, f32::min)
-                            - 0.001
-                        || p.component(a)
-                            > points
-                                .iter()
-                                .map(|q| q.component(a))
-                                .fold(f32::NEG_INFINITY, f32::max)
-                                + 0.001
-                }) {
-                    return false;
-                }
-                let edges: [f32; 3] = std::array::from_fn(|i| {
-                    let a = t.points[i];
-                    let b = t.points[(i + 1) % 3];
-                    (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
-                });
-                edges.iter().all(|v| *v >= -0.00001) || edges.iter().all(|v| *v <= 0.00001)
-            })
-            .map(|t| t.material)
-    }
+                            .map(|q| geometry::xz_component(*q, a))
+                            .fold(f32::NEG_INFINITY, f32::max)
+                            + 0.001
+            }) {
+                return false;
+            }
+            let edges: [f32; 3] = std::array::from_fn(|i| {
+                let a = t.points[i];
+                let b = t.points[(i + 1) % 3];
+                (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
+            });
+            edges.iter().all(|v| *v >= -0.00001) || edges.iter().all(|v| *v <= 0.00001)
+        })
+        .map(|t| t.material)
 }
 
 // Terrain elevation.
 
 #[cfg(test)]
 mod index_tests {
+    use crate::landscape;
+
     use super::*;
     use crate::geometry;
     use crate::world;
@@ -201,28 +202,27 @@ mod index_tests {
                 ],
             },
         ];
-        let cover = GroundCover::new(triangles, vec![]);
+        let cover = landscape::new(triangles, vec![]);
         for x in (-80..=80).step_by(3) {
             for z in (-80..=80).step_by(5) {
                 let p = XZ {
                     x: x as f32 + 0.13,
                     z: z as f32 + 0.37,
                 };
-                let expected = cover
-                    .triangles()
+                let expected = landscape::triangles(&cover)
                     .iter()
                     .find(|t| {
-                        geometry::polygon(&t.points.map(|p| p.map(f64::from)))
+                        geometry::polygon(&t.points.map(|p| geometry::xz_map(p, f64::from)))
                             .intersects(&Point::new(p.x as f64, p.z as f64))
                     })
                     .map(|t| t.material);
-                assert_eq!(cover.material(p), expected, "{p:?}");
+                assert_eq!(landscape::material(&(cover), p), expected, "{p:?}");
             }
         }
-        let empty = GroundCover::new(vec![], vec![]);
-        assert_eq!(empty.material(XZ { x: 0., z: 0. }), None);
+        let empty = landscape::new(vec![], vec![]);
+        assert_eq!(landscape::material(&(empty), XZ { x: 0., z: 0. }), None);
         assert_eq!(
-            cover.material(XZ { x: 0.1, z: 0.1 }),
+            landscape::material(&(cover), XZ { x: 0.1, z: 0.1 }),
             Some(Material::Paving)
         );
     }

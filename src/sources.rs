@@ -1,4 +1,6 @@
 //! OSM PBF source extraction for the location compiler.
+
+use crate::geometry;
 use crate::{
     error::{invalid, Result},
     geometry::BoundingBox,
@@ -124,7 +126,7 @@ fn scan(path: &Path, mut f: impl FnMut(osmpbf::Element<'_>) -> Result<()>) -> Re
 }
 
 pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -> Result<()> {
-    if !bounds.is_valid() {
+    if !geometry::is_valid(&bounds) {
         return Err(invalid("invalid SOUTH WEST NORTH EAST bounds"));
     }
     if source == output {
@@ -276,7 +278,7 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
         fs::write(
             output.with_extension("json"),
             serde_json::to_vec_pretty(
-                &serde_json::json!({"bbox":bounds.to_array(),"source":source.file_name().map(|s|s.to_string_lossy()),"source_timestamp":timestamp,"nodes":count,"ways":ways.len(),"multipolygons":relations.len(),"skipped_multipolygons":skipped_multipolygons}),
+                &serde_json::json!({"bbox":geometry::bounding_box_to_array(bounds),"source":source.file_name().map(|s|s.to_string_lossy()),"source_timestamp":timestamp,"nodes":count,"ways":ways.len(),"multipolygons":relations.len(),"skipped_multipolygons":skipped_multipolygons}),
             )?,
         )?;
         println!(

@@ -1,6 +1,12 @@
 //! Render-only chase-camera tuning. Never writes vehicle state.
+
+use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::gl;
+use crate::street_surface;
+use crate::world;
+use crate::world_buildings;
+use crate::world_transport;
 use crate::{phys_car::Vehicle, track};
 use std::{
     f32::consts::{PI, TAU},
@@ -14,29 +20,27 @@ pub enum FollowView {
     Bonnet,
 }
 
-impl FollowView {
-    fn dimensions(self) -> (f32, f32) {
-        // Distances are from the car centre; close sits roughly 3.4 m behind the bumper.
-        match self {
-            Self::Wide => (9.0, 4.5),
-            Self::Close => (5.5, 2.1),
-            Self::Bonnet => (0.0, 0.0),
-        }
+fn dimensions(follow_view: FollowView) -> (f32, f32) {
+    // Distances are from the car centre; close sits roughly 3.4 m behind the bumper.
+    match follow_view {
+        FollowView::Wide => (9.0, 4.5),
+        FollowView::Close => (5.5, 2.1),
+        FollowView::Bonnet => (0.0, 0.0),
     }
+}
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Wide => "wide",
-            Self::Close => "close",
-            Self::Bonnet => "bonnet",
-        }
+pub fn view_name(follow_view: FollowView) -> &'static str {
+    match follow_view {
+        FollowView::Wide => "wide",
+        FollowView::Close => "close",
+        FollowView::Bonnet => "bonnet",
     }
+}
 
-    pub fn from_name(name: &str) -> Option<Self> {
-        [Self::Wide, Self::Close, Self::Bonnet]
-            .into_iter()
-            .find(|view| view.name().eq_ignore_ascii_case(name))
-    }
+pub fn from_name(name: &str) -> Option<FollowView> {
+    [FollowView::Wide, FollowView::Close, FollowView::Bonnet]
+        .into_iter()
+        .find(|view| view_name(*view).eq_ignore_ascii_case(name))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,129 +60,140 @@ pub struct ChaseCamera {
     bonnet: Pose,
 }
 
-impl ChaseCamera {
-    pub fn new(car: &Vehicle) -> Self {
-        let (distance, height) = FollowView::Close.dimensions();
-        let mut camera = Self {
-            track: car.track.clone(),
-            view: FollowView::Close,
-            anchor: car.position,
-            heading: car.heading,
-            look_ahead: XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
+pub fn new(car: &Vehicle) -> ChaseCamera {
+    let (distance, height) = dimensions(FollowView::Close);
+    let mut camera = ChaseCamera {
+        track: car.track.clone(),
+        view: FollowView::Close,
+        anchor: car.position,
+        heading: car.heading,
+        look_ahead: XYZ {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+        distance,
+        height,
+        bonnet: bonnet_pose(car),
+    };
+    snap(&mut camera, car);
+    camera
+}
+
+pub fn view(chase_camera: &ChaseCamera) -> FollowView {
+    chase_camera.view
+}
+
+pub fn set_view(chase_camera: &mut ChaseCamera, view: FollowView) {
+    chase_camera.view = view;
+}
+
+pub fn toggle_view(chase_camera: &mut ChaseCamera) {
+    chase_camera.view = match chase_camera.view {
+        FollowView::Wide => FollowView::Bonnet,
+        FollowView::Bonnet => FollowView::Close,
+        FollowView::Close => FollowView::Wide,
+    };
+}
+
+pub fn snap(chase_camera: &mut ChaseCamera, car: &Vehicle) {
+    chase_camera.bonnet = bonnet_pose(car);
+    chase_camera.track = car.track.clone();
+    chase_camera.anchor = car.position;
+    chase_camera.heading = car.heading.rem_euclid(TAU);
+    chase_camera.look_ahead = desired_look(car);
+    (chase_camera.distance, chase_camera.height) = dimensions(chase_camera.view);
+    chase_camera.distance += speed_pullback(car.speed);
+}
+
+pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duration) {
+    if !std::sync::Arc::ptr_eq(&chase_camera.track, &car.track) {
+        snap(chase_camera, car);
+        return;
+    }
+    let dt = frame_time.as_secs_f32().min(0.25);
+    chase_camera.bonnet = bonnet_pose(car);
+    let position_blend = damp(7.0, dt);
+    for axis in 0..3 {
+        *geometry::xyz_component_mut(&mut chase_camera.anchor, axis) +=
+            (geometry::xyz_component(car.position, axis)
+                - geometry::xyz_component(chase_camera.anchor, axis))
+                * position_blend;
+    }
+
+    // A little velocity alignment stabilizes slides without swinging away
+    // from the nose or forcing the camera to follow the route instead.
+    let motion = car.velocity.x.hypot(car.velocity.z);
+    let drift = if motion > 1.0 {
+        angle(car.velocity.x.atan2(car.velocity.z) - car.heading).clamp(-0.35, 0.35)
+            * (car.speed.max(0.0) / 12.0).clamp(0.0, 1.0)
+            * 0.25
+    } else {
+        0.0
+    };
+    let heading = car.heading + drift;
+    chase_camera.heading = (chase_camera.heading
+        + angle(heading - chase_camera.heading) * damp(7.0, dt))
+    .rem_euclid(TAU);
+
+    let look = desired_look(car);
+    for (current, desired) in geometry::xyz_iter_mut(&mut chase_camera.look_ahead).zip(look) {
+        *current += (desired - *current) * damp(4.5, dt);
+    }
+    let (distance, height) = dimensions(chase_camera.view);
+    chase_camera.distance +=
+        (distance + speed_pullback(car.speed) - chase_camera.distance) * damp(5.0, dt);
+    chase_camera.height += (height - chase_camera.height) * damp(5.0, dt);
+}
+
+pub fn pose(chase_camera: &ChaseCamera) -> Pose {
+    if chase_camera.view == FollowView::Bonnet {
+        return chase_camera.bonnet;
+    }
+    let mut eye = XYZ {
+        x: chase_camera.anchor.x - chase_camera.heading.sin() * chase_camera.distance,
+        y: chase_camera.anchor.y + chase_camera.height,
+        z: chase_camera.anchor.z - chase_camera.heading.cos() * chase_camera.distance,
+    };
+    // Conservative road-height clearance, not full scenery collision.
+    eye.y = eye.y.max(
+        world_transport::drive_height_near(
+            &chase_camera.track,
+            geometry::xz(eye),
+            chase_camera.anchor.y - 0.5,
+        ) + 1.5,
+    );
+    let target = geometry::xyz_from_fn(|i| {
+        geometry::xyz_component(chase_camera.anchor, i)
+            + geometry::xyz_component(chase_camera.look_ahead, i)
+            + if i == 1 { 0.4 } else { 0.0 }
+    });
+    if street_surface::has_compiled_roads(&chase_camera.track) {
+        let city = &chase_camera.track;
+        eye = camera_eye(
+            city,
+            XYZ {
+                x: chase_camera.anchor.x,
+                y: chase_camera.anchor.y + 0.5,
+                z: chase_camera.anchor.z,
             },
-            distance,
-            height,
-            bonnet: bonnet_pose(car),
-        };
-        camera.snap(car);
-        camera
+            eye,
+        );
     }
-
-    pub fn view(&self) -> FollowView {
-        self.view
-    }
-
-    pub fn set_view(&mut self, view: FollowView) {
-        self.view = view;
-    }
-
-    pub fn toggle_view(&mut self) {
-        self.view = match self.view {
-            FollowView::Wide => FollowView::Bonnet,
-            FollowView::Bonnet => FollowView::Close,
-            FollowView::Close => FollowView::Wide,
-        };
-    }
-
-    pub fn snap(&mut self, car: &Vehicle) {
-        self.bonnet = bonnet_pose(car);
-        self.track = car.track.clone();
-        self.anchor = car.position;
-        self.heading = car.heading.rem_euclid(TAU);
-        self.look_ahead = desired_look(car);
-        (self.distance, self.height) = self.view.dimensions();
-        self.distance += speed_pullback(car.speed);
-    }
-
-    pub fn update(&mut self, car: &Vehicle, frame_time: Duration) {
-        if !std::sync::Arc::ptr_eq(&self.track, &car.track) {
-            self.snap(car);
-            return;
-        }
-        let dt = frame_time.as_secs_f32().min(0.25);
-        self.bonnet = bonnet_pose(car);
-        let position_blend = damp(7.0, dt);
-        for axis in 0..3 {
-            *self.anchor.component_mut(axis) +=
-                (car.position.component(axis) - self.anchor.component(axis)) * position_blend;
-        }
-
-        // A little velocity alignment stabilizes slides without swinging away
-        // from the nose or forcing the camera to follow the route instead.
-        let motion = car.velocity.x.hypot(car.velocity.z);
-        let drift = if motion > 1.0 {
-            angle(car.velocity.x.atan2(car.velocity.z) - car.heading).clamp(-0.35, 0.35)
-                * (car.speed.max(0.0) / 12.0).clamp(0.0, 1.0)
-                * 0.25
-        } else {
-            0.0
-        };
-        let heading = car.heading + drift;
-        self.heading =
-            (self.heading + angle(heading - self.heading) * damp(7.0, dt)).rem_euclid(TAU);
-
-        let look = desired_look(car);
-        for (current, desired) in self.look_ahead.iter_mut().zip(look) {
-            *current += (desired - *current) * damp(4.5, dt);
-        }
-        let (distance, height) = self.view.dimensions();
-        self.distance += (distance + speed_pullback(car.speed) - self.distance) * damp(5.0, dt);
-        self.height += (height - self.height) * damp(5.0, dt);
-    }
-
-    pub fn pose(&self) -> Pose {
-        if self.view == FollowView::Bonnet {
-            return self.bonnet;
-        }
-        let mut eye = XYZ {
-            x: self.anchor.x - self.heading.sin() * self.distance,
-            y: self.anchor.y + self.height,
-            z: self.anchor.z - self.heading.cos() * self.distance,
-        };
-        // Conservative road-height clearance, not full scenery collision.
-        eye.y = eye
-            .y
-            .max(self.track.drive_height_near(eye.xz(), self.anchor.y - 0.5) + 1.5);
-        let target = XYZ::from_fn(|i| {
-            self.anchor.component(i) + self.look_ahead.component(i) + if i == 1 { 0.4 } else { 0.0 }
-        });
-        if self.track.has_compiled_roads() {
-            let city = &self.track;
-            eye = city.camera_eye(
-                XYZ {
-                    x: self.anchor.x,
-                    y: self.anchor.y + 0.5,
-                    z: self.anchor.z,
-                },
-                eye,
-            );
-        }
-        Pose {
-            eye: eye,
-            target: target,
-        }
+    Pose {
+        eye: eye,
+        target: target,
     }
 }
 
 fn bonnet_pose(car: &Vehicle) -> Pose {
     let body = gl::vehicle_body_matrix(car);
-    let eye = XYZ::from_fn(|i| body[12 + i] + body[4 + i] * 0.85 + body[8 + i] * 0.95);
+    let eye = geometry::xyz_from_fn(|i| body[12 + i] + body[4 + i] * 0.85 + body[8 + i] * 0.95);
     Pose {
         eye: (eye),
-        target: XYZ::from_fn(|i| eye.component(i) + (body[8 + i] - body[4 + i] * 0.08) * 30.0),
+        target: geometry::xyz_from_fn(|i| {
+            geometry::xyz_component(eye, i) + (body[8 + i] - body[4 + i] * 0.08) * 30.0
+        }),
     }
 }
 
@@ -214,47 +229,53 @@ fn angle(value: f32) -> f32 {
     (value + PI).rem_euclid(TAU) - PI
 }
 
-impl track::WorldLocation {
-    pub fn camera_eye(&self, anchor: XYZ, eye: XYZ) -> XYZ {
-        let length = (eye.x - anchor.x).hypot(eye.z - anchor.z);
-        let steps = (length / 0.35).ceil().max(1.0) as usize;
-        let mut safe = anchor;
-        for step in 1..=steps {
-            let t = step as f32 / steps as f32;
-            let p = XYZ::from_fn(|i| {
-                anchor.component(i) + (eye.component(i) - anchor.component(i)) * t
-            });
-            let blocked = self.nearby_buildings(XZ { x: p.x, z: p.z }).any(|b| {
-                p.y >= self.height(p.xz()) - 0.5
-                    && p.y < b.base_y + b.height_meters + 0.5
-                    && (b.min_height_meters == 0.0 || p.y >= b.base_y + b.min_height_meters - 0.5)
-                    && (b.contains(XZ { x: p.x, z: p.z })
-                        || b.nearest(XZ { x: p.x, z: p.z }).2 < 0.5)
-            });
-            if blocked
-                || p.y < self.drive_height_near(p.xz(), anchor.y - 0.5) + 0.4
-                || self
-                    .tunnel_ceiling(p.xz(), anchor.y - 0.5)
-                    .is_some_and(|ceiling| p.y > ceiling - 0.3)
-            {
-                return safe;
-            }
-            safe = p;
+pub fn camera_eye(world: &track::WorldLocation, anchor: XYZ, eye: XYZ) -> XYZ {
+    let length = (eye.x - anchor.x).hypot(eye.z - anchor.z);
+    let steps = (length / 0.35).ceil().max(1.0) as usize;
+    let mut safe = anchor;
+    for step in 1..=steps {
+        let t = step as f32 / steps as f32;
+        let p = geometry::xyz_from_fn(|i| {
+            geometry::xyz_component(anchor, i)
+                + (geometry::xyz_component(eye, i) - geometry::xyz_component(anchor, i)) * t
+        });
+        let blocked = world_buildings::nearby_buildings(world, XZ { x: p.x, z: p.z }).any(|b| {
+            p.y >= world::height(world, geometry::xz(p)) - 0.5
+                && p.y < b.base_y + b.height_meters + 0.5
+                && (b.min_height_meters == 0.0 || p.y >= b.base_y + b.min_height_meters - 0.5)
+                && (world::contains(b, XZ { x: p.x, z: p.z })
+                    || world::nearest(b, XZ { x: p.x, z: p.z }).2 < 0.5)
+        });
+        if blocked
+            || p.y
+                < world_transport::drive_height_near(world, geometry::xz(p), anchor.y - 0.5) + 0.4
+            || world_transport::tunnel_ceiling(world, geometry::xz(p), anchor.y - 0.5)
+                .is_some_and(|ceiling| p.y > ceiling - 0.3)
+        {
+            return safe;
         }
-        eye
+        safe = p;
     }
+    eye
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::camera;
+    use crate::geometry;
+    use crate::phys_car;
+    use crate::track;
+    use crate::vehicle_location;
+    use crate::world;
+
     use super::*;
     use crate::test_support;
 
     fn car() -> Vehicle {
-        let road = test_support::compact_track().at_distance(50.0);
+        let road = track::at_distance(&test_support::compact_track(), 50.0);
         test_support::vehicle(
-            road.vehicle_position(0.0),
-            road.heading(),
+            vehicle_location::vehicle_position(road, 0.0),
+            world::heading(road),
             test_support::car(),
         )
     }
@@ -262,16 +283,16 @@ mod tests {
     #[test]
     fn view_names_round_trip() {
         for view in [FollowView::Wide, FollowView::Close, FollowView::Bonnet] {
-            assert_eq!(FollowView::from_name(view.name()), Some(view));
+            assert_eq!(camera::from_name(camera::view_name(view)), Some(view));
         }
-        assert_eq!(FollowView::from_name("WIDE"), Some(FollowView::Wide));
-        assert_eq!(FollowView::from_name("nope"), None);
+        assert_eq!(camera::from_name("WIDE"), Some(FollowView::Wide));
+        assert_eq!(camera::from_name("nope"), None);
     }
 
     fn assert_close(a: XYZ, b: XYZ, tolerance: f32) {
         for i in 0..3 {
             assert!(
-                (a.component(i) - b.component(i)).abs() < tolerance,
+                (geometry::xyz_component(a, i) - geometry::xyz_component(b, i)).abs() < tolerance,
                 "{a:?} != {b:?}"
             );
         }
@@ -279,30 +300,30 @@ mod tests {
 
     #[test]
     fn changing_routes_snaps_camera_and_preserves_selected_view() {
-        let mut camera = ChaseCamera::new(&car());
-        camera.toggle_view();
+        let mut camera = camera::new(&car());
+        camera::toggle_view(&mut camera);
         let track = test_support::track();
-        let road = track.at_distance(850.0);
-        let mut scenic = Vehicle::on_track(
-            road.vehicle_position(0.0),
-            road.heading(),
+        let road = track::at_distance(&track, 850.0);
+        let mut scenic = phys_car::on_track(
+            vehicle_location::vehicle_position(road, 0.0),
+            world::heading(road),
             test_support::car(),
             track.clone(),
         );
         scenic.speed = 30.0;
-        camera.update(&scenic, Duration::ZERO);
+        camera::update(&mut camera, &scenic, Duration::ZERO);
         assert!(std::sync::Arc::ptr_eq(&camera.track, &track));
-        assert_eq!(camera.view(), FollowView::Wide);
+        assert_eq!(camera::view(&(camera)), FollowView::Wide);
         assert_eq!(camera.anchor, scenic.position);
-        let mut expected = ChaseCamera::new(&scenic);
-        expected.toggle_view();
-        expected.snap(&scenic);
-        assert_eq!(camera.pose(), expected.pose());
+        let mut expected = camera::new(&scenic);
+        camera::toggle_view(&mut expected);
+        camera::snap(&mut expected, &scenic);
+        assert_eq!(camera::pose(&(camera)), camera::pose(&(expected)));
         let compact = car();
-        camera.update(&compact, Duration::from_millis(16));
+        camera::update(&mut camera, &compact, Duration::from_millis(16));
         assert!(std::sync::Arc::ptr_eq(&camera.track, &compact.track));
         assert_eq!(camera.anchor, compact.position);
-        camera.snap(&scenic);
+        camera::snap(&mut camera, &scenic);
         assert!(std::sync::Arc::ptr_eq(&camera.track, &scenic.track));
     }
 
@@ -318,12 +339,12 @@ mod tests {
             z: moved.heading.cos() * 18.0,
         };
         let run = |fps: u32| {
-            let mut c = ChaseCamera::new(&v);
-            c.toggle_view();
+            let mut c = camera::new(&v);
+            camera::toggle_view(&mut c);
             for _ in 0..fps {
-                c.update(&moved, Duration::from_secs_f64(1.0 / fps as f64));
+                camera::update(&mut c, &moved, Duration::from_secs_f64(1.0 / fps as f64));
             }
-            c.pose()
+            camera::pose(&c)
         };
         let a = run(30);
         for fps in [60, 144] {
@@ -337,48 +358,54 @@ mod tests {
     fn heading_wrap_uses_short_path_and_zero_dt_is_frozen() {
         let mut v = car();
         v.heading = TAU - 0.02;
-        let mut c = ChaseCamera::new(&v);
+        let mut c = camera::new(&v);
         v.heading = 0.02;
-        c.update(&v, Duration::from_millis(16));
+        camera::update(&mut c, &v, Duration::from_millis(16));
         assert!(angle(c.heading).abs() < 0.025);
-        let before = c.pose();
+        let before = camera::pose(&c);
         v.position.x += 20.0;
-        c.update(&v, Duration::ZERO);
-        assert_eq!(before, c.pose());
+        camera::update(&mut c, &v, Duration::ZERO);
+        assert_eq!(before, camera::pose(&(c)));
     }
 
     #[test]
     fn both_views_stay_finite_and_above_road_on_a_complete_route() {
         let mut v = car();
-        let mut c = ChaseCamera::new(&v);
+        let mut c = camera::new(&v);
         for close in [false, true] {
             if close {
-                c.toggle_view();
+                camera::toggle_view(&mut c);
             }
             for i in 0..600 {
-                let road = test_support::compact_track().at_distance(
-                    i as f32 * test_support::compact_track().sampling_length() / 600.0,
+                let road = track::at_distance(
+                    &test_support::compact_track(),
+                    i as f32 * track::sampling_length(&test_support::compact_track()) / 600.0,
                 );
-                v.position = road.vehicle_position(1.4);
-                v.heading = road.heading();
+                v.position = vehicle_location::vehicle_position(road, 1.4);
+                v.heading = world::heading(road);
                 v.speed = 20.0;
-                v.velocity = road.tangent.map(|x| x * 20.0);
-                c.update(&v, Duration::from_secs_f64(1.0 / 60.0));
-                let pose = c.pose();
-                assert!(pose
-                    .eye
-                    .iter()
-                    .chain(pose.target.iter())
+                v.velocity = geometry::xz_map(road.tangent, |x| x * 20.0);
+                camera::update(&mut c, &v, Duration::from_secs_f64(1.0 / 60.0));
+                let pose = camera::pose(&c);
+                assert!(geometry::iter(&(pose.eye))
+                    .chain(geometry::iter(&(pose.target)))
                     .all(|x| x.is_finite()));
                 assert!(
                     pose.eye.y
-                        >= test_support::compact_track().height(XZ {
-                            x: pose.eye.x,
-                            z: pose.eye.z
-                        }) + 1.499
+                        >= world::height(
+                            &test_support::compact_track(),
+                            XZ {
+                                x: pose.eye.x,
+                                z: pose.eye.z
+                            }
+                        ) + 1.499
                 );
                 let gap = (0..3)
-                    .map(|i| (pose.eye.component(i) - pose.target.component(i)).powi(2))
+                    .map(|i| {
+                        (geometry::xyz_component(pose.eye, i)
+                            - geometry::xyz_component(pose.target, i))
+                        .powi(2)
+                    })
                     .sum::<f32>();
                 assert!(gap > 10.0);
             }

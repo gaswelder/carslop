@@ -1,10 +1,15 @@
 use crate::city_assets;
 use crate::font;
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
 use crate::hud_atlas;
 use crate::phys_car;
+use crate::street_surface;
+use crate::track;
 #[cfg(test)]
 use crate::track::LocationId;
+use crate::world;
+use crate::world_roads;
 use crate::{asset_car, track::WorldLocation};
 use std::ffi::CString;
 
@@ -138,49 +143,48 @@ struct MapFit {
     heading: Option<f32>,
     content: [[f32; 2]; 2],
 }
-impl MapFit {
-    fn new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> Self {
-        let x_scale = (MAP_CONTENT[1][0] - MAP_CONTENT[0][0]) / MAP_WIDTH_METRES;
-        Self {
-            center: player.xz(),
-            scale: [x_scale, x_scale * viewport[0] / viewport[1]],
-            north_up: track.has_compiled_roads(),
-            heading: None,
-            content: MAP_CONTENT,
-        }
+
+fn map_fit_new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> MapFit {
+    let x_scale = (MAP_CONTENT[1][0] - MAP_CONTENT[0][0]) / MAP_WIDTH_METRES;
+    MapFit {
+        center: geometry::xz(player),
+        scale: [x_scale, x_scale * viewport[0] / viewport[1]],
+        north_up: street_surface::has_compiled_roads(track),
+        heading: None,
+        content: MAP_CONTENT,
     }
-    fn world_bounds(&self) -> BoundingBoxXZ<f32> {
-        let mut x = (self.content[1][0] - self.content[0][0]) * 0.5 / self.scale[0];
-        let mut z = (self.content[1][1] - self.content[0][1]) * 0.5 / self.scale[1];
-        if let Some(heading) = self.heading {
-            let (sin, cos) = heading.sin_cos();
-            (x, z) = (x * cos.abs() + z * sin.abs(), x * sin.abs() + z * cos.abs());
-        }
-        BoundingBoxXZ {
-            min: XZ {
-                x: self.center.x - x,
-                z: self.center.z - z,
-            },
-            max: XZ {
-                x: self.center.x + x,
-                z: self.center.z + z,
-            },
-        }
+}
+fn world_bounds(map_fit: &MapFit) -> BoundingBoxXZ<f32> {
+    let mut x = (map_fit.content[1][0] - map_fit.content[0][0]) * 0.5 / map_fit.scale[0];
+    let mut z = (map_fit.content[1][1] - map_fit.content[0][1]) * 0.5 / map_fit.scale[1];
+    if let Some(heading) = map_fit.heading {
+        let (sin, cos) = heading.sin_cos();
+        (x, z) = (x * cos.abs() + z * sin.abs(), x * sin.abs() + z * cos.abs());
     }
-    fn point(&self, p: XYZ) -> [f32; 2] {
-        let dx = p.x - self.center.x;
-        let dz = p.z - self.center.z;
-        let [x, y] = if let Some(heading) = self.heading {
-            let (sin, cos) = heading.sin_cos();
-            [dz * sin - dx * cos, dx * sin + dz * cos]
-        } else {
-            [dx, dz * if self.north_up { -1.0 } else { 1.0 }]
-        };
-        [
-            (self.content[0][0] + self.content[1][0]) * 0.5 + x * self.scale[0],
-            (self.content[0][1] + self.content[1][1]) * 0.5 + y * self.scale[1],
-        ]
+    BoundingBoxXZ {
+        min: XZ {
+            x: map_fit.center.x - x,
+            z: map_fit.center.z - z,
+        },
+        max: XZ {
+            x: map_fit.center.x + x,
+            z: map_fit.center.z + z,
+        },
     }
+}
+fn map_fit_point(map_fit: &MapFit, p: XYZ) -> [f32; 2] {
+    let dx = p.x - map_fit.center.x;
+    let dz = p.z - map_fit.center.z;
+    let [x, y] = if let Some(heading) = map_fit.heading {
+        let (sin, cos) = heading.sin_cos();
+        [dz * sin - dx * cos, dx * sin + dz * cos]
+    } else {
+        [dx, dz * if map_fit.north_up { -1.0 } else { 1.0 }]
+    };
+    [
+        (map_fit.content[0][0] + map_fit.content[1][0]) * 0.5 + x * map_fit.scale[0],
+        (map_fit.content[0][1] + map_fit.content[1][1]) * 0.5 + y * map_fit.scale[1],
+    ]
 }
 
 struct FullMapView {
@@ -189,62 +193,62 @@ struct FullMapView {
     min_scale: f32,
     max_scale: f32,
 }
-impl FullMapView {
-    fn new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> Self {
-        // Keep the minimap's metres per pixel, expanding the visible area.
-        let mut fit = MapFit::new(track, player, viewport);
-        fit.content = FULL_MAP_CONTENT;
-        let mut bounds = track.bounding_box();
-        for p in track.map_segments().flat_map(|(a, b)| [a, b]) {
-            bounds.min.x = bounds.min.x.min(p.x);
-            bounds.min.z = bounds.min.z.min(p.z);
-            bounds.max.x = bounds.max.x.max(p.x);
-            bounds.max.z = bounds.max.z.max(p.z);
-        }
-        // Zooming out can reveal the entire network while keeping the car centered.
-        let size: [f32; 2] = std::array::from_fn(|i| {
-            2.0 * ([bounds.min.x, bounds.min.z][i] - fit.center.component(i))
-                .abs()
-                .max(([bounds.max.x, bounds.max.z][i] - fit.center.component(i)).abs())
-                .max(1.0)
-        });
-        let available: [f32; 2] =
-            std::array::from_fn(|i| (FULL_MAP_CONTENT[1][i] - FULL_MAP_CONTENT[0][i]) * 0.9);
-        let min_scale = (available[0] / size[0])
-            .min(available[1] / (size[1] * viewport[0] / viewport[1]))
-            .min(fit.scale[0]);
-        Self {
-            copy_status: None,
-            min_scale,
-            max_scale: fit.scale[0] * 16.0,
-            fit,
-        }
-    }
 
-    fn zoom(&mut self, steps: f32) -> bool {
-        if !steps.is_finite() || steps == 0.0 {
-            return false;
-        }
-        let scale = (self.fit.scale[0] * 1.25_f32.powf(steps.clamp(-100.0, 100.0)))
-            .clamp(self.min_scale, self.max_scale);
-        if scale == self.fit.scale[0] {
-            return false;
-        }
-        self.fit.scale[1] *= scale / self.fit.scale[0];
-        self.fit.scale[0] = scale;
-        true
+fn full_map_view_new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> FullMapView {
+    // Keep the minimap's metres per pixel, expanding the visible area.
+    let mut fit = map_fit_new(track, player, viewport);
+    fit.content = FULL_MAP_CONTENT;
+    let mut bounds = world::bounding_box(track);
+    for p in map_segments(track).flat_map(|(a, b)| [a, b]) {
+        bounds.min.x = bounds.min.x.min(p.x);
+        bounds.min.z = bounds.min.z.min(p.z);
+        bounds.max.x = bounds.max.x.max(p.x);
+        bounds.max.z = bounds.max.z.max(p.z);
     }
-
-    fn zoom_factor(&self) -> f32 {
-        self.fit.scale[0] / (self.max_scale / 16.0)
+    // Zooming out can reveal the entire network while keeping the car centered.
+    let size: [f32; 2] = std::array::from_fn(|i| {
+        2.0 * ([bounds.min.x, bounds.min.z][i] - geometry::xz_component(fit.center, i))
+            .abs()
+            .max(([bounds.max.x, bounds.max.z][i] - geometry::xz_component(fit.center, i)).abs())
+            .max(1.0)
+    });
+    let available: [f32; 2] =
+        std::array::from_fn(|i| (FULL_MAP_CONTENT[1][i] - FULL_MAP_CONTENT[0][i]) * 0.9);
+    let min_scale = (available[0] / size[0])
+        .min(available[1] / (size[1] * viewport[0] / viewport[1]))
+        .min(fit.scale[0]);
+    FullMapView {
+        copy_status: None,
+        min_scale,
+        max_scale: fit.scale[0] * 16.0,
+        fit,
     }
+}
 
-    fn set_zoom_factor(&mut self, factor: f32) {
-        let scale = (self.max_scale / 16.0 * factor).clamp(self.min_scale, self.max_scale);
-        if scale != self.fit.scale[0] {
-            self.fit.scale[1] *= scale / self.fit.scale[0];
-            self.fit.scale[0] = scale;
-        }
+fn zoom_full_map(full_map_view: &mut FullMapView, steps: f32) -> bool {
+    if !steps.is_finite() || steps == 0.0 {
+        return false;
+    }
+    let scale = (full_map_view.fit.scale[0] * 1.25_f32.powf(steps.clamp(-100.0, 100.0)))
+        .clamp(full_map_view.min_scale, full_map_view.max_scale);
+    if scale == full_map_view.fit.scale[0] {
+        return false;
+    }
+    full_map_view.fit.scale[1] *= scale / full_map_view.fit.scale[0];
+    full_map_view.fit.scale[0] = scale;
+    true
+}
+
+fn zoom_factor(full_map_view: &FullMapView) -> f32 {
+    full_map_view.fit.scale[0] / (full_map_view.max_scale / 16.0)
+}
+
+fn set_zoom_factor(full_map_view: &mut FullMapView, factor: f32) {
+    let scale = (full_map_view.max_scale / 16.0 * factor)
+        .clamp(full_map_view.min_scale, full_map_view.max_scale);
+    if scale != full_map_view.fit.scale[0] {
+        full_map_view.fit.scale[1] *= scale / full_map_view.fit.scale[0];
+        full_map_view.fit.scale[0] = scale;
     }
 }
 
@@ -327,358 +331,358 @@ impl Drop for Hud {
     }
 }
 
-impl Hud {
-    pub fn draw_loading(&self, program: u32, name: &str, elapsed: f32) {
-        let mut vertices = Vec::new();
-        let title = format!("Loading {name}");
-        let width = font::labels().width(&title);
-        let size = 0.009_f32.min(1.8 / width.max(1.0));
-        text(
-            &mut vertices,
-            &title,
-            [-width * size * 0.5, 0.15],
-            size,
-            [0.15, 0.85, 0.95],
-        );
-        quad(
-            &mut vertices,
-            [-0.55, -0.22],
-            [0.55, -0.19],
-            [0.12, 0.20, 0.25],
-        );
-        let x = -0.55 + (elapsed * 1.5).sin().mul_add(0.5, 0.5) * 0.9;
-        quad(
-            &mut vertices,
-            [x, -0.22],
-            [x + 0.2, -0.19],
-            [0.15, 0.85, 0.95],
-        );
-        self.upload(program, &vertices);
-    }
+pub fn draw_loading(hud: &Hud, program: u32, name: &str, elapsed: f32) {
+    let mut vertices = Vec::new();
+    let title = format!("Loading {name}");
+    let width = font::width(font::labels(), &title);
+    let size = 0.009_f32.min(1.8 / width.max(1.0));
+    text(
+        &mut vertices,
+        &title,
+        [-width * size * 0.5, 0.15],
+        size,
+        [0.15, 0.85, 0.95],
+    );
+    quad(
+        &mut vertices,
+        [-0.55, -0.22],
+        [0.55, -0.19],
+        [0.12, 0.20, 0.25],
+    );
+    let x = -0.55 + (elapsed * 1.5).sin().mul_add(0.5, 0.5) * 0.9;
+    quad(
+        &mut vertices,
+        [x, -0.22],
+        [x + 0.2, -0.19],
+        [0.15, 0.85, 0.95],
+    );
+    upload(hud, program, &vertices);
+}
 
-    pub fn new() -> Self {
-        let font_texture = hud_atlas::Texture::new();
-        unsafe {
-            let (mut vao, mut vbo) = (0, 0);
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-            gl::EnableVertexAttribArray(0);
-            let stride = std::mem::size_of::<Vertex>() as i32;
-            gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride, 12usize as *const _);
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride, 24usize as *const _);
-            Self {
-                font_texture,
-                vao,
-                vbo,
-                full_map_vertices: 0,
-                full_map_view: None,
-            }
+pub fn hud_new() -> Hud {
+    let font_texture = hud_atlas::texture_new();
+    unsafe {
+        let (mut vao, mut vbo) = (0, 0);
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+        gl::EnableVertexAttribArray(0);
+        let stride = std::mem::size_of::<Vertex>() as i32;
+        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
+        gl::EnableVertexAttribArray(1);
+        gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, stride, 12usize as *const _);
+        gl::EnableVertexAttribArray(2);
+        gl::VertexAttribPointer(2, 2, gl::FLOAT, gl::FALSE, stride, 24usize as *const _);
+        Hud {
+            font_texture,
+            vao,
+            vbo,
+            full_map_vertices: 0,
+            full_map_view: None,
         }
     }
+}
 
-    pub fn draw(
-        &self,
-        program: u32,
-        map: Map<'_>,
-        heading: f32,
-        gauges: Gauges,
-        pause: Option<PauseMenu<'_>>,
-    ) {
-        let mut v = Vec::new();
-        let mut viewport = [0_i32; 4];
-        unsafe {
-            gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
+pub fn draw(
+    hud: &Hud,
+    program: u32,
+    map: Map<'_>,
+    heading: f32,
+    gauges: Gauges,
+    pause: Option<PauseMenu<'_>>,
+) {
+    let mut v = Vec::new();
+    let mut viewport = [0_i32; 4];
+    unsafe {
+        gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
+    }
+    append_instruments(
+        &mut v,
+        gauges,
+        [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
+    );
+    quad(&mut v, [0.59, 0.47], [0.97, 0.90], [0.025, 0.05, 0.075]);
+    let mut fit = map_fit_new(
+        map.track,
+        map.player,
+        [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
+    );
+    fit.heading = Some(heading);
+    let width = if street_surface::has_compiled_roads(map.track) {
+        0.0025
+    } else {
+        0.006
+    };
+    for (from, to) in map_segments_near(map.track, world_bounds(&fit)) {
+        if let Some([a, b]) =
+            clip_map_line(map_fit_point(&fit, from), map_fit_point(&fit, to), width)
+        {
+            line(&mut v, a, b, width, [0.4, 0.49, 0.52]);
         }
-        append_instruments(
-            &mut v,
-            gauges,
-            [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
-        );
-        quad(&mut v, [0.59, 0.47], [0.97, 0.90], [0.025, 0.05, 0.075]);
-        let mut fit = MapFit::new(
-            map.track,
-            map.player,
-            [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
-        );
-        fit.heading = Some(heading);
-        let width = if map.track.has_compiled_roads() {
-            0.0025
+    }
+    map_marker(
+        &mut v,
+        map_fit_point(&fit, map.player),
+        0.014,
+        fit.scale[1] / fit.scale[0],
+        [0.15, 0.85, 0.95],
+    );
+
+    append_street_name(&mut v, street_name(map.track, map.player));
+    if let Some(pause) = pause {
+        append_pause(&mut v, pause);
+    }
+    upload(hud, program, &v);
+}
+
+pub fn prepare_full_map(
+    hud: &mut Hud,
+    map: Map<'_>,
+    heading: f32,
+    viewport: [f32; 2],
+    zoom: Option<f32>,
+) {
+    let mut view = full_map_view_new(map.track, map.player, viewport);
+    if let Some(zoom) = zoom {
+        set_zoom_factor(&mut view, zoom);
+    }
+    hud.full_map_view = Some(view);
+    rebuild_full_map(hud, map, heading, viewport);
+}
+
+pub fn hud_zoom_full_map(
+    hud: &mut Hud,
+    map: Map<'_>,
+    heading: f32,
+    viewport: [f32; 2],
+    steps: f32,
+) -> Option<f32> {
+    let mut zoom = None;
+    if let Some(view) = hud.full_map_view.as_mut() {
+        if zoom_full_map(view, steps) {
+            zoom = Some(zoom_factor(view));
+        }
+    }
+    if zoom.is_some() {
+        rebuild_full_map(hud, map, heading, viewport);
+    }
+    zoom
+}
+
+pub fn map_copy_status(
+    hud: &mut Hud,
+    map: Map<'_>,
+    heading: f32,
+    viewport: [f32; 2],
+    status: &'static str,
+) {
+    if let Some(view) = hud.full_map_view.as_mut() {
+        view.copy_status = Some(status);
+        rebuild_full_map(hud, map, heading, viewport);
+    }
+}
+
+fn rebuild_full_map(hud: &mut Hud, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
+    let view = hud.full_map_view.as_ref().expect("full map is open");
+    let mut vertices = Vec::new();
+    let hint = view.copy_status.unwrap_or_else(|| {
+        if google_maps_url(map.track, map.player).is_some() {
+            "C Copy Google Maps URL"
         } else {
-            0.006
-        };
-        for (from, to) in map.track.map_segments_near(fit.world_bounds()) {
-            if let Some([a, b]) = clip_map_line(fit.point(from), fit.point(to), width) {
-                line(&mut v, a, b, width, [0.4, 0.49, 0.52]);
-            }
+            "No Google Maps location"
         }
-        map_marker(
+    });
+    append_full_map(&mut vertices, map, heading, viewport, &view.fit);
+    text(&mut vertices, hint, [-0.90, -0.89], 0.003, [0.9, 0.95, 1.0]);
+    // Reuse the uploaded map until it opens again or the zoom changes.
+    set_vertices(hud, &vertices);
+    hud.full_map_vertices = vertices.len() as i32;
+}
+
+pub fn draw_full_map(hud: &Hud, program: u32) {
+    draw_vertices(hud, program, hud.full_map_vertices);
+}
+
+pub fn draw_menu(hud: &Hud, program: u32, menu: MainMenu) {
+    let mut v = Vec::new();
+    let cyan = [0.15, 0.85, 0.95];
+    let white = [0.9, 0.95, 1.0];
+    let muted = [0.55, 0.66, 0.70];
+    for left in [-1.0, -0.20] {
+        quad(
             &mut v,
-            fit.point(map.player),
-            0.014,
-            fit.scale[1] / fit.scale[0],
-            [0.15, 0.85, 0.95],
+            [left, 0.19],
+            [left + 0.80, 0.98],
+            [0.025, 0.05, 0.075],
         );
-
-        append_street_name(&mut v, map.track.street_name(map.player));
-        if let Some(pause) = pause {
-            append_pause(&mut v, pause);
-        }
-        self.upload(program, &v);
     }
-
-    pub fn prepare_full_map(
-        &mut self,
-        map: Map<'_>,
-        heading: f32,
-        viewport: [f32; 2],
-        zoom: Option<f32>,
-    ) {
-        let mut view = FullMapView::new(map.track, map.player, viewport);
-        if let Some(zoom) = zoom {
-            view.set_zoom_factor(zoom);
-        }
-        self.full_map_view = Some(view);
-        self.rebuild_full_map(map, heading, viewport);
-    }
-
-    pub fn zoom_full_map(
-        &mut self,
-        map: Map<'_>,
-        heading: f32,
-        viewport: [f32; 2],
-        steps: f32,
-    ) -> Option<f32> {
-        let mut zoom = None;
-        if let Some(view) = self.full_map_view.as_mut() {
-            if view.zoom(steps) {
-                zoom = Some(view.zoom_factor());
-            }
-        }
-        if zoom.is_some() {
-            self.rebuild_full_map(map, heading, viewport);
-        }
-        zoom
-    }
-
-    pub fn map_copy_status(
-        &mut self,
-        map: Map<'_>,
-        heading: f32,
-        viewport: [f32; 2],
-        status: &'static str,
-    ) {
-        if let Some(view) = self.full_map_view.as_mut() {
-            view.copy_status = Some(status);
-            self.rebuild_full_map(map, heading, viewport);
-        }
-    }
-
-    fn rebuild_full_map(&mut self, map: Map<'_>, heading: f32, viewport: [f32; 2]) {
-        let view = self.full_map_view.as_ref().expect("full map is open");
-        let mut vertices = Vec::new();
-        let hint = view.copy_status.unwrap_or_else(|| {
-            if map.track.google_maps_url(map.player).is_some() {
-                "C Copy Google Maps URL"
-            } else {
-                "No Google Maps location"
-            }
-        });
-        append_full_map(&mut vertices, map, heading, viewport, &view.fit);
-        text(&mut vertices, hint, [-0.90, -0.89], 0.003, [0.9, 0.95, 1.0]);
-        // Reuse the uploaded map until it opens again or the zoom changes.
-        self.set_vertices(&vertices);
-        self.full_map_vertices = vertices.len() as i32;
-    }
-
-    pub fn draw_full_map(&self, program: u32) {
-        self.draw_vertices(program, self.full_map_vertices);
-    }
-
-    pub fn draw_menu(&self, program: u32, menu: MainMenu) {
-        let mut v = Vec::new();
-        let cyan = [0.15, 0.85, 0.95];
-        let white = [0.9, 0.95, 1.0];
-        let muted = [0.55, 0.66, 0.70];
-        for left in [-1.0, -0.20] {
-            quad(
-                &mut v,
-                [left, 0.19],
-                [left + 0.80, 0.98],
-                [0.025, 0.05, 0.075],
-            );
-        }
-        choice_header(
+    choice_header(
+        &mut v,
+        "Location",
+        -0.96,
+        menu.selected,
+        menu.locations.len(),
+    );
+    for (i, entry) in menu
+        .locations
+        .iter()
+        .enumerate()
+        .skip(menu.selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
+        .take(CHOICES_PER_PAGE)
+    {
+        choice_button(
             &mut v,
-            "Location",
-            -0.96,
-            menu.selected,
-            menu.locations.len(),
+            location_box(i % CHOICES_PER_PAGE),
+            &entry.name,
+            menu.selected == i,
+            menu.focus == 0,
         );
-        for (i, entry) in menu
-            .locations
-            .iter()
-            .enumerate()
-            .skip(menu.selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
-            .take(CHOICES_PER_PAGE)
-        {
-            choice_button(
-                &mut v,
-                location_box(i % CHOICES_PER_PAGE),
-                &entry.name,
-                menu.selected == i,
-                menu.focus == 0,
-            );
-        }
-        let selected_car = menu.car;
-        choice_header(&mut v, "Car", -0.16, selected_car, menu.cars.len());
-        for (i, car) in menu
-            .cars
-            .iter()
-            .enumerate()
-            .skip(selected_car / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
-            .take(CHOICES_PER_PAGE)
-        {
-            choice_button(
-                &mut v,
-                car_box(i % CHOICES_PER_PAGE),
-                &car.name,
-                menu.car == i,
-                menu.focus == 1,
-            );
-        }
-        menu_button(&mut v, START_BOX, true, menu.focus == 2);
+    }
+    let selected_car = menu.car;
+    choice_header(&mut v, "Car", -0.16, selected_car, menu.cars.len());
+    for (i, car) in menu
+        .cars
+        .iter()
+        .enumerate()
+        .skip(selected_car / CHOICES_PER_PAGE * CHOICES_PER_PAGE)
+        .take(CHOICES_PER_PAGE)
+    {
+        choice_button(
+            &mut v,
+            car_box(i % CHOICES_PER_PAGE),
+            &car.name,
+            menu.car == i,
+            menu.focus == 1,
+        );
+    }
+    menu_button(&mut v, START_BOX, true, menu.focus == 2);
+    text(
+        &mut v,
+        "Stard Driving (Enter)",
+        [
+            (START_BOX[0] + START_BOX[2]
+                - font::width(font::labels(), "Stard Driving (Enter)") * 0.0034)
+                * 0.5,
+            -0.90,
+        ],
+        0.0034,
+        cyan,
+    );
+    if track::asset_path(&menu.locations[menu.selected].track).is_some() {
         text(
             &mut v,
-            "Stard Driving (Enter)",
-            [
-                (START_BOX[0] + START_BOX[2]
-                    - font::labels().width("Stard Driving (Enter)") * 0.0034)
-                    * 0.5,
-                -0.90,
-            ],
-            0.0034,
-            cyan,
-        );
-        if menu.locations[menu.selected].track.asset_path().is_some() {
-            text(
-                &mut v,
-                "OpenStreetMap contributors / ODbL",
-                [-0.92, -0.83],
-                0.0025,
-                muted,
-            );
-            text(
-                &mut v,
-                "Terrain: Mapzen / USGS / EU Copernicus",
-                [-0.92, -0.87],
-                0.0025,
-                muted,
-            );
-            if let Some(label) = menu.locations[menu.selected]
-                .assets
-                .as_ref()
-                .and_then(|a| a.aerial_attribution())
-            {
-                text(&mut v, label, [-0.92, -0.91], 0.0024, muted);
-            }
-        }
-        text(
-            &mut v,
-            "Left location / Right car / Up-down browse / Enter start / Q quit",
-            [-0.92, -0.96],
+            "OpenStreetMap contributors / ODbL",
+            [-0.92, -0.83],
             0.0025,
-            white,
+            muted,
         );
-        self.upload(program, &v);
-    }
-
-    fn upload(&self, program: u32, v: &[Vertex]) {
-        self.set_vertices(v);
-        self.draw_vertices(program, v.len() as i32);
-    }
-
-    fn set_vertices(&self, v: &[Vertex]) {
-        unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                std::mem::size_of_val(v) as isize,
-                v.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
+        text(
+            &mut v,
+            "Terrain: Mapzen / USGS / EU Copernicus",
+            [-0.92, -0.87],
+            0.0025,
+            muted,
+        );
+        if let Some(label) = menu.locations[menu.selected]
+            .assets
+            .as_ref()
+            .and_then(|a| city_assets::aerial_attribution(a))
+        {
+            text(&mut v, label, [-0.92, -0.91], 0.0024, muted);
         }
     }
+    text(
+        &mut v,
+        "Left location / Right car / Up-down browse / Enter start / Q quit",
+        [-0.92, -0.96],
+        0.0025,
+        white,
+    );
+    upload(hud, program, &v);
+}
 
-    fn draw_vertices(&self, program: u32, count: i32) {
-        let identity = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        unsafe {
-            let blending = gl::IsEnabled(gl::BLEND);
-            let mut blend = [0; 6];
-            for (value, parameter) in blend.iter_mut().zip([
-                gl::BLEND_SRC_RGB,
-                gl::BLEND_DST_RGB,
-                gl::BLEND_SRC_ALPHA,
-                gl::BLEND_DST_ALPHA,
-                gl::BLEND_EQUATION_RGB,
-                gl::BLEND_EQUATION_ALPHA,
-            ]) {
-                gl::GetIntegerv(parameter, value);
-            }
-            let mut active_texture = 0;
-            gl::GetIntegerv(gl::ACTIVE_TEXTURE, &mut active_texture);
-            gl::ActiveTexture(gl::TEXTURE0);
-            let mut binding = 0;
-            gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut binding);
-            self.font_texture.bind();
-            gl::Enable(gl::BLEND);
-            gl::BlendEquation(gl::FUNC_ADD);
-            gl::BlendFuncSeparate(
-                gl::SRC_ALPHA,
-                gl::ONE_MINUS_SRC_ALPHA,
-                gl::ONE,
-                gl::ONE_MINUS_SRC_ALPHA,
-            );
-            gl::Disable(gl::DEPTH_TEST);
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::UseProgram(program);
-            let name = CString::new("u_glyphs").unwrap();
-            gl::Uniform1i(gl::GetUniformLocation(program, name.as_ptr()), 0);
-            let name = CString::new("u_mvp").unwrap();
-            gl::UniformMatrix4fv(
-                gl::GetUniformLocation(program, name.as_ptr()),
-                1,
-                gl::FALSE,
-                identity.as_ptr(),
-            );
-            let name = CString::new("u_tint").unwrap();
-            gl::Uniform3f(
-                gl::GetUniformLocation(program, name.as_ptr()),
-                1.0,
-                1.0,
-                1.0,
-            );
-            gl::DrawArrays(gl::TRIANGLES, 0, count);
-            gl::Enable(gl::DEPTH_TEST);
-            gl::BindTexture(gl::TEXTURE_2D, binding as u32);
-            gl::ActiveTexture(active_texture as u32);
-            gl::BlendFuncSeparate(
-                blend[0] as u32,
-                blend[1] as u32,
-                blend[2] as u32,
-                blend[3] as u32,
-            );
-            gl::BlendEquationSeparate(blend[4] as u32, blend[5] as u32);
-            if blending == gl::FALSE {
-                gl::Disable(gl::BLEND);
-            }
+fn upload(hud: &Hud, program: u32, v: &[Vertex]) {
+    set_vertices(hud, v);
+    draw_vertices(hud, program, v.len() as i32);
+}
+
+fn set_vertices(hud: &Hud, v: &[Vertex]) {
+    unsafe {
+        gl::BindBuffer(gl::ARRAY_BUFFER, hud.vbo);
+        gl::BufferData(
+            gl::ARRAY_BUFFER,
+            std::mem::size_of_val(v) as isize,
+            v.as_ptr() as *const _,
+            gl::STREAM_DRAW,
+        );
+    }
+}
+
+fn draw_vertices(hud: &Hud, program: u32, count: i32) {
+    let identity = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    unsafe {
+        let blending = gl::IsEnabled(gl::BLEND);
+        let mut blend = [0; 6];
+        for (value, parameter) in blend.iter_mut().zip([
+            gl::BLEND_SRC_RGB,
+            gl::BLEND_DST_RGB,
+            gl::BLEND_SRC_ALPHA,
+            gl::BLEND_DST_ALPHA,
+            gl::BLEND_EQUATION_RGB,
+            gl::BLEND_EQUATION_ALPHA,
+        ]) {
+            gl::GetIntegerv(parameter, value);
+        }
+        let mut active_texture = 0;
+        gl::GetIntegerv(gl::ACTIVE_TEXTURE, &mut active_texture);
+        gl::ActiveTexture(gl::TEXTURE0);
+        let mut binding = 0;
+        gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut binding);
+        hud_atlas::bind(&hud.font_texture);
+        gl::Enable(gl::BLEND);
+        gl::BlendEquation(gl::FUNC_ADD);
+        gl::BlendFuncSeparate(
+            gl::SRC_ALPHA,
+            gl::ONE_MINUS_SRC_ALPHA,
+            gl::ONE,
+            gl::ONE_MINUS_SRC_ALPHA,
+        );
+        gl::Disable(gl::DEPTH_TEST);
+        gl::BindVertexArray(hud.vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, hud.vbo);
+        gl::UseProgram(program);
+        let name = CString::new("u_glyphs").unwrap();
+        gl::Uniform1i(gl::GetUniformLocation(program, name.as_ptr()), 0);
+        let name = CString::new("u_mvp").unwrap();
+        gl::UniformMatrix4fv(
+            gl::GetUniformLocation(program, name.as_ptr()),
+            1,
+            gl::FALSE,
+            identity.as_ptr(),
+        );
+        let name = CString::new("u_tint").unwrap();
+        gl::Uniform3f(
+            gl::GetUniformLocation(program, name.as_ptr()),
+            1.0,
+            1.0,
+            1.0,
+        );
+        gl::DrawArrays(gl::TRIANGLES, 0, count);
+        gl::Enable(gl::DEPTH_TEST);
+        gl::BindTexture(gl::TEXTURE_2D, binding as u32);
+        gl::ActiveTexture(active_texture as u32);
+        gl::BlendFuncSeparate(
+            blend[0] as u32,
+            blend[1] as u32,
+            blend[2] as u32,
+            blend[3] as u32,
+        );
+        gl::BlendEquationSeparate(blend[4] as u32, blend[5] as u32);
+        if blending == gl::FALSE {
+            gl::Disable(gl::BLEND);
         }
     }
 }
@@ -702,7 +706,8 @@ fn append_full_map(
         [0.025, 0.05, 0.075],
     );
     text(v, "Full map", [-0.94, 0.92], 0.006, cyan);
-    let name_size = 0.004_f32.min(0.94 / font::labels().width(&map.track.display_name).max(1.0));
+    let name_size =
+        0.004_f32.min(0.94 / font::width(font::labels(), &map.track.display_name).max(1.0));
     text(v, &map.track.display_name, [-0.60, 0.90], name_size, white);
     text(v, "M / Esc back", [0.49, 0.90], 0.004, white);
 
@@ -720,14 +725,25 @@ fn append_full_map(
     };
     let road_width = if fit.north_up { 1.5 } else { 3.0 };
     let padding = [road_width / viewport[0], road_width / viewport[1]];
-    for (a, b) in map.track.map_segments_near(fit.world_bounds()) {
-        if let Some([a, b]) = clip_line(fit.point(a), fit.point(b), fit.content, padding) {
-            canvas.stroke(pixel(a), pixel(b), road_width, [0.40, 0.55, 0.60]);
+    for (a, b) in map_segments_near(map.track, world_bounds(fit)) {
+        if let Some([a, b]) = clip_line(
+            map_fit_point(fit, a),
+            map_fit_point(fit, b),
+            fit.content,
+            padding,
+        ) {
+            stroke(
+                &mut canvas,
+                pixel(a),
+                pixel(b),
+                road_width,
+                [0.40, 0.55, 0.60],
+            );
         }
     }
-    let player = pixel(fit.point(map.player));
-    canvas.disc(player, 15.0, white);
-    canvas.disc(player, 12.0, [0.025, 0.05, 0.075]);
+    let player = pixel(map_fit_point(fit, map.player));
+    disc(&mut canvas, player, 15.0, white);
+    disc(&mut canvas, player, 12.0, [0.025, 0.05, 0.075]);
     let forward = [
         heading.sin(),
         heading.cos() * if fit.north_up { 1.0 } else { -1.0 },
@@ -736,8 +752,8 @@ fn append_full_map(
     let tip = std::array::from_fn(|i| player[i] + forward[i] * 10.0);
     let left = std::array::from_fn(|i| player[i] - forward[i] * 7.0 - right[i] * 7.0);
     let right = std::array::from_fn(|i| player[i] - forward[i] * 7.0 + right[i] * 7.0);
-    canvas.triangle([tip, left, right], orange);
-    canvas.disc(pixel([-0.925, -0.855]), 5.0, orange);
+    triangle(&mut canvas, [tip, left, right], orange);
+    disc(&mut canvas, pixel([-0.925, -0.855]), 5.0, orange);
     text(v, "Your position", [-0.90, -0.83], 0.0035, white);
     text(v, "Driving paused", [-0.54, -0.83], 0.0035, muted);
     text(v, "Wheel / +/- zoom", [-0.14, -0.83], 0.0035, white);
@@ -795,7 +811,7 @@ fn choice_header(v: &mut Vec<Vertex>, label: &str, left: f32, selected: usize, c
 }
 fn choice_button(v: &mut Vec<Vertex>, r: [f32; 4], label: &str, selected: bool, focused: bool) {
     menu_button(v, r, selected, focused && selected);
-    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::regular().width(label).max(1.0));
+    let size = 0.0038_f32.min((r[2] - r[0] - 0.07) / font::width(font::regular(), label).max(1.0));
     text_with_font(
         v,
         &hud_atlas::get().regular,
@@ -841,66 +857,97 @@ struct InstrumentCanvas<'a> {
     scale: f32,
     origin: [f32; 2],
 }
-impl InstrumentCanvas<'_> {
-    fn point(&self, p: [f32; 2]) -> [f32; 2] {
-        [
-            2.0 * (self.origin[0] + p[0] * self.scale) / self.viewport[0] - 1.0,
-            1.0 - 2.0 * (self.origin[1] + p[1] * self.scale) / self.viewport[1],
-        ]
-    }
-    fn triangle(&mut self, p: [[f32; 2]; 3], color: [f32; 3]) {
-        for p in p {
-            let p = self.point(p);
-            solid(self.vertices, p, color);
-        }
-    }
-    fn rect(&mut self, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
-        let a = self.point(a);
-        let b = self.point(b);
-        quad(self.vertices, a, b, color);
-    }
-    fn stroke(&mut self, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 3]) {
-        let delta = [b[0] - a[0], b[1] - a[1]];
-        let len = delta[0].hypot(delta[1]).max(0.001);
-        let n = [-delta[1] / len * width * 0.5, delta[0] / len * width * 0.5];
-        let p = [
-            [a[0] + n[0], a[1] + n[1]],
-            [a[0] - n[0], a[1] - n[1]],
-            [b[0] - n[0], b[1] - n[1]],
-            [b[0] + n[0], b[1] + n[1]],
-        ];
-        self.triangle([p[0], p[1], p[2]], color);
-        self.triangle([p[0], p[2], p[3]], color);
-    }
-    fn disc(&mut self, center: [f32; 2], radius: f32, color: [f32; 3]) {
-        for i in 0..80 {
-            let point = |i: usize| {
-                let a = i as f32 * std::f32::consts::TAU / 80.0;
-                [center[0] + a.cos() * radius, center[1] + a.sin() * radius]
-            };
-            self.triangle([center, point(i), point(i + 1)], color);
-        }
-    }
-    fn label(&mut self, value: &str, center: [f32; 2], size: f32, color: [f32; 3]) {
-        self.font_label(&hud_atlas::get().labels, value, center, size, color);
-    }
-    fn font_label(
-        &mut self,
-        font: &hud_atlas::Font,
-        value: &str,
-        center: [f32; 2],
-        size: f32,
-        color: [f32; 3],
-    ) {
-        let width = font.width(value) * size;
-        let origin = [center[0] - width * 0.5, center[1] - 3.5 * size];
-        font.draw(value, |sprite| {
-            let positions = corners(sprite.bounds)
-                .map(|p| self.point([origin[0] + p[0] * size, origin[1] + p[1] * size]));
-            glyph_quad(self.vertices, positions, sprite.uv, color);
-        });
+
+fn instrument_canvas_point(instrument_canvas: &InstrumentCanvas<'_>, p: [f32; 2]) -> [f32; 2] {
+    [
+        2.0 * (instrument_canvas.origin[0] + p[0] * instrument_canvas.scale)
+            / instrument_canvas.viewport[0]
+            - 1.0,
+        1.0 - 2.0 * (instrument_canvas.origin[1] + p[1] * instrument_canvas.scale)
+            / instrument_canvas.viewport[1],
+    ]
+}
+fn triangle(instrument_canvas: &mut InstrumentCanvas<'_>, p: [[f32; 2]; 3], color: [f32; 3]) {
+    for p in p {
+        let p = instrument_canvas_point(instrument_canvas, p);
+        solid(instrument_canvas.vertices, p, color);
     }
 }
+fn rect(instrument_canvas: &mut InstrumentCanvas<'_>, a: [f32; 2], b: [f32; 2], color: [f32; 3]) {
+    let a = instrument_canvas_point(instrument_canvas, a);
+    let b = instrument_canvas_point(instrument_canvas, b);
+    quad(instrument_canvas.vertices, a, b, color);
+}
+fn stroke(
+    instrument_canvas: &mut InstrumentCanvas<'_>,
+    a: [f32; 2],
+    b: [f32; 2],
+    width: f32,
+    color: [f32; 3],
+) {
+    let delta = [b[0] - a[0], b[1] - a[1]];
+    let len = delta[0].hypot(delta[1]).max(0.001);
+    let n = [-delta[1] / len * width * 0.5, delta[0] / len * width * 0.5];
+    let p = [
+        [a[0] + n[0], a[1] + n[1]],
+        [a[0] - n[0], a[1] - n[1]],
+        [b[0] - n[0], b[1] - n[1]],
+        [b[0] + n[0], b[1] + n[1]],
+    ];
+    triangle(instrument_canvas, [p[0], p[1], p[2]], color);
+    triangle(instrument_canvas, [p[0], p[2], p[3]], color);
+}
+fn disc(
+    instrument_canvas: &mut InstrumentCanvas<'_>,
+    center: [f32; 2],
+    radius: f32,
+    color: [f32; 3],
+) {
+    for i in 0..80 {
+        let point = |i: usize| {
+            let a = i as f32 * std::f32::consts::TAU / 80.0;
+            [center[0] + a.cos() * radius, center[1] + a.sin() * radius]
+        };
+        triangle(instrument_canvas, [center, point(i), point(i + 1)], color);
+    }
+}
+fn label(
+    instrument_canvas: &mut InstrumentCanvas<'_>,
+    value: &str,
+    center: [f32; 2],
+    size: f32,
+    color: [f32; 3],
+) {
+    font_label(
+        instrument_canvas,
+        &hud_atlas::get().labels,
+        value,
+        center,
+        size,
+        color,
+    );
+}
+fn font_label(
+    instrument_canvas: &mut InstrumentCanvas<'_>,
+    font: &hud_atlas::Font,
+    value: &str,
+    center: [f32; 2],
+    size: f32,
+    color: [f32; 3],
+) {
+    let width = hud_atlas::width(font, value) * size;
+    let origin = [center[0] - width * 0.5, center[1] - 3.5 * size];
+    hud_atlas::draw(font, value, |sprite| {
+        let positions = corners(sprite.bounds).map(|p| {
+            instrument_canvas_point(
+                instrument_canvas,
+                [origin[0] + p[0] * size, origin[1] + p[1] * size],
+            )
+        });
+        glyph_quad(instrument_canvas.vertices, positions, sprite.uv, color);
+    });
+}
+
 fn dial_point(center: [f32; 2], radius: f32, fraction: f32) -> [f32; 2] {
     let angle = (135.0 + 270.0 * fraction.clamp(0.0, 1.0)).to_radians();
     [
@@ -926,20 +973,22 @@ fn dial_face(
 ) {
     let ink = [0.89, 0.90, 0.85];
     let red = [1.0, 0.28, 0.18];
-    c.disc(
+    disc(
+        c,
         [center[0] + 1.0, center[1] + 2.0],
         radius + 2.0,
         [0.015, 0.02, 0.025],
     );
-    c.disc(center, radius, [0.29, 0.34, 0.36]);
-    c.disc(center, radius - 1.5, [0.07, 0.09, 0.10]);
-    c.disc(center, radius - 4.0, [0.025, 0.035, 0.045]);
+    disc(c, center, radius, [0.29, 0.34, 0.36]);
+    disc(c, center, radius - 1.5, [0.07, 0.09, 0.10]);
+    disc(c, center, radius - 4.0, [0.025, 0.035, 0.045]);
     if let Some(redline) = redline {
         let start = dial_value(redline, maximum as f32);
         for i in 0..32 {
             let a = start + (1.0 - start) * i as f32 / 32.0;
             let b = start + (1.0 - start) * (i + 1) as f32 / 32.0;
-            c.stroke(
+            stroke(
+                c,
                 dial_point(center, radius - 8.0, a),
                 dial_point(center, radius - 8.0, b),
                 3.0,
@@ -955,7 +1004,8 @@ fn dial_face(
         } else {
             ink
         };
-        c.stroke(
+        stroke(
+            c,
             dial_point(center, radius - 8.0, fraction),
             dial_point(center, radius - if big { 17.0 } else { 12.0 }, fraction),
             if big { 1.8 } else { 1.0 },
@@ -969,7 +1019,8 @@ fn dial_face(
             } else {
                 value.to_string()
             };
-            c.font_label(
+            font_label(
+                c,
                 &hud_atlas::get().digits,
                 &label,
                 dial_point(center, radius - 26.0, fraction),
@@ -990,7 +1041,8 @@ fn dial_needle(
     let dx = (tip[0] - center[0]) / (radius * 0.73);
     let dy = (tip[1] - center[1]) / (radius * 0.73);
     let rear = [center[0] - dx * 11.0, center[1] - dy * 11.0];
-    c.triangle(
+    triangle(
+        c,
         [
             [rear[0] - dy * 2.0, rear[1] + dx * 2.0],
             [rear[0] + dy * 2.0, rear[1] - dx * 2.0],
@@ -998,8 +1050,8 @@ fn dial_needle(
         ],
         color,
     );
-    c.disc(center, 6.0, [0.12, 0.15, 0.17]);
-    c.disc(center, 3.0, [0.65, 0.69, 0.69]);
+    disc(c, center, 6.0, [0.12, 0.15, 0.17]);
+    disc(c, center, 3.0, [0.65, 0.69, 0.69]);
 }
 fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
     let scale = (viewport[0] / 1280.0).min(viewport[1] / 720.0);
@@ -1022,8 +1074,8 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
         Some(gauges.redline_rpm),
     );
     let muted = [0.56, 0.65, 0.68];
-    c.label("KM/H", [82.0, 116.0], 1.1, muted);
-    c.label("RPM X1000", [246.0, 118.0], 0.85, muted);
+    label(&mut c, "KM/H", [82.0, 116.0], 1.1, muted);
+    label(&mut c, "RPM X1000", [246.0, 118.0], 0.85, muted);
     let needle = [1.0, 0.28, 0.18];
     dial_needle(
         &mut c,
@@ -1043,9 +1095,10 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
             needle
         },
     );
-    c.rect([148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
-    c.label("GEAR", [166.0, 129.0], 0.95, muted);
-    c.font_label(
+    rect(&mut c, [148.0, 122.0], [184.0, 166.0], [0.025, 0.04, 0.05]);
+    label(&mut c, "GEAR", [166.0, 129.0], 0.95, muted);
+    font_label(
+        &mut c,
         &hud_atlas::get().digits,
         &if gauges.gear == phys_car::NEUTRAL_GEAR {
             "N".into()
@@ -1130,7 +1183,7 @@ fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
         let mut end = start;
         let mut width = 0.0;
         while end < chars.len() {
-            width += font::labels().width(&chars[end].to_string()) * size;
+            width += font::width(font::labels(), &chars[end].to_string()) * size;
             if width > available_width {
                 break;
             }
@@ -1149,7 +1202,7 @@ fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
             start += 1;
         }
         if lines.len() == 1 && start < chars.len() {
-            while font::labels().width(&(line.clone() + "...")) * size > available_width {
+            while font::width(font::labels(), &(line.clone() + "...")) * size > available_width {
                 line.pop();
             }
             line.push_str("...");
@@ -1171,7 +1224,7 @@ fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
         [0.025, 0.05, 0.075],
     );
     for (i, line) in lines.iter().enumerate() {
-        let x = center - font::labels().width(line) * 0.5 * size;
+        let x = center - font::width(font::labels(), line) * 0.5 * size;
         text(v, line, [x, top - i as f32 * 0.045], size, [0.9, 0.95, 1.0]);
     }
 }
@@ -1204,54 +1257,57 @@ fn text_with_font(
     size: f32,
     color: [f32; 3],
 ) {
-    font.draw(value, |sprite| {
+    hud_atlas::draw(font, value, |sprite| {
         let positions = corners(sprite.bounds)
             .map(|p| [origin[0] + p[0] * size, origin[1] - p[1] * size * 1.65]);
         glyph_quad(v, positions, sprite.uv, color);
     });
 }
 
-impl WorldLocation {
-    fn map_segments(&self) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
-        Box::new(
-            self.road_lines()
-                .iter()
-                .flat_map(|street| street.path.windows(2).map(|p| (p[0], p[1]))),
-        )
-    }
-    fn map_segments_near(
-        &self,
-        bounds: BoundingBoxXZ<f32>,
-    ) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
-        Box::new(self.road_segments_in(bounds).into_iter())
-    }
+fn map_segments(world: &WorldLocation) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
+    Box::new(
+        world_roads::road_lines(world)
+            .iter()
+            .flat_map(|street| street.path.windows(2).map(|p| (p[0], p[1]))),
+    )
+}
+fn map_segments_near(
+    world: &WorldLocation,
+    bounds: BoundingBoxXZ<f32>,
+) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
+    Box::new(world_roads::road_segments_in(world, bounds).into_iter())
+}
 
-    pub fn google_maps_url(&self, position: XYZ) -> Option<String> {
-        let p = self.geographic_position(position)?;
-        Some(format!(
-            "https://www.google.com/maps/search/?api=1&query={:.7},{:.7}",
-            p.lat, p.lon
-        ))
-    }
+pub fn google_maps_url(world: &WorldLocation, position: XYZ) -> Option<String> {
+    let p = geometry::geographic_position(world, position)?;
+    Some(format!(
+        "https://www.google.com/maps/search/?api=1&query={:.7},{:.7}",
+        p.lat, p.lon
+    ))
+}
 
-    /// Label the closest road only while the car is on or beside its surface.
-    fn street_name(&self, p: XYZ) -> &str {
-        let (index, road) = self.nearest_road(p);
-        if (p.x - road.point.x).hypot(p.z - road.point.z) > road.width * 0.5 + 5.0 {
-            return "";
+/// Label the closest road only while the car is on or beside its surface.
+fn street_name(world: &WorldLocation, p: XYZ) -> &str {
+    let (index, road) = world_roads::nearest_road(world, p);
+    if (p.x - road.point.x).hypot(p.z - road.point.z) > road.width * 0.5 + 5.0 {
+        return "";
+    }
+    world_roads::road_name(world, index).unwrap_or_else(|| {
+        if world_roads::road_lines(world)[index].osm_way_id.is_none() {
+            world.display_name.as_str()
+        } else {
+            "UNNAMED ROAD"
         }
-        self.road_name(index).unwrap_or_else(|| {
-            if self.road_lines()[index].osm_way_id.is_none() {
-                self.display_name.as_str()
-            } else {
-                "UNNAMED ROAD"
-            }
-        })
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::hud;
+    use crate::track;
+    use crate::vehicle_location;
+    use crate::world;
+
     use super::*;
     use crate::test_support;
 
@@ -1294,20 +1350,22 @@ mod tests {
 
     #[test]
     fn map_zoom_factor_applies_to_every_location() {
-        let track = LocationId::Compact.try_track().unwrap();
-        let other = test_support::scenic_id().try_track().unwrap();
+        let track = track::try_track(&LocationId::Compact).unwrap();
+        let other = track::try_track(&test_support::scenic_id()).unwrap();
         let viewport = [1280.0, 720.0];
 
-        let mut view = FullMapView::new(&track, track.spawn().point, viewport);
-        assert!(view.zoom(3.0));
-        let factor = view.zoom_factor();
+        let mut view =
+            hud::full_map_view_new(&track, vehicle_location::spawn(&track).point, viewport);
+        assert!(hud::zoom_full_map(&mut (view), 3.0));
+        let factor = hud::zoom_factor(&view);
         assert!(factor > 1.0);
 
         for track in [&track, &other] {
-            let mut view = FullMapView::new(track, track.spawn().point, viewport);
-            assert!((view.zoom_factor() - 1.0).abs() < 0.000001);
-            view.set_zoom_factor(factor);
-            assert!((view.zoom_factor() - factor).abs() < 0.00001);
+            let mut view =
+                hud::full_map_view_new(track, vehicle_location::spawn(track).point, viewport);
+            assert!((hud::zoom_factor(&(view)) - 1.0).abs() < 0.000001);
+            hud::set_zoom_factor(&mut view, factor);
+            assert!((hud::zoom_factor(&(view)) - factor).abs() < 0.00001);
         }
     }
 
@@ -1352,9 +1410,9 @@ mod tests {
 
     #[test]
     fn minimap_heading_keeps_forward_up_and_queries_rotated_corners() {
-        let track = LocationId::Compact.try_track().unwrap();
+        let track = track::try_track(&LocationId::Compact).unwrap();
         for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
-            let mut fit = MapFit::new(
+            let mut fit = hud::map_fit_new(
                 &track,
                 XYZ {
                     x: 0.0,
@@ -1364,26 +1422,35 @@ mod tests {
                 [1280.0, 720.0],
             );
             fit.heading = Some(heading);
-            let center = fit.point(XYZ {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            });
-            let forward = fit.point(XYZ {
-                x: heading.sin() * 30.0,
-                y: 0.0,
-                z: heading.cos() * 30.0,
-            });
+            let center = hud::map_fit_point(
+                &fit,
+                XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            );
+            let forward = hud::map_fit_point(
+                &fit,
+                XYZ {
+                    x: heading.sin() * 30.0,
+                    y: 0.0,
+                    z: heading.cos() * 30.0,
+                },
+            );
             assert!((forward[0] - center[0]).abs() < 0.00001);
             assert!(forward[1] > center[1]);
-            let camera_right = fit.point(XYZ {
-                x: -heading.cos() * 30.0,
-                y: 0.0,
-                z: heading.sin() * 30.0,
-            });
+            let camera_right = hud::map_fit_point(
+                &fit,
+                XYZ {
+                    x: -heading.cos() * 30.0,
+                    y: 0.0,
+                    z: heading.sin() * 30.0,
+                },
+            );
             assert!(camera_right[0] > center[0]);
             assert!((camera_right[1] - center[1]).abs() < 0.00001);
-            let bounds = fit.world_bounds();
+            let bounds = hud::world_bounds(&fit);
             for x in [MAP_CONTENT[0][0], MAP_CONTENT[1][0]] {
                 for y in [MAP_CONTENT[0][1], MAP_CONTENT[1][1]] {
                     let right = (x - center[0]) / fit.scale[0];
@@ -1406,61 +1473,66 @@ mod tests {
     #[test]
     fn full_map_zoom_matches_minimap_and_can_fit_every_road() {
         for id in test_support::location_ids() {
-            let track = id.try_track().unwrap();
+            let track = track::try_track(&id).unwrap();
             for player in [
-                track.spawn().point,
+                vehicle_location::spawn(&track).point,
                 XYZ {
-                    x: track.bounding_box().max.x + 100.0,
+                    x: world::bounding_box(&track).max.x + 100.0,
                     y: 0.0,
-                    z: track.bounding_box().max.z + 100.0,
+                    z: world::bounding_box(&track).max.z + 100.0,
                 },
             ] {
                 for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-                    let mini = MapFit::new(&track, player, viewport);
-                    let mut view = FullMapView::new(&track, player, viewport);
+                    let mini = hud::map_fit_new(&track, player, viewport);
+                    let mut view = hud::full_map_view_new(&track, player, viewport);
                     assert_eq!(view.fit.scale, mini.scale);
                     assert_eq!(view.fit.center, mini.center);
-                    let center = view.fit.point(player);
+                    let center = hud::map_fit_point(&view.fit, player);
                     assert!(center[0].abs() < 0.00001);
                     assert!((center[1] - 0.015).abs() < 0.00001);
-                    assert!(view.zoom(1.0));
+                    assert!(hud::zoom_full_map(&mut (view), 1.0));
                     assert!((view.fit.scale[0] / mini.scale[0] - 1.25).abs() < 0.00001);
-                    assert_eq!(view.fit.point(player), center);
-                    assert!(view.zoom(-1.0));
+                    assert_eq!(hud::map_fit_point(&(view.fit), player), center);
+                    assert!(hud::zoom_full_map(&mut (view), -1.0));
                     assert!((view.fit.scale[0] - mini.scale[0]).abs() < 0.00001);
-                    assert!(view.zoom(100.0));
-                    assert!(!view.zoom(1.0));
+                    assert!(hud::zoom_full_map(&mut (view), 100.0));
+                    assert!(!hud::zoom_full_map(&mut (view), 1.0));
                     assert_eq!(view.fit.scale[0], view.max_scale);
-                    assert!(view.zoom(-100.0));
-                    assert!(!view.zoom(-1.0));
+                    assert!(hud::zoom_full_map(&mut (view), -100.0));
+                    assert!(!hud::zoom_full_map(&mut (view), -1.0));
                     assert_eq!(view.fit.scale[0], view.min_scale);
                     for invalid in [0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                        assert!(!view.zoom(invalid));
+                        assert!(!hud::zoom_full_map(&mut (view), invalid));
                     }
-                    assert_eq!(view.fit.point(player), center);
+                    assert_eq!(hud::map_fit_point(&(view.fit), player), center);
                     let fit = &view.fit;
-                    for p in track
-                        .map_segments()
+                    for p in hud::map_segments(&track)
                         .flat_map(|(a, b)| [a, b])
                         .chain([player])
                     {
-                        let point = fit.point(p);
+                        let point = hud::map_fit_point(fit, p);
                         for axis in 0..2 {
                             assert!(point[axis] > FULL_MAP_CONTENT[0][axis]);
                             assert!(point[axis] < FULL_MAP_CONTENT[1][axis]);
                         }
                     }
-                    let center = fit.point(player);
-                    let east = fit.point(XYZ {
-                        x: player.x + 100.0,
-                        y: 0.0,
-                        z: player.z,
-                    });
-                    let south = fit.point(XYZ {
-                        x: player.x,
-                        y: 0.0,
-                        z: player.z + 100.0,
-                    });
+                    let center = hud::map_fit_point(fit, player);
+                    let east = hud::map_fit_point(
+                        fit,
+                        XYZ {
+                            x: player.x + 100.0,
+                            y: 0.0,
+                            z: player.z,
+                        },
+                    );
+                    let south = hud::map_fit_point(
+                        fit,
+                        XYZ {
+                            x: player.x,
+                            y: 0.0,
+                            z: player.z + 100.0,
+                        },
+                    );
                     let width = (east[0] - center[0]) * viewport[0];
                     let height = (south[1] - center[1]).abs() * viewport[1];
                     assert!((width - height).abs() < 0.001);
@@ -1472,12 +1544,12 @@ mod tests {
 
     #[test]
     fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = test_support::scenic_id().try_track().unwrap();
-        let player = track.spawn().point;
+        let track = track::try_track(&test_support::scenic_id()).unwrap();
+        let player = vehicle_location::spawn(&track).point;
         for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
             for steps in [-100.0, 0.0, 100.0] {
-                let mut view = FullMapView::new(&track, player, viewport);
-                view.zoom(steps);
+                let mut view = hud::full_map_view_new(&track, player, viewport);
+                hud::zoom_full_map(&mut view, steps);
                 let mut vertices = Vec::new();
                 append_full_map(
                     &mut vertices,

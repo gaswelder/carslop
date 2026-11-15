@@ -1,7 +1,9 @@
-use crate::codec_number::Number;
+use crate::codec_number;
 use crate::error;
 use crate::error::invalid;
-use crate::geometry::{BoundingBoxXZ, LatLon, XYZ, XZ};
+use crate::geometry;
+use crate::geometry::{BoundingBoxXZ, XYZ, XZ};
+use crate::source_location;
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::world::{Building, Entrance};
 use std::collections::BTreeSet;
@@ -39,7 +41,7 @@ pub fn write_volume<T: Copy + Into<f64> + Display>(
         writer,
         "v {} {} {}",
         index,
-        Number::new(min_height, sizes),
+        codec_number::new(min_height, sizes),
         holes.len()
     )?;
     for hole in holes {
@@ -48,8 +50,8 @@ pub fn write_volume<T: Copy + Into<f64> + Display>(
             write!(
                 writer,
                 " {} {}",
-                Number::new(p.x, coords),
-                Number::new(p.z, coords)
+                codec_number::new(p.x, coords),
+                codec_number::new(p.z, coords)
             )?;
         }
     }
@@ -73,17 +75,17 @@ pub fn write(
     writeln!(
         writer,
         "bounds {} {} {} {}",
-        Number::new(map.bounding_box.min.x, coords),
-        Number::new(map.bounding_box.min.z, coords),
-        Number::new(map.bounding_box.max.x, coords),
-        Number::new(map.bounding_box.max.z, coords)
+        codec_number::new(map.bounding_box.min.x, coords),
+        codec_number::new(map.bounding_box.min.z, coords),
+        codec_number::new(map.bounding_box.max.x, coords),
+        codec_number::new(map.bounding_box.max.z, coords)
     )?;
     for p in &map.road_nodes {
         writeln!(
             writer,
             "n {} {}",
-            Number::new(p.x, coords),
-            Number::new(p.z, coords)
+            codec_number::new(p.x, coords),
+            codec_number::new(p.z, coords)
         )?;
     }
     for r in &map.road_lines {
@@ -92,7 +94,7 @@ pub fn write(
             "r {} {} {} {} {} {} {}",
             r.ends[0],
             r.ends[1],
-            Number::new(r.road_width_start_meters, sizes),
+            codec_number::new(r.road_width_start_meters, sizes),
             r.direction,
             r.osm_way_id
                 .ok_or_else(|| invalid("compiler road is missing a way ID"))?,
@@ -114,7 +116,7 @@ pub fn write(
             writer,
             "b {} {} {} {}",
             b.id,
-            Number::new(b.height_meters, sizes),
+            codec_number::new(b.height_meters, sizes),
             u8::from(b.tagged),
             b.ground_outline.len()
         )?;
@@ -122,8 +124,8 @@ pub fn write(
             write!(
                 writer,
                 " {} {}",
-                Number::new(p.x, coords),
-                Number::new(p.z, coords)
+                codec_number::new(p.x, coords),
+                codec_number::new(p.z, coords)
             )?;
         }
         writeln!(writer)?;
@@ -134,8 +136,8 @@ pub fn write(
             writer,
             "e {} {} {}",
             entrance.building_id,
-            Number::new(entrance.position.x, coords),
-            Number::new(entrance.position.z, coords)
+            codec_number::new(entrance.position.x, coords),
+            codec_number::new(entrance.position.z, coords)
         )?;
     }
     Ok(())
@@ -144,7 +146,7 @@ pub fn write(
 // Keep existing optional road metadata, strict CITY header, record validation,
 // and f32 parsing at the format boundary.
 pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
-    let mut city = SourceLocation::empty();
+    let mut city = source_location::empty();
     let mut lines = text.lines();
     if !matches!(lines.next(), Some("CITY 2")) {
         return Err("unsupported city format".into());
@@ -185,7 +187,7 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                 if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
                     return Err("invalid geographic origin".into());
                 }
-                city.origin = Some(LatLon::new(latitude, longitude));
+                city.origin = Some(geometry::new(latitude, longitude));
             }
             Some("bounds") => {
                 city.bounding_box = BoundingBoxXZ {
@@ -341,11 +343,14 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::source_location;
+
     use super::*;
 
     fn fixture() -> SourceLocation<f64> {
-        let mut map = SourceLocation::empty();
-        map.origin = Some(LatLon::new(35.123456789, 33.987654321));
+        let mut map = source_location::empty();
+        map.origin = Some(geometry::new(35.123456789, 33.987654321));
         map.bounding_box = BoundingBoxXZ {
             min: XZ {
                 x: -10.0004,
@@ -357,23 +362,27 @@ mod tests {
             },
         };
         map.road_nodes = vec![
-            XZ {
-                x: 0.00049,
-                z: -0.00049,
-            }
-            .at_height(0.),
-            XZ {
-                x: 20.123456,
-                z: 0.,
-            }
-            .at_height(0.),
+            geometry::at_height(
+                XZ {
+                    x: 0.00049,
+                    z: -0.00049,
+                },
+                0.,
+            ),
+            geometry::at_height(
+                XZ {
+                    x: 20.123456,
+                    z: 0.,
+                },
+                0.,
+            ),
         ];
         map.road_lines.push(SourceRoad {
             osm_way_id: Some(42),
             direction: -1,
             kind: 0,
             lanes: 3,
-            ..SourceRoad::new([0, 1], 6.123456)
+            ..source_location::new([0, 1], 6.123456)
         });
         map.buildings.push(Building {
             id: 7,

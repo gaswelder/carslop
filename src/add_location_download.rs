@@ -1,3 +1,5 @@
+use crate::download;
+use crate::geometry;
 use crate::{
     download::Downloader,
     error::{invalid, Result},
@@ -45,8 +47,8 @@ fn write_manifest(directory: &Path, manifest: &Manifest) -> Result<()> {
 }
 
 pub fn download_map_data(area: osm::ImportArea) -> Result<PathBuf> {
-    let boundary = area.geometry()?;
-    let name = area.name();
+    let boundary = osm::geometry(&area)?;
+    let name = osm::name(&area);
     let download_dir = PathBuf::from(format!("src-locations/{name}"));
     let cache_dir = Path::new(".cache");
     fs::create_dir_all(&download_dir)?;
@@ -55,17 +57,21 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<PathBuf> {
         .build()
         .into();
 
-    let downloader = Downloader::new(agent, cache_dir);
+    let downloader = download::new(agent, cache_dir);
     let imagery_blocks = imagery_blocks(&boundary, MAX_IMAGERY_BLOCKS)?;
 
     // Persist the index alongside the sources so resuming selects the same extract.
     let index_path = download_dir.join("geofabrik-index.json");
-    downloader.copy_download(REGIONAL_INDEX, &index_path)?;
+    download::copy_download(&downloader, REGIONAL_INDEX, &index_path)?;
     let index: RegionalIndex = serde_json::from_slice(&fs::read(index_path)?)?;
-    let regional_osm_url = index.covering_extract(&boundary)?;
+    let regional_osm_url = covering_extract(&index, &boundary)?;
 
     // Download the region map.
-    downloader.copy_download(regional_osm_url, &download_dir.join(REGIONAL_OSM))?;
+    download::copy_download(
+        &downloader,
+        regional_osm_url,
+        &download_dir.join(REGIONAL_OSM),
+    )?;
 
     println!(
         "extracting requested area ({}x{} km)",
@@ -74,13 +80,14 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<PathBuf> {
     sources::extract_osm_boundary(
         &download_dir.join(REGIONAL_OSM),
         &download_dir.join(LOCATION_OSM_FILE),
-        boundary.bbox(),
+        osm::bbox(&boundary),
     )?;
 
     // Download relevant Mapzen/Skadi HGT tiles.
-    let height_tiles = elevation_tiles(boundary.bbox());
+    let height_tiles = elevation_tiles(osm::bbox(&boundary));
     for tile in &height_tiles {
-        downloader.copy_download(
+        download::copy_download(
+            &downloader,
             &format!("{}/{}/{tile}.hgt.gz", ELEVATION_SERVICE, &tile[..3]),
             &download_dir
                 .join(ELEVATION_DATA_DIR)
@@ -94,7 +101,7 @@ pub fn download_map_data(area: osm::ImportArea) -> Result<PathBuf> {
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into();
-    let imagery_downloader = Downloader::new(imagery_agent, cache_dir);
+    let imagery_downloader = download::new(imagery_agent, cache_dir);
     for block in &imagery_blocks {
         let extent = block.extent;
         let side = imagery::CORE + 2 * imagery::PAD;
@@ -124,14 +131,14 @@ fn download_imagery(downloader: &Downloader, url: &str, path: &Path) -> Result<(
     const MAX_BYTES: u64 = 32 * 1024 * 1024;
     for attempt in 0..ATTEMPTS {
         let result = (|| -> Result<()> {
-            downloader.copy_download(url, path)?;
+            download::copy_download(downloader, url, path)?;
             let valid = fs::metadata(path)?.len() <= MAX_BYTES
                 && image::load_from_memory(&fs::read(path)?).is_ok_and(|image| {
                     image.width() == imagery::CORE + 2 * imagery::PAD
                         && image.height() == imagery::CORE + 2 * imagery::PAD
                 });
             if !valid {
-                downloader.invalidate(url)?;
+                download::invalidate(downloader, url)?;
                 fs::remove_file(path)?;
                 return Err(invalid(format!("invalid downloaded image: {url}")));
             }
@@ -147,15 +154,15 @@ fn download_imagery(downloader: &Downloader, url: &str, path: &Path) -> Result<(
 }
 
 fn imagery_blocks(boundary: &osm::OSMArea, limit: usize) -> Result<Vec<imagery::Block>> {
-    let bbox = boundary.bbox();
-    if !bbox.is_valid_for_imagery() {
+    let bbox = osm::bbox(boundary);
+    if !geometry::is_valid_for_imagery(&bbox) {
         return Err(invalid("invalid city geographic bounds"));
     }
     let mercator_boundary = boundary.geometry.map_coords(|c| {
         let p = imagery::mercator(c.x, c.y);
         geo::Coord { x: p[0], y: p[1] }
     });
-    let all: Vec<_> = imagery::blocks(bbox.to_array())
+    let all: Vec<_> = imagery::blocks(geometry::bounding_box_to_array(bbox))
         .into_iter()
         .filter(|b| {
             mercator_boundary.intersects(&geo::Rect::new(
@@ -206,44 +213,44 @@ enum RegionalGeometry {
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
 }
 
-impl RegionalGeometry {
-    fn polygons(&self) -> geo::MultiPolygon<f64> {
-        let polygons = match self {
-            Self::Polygon(rings) => std::slice::from_ref(rings),
-            Self::MultiPolygon(polygons) => polygons.as_slice(),
-        };
-        geo::MultiPolygon(
-            polygons
-                .iter()
-                .filter_map(|rings| {
-                    let (exterior, holes) = rings.split_first()?;
-                    let ring = |points: &Vec<[f64; 2]>| geo::LineString::from(points.clone());
-                    Some(geo::Polygon::new(
-                        ring(exterior),
-                        holes.iter().map(ring).collect(),
-                    ))
-                })
-                .collect(),
-        )
-    }
+fn polygons(regional_geometry: &RegionalGeometry) -> geo::MultiPolygon<f64> {
+    let polygons = match regional_geometry {
+        RegionalGeometry::Polygon(rings) => std::slice::from_ref(rings),
+        RegionalGeometry::MultiPolygon(polygons) => polygons.as_slice(),
+    };
+    geo::MultiPolygon(
+        polygons
+            .iter()
+            .filter_map(|rings| {
+                let (exterior, holes) = rings.split_first()?;
+                let ring = |points: &Vec<[f64; 2]>| geo::LineString::from(points.clone());
+                Some(geo::Polygon::new(
+                    ring(exterior),
+                    holes.iter().map(ring).collect(),
+                ))
+            })
+            .collect(),
+    )
 }
 
-impl RegionalIndex {
-    fn covering_extract(&self, boundary: &osm::OSMArea) -> Result<&str> {
-        self.features
-            .iter()
-            .filter_map(|extract| {
-                let url = extract.properties.urls.pbf.as_deref()?;
-                let geometry = extract.geometry.polygons();
-                geometry
-                    .relate(&boundary.geometry)
-                    .is_covers()
-                    .then(|| (geometry.unsigned_area(), url))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)))
-            .map(|(_, url)| url)
-            .ok_or_else(|| invalid("no Geofabrik extract covers the complete requested rectangle"))
-    }
+fn covering_extract<'a>(
+    regional_index: &'a RegionalIndex,
+    boundary: &osm::OSMArea,
+) -> Result<&'a str> {
+    regional_index
+        .features
+        .iter()
+        .filter_map(|extract| {
+            let url = extract.properties.urls.pbf.as_deref()?;
+            let geometry = polygons(&extract.geometry);
+            geometry
+                .relate(&boundary.geometry)
+                .is_covers()
+                .then(|| (geometry.unsigned_area(), url))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)))
+        .map(|(_, url)| url)
+        .ok_or_else(|| invalid("no Geofabrik extract covers the complete requested rectangle"))
 }
 
 fn elevation_tiles(bounds: BoundingBox) -> Vec<String> {
@@ -271,6 +278,8 @@ fn elevation_tiles(bounds: BoundingBox) -> Vec<String> {
 
 #[cfg(test)]
 mod import_tests {
+    use crate::add_location_download;
+
     use super::*;
 
     #[test]
@@ -296,7 +305,10 @@ mod import_tests {
             )
             .to_polygon()]),
         };
-        assert_eq!(index.covering_extract(&boundary).unwrap(), "smallest-cover");
+        assert_eq!(
+            add_location_download::covering_extract(&(index), &boundary).unwrap(),
+            "smallest-cover"
+        );
         let boundary = osm::OSMArea {
             geometry: geo::MultiPolygon(vec![geo::Rect::new(
                 geo::Coord { x: 9., y: 9. },
@@ -304,7 +316,7 @@ mod import_tests {
             )
             .to_polygon()]),
         };
-        assert!(index.covering_extract(&boundary).is_err());
+        assert!(add_location_download::covering_extract(&(index), &boundary).is_err());
     }
 }
 

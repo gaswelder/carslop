@@ -1,29 +1,31 @@
 //! Immutable authored routes. No global mutable "active track".
+
 use crate::authoring;
 use crate::city_assets;
 use crate::geometry::XYZ;
 use crate::scene_archive;
+use crate::world;
 pub use crate::world::{LocationId, RoadSample, WorldLocation};
+use crate::world_preparation;
+use crate::world_roads;
 
 // Authoring and test sampling enumerate streets in storage order. This is
 // deliberately separate from gameplay navigation, which uses nearby roads.
-impl WorldLocation {
-    /// Total horizontal distance of sampled streets, derived for generation and tests.
-    pub fn sampling_length(&self) -> f32 {
-        self.road_lines()
-            .last()
-            .map_or(0.0, |street| street.distance + street.length)
-    }
 
-    /// Sample streets in storage order, wrapping at the end for authoring loops.
-    pub fn at_distance(&self, distance: f32) -> RoadSample {
-        let d = distance.rem_euclid(self.sampling_length());
-        let i = self
-            .road_lines()
-            .partition_point(|street| street.distance <= d)
-            .saturating_sub(1);
-        self.sample_distance(i, d - self.road_lines()[i].distance)
-    }
+/// Total horizontal distance of sampled streets, derived for generation and tests.
+pub fn sampling_length(world: &WorldLocation) -> f32 {
+    world_roads::road_lines(world)
+        .last()
+        .map_or(0.0, |street| street.distance + street.length)
+}
+
+/// Sample streets in storage order, wrapping at the end for authoring loops.
+pub fn at_distance(world: &WorldLocation, distance: f32) -> RoadSample {
+    let d = distance.rem_euclid(sampling_length(world));
+    let i = world_roads::road_lines(world)
+        .partition_point(|street| street.distance <= d)
+        .saturating_sub(1);
+    world_roads::sample_distance(world, i, d - world_roads::road_lines(world)[i].distance)
 }
 
 use std::sync::OnceLock;
@@ -82,7 +84,7 @@ pub fn register_file(path: &std::path::Path) -> Result<(LocationId, &'static str
             .collect(),
         coastal,
     };
-    circuit.validate()?;
+    authoring::validate(&circuit)?;
     let name = Box::leak(name.trim().to_owned().into_boxed_str());
     let index = tracks.len();
     tracks.push(std::sync::Arc::new(RuntimeTrack {
@@ -156,57 +158,58 @@ const ROAD_POINTS: [XYZ; 12] = [
     },
 ];
 
-impl LocationId {
-    pub fn asset(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
-        path.as_ref()
-            .canonicalize()
-            .map(Self::Asset)
-            .map_err(|e| format!("cannot resolve location {}: {e}", path.as_ref().display()))
+pub fn asset(path: impl AsRef<std::path::Path>) -> Result<LocationId, String> {
+    path.as_ref()
+        .canonicalize()
+        .map(LocationId::Asset)
+        .map_err(|e| format!("cannot resolve location {}: {e}", path.as_ref().display()))
+}
+pub fn asset_path(location_id: &LocationId) -> Option<&std::path::Path> {
+    match location_id {
+        LocationId::Asset(path) => Some(path),
+        _ => None,
     }
-    pub fn asset_path(&self) -> Option<&std::path::Path> {
-        match self {
-            Self::Asset(path) => Some(path),
-            _ => None,
+}
+
+pub fn try_track(location_id: &LocationId) -> Result<std::sync::Arc<WorldLocation>, String> {
+    use std::sync::Arc;
+    Ok(match location_id {
+        LocationId::File(index) => {
+            let definition = runtime_tracks()
+                .read()
+                .unwrap()
+                .get(*index)
+                .cloned()
+                .ok_or("unknown runtime track")?;
+            let mut track = authoring::circuit_build(&definition.circuit, location_id.clone())?;
+            track.display_name = definition.name.to_owned();
+            Arc::new(track)
         }
-    }
 
-    pub fn try_track(&self) -> Result<std::sync::Arc<WorldLocation>, String> {
-        use std::sync::Arc;
-        Ok(match self {
-            Self::File(index) => {
-                let definition = runtime_tracks()
-                    .read()
-                    .unwrap()
-                    .get(*index)
-                    .cloned()
-                    .ok_or("unknown runtime track")?;
-                let mut track = definition.circuit.build(self.clone())?;
-                track.display_name = definition.name.to_owned();
-                Arc::new(track)
-            }
-
-            Self::Compact => Arc::new(WorldLocation::build(self.clone(), &ROAD_POINTS)),
-            Self::Asset(path) => Arc::new(WorldLocation::load(&city_assets::CityAsset::new(
-                path.clone(),
-            ))?),
-        })
-    }
+        LocationId::Compact => Arc::new(authoring::world_location_build(
+            location_id.clone(),
+            &ROAD_POINTS,
+        )),
+        LocationId::Asset(path) => Arc::new(world_preparation::world_location_load(
+            &city_assets::new(path.clone()),
+        )?),
+    })
 }
 
 // Compact-route fixtures retained for existing regression tests, never selected globally.
 
 #[cfg(test)]
 mod tests {
+    use crate::track;
+    use crate::vehicle_location;
+    use crate::world_roads;
+
     use crate::test_support;
 
     fn variable_width_track() -> std::sync::Arc<super::WorldLocation> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), r#"{"version":2,"name":"Variable width","scenery":"coastal","points":[[0,0,0,4],[400,0,0,12],[400,0,400,6],[0,0,400,8]]}"#).unwrap();
-        super::register_file(file.path())
-            .unwrap()
-            .0
-            .try_track()
-            .unwrap()
+        track::try_track(&super::register_file(file.path()).unwrap().0).unwrap()
     }
 
     #[test]
@@ -219,17 +222,24 @@ mod tests {
             ([0.0, 0.0, 400.0], 8.0),
             ([200.0, 0.0, -50.0], 8.0),
         ] {
-            assert!((track.project((point).into()).width - width).abs() < 0.001);
+            assert!((world_roads::project(&track, (point).into()).width - width).abs() < 0.001);
         }
         for i in 0..1000 {
-            let sample = track.at_distance(track.sampling_length() * i as f32 / 1000.0);
+            let sample =
+                track::at_distance(&track, track::sampling_length(&track) * i as f32 / 1000.0);
             assert!((4.0..=12.0).contains(&sample.width));
-            let projected = track.project(sample.point);
+            let projected = world_roads::project(&track, sample.point);
             assert!((sample.width - projected.width).abs() < 0.001);
         }
-        assert_eq!(track.at_distance(0.0).width, 4.0);
-        assert_eq!(track.at_distance(track.sampling_length()).width, 4.0);
-        assert!((track.at_distance(track.sampling_length() - 0.01).width - 4.0).abs() < 0.001);
+        assert_eq!(track::at_distance(&track, 0.0).width, 4.0);
+        assert_eq!(
+            track::at_distance(&track, track::sampling_length(&track)).width,
+            4.0
+        );
+        assert!(
+            (track::at_distance(&track, track::sampling_length(&track) - 0.01).width - 4.0).abs()
+                < 0.001
+        );
     }
 
     #[test]
@@ -278,14 +288,14 @@ mod tests {
 
     #[test]
     fn spatial_projection_matches_full_search_and_route_caches_are_isolated() {
-        let scenic = test_support::scenic_id().try_track().unwrap();
+        let scenic = track::try_track(&test_support::scenic_id()).unwrap();
         for i in 0..400 {
-            let s = scenic.at_distance(scenic.sampling_length() * i as f32 / 400.0);
+            let s = track::at_distance(&scenic, track::sampling_length(&scenic) * i as f32 / 400.0);
             for offset in [-45.0, -3.0, 0.0, 3.0, 45.0] {
-                let p = s.vehicle_position(offset);
-                let indexed = scenic.project(p);
-                let exact = (0..scenic.road_lines().len())
-                    .map(|i| scenic.projected(i, p))
+                let p = vehicle_location::vehicle_position(s, offset);
+                let indexed = world_roads::project(&scenic, p);
+                let exact = (0..world_roads::road_lines(&scenic).len())
+                    .map(|i| world_roads::projected(&scenic, i, p))
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .unwrap()
                     .1;
@@ -296,10 +306,11 @@ mod tests {
                 assert!((indexed.point.y - exact.point.y).abs() < 0.001);
             }
         }
-        let compact_length = LocationId::Compact.try_track().unwrap().sampling_length();
-        assert!(scenic.sampling_length() > compact_length * 7.0);
+        let compact_length =
+            track::sampling_length(&track::try_track(&LocationId::Compact).unwrap());
+        assert!(track::sampling_length(&scenic) > compact_length * 7.0);
         assert_eq!(
-            LocationId::Compact.try_track().unwrap().sampling_length(),
+            track::sampling_length(&track::try_track(&(LocationId::Compact)).unwrap()),
             compact_length
         );
     }
@@ -323,33 +334,42 @@ pub fn coastal_preset(id: &LocationId) -> bool {
 pub struct LocationCache {
     current: Option<std::sync::Arc<WorldLocation>>,
 }
-impl LocationCache {
-    /// Prepare a candidate without changing the installed cache or active session.
-    fn prepare(&self, id: &LocationId) -> Result<std::sync::Arc<WorldLocation>, String> {
-        let world = match self.current.as_ref().filter(|world| &world.id == id) {
-            Some(world) => world.clone(),
-            None => id.try_track()?,
-        };
-        Ok(world)
+
+/// Prepare a candidate without changing the installed cache or active session.
+fn prepare(
+    location_cache: &LocationCache,
+    id: &LocationId,
+) -> Result<std::sync::Arc<WorldLocation>, String> {
+    let world = match location_cache
+        .current
+        .as_ref()
+        .filter(|world| &world.id == id)
+    {
+        Some(world) => world.clone(),
+        None => try_track(id)?,
+    };
+    Ok(world)
+}
+pub fn prepare_for_render(
+    location_cache: &LocationCache,
+    id: &LocationId,
+) -> Result<std::sync::Arc<WorldLocation>, String> {
+    let world = prepare(location_cache, id)?;
+    if let Some(assets) = world::assets(&world) {
+        scene_archive::open_for(assets).map_err(|e| {
+            format!(
+                "cannot prepare scene {}: {e}",
+                city_assets::directory(assets).display()
+            )
+        })?;
     }
-    pub fn prepare_for_render(
-        &self,
-        id: &LocationId,
-    ) -> Result<std::sync::Arc<WorldLocation>, String> {
-        let world = self.prepare(id)?;
-        if let Some(assets) = world.assets() {
-            scene_archive::Archive::open_for(assets).map_err(|e| {
-                format!("cannot prepare scene {}: {e}", assets.directory().display())
-            })?;
-        }
-        Ok(world)
-    }
-    pub fn install(&mut self, world: std::sync::Arc<WorldLocation>) {
-        self.invalidate();
-        self.current = Some(world);
-    }
-    /// Call together with eviction of this world's GPU mesh after rebuilding files.
-    fn invalidate(&mut self) {
-        self.current = None;
-    }
+    Ok(world)
+}
+pub fn install(location_cache: &mut LocationCache, world: std::sync::Arc<WorldLocation>) {
+    invalidate(location_cache);
+    location_cache.current = Some(world);
+}
+/// Call together with eviction of this world's GPU mesh after rebuilding files.
+fn invalidate(location_cache: &mut LocationCache) {
+    location_cache.current = None;
 }

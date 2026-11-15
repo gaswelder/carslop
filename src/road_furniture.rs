@@ -1,6 +1,8 @@
 //! Original procedural signal heads and sign faces, placed from mapped controls.
+
 use crate::font;
 use crate::geometry::{XYZ, XZ};
+use crate::scene;
 use crate::scene::{Builder, Surface};
 use crate::traffic::{Furniture, FurnitureKind};
 use std::f32::consts::{PI, TAU};
@@ -35,7 +37,7 @@ fn box_mesh(b: &mut Builder, f: &Furniture, min: XYZ, max: XYZ, surface: Surface
         [4, 7, 3, 0],
         [2, 6, 5, 1],
     ] {
-        b.quad([p[a], p[c], p[d], p[e]], surface);
+        scene::quad(b, [p[a], p[c], p[d], p[e]], surface);
     }
 }
 fn disc(
@@ -50,7 +52,8 @@ fn disc(
     for i in 0..steps {
         let a = PI / 8.0 + i as f32 * TAU / steps as f32;
         let c = PI / 8.0 + (i + 1) as f32 * TAU / steps as f32;
-        b.triangle(
+        scene::emit_triangle(
+            b,
             [
                 point(f, 0.0, y, depth),
                 point(f, a.cos() * radius, y + a.sin() * radius, depth),
@@ -62,9 +65,10 @@ fn disc(
 }
 fn lettering(b: &mut Builder, f: &Furniture, label: &str, y: f32, size: f32, surface: Surface) {
     let font = font::labels();
-    let width = font.width(label) * size;
-    font.draw(label, |triangle| {
-        b.triangle(
+    let width = font::width(font, label) * size;
+    font::draw(font, label, |triangle| {
+        scene::emit_triangle(
+            b,
             triangle.map(|p| {
                 point(
                     f,
@@ -83,8 +87,8 @@ pub fn build(b: &mut Builder, f: &Furniture) {
         color: [0.29, 0.32, 0.32],
         material: [0.0, 0.35],
     };
-    let dark = Surface::matte([0.035, 0.045, 0.045]);
-    let red = Surface::matte([0.83, 0.035, 0.025]);
+    let dark = scene::matte([0.035, 0.045, 0.045]);
+    let red = scene::matte([0.83, 0.035, 0.025]);
     let white = Surface {
         color: [0.96, 0.96, 0.90],
         material: [0.0, 0.12],
@@ -97,7 +101,8 @@ pub fn build(b: &mut Builder, f: &Furniture) {
     for i in 0..12 {
         let a = i as f32 * TAU / 12.0;
         let c = (i + 1) as f32 * TAU / 12.0;
-        b.quad(
+        scene::quad(
+            b,
             [
                 point(f, a.cos() * 0.045, 0.0, a.sin() * 0.045 - 0.065),
                 point(f, c.cos() * 0.045, 0.0, c.sin() * 0.045 - 0.065),
@@ -204,7 +209,7 @@ pub fn build(b: &mut Builder, f: &Furniture) {
             disc(b, f, 2.12, 0.365, 0.015, 32, red);
             disc(b, f, 2.12, 0.29, 0.035, 32, white);
             let label = f.value.to_string();
-            let size = 0.033_f32.min(0.48 / font::labels().width(&label).max(1.0));
+            let size = 0.033_f32.min(0.48 / font::width(font::labels(), &label).max(1.0));
             lettering(b, f, &label, 2.12, size, dark);
         }
         FurnitureKind::Yield => {
@@ -215,8 +220,8 @@ pub fn build(b: &mut Builder, f: &Furniture) {
                     point(f, 0.0, 2.40 - 0.73 * scale, depth),
                 ]
             };
-            b.triangle(triangle(1.0, 0.015), red);
-            b.triangle(triangle(0.79, 0.035), white);
+            scene::emit_triangle(b, triangle(1.0, 0.015), red);
+            scene::emit_triangle(b, triangle(0.79, 0.035), white);
         }
     }
 }

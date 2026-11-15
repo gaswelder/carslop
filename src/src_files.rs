@@ -1,6 +1,7 @@
 use crate::codec_city;
 use crate::codec_landscape;
 use crate::geometry::XZ;
+use crate::source_location;
 use crate::{
     error::{invalid, Result},
     source_location::SourceLocation,
@@ -40,7 +41,6 @@ pub fn write_city_txt(
     let mut file = BufWriter::new(fs::File::create(path_city_txt)?);
     codec_city::write(&mut file, location_map, codec_city::Precision::Imported)?;
     file.flush()?;
-    let city =
-        SourceLocation::<f32>::parse(&fs::read_to_string(path_city_txt)?).map_err(invalid)?;
+    let city = source_location::parse(&fs::read_to_string(path_city_txt)?).map_err(invalid)?;
     Ok(WriteCityResult { city })
 }

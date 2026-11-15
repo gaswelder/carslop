@@ -1,8 +1,10 @@
 //! Paint mapped pedestrian crossings into the compiled street marking layer.
+
 use crate::build_surfaces;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::osm;
+use crate::source_location;
 use crate::source_location::SourceLocation;
 use geo::{BooleanOps, Buffer, MultiPolygon};
 use std::collections::BTreeMap;
@@ -38,25 +40,28 @@ fn markings(value: &str) -> Option<Style> {
 }
 
 fn style(node: &osm::OSMElement, walking: Option<&Walking<'_>>) -> Option<Style> {
-    let explicit = node.tag("crossing:markings");
+    let explicit = osm::tag(node, "crossing:markings");
     if !explicit.is_empty() && explicit != "yes" {
         return markings(explicit);
     }
-    if explicit.is_empty() && matches!(node.tag("crossing"), "unmarked" | "informal" | "no") {
+    if explicit.is_empty() && matches!(osm::tag(node, "crossing"), "unmarked" | "informal" | "no") {
         return None;
     }
     if let Some(walking) = walking {
-        let value = walking.way.tag("crossing:markings");
+        let value = osm::tag(walking.way, "crossing:markings");
         if !value.is_empty() {
             return markings(value);
         }
     }
     if explicit == "yes"
-        || node.tag("crossing_ref") == "zebra"
-        || matches!(node.tag("crossing"), "zebra" | "marked" | "uncontrolled")
+        || osm::tag(node, "crossing_ref") == "zebra"
+        || matches!(
+            osm::tag(node, "crossing"),
+            "zebra" | "marked" | "uncontrolled"
+        )
         || walking.is_some_and(|walking| {
             matches!(
-                walking.way.tag("crossing"),
+                osm::tag(walking.way, "crossing"),
                 "zebra" | "marked" | "uncontrolled"
             )
         })
@@ -87,10 +92,10 @@ fn rectangle(center: XZ, across: XZ, lo: f64, hi: f64, near: f64, far: f64) -> M
 }
 
 fn ground_level(element: &osm::OSMElement) -> bool {
-    matches!(element.tag("layer"), "" | "0")
+    matches!(osm::tag(element, "layer"), "" | "0")
         && ["bridge", "tunnel"]
             .iter()
-            .all(|key| matches!(element.tag(key), "" | "no"))
+            .all(|key| matches!(osm::tag(element, key), "" | "no"))
 }
 
 pub fn build_crossings(
@@ -118,7 +123,8 @@ pub fn build_crossings(
     }
     let mut walking = BTreeMap::new();
     for way in source.ways.values().filter(|way| {
-        ground_level(way) && (way.tag("footway") == "crossing" || way.tag("path") == "crossing")
+        ground_level(way)
+            && (osm::tag(way, "footway") == "crossing" || osm::tag(way, "path") == "crossing")
     }) {
         for (i, id) in way.nodes.iter().enumerate() {
             let before = way.nodes[i.saturating_sub(1)];
@@ -129,7 +135,10 @@ pub fn build_crossings(
             let Some(b) = source.nodes.get(&after).and_then(|node| node.coord) else {
                 continue;
             };
-            let direction = geometry::sub(map.metres(b), map.metres(a));
+            let direction = geometry::sub(
+                source_location::metres(map, b),
+                source_location::metres(map, a),
+            );
             if geometry::length(direction) > 0.1 {
                 walking.entry(*id).or_insert(Walking {
                     way,
@@ -145,7 +154,7 @@ pub fn build_crossings(
             continue;
         };
         let walk = walking.get(&id);
-        if (node.tag("highway") != "crossing" && walk.is_none()) || !ground_level(node) {
+        if (osm::tag(node, "highway") != "crossing" && walk.is_none()) || !ground_level(node) {
             continue;
         }
         let Some(style) = style(node, walk) else {
@@ -154,14 +163,14 @@ pub fn build_crossings(
         let Some(coord) = node.coord else {
             continue;
         };
-        let position = map.metres(coord);
-        if !map.contains(position) {
+        let position = source_location::metres(map, coord);
+        if !source_location::contains(map, position) {
             continue;
         }
-        let width = osm::number(node.tag("width"))
+        let width = osm::number(osm::tag(node, "width"))
             .filter(|width| *width > 0.)
             .or_else(|| {
-                walk.and_then(|walk| osm::number(walk.way.tag("width")))
+                walk.and_then(|walk| osm::number(osm::tag(walk.way, "width")))
                     .filter(|width| *width > 0.)
             })
             .unwrap_or(3.0)

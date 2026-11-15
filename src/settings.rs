@@ -1,4 +1,6 @@
 //! Persistent user settings stored in `settings.ini`.
+
+use crate::camera;
 use crate::camera::FollowView;
 use crate::file_io;
 use std::path::PathBuf;
@@ -15,55 +17,53 @@ pub struct Settings {
     camera: Option<FollowView>,
 }
 
-impl Settings {
-    pub fn load() -> Self {
-        Self::load_from(PathBuf::from(PATH))
-    }
+pub fn load() -> Settings {
+    load_from(PathBuf::from(PATH))
+}
 
-    fn load_from(path: PathBuf) -> Self {
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let map_zoom = value(&text, MAP_ZOOM).and_then(|raw| {
-            raw.trim()
-                .parse()
-                .ok()
-                .filter(|zoom: &f32| zoom.is_finite() && *zoom > 0.0)
-        });
-        let camera = value(&text, CAMERA).and_then(|name| FollowView::from_name(name.trim()));
-        Self {
-            path: Some(path),
-            map_zoom,
-            camera,
-        }
+fn load_from(path: PathBuf) -> Settings {
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let map_zoom = value(&text, MAP_ZOOM).and_then(|raw| {
+        raw.trim()
+            .parse()
+            .ok()
+            .filter(|zoom: &f32| zoom.is_finite() && *zoom > 0.0)
+    });
+    let camera = value(&text, CAMERA).and_then(|name| camera::from_name(name.trim()));
+    Settings {
+        path: Some(path),
+        map_zoom,
+        camera,
     }
+}
 
-    /// The remembered zoom factor, relative to each location's default fitted view.
-    pub fn map_zoom(&self) -> Option<f32> {
-        self.map_zoom
-    }
+/// The remembered zoom factor, relative to each location's default fitted view.
+pub fn map_zoom(settings: &Settings) -> Option<f32> {
+    settings.map_zoom
+}
 
-    pub fn camera(&self) -> Option<FollowView> {
-        self.camera
-    }
+pub fn camera(settings: &Settings) -> Option<FollowView> {
+    settings.camera
+}
 
-    pub fn set_map_zoom(&mut self, zoom: f32) {
-        self.map_zoom = Some(zoom);
-        self.save(MAP_ZOOM, &zoom.to_string());
-    }
+pub fn set_map_zoom(settings: &mut Settings, zoom: f32) {
+    settings.map_zoom = Some(zoom);
+    save(settings, MAP_ZOOM, &zoom.to_string());
+}
 
-    pub fn set_camera(&mut self, camera: FollowView) {
-        self.camera = Some(camera);
-        self.save(CAMERA, camera.name());
-    }
+pub fn set_camera(settings: &mut Settings, camera: FollowView) {
+    settings.camera = Some(camera);
+    save(settings, CAMERA, camera::view_name(camera));
+}
 
-    fn save(&self, key: &str, value: &str) {
-        let Some(path) = self.path.as_deref() else {
-            return;
-        };
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        let text = set_value(&text, key, value);
-        if let Err(error) = file_io::write_file(path, text.as_bytes()) {
-            log::warn!("Cannot save {}: {error}", path.display());
-        }
+fn save(settings: &Settings, key: &str, value: &str) {
+    let Some(path) = settings.path.as_deref() else {
+        return;
+    };
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = set_value(&text, key, value);
+    if let Err(error) = file_io::write_file(path, text.as_bytes()) {
+        log::warn!("Cannot save {}: {error}", path.display());
     }
 }
 
@@ -121,26 +121,31 @@ fn push_setting(output: &mut String, key: &str, value: &str, newline: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FollowView, Settings};
+    use crate::settings;
+
+    use super::FollowView;
 
     #[test]
     fn map_zoom_round_trips() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.ini");
-        let mut settings = Settings::load_from(path.clone());
-        assert_eq!(settings.map_zoom(), None);
-        settings.set_map_zoom(0.75);
-        assert_eq!(Settings::load_from(path).map_zoom(), Some(0.75));
+        let mut settings = settings::load_from(path.clone());
+        assert_eq!(settings::map_zoom(&(settings)), None);
+        settings::set_map_zoom(&mut settings, 0.75);
+        assert_eq!(settings::map_zoom(&(settings::load_from(path))), Some(0.75));
     }
 
     #[test]
     fn camera_round_trips() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.ini");
-        let mut settings = Settings::load_from(path.clone());
-        assert_eq!(settings.camera(), None);
-        settings.set_camera(FollowView::Bonnet);
-        assert_eq!(Settings::load_from(path).camera(), Some(FollowView::Bonnet));
+        let mut settings = settings::load_from(path.clone());
+        assert_eq!(settings::camera(&(settings)), None);
+        settings::set_camera(&mut settings, FollowView::Bonnet);
+        assert_eq!(
+            settings::camera(&(settings::load_from(path))),
+            Some(FollowView::Bonnet)
+        );
     }
 
     #[test]
@@ -148,17 +153,17 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.ini");
         std::fs::write(&path, "volume = 0.8\r\nmap_zoom = 1\r\n").unwrap();
-        let mut settings = Settings::load_from(path.clone());
-        assert_eq!(settings.map_zoom(), Some(1.0));
-        settings.set_camera(FollowView::Wide);
-        settings.set_map_zoom(2.5);
+        let mut settings = settings::load_from(path.clone());
+        assert_eq!(settings::map_zoom(&(settings)), Some(1.0));
+        settings::set_camera(&mut settings, FollowView::Wide);
+        settings::set_map_zoom(&mut settings, 2.5);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("volume = 0.8\r\n"));
         assert!(text.contains("map_zoom = 2.5\r\n"));
         assert!(text.contains("camera = wide\r\n"));
-        let settings = Settings::load_from(path);
-        assert_eq!(settings.map_zoom(), Some(2.5));
-        assert_eq!(settings.camera(), Some(FollowView::Wide));
+        let settings = settings::load_from(path);
+        assert_eq!(settings::map_zoom(&(settings)), Some(2.5));
+        assert_eq!(settings::camera(&(settings)), Some(FollowView::Wide));
     }
 
     #[test]
@@ -175,9 +180,9 @@ mod tests {
         ] {
             let path = root.path().join("settings.ini");
             std::fs::write(&path, text).unwrap();
-            let settings = Settings::load_from(path);
-            assert_eq!(settings.map_zoom(), None);
-            assert_eq!(settings.camera(), None);
+            let settings = settings::load_from(path);
+            assert_eq!(settings::map_zoom(&(settings)), None);
+            assert_eq!(settings::camera(&(settings)), None);
         }
     }
 
@@ -186,8 +191,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.ini");
         std::fs::write(&path, "  MAP_ZOOM = 0.5  \n  CAMERA = Bonnet  \n").unwrap();
-        let settings = Settings::load_from(path);
-        assert_eq!(settings.map_zoom(), Some(0.5));
-        assert_eq!(settings.camera(), Some(FollowView::Bonnet));
+        let settings = settings::load_from(path);
+        assert_eq!(settings::map_zoom(&(settings)), Some(0.5));
+        assert_eq!(settings::camera(&(settings)), Some(FollowView::Bonnet));
     }
 }

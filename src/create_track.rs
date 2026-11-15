@@ -1,21 +1,27 @@
 //! Compile authored points into the same assets used by imported cities.
+
 use crate::build_collision;
 use crate::build_scene;
 use crate::city_assets;
 use crate::codec_city;
 use crate::codec_furniture;
 use crate::codec_landscape;
+use crate::elevation;
 use crate::error::{invalid, Result};
+use crate::geometry;
 use crate::geometry::{BoundingBoxXZ, XZ};
 use crate::landscape;
 use crate::scene;
 use crate::scene_archive;
 use crate::source_location;
 use crate::source_location::{SourceLocation, SourceRoad};
+use crate::street_surface;
 use crate::track;
 use crate::world;
 use crate::world::Building;
+use crate::world_buildings;
 use crate::world_preparation;
+use crate::world_roads;
 use std::fs;
 use std::path::Path;
 use std::{
@@ -47,7 +53,7 @@ pub fn create_track(source: &Path) -> Result<PathBuf> {
     }
     // Parse and validate before creating anything in the location store.
     let id = track::register_file(source).map_err(invalid)?.0;
-    let track = id.try_track().map_err(invalid)?;
+    let track = track::try_track(&id).map_err(invalid)?;
     fs::create_dir_all(root)?;
     let staging = tempfile::Builder::new()
         .prefix(".create-track-")
@@ -64,23 +70,28 @@ pub fn create_track(source: &Path) -> Result<PathBuf> {
 
 fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result<()> {
     println!("Sampling authored road...");
-    let count = (track.sampling_length().ceil() as usize).max(4);
+    let count = (track::sampling_length(track).ceil() as usize).max(4);
     let samples: Vec<_> = (0..count)
-        .map(|i| track.at_distance(track.sampling_length() * i as f32 / count as f32))
+        .map(|i| {
+            track::at_distance(
+                track,
+                track::sampling_length(track) * i as f32 / count as f32,
+            )
+        })
         .collect();
     let city = track;
-    let bounds = track.terrain_bounds();
+    let bounds = world::terrain_bounds(track);
     let map = SourceLocation {
         boundary: None,
         // Authored locations have local coordinates, with no geographic origin.
         origin: None,
         bounding_box: BoundingBoxXZ {
-            min: bounds.min.map(f64::from),
-            max: bounds.max.map(f64::from),
+            min: geometry::xz_map(bounds.min, f64::from),
+            max: geometry::xz_map(bounds.max, f64::from),
         },
         road_nodes: samples
             .iter()
-            .map(|s| s.point.xz().map(f64::from).at_height(0.0))
+            .map(|s| geometry::at_height(geometry::xz_map(geometry::xz(s.point), f64::from), 0.0))
             .collect(),
         road_lines: (0..count)
             .map(|i| SourceRoad {
@@ -88,14 +99,13 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
                 osm_way_id: Some(1),
                 kind: 1,
                 lanes: 2,
-                ..SourceRoad::new(
+                ..source_location::new(
                     [i, (i + 1) % count],
                     (samples[i].width as f64 + samples[(i + 1) % count].width as f64) * 0.5,
                 )
             })
             .collect(),
-        buildings: city
-            .buildings()
+        buildings: world_buildings::buildings(city)
             .iter()
             .map(|b| Building {
                 id: b.id,
@@ -114,7 +124,7 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
                     .collect(),
             })
             .collect(),
-        ..SourceLocation::<f64>::empty()
+        ..source_location::empty::<f64>()
     };
     let mut city_file = BufWriter::new(fs::File::create(output.join("city.txt"))?);
     codec_city::write(&mut city_file, &map, codec_city::Precision::Authored)?;
@@ -122,7 +132,7 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
     println!("Building streets ({} segments)...", count);
     write_streets(&samples, output)?;
     write_elevation(track, output)?;
-    write_landscape(track, track.trees(), output)?;
+    write_landscape(track, world::trees(track), output)?;
     codec_furniture::write(&mut fs::File::create(output.join("furniture.txt"))?, &[])?;
     fs::copy(source, output.join("source.track.json"))?;
     // Keep the existing label reader independent of the authoring format.
@@ -138,8 +148,8 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
         serde_json::to_string_pretty(&serde_json::json!({
             "compiler": "native-track-v1", "raceways_only": true,
             "source_file": "source.track.json",
-            "bounds_metres": map.bounding_box.to_array(), "coordinates": "local metres: X east, Y up, Z south",
-            "statistics": {"nodes": count, "road_segments": count, "buildings": map.buildings.len(), "trees": track.trees().len()}
+            "bounds_metres": geometry::bounding_box_xz_to_array(map.bounding_box), "coordinates": "local metres: X east, Y up, Z south",
+            "statistics": {"nodes": count, "road_segments": count, "buildings": map.buildings.len(), "trees": world::trees(track).len()}
         }))? + "\n",
     )?;
     println!("Building stored scenery decorations...");
@@ -153,15 +163,13 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
     let streets_txt_source = std::fs::read_to_string(&path_streets_txt)?;
     build_collision::build_collisions(
         &output.join("streets.bin"),
-        &SourceLocation::<f32>::parse(&city_txt_source).map_err(invalid)?,
+        &source_location::parse(&city_txt_source).map_err(invalid)?,
         streets_txt_source,
     )?;
     source_location::write_labels(output)?;
     // Validate using the regular runtime loader before publishing the directory.
-    let loaded = world_preparation::CompiledLocation::load(&city_assets::CityAsset::new(
-        output.to_path_buf(),
-    ))
-    .map_err(invalid)?;
+    let loaded = world_preparation::compiled_location_load(&city_assets::new(output.to_path_buf()))
+        .map_err(invalid)?;
     build_scene::build_scene(
         &loaded,
         None,
@@ -169,7 +177,7 @@ fn compile(source: &Path, track: &track::WorldLocation, output: &Path) -> Result
         &output.join("scene.pack"),
         output,
     )?;
-    if loaded.road_lines().len() != count {
+    if world_roads::road_lines(&loaded).len() != count {
         return Err(invalid("compiled road count mismatch"));
     }
     Ok(())
@@ -180,7 +188,7 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
     let mut file = BufWriter::new(fs::File::create(&path)?);
     writeln!(file, "STREETS 1 {}", samples.len())?;
     let point = |sample: track::RoadSample, offset: f32| {
-        let normal = sample.normal();
+        let normal = world::normal(sample);
         XZ {
             x: sample.point.x + normal.x * offset,
             z: sample.point.z + normal.z * offset,
@@ -197,7 +205,7 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
         writeln!(
             file,
             "t {} {} {} {} {} {} {}",
-            usage.street_id().map_err(invalid)?,
+            street_surface::triangle_usage_street_id(usage).map_err(invalid)?,
             p[0].x,
             p[0].z,
             p[1].x,
@@ -258,7 +266,7 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
         for side in [-1.0, 1.0] {
             let start = point(a, side * a.width * 0.5);
             let end = point(b, side * b.width * 0.5);
-            let normal = a.normal().map(|v| -side * v);
+            let normal = geometry::xz_map(world::normal(a), |v| -side * v);
             writeln!(
                 file,
                 "c 2 {} {} {} {} {} {}",
@@ -272,9 +280,7 @@ fn write_streets(samples: &[track::RoadSample], output: &Path) -> Result<()> {
 
 fn write_elevation(track: &track::WorldLocation, output: &Path) -> Result<()> {
     fs::create_dir_all(output.join("elevation"))?;
-    let field = track
-        .elevation()
-        .ok_or_else(|| invalid("authored track has no terrain"))?;
+    let field = world::elevation(track).ok_or_else(|| invalid("authored track has no terrain"))?;
     let mut file = BufWriter::new(fs::File::create(output.join("elevation/heightfield.txt"))?);
     writeln!(
         file,
@@ -283,7 +289,7 @@ fn write_elevation(track: &track::WorldLocation, output: &Path) -> Result<()> {
     )?;
     for row in 0..field.rows {
         for col in 0..field.columns {
-            let height = field.point(col, row).y;
+            let height = elevation::point(field, col, row).y;
             if !height.is_finite() || height.abs() >= 10_000.0 {
                 return Err(invalid(
                     "authored elevation must be within 10000 metres of zero",
@@ -302,22 +308,23 @@ fn write_landscape(
     trees: &[landscape::Tree],
     output: &Path,
 ) -> Result<()> {
-    let mut file = codec_landscape::Writer::new(
+    let mut file = codec_landscape::new(
         BufWriter::new(fs::File::create(output.join("landscape.txt"))?),
         codec_landscape::Precision::Authored,
     )?;
-    for triangle in track.ground_triangles() {
-        file.ground(triangle.material, triangle.points)?;
+    for triangle in world::ground_triangles(track) {
+        codec_landscape::ground(&mut file, triangle.material, triangle.points)?;
     }
     for tree in trees {
-        file.tree(tree)?;
+        codec_landscape::tree(&mut file, tree)?;
     }
-    file.flush()?;
+    codec_landscape::flush(&mut file)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+
     use crate::authoring;
     use crate::geometry;
     use crate::world;
@@ -339,7 +346,7 @@ mod tests {
                     .collect(),
                 coastal: false,
             };
-            assert!(circuit.build(world::LocationId::Compact).is_err());
+            assert!(authoring::circuit_build(&(circuit), world::LocationId::Compact).is_err());
         }
     }
 }

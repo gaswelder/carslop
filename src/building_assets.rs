@@ -1,4 +1,7 @@
 //! File-backed architectural parts, loaded only while baking location geometry.
+
+use crate::chunks;
+use crate::geometry;
 use crate::geometry::{XYZ, XZ};
 use crate::mesh_glb;
 use crate::scene::Builder;
@@ -31,96 +34,94 @@ pub struct Part {
     pub size: XYZ,
     scale_axes: [bool; 3],
 }
-impl Part {
-    fn load(directory: &Path, definition: &Value) -> io::Result<Self> {
-        let filename = definition["model"]
-            .as_str()
-            .ok_or_else(|| invalid("missing model filename"))?;
-        let path = Path::new(filename);
-        if path.components().count() != 1
-            || !matches!(
-                path.components().next(),
-                Some(std::path::Component::Normal(_))
-            )
-            || path.extension().is_none_or(|s| s != "glb")
-        {
-            return Err(invalid(
-                "model must name a GLB in the building asset directory",
-            ));
-        }
-        let size: [f32; 3] = serde_json::from_value(definition["size"].clone()).map_err(invalid)?;
-        if size.iter().any(|x| !x.is_finite() || *x <= 0.0) {
-            return Err(invalid("model size must be finite and positive"));
-        }
-        let scale_axes =
-            serde_json::from_value(definition["scale_axes"].clone()).map_err(invalid)?;
-        Ok(Self {
-            meshes: mesh_glb::load(&directory.join(path))?,
-            size: (size).into(),
-            scale_axes,
-        })
-    }
 
-    /// Place a model centred along a facade edge. X follows the edge, Y is up,
-    /// and Z projects out of the wall. Disallowed scale axes retain native size.
-    pub fn place(
-        &self,
-        b: &mut Builder,
-        edge: [XZ<f32>; 2],
-        center: f32,
-        y: f32,
-        requested: XYZ,
-        tints: &Tints,
-    ) {
-        let [a, c] = edge;
-        let length = (c.x - a.x).hypot(c.z - a.z);
-        let tangent = Vec3::new((c.x - a.x) / length, 0.0, (c.z - a.z) / length);
-        let outward = Vec3::new(tangent.z, 0.0, -tangent.x);
-        let scale = Vec3::from_array(std::array::from_fn(|i| {
-            if self.scale_axes[i] {
-                requested.component(i) / self.size.component(i)
-            } else {
-                1.0
+fn part_load(directory: &Path, definition: &Value) -> io::Result<Part> {
+    let filename = definition["model"]
+        .as_str()
+        .ok_or_else(|| invalid("missing model filename"))?;
+    let path = Path::new(filename);
+    if path.components().count() != 1
+        || !matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || path.extension().is_none_or(|s| s != "glb")
+    {
+        return Err(invalid(
+            "model must name a GLB in the building asset directory",
+        ));
+    }
+    let size: [f32; 3] = serde_json::from_value(definition["size"].clone()).map_err(invalid)?;
+    if size.iter().any(|x| !x.is_finite() || *x <= 0.0) {
+        return Err(invalid("model size must be finite and positive"));
+    }
+    let scale_axes = serde_json::from_value(definition["scale_axes"].clone()).map_err(invalid)?;
+    Ok(Part {
+        meshes: mesh_glb::load(&directory.join(path))?,
+        size: (size).into(),
+        scale_axes,
+    })
+}
+
+/// Place a model centred along a facade edge. X follows the edge, Y is up,
+/// and Z projects out of the wall. Disallowed scale axes retain native size.
+pub fn place(
+    part: &Part,
+    b: &mut Builder,
+    edge: [XZ<f32>; 2],
+    center: f32,
+    y: f32,
+    requested: XYZ,
+    tints: &Tints,
+) {
+    let [a, c] = edge;
+    let length = (c.x - a.x).hypot(c.z - a.z);
+    let tangent = Vec3::new((c.x - a.x) / length, 0.0, (c.z - a.z) / length);
+    let outward = Vec3::new(tangent.z, 0.0, -tangent.x);
+    let scale = Vec3::from_array(std::array::from_fn(|i| {
+        if part.scale_axes[i] {
+            geometry::xyz_component(requested, i) / geometry::xyz_component(part.size, i)
+        } else {
+            1.0
+        }
+    }));
+    let origin = Vec3::new(a.x, y, a.z) + tangent * (center - part.size.x * scale.x * 0.5);
+    let transform = Mat4::from_cols(
+        (tangent * scale.x).extend(0.0),
+        (Vec3::Y * scale.y).extend(0.0),
+        (outward * scale.z).extend(0.0),
+        Vec4::from((origin, 1.0)),
+    );
+    let normal_matrix = Mat3::from_mat4(transform).inverse().transpose();
+    let mirrored = transform.determinant() < 0.0;
+    for mesh in &part.meshes {
+        let tint = match mesh.name.as_str() {
+            "wall" => tints.wall,
+            "frame" => tints.frame,
+            "glass" => tints.glass,
+            "trim" => tints.trim,
+            "shutter" => tints.shutter,
+            _ => [1.0; 3],
+        };
+        for tri in mesh.vertices.chunks_exact(3) {
+            let mut vertices: [_; 3] = std::array::from_fn(|i| {
+                let mut v = tri[i];
+                v.position = transform
+                    .transform_point3(Vec3::from_array(v.position))
+                    .to_array();
+                v.normal = (normal_matrix * Vec3::from_array(v.normal))
+                    .normalize()
+                    .to_array();
+                v.color = std::array::from_fn(|j| v.color[j] * tint[j]);
+                v
+            });
+            if mirrored {
+                vertices.swap(1, 2);
             }
-        }));
-        let origin = Vec3::new(a.x, y, a.z) + tangent * (center - self.size.x * scale.x * 0.5);
-        let transform = Mat4::from_cols(
-            (tangent * scale.x).extend(0.0),
-            (Vec3::Y * scale.y).extend(0.0),
-            (outward * scale.z).extend(0.0),
-            Vec4::from((origin, 1.0)),
-        );
-        let normal_matrix = Mat3::from_mat4(transform).inverse().transpose();
-        let mirrored = transform.determinant() < 0.0;
-        for mesh in &self.meshes {
-            let tint = match mesh.name.as_str() {
-                "wall" => tints.wall,
-                "frame" => tints.frame,
-                "glass" => tints.glass,
-                "trim" => tints.trim,
-                "shutter" => tints.shutter,
-                _ => [1.0; 3],
-            };
-            for tri in mesh.vertices.chunks_exact(3) {
-                let mut vertices: [_; 3] = std::array::from_fn(|i| {
-                    let mut v = tri[i];
-                    v.position = transform
-                        .transform_point3(Vec3::from_array(v.position))
-                        .to_array();
-                    v.normal = (normal_matrix * Vec3::from_array(v.normal))
-                        .normalize()
-                        .to_array();
-                    v.color = std::array::from_fn(|j| v.color[j] * tint[j]);
-                    v
-                });
-                if mirrored {
-                    vertices.swap(1, 2);
-                }
-                if let Some(chunks) = &mut b.chunks {
-                    chunks.push(vertices);
-                } else {
-                    b.vertices.extend(vertices);
-                }
+            if let Some(chunks) = &mut b.chunks {
+                chunks::push(chunks, vertices);
+            } else {
+                b.vertices.extend(vertices);
             }
         }
     }
@@ -153,57 +154,58 @@ pub struct Catalog {
     pub balconies: [Part; 2],
     pub placement: Placement,
 }
-impl Catalog {
-    pub fn load_default() -> io::Result<Self> {
-        Self::load(Path::new("data/buildings"))
+
+pub fn load_default() -> io::Result<Catalog> {
+    catalog_load(Path::new("data/buildings"))
+}
+fn catalog_load(directory: &Path) -> io::Result<Catalog> {
+    let path = directory.join("parts.json");
+    decode(directory, &std::fs::read(&path)?)
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+fn decode(directory: &Path, bytes: &[u8]) -> io::Result<Catalog> {
+    let definition: Value = serde_json::from_slice(bytes).map_err(invalid)?;
+    if definition["version"].as_u64() != Some(1) {
+        return Err(invalid("unsupported building parts version"));
     }
-    fn load(directory: &Path) -> io::Result<Self> {
-        let path = directory.join("parts.json");
-        Self::decode(directory, &std::fs::read(&path)?)
-            .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+    let p = &definition["placement"];
+    let max_walls = p["balcony_max_walls"]
+        .as_u64()
+        .filter(|n| (1..=128).contains(n))
+        .ok_or_else(|| invalid("balcony_max_walls must be between 1 and 128"))?
+        as usize;
+    let width_ratio = positive(p, "balcony_width_ratio")?;
+    if width_ratio > 1.0 {
+        return Err(invalid("balcony_width_ratio must not exceed 1"));
     }
-    fn decode(directory: &Path, bytes: &[u8]) -> io::Result<Self> {
-        let definition: Value = serde_json::from_slice(bytes).map_err(invalid)?;
-        if definition["version"].as_u64() != Some(1) {
-            return Err(invalid("unsupported building parts version"));
-        }
-        let p = &definition["placement"];
-        let max_walls = p["balcony_max_walls"]
-            .as_u64()
-            .filter(|n| (1..=128).contains(n))
-            .ok_or_else(|| invalid("balcony_max_walls must be between 1 and 128"))?
-            as usize;
-        let width_ratio = positive(p, "balcony_width_ratio")?;
-        if width_ratio > 1.0 {
-            return Err(invalid("balcony_width_ratio must not exceed 1"));
-        }
-        Ok(Self {
-            window: Part::load(directory, &definition["window"])?,
-            entrance: Part::load(directory, &definition["entrance"])?,
-            balconies: [
-                Part::load(directory, &definition["balconies"][0])?,
-                Part::load(directory, &definition["balconies"][1])?,
-            ],
-            placement: Placement {
-                window_spacing: range(p, "window_spacing")?,
-                modern_window_spacing: positive(p, "modern_window_spacing")?,
-                entrance_min_wall: positive(p, "entrance_min_wall")?,
-                entrance_min_height: positive(p, "entrance_min_height")?,
-                balcony_min_height: positive(p, "balcony_min_height")?,
-                balcony_min_wall: positive(p, "balcony_min_wall")?,
-                balcony_max_walls: max_walls,
-                balcony_width_ratio: width_ratio,
-                balcony_max_width: positive(p, "balcony_max_width")?,
-                balcony_depth: range(p, "balcony_depth")?,
-                balcony_floor_offset: positive(p, "balcony_floor_offset")?,
-                balcony_headroom: positive(p, "balcony_headroom")?,
-            },
-        })
-    }
+    Ok(Catalog {
+        window: part_load(directory, &definition["window"])?,
+        entrance: part_load(directory, &definition["entrance"])?,
+        balconies: [
+            part_load(directory, &definition["balconies"][0])?,
+            part_load(directory, &definition["balconies"][1])?,
+        ],
+        placement: Placement {
+            window_spacing: range(p, "window_spacing")?,
+            modern_window_spacing: positive(p, "modern_window_spacing")?,
+            entrance_min_wall: positive(p, "entrance_min_wall")?,
+            entrance_min_height: positive(p, "entrance_min_height")?,
+            balcony_min_height: positive(p, "balcony_min_height")?,
+            balcony_min_wall: positive(p, "balcony_min_wall")?,
+            balcony_max_walls: max_walls,
+            balcony_width_ratio: width_ratio,
+            balcony_max_width: positive(p, "balcony_max_width")?,
+            balcony_depth: range(p, "balcony_depth")?,
+            balcony_floor_offset: positive(p, "balcony_floor_offset")?,
+            balcony_headroom: positive(p, "balcony_headroom")?,
+        },
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::building_assets;
+
     use super::*;
     fn tints() -> Tints {
         Tints {
@@ -216,11 +218,12 @@ mod tests {
     }
     #[test]
     fn model_placement_preserves_normals_winding_tints_and_fixed_scale_axes() {
-        let catalog = Catalog::load_default().unwrap();
+        let catalog = building_assets::load_default().unwrap();
         let mut b = Builder::default();
         // This facade basis reflects the model; nonuniform scale and rotated
         // placement must preserve outward normals and triangle winding.
-        catalog.window.place(
+        building_assets::place(
+            &catalog.window,
             &mut b,
             [XZ { x: 10., z: 20. }, XZ { x: 10., z: 30. }],
             5.,
@@ -253,7 +256,8 @@ mod tests {
             .iter()
             .any(|v| v.color == tints().glass && v.material == [0.0, 0.45]));
         let mut b = Builder::default();
-        catalog.entrance.place(
+        building_assets::place(
+            &catalog.entrance,
             &mut b,
             [XZ { x: 0., z: 0. }, XZ { x: 10., z: 0. }],
             5.,

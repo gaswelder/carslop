@@ -62,22 +62,20 @@ struct WheelVelocity {
     lateral: f32,
 }
 
-impl Contact {
-    fn velocity(&self, motion: Motion) -> WheelVelocity {
-        let side = motion.lateral + self.offset * motion.yaw_rate;
-        WheelVelocity {
-            longitudinal: motion.longitudinal * self.cos + side * self.sin,
-            lateral: -motion.longitudinal * self.sin + side * self.cos,
-        }
+fn velocity(contact: &Contact, motion: Motion) -> WheelVelocity {
+    let side = motion.lateral + contact.offset * motion.yaw_rate;
+    WheelVelocity {
+        longitudinal: motion.longitudinal * contact.cos + side * contact.sin,
+        lateral: -motion.longitudinal * contact.sin + side * contact.cos,
     }
+}
 
-    fn apply(&self, motion: &mut Motion, impulse: Impulse, mass: f32, inertia: f32) {
-        let forward = impulse.longitudinal * self.cos - impulse.lateral * self.sin;
-        let side = impulse.longitudinal * self.sin + impulse.lateral * self.cos;
-        motion.longitudinal += forward / mass;
-        motion.lateral += side / mass;
-        motion.yaw_rate += self.offset * side / inertia;
-    }
+fn apply(contact: &Contact, motion: &mut Motion, impulse: Impulse, mass: f32, inertia: f32) {
+    let forward = impulse.longitudinal * contact.cos - impulse.lateral * contact.sin;
+    let side = impulse.longitudinal * contact.sin + impulse.lateral * contact.cos;
+    motion.longitudinal += forward / mass;
+    motion.lateral += side / mass;
+    motion.yaw_rate += contact.offset * side / inertia;
 }
 
 struct EffectiveMass {
@@ -96,104 +94,104 @@ struct Constraint {
     radius: f32,
 }
 
-impl Constraint {
-    fn new(contact: &Contact, motion: Motion, mass: f32, inertia: f32, dt: f32) -> Self {
-        let wheel = contact.velocity(motion);
-        let along = wheel.longitudinal.abs();
-        let radius = contact.capacity * dt;
-        let drive = contact.drive_force * dt;
-        let brake = contact.brake_force * dt;
-        let limit = if brake > 0.0 {
-            radius
+fn new(contact: &Contact, motion: Motion, mass: f32, inertia: f32, dt: f32) -> Constraint {
+    let wheel = velocity(contact, motion);
+    let along = wheel.longitudinal.abs();
+    let radius = contact.capacity * dt;
+    let drive = contact.drive_force * dt;
+    let brake = contact.brake_force * dt;
+    let limit = if brake > 0.0 {
+        radius
+    } else {
+        contact.drive_limit * dt
+    };
+    Constraint {
+        mass: EffectiveMass {
+            along: 1.0 / mass + (contact.offset * contact.sin).powi(2) / inertia,
+            cross: contact.offset.powi(2) * contact.sin * contact.cos / inertia,
+            side: 1.0 / mass + (contact.offset * contact.cos).powi(2) / inertia,
+        },
+        // At speed this requests up to the pedal's brake force. As wheel
+        // speed tends to zero it becomes a bounded no-slip constraint.
+        along_compliance: if brake > 0.0 && !contact.locked {
+            along / brake
         } else {
-            contact.drive_limit * dt
-        };
-        Self {
-            mass: EffectiveMass {
-                along: 1.0 / mass + (contact.offset * contact.sin).powi(2) / inertia,
-                cross: contact.offset.powi(2) * contact.sin * contact.cos / inertia,
-                side: 1.0 / mass + (contact.offset * contact.cos).powi(2) / inertia,
-            },
-            // At speed this requests up to the pedal's brake force. As wheel
-            // speed tends to zero it becomes a bounded no-slip constraint.
-            along_compliance: if brake > 0.0 && !contact.locked {
-                along / brake
-            } else {
-                0.0
-            },
-            side_compliance: if contact.locked {
-                0.0
-            } else {
-                let stiffness = lateral_stiffness(
-                    along,
-                    contact.corner_stiffness,
-                    contact.capacity,
-                    wheel.lateral,
-                );
-                along / (stiffness * dt)
-            },
-            drive,
-            minimum: (drive - brake).clamp(-limit, limit),
-            maximum: (drive + brake).clamp(-limit, limit),
-            radius,
-        }
+            0.0
+        },
+        side_compliance: if contact.locked {
+            0.0
+        } else {
+            let stiffness = lateral_stiffness(
+                along,
+                contact.corner_stiffness,
+                contact.capacity,
+                wheel.lateral,
+            );
+            along / (stiffness * dt)
+        },
+        drive,
+        minimum: (drive - brake).clamp(-limit, limit),
+        maximum: (drive + brake).clamp(-limit, limit),
+        radius,
     }
+}
 
-    fn solve(&self, velocity: WheelVelocity) -> Impulse {
-        if self.radius == 0.0 {
-            return Impulse::default();
-        }
-        // Minimize contact kinetic energy plus tire compliance. The brake
-        // bound and friction circle are imposed together, so a saturated
-        // rolling tire can trade braking force for cornering force.
-        let along = velocity.longitudinal - self.along_compliance * self.drive;
-        let at = |lambda: f32| {
-            let a = self.mass.along + self.along_compliance + lambda;
-            let b = self.mass.cross;
-            let c = self.mass.side + self.side_compliance + lambda;
-            let longitudinal = ((b * velocity.lateral - c * along) / (a * c - b * b))
-                .clamp(self.minimum, self.maximum);
-            Impulse {
-                longitudinal,
-                lateral: -(velocity.lateral + b * longitudinal) / c,
-            }
-        };
-        if self.minimum >= self.radius || self.maximum <= -self.radius {
-            return Impulse {
-                longitudinal: self.minimum.clamp(-self.radius, self.radius),
-                lateral: 0.0,
-            };
-        }
-        let impulse = at(0.0);
-        if impulse.longitudinal.hypot(impulse.lateral) <= self.radius {
-            return impulse;
-        }
-        // The Lagrange multiplier for the circular bound is monotone. Solve
-        // it rather than giving longitudinal force priority over lateral.
-        let mut low = 0.0;
-        let mut high = along.hypot(velocity.lateral) / self.radius
-            + self.mass.along
-            + self.mass.side
-            + self.along_compliance
-            + self.side_compliance;
-        for _ in 0..32 {
-            let impulse = at(high);
-            if impulse.longitudinal.hypot(impulse.lateral) <= self.radius {
-                break;
-            }
-            high *= 2.0;
-        }
-        for _ in 0..24 {
-            let middle = (low + high) * 0.5;
-            let impulse = at(middle);
-            if impulse.longitudinal.hypot(impulse.lateral) > self.radius {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        at(high)
+fn constraint_solve(constraint: &Constraint, velocity: WheelVelocity) -> Impulse {
+    if constraint.radius == 0.0 {
+        return Impulse::default();
     }
+    // Minimize contact kinetic energy plus tire compliance. The brake
+    // bound and friction circle are imposed together, so a saturated
+    // rolling tire can trade braking force for cornering force.
+    let along = velocity.longitudinal - constraint.along_compliance * constraint.drive;
+    let at = |lambda: f32| {
+        let a = constraint.mass.along + constraint.along_compliance + lambda;
+        let b = constraint.mass.cross;
+        let c = constraint.mass.side + constraint.side_compliance + lambda;
+        let longitudinal = ((b * velocity.lateral - c * along) / (a * c - b * b))
+            .clamp(constraint.minimum, constraint.maximum);
+        Impulse {
+            longitudinal,
+            lateral: -(velocity.lateral + b * longitudinal) / c,
+        }
+    };
+    if constraint.minimum >= constraint.radius || constraint.maximum <= -constraint.radius {
+        return Impulse {
+            longitudinal: constraint
+                .minimum
+                .clamp(-constraint.radius, constraint.radius),
+            lateral: 0.0,
+        };
+    }
+    let impulse = at(0.0);
+    if impulse.longitudinal.hypot(impulse.lateral) <= constraint.radius {
+        return impulse;
+    }
+    // The Lagrange multiplier for the circular bound is monotone. Solve
+    // it rather than giving longitudinal force priority over lateral.
+    let mut low = 0.0;
+    let mut high = along.hypot(velocity.lateral) / constraint.radius
+        + constraint.mass.along
+        + constraint.mass.side
+        + constraint.along_compliance
+        + constraint.side_compliance;
+    for _ in 0..32 {
+        let impulse = at(high);
+        if impulse.longitudinal.hypot(impulse.lateral) <= constraint.radius {
+            break;
+        }
+        high *= 2.0;
+    }
+    for _ in 0..24 {
+        let middle = (low + high) * 0.5;
+        let impulse = at(middle);
+        if impulse.longitudinal.hypot(impulse.lateral) > constraint.radius {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    at(high)
 }
 
 pub struct Solution {
@@ -211,7 +209,7 @@ pub fn solve(
 ) -> Solution {
     let constraints = contacts
         .each_ref()
-        .map(|contact| Constraint::new(contact, initial, mass, inertia, dt));
+        .map(|contact| new(contact, initial, mass, inertia, dt));
     let mut motion = free;
     let mut impulses = [Impulse::default(); 2];
     // Each axle changes the velocity seen by the other through chassis yaw.
@@ -219,7 +217,8 @@ pub fn solve(
     for _ in 0..24 {
         for axle in 0..2 {
             let contact = &contacts[axle];
-            contact.apply(
+            apply(
+                contact,
                 &mut motion,
                 Impulse {
                     longitudinal: -impulses[axle].longitudinal,
@@ -228,8 +227,8 @@ pub fn solve(
                 mass,
                 inertia,
             );
-            impulses[axle] = constraints[axle].solve(contact.velocity(motion));
-            contact.apply(&mut motion, impulses[axle], mass, inertia);
+            impulses[axle] = constraint_solve(&constraints[axle], velocity(contact, motion));
+            apply(contact, &mut motion, impulses[axle], mass, inertia);
         }
     }
     Solution { motion, impulses }

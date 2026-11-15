@@ -1,9 +1,11 @@
 //! OpenGL scene/HUD programs, mesh upload, and chase-camera math.
+
 use crate::aerial;
 use crate::asset_car;
 use crate::camera;
 use crate::chunks;
 use crate::feedback;
+use crate::geometry;
 use crate::geometry::XYZ;
 #[cfg(test)]
 use crate::geometry::XZ;
@@ -13,9 +15,11 @@ use crate::prefetch;
 use crate::scene;
 use crate::scene_archive;
 use crate::shadows;
+use crate::street_surface;
 use crate::track;
 use crate::vehicle_location;
 use crate::world;
+use crate::world_transport;
 use sdl3::video::Window;
 use std::ffi::CString;
 
@@ -414,39 +418,37 @@ struct Shader {
     handle: gl::types::GLuint,
 }
 
-impl Shader {
-    fn compile(src: &str, kind: u32) -> Result<Shader, String> {
-        let handle = unsafe { gl::CreateShader(kind) };
-        let c_src = CString::new(src).map_err(|_| "NUL in shader source".to_string())?;
-        let strings = [c_src.as_ptr()];
-        let lengths = [c_src.count_bytes() as i32];
-        unsafe {
-            gl::ShaderSource(handle, 1, strings.as_ptr(), lengths.as_ptr());
-            gl::CompileShader(handle);
-            let mut status: i32 = 0;
-            gl::GetShaderiv(handle, GL_COMPILE_STATUS, &mut status);
-            if status != 1 {
-                let mut log_len: i32 = 0;
-                gl::GetShaderiv(handle, GL_INFO_LOG_LENGTH, &mut log_len);
-                let mut log_buf: Vec<u8> = vec![0u8; log_len.max(1) as usize];
-                gl::GetShaderInfoLog(
-                    handle,
-                    log_buf.len() as i32,
-                    &mut log_len,
-                    log_buf.as_mut_ptr() as *mut i8,
-                );
-                gl::DeleteShader(handle);
-                let log = std::str::from_utf8(&log_buf).unwrap_or("shader info log not utf8");
-                return Err(format!(
-                    "shader compilation failed: status={} info_log_len={} log={}",
-                    status,
-                    log_len,
-                    log.trim_end_matches('\0')
-                ));
-            }
+fn compile(src: &str, kind: u32) -> Result<Shader, String> {
+    let handle = unsafe { gl::CreateShader(kind) };
+    let c_src = CString::new(src).map_err(|_| "NUL in shader source".to_string())?;
+    let strings = [c_src.as_ptr()];
+    let lengths = [c_src.count_bytes() as i32];
+    unsafe {
+        gl::ShaderSource(handle, 1, strings.as_ptr(), lengths.as_ptr());
+        gl::CompileShader(handle);
+        let mut status: i32 = 0;
+        gl::GetShaderiv(handle, GL_COMPILE_STATUS, &mut status);
+        if status != 1 {
+            let mut log_len: i32 = 0;
+            gl::GetShaderiv(handle, GL_INFO_LOG_LENGTH, &mut log_len);
+            let mut log_buf: Vec<u8> = vec![0u8; log_len.max(1) as usize];
+            gl::GetShaderInfoLog(
+                handle,
+                log_buf.len() as i32,
+                &mut log_len,
+                log_buf.as_mut_ptr() as *mut i8,
+            );
+            gl::DeleteShader(handle);
+            let log = std::str::from_utf8(&log_buf).unwrap_or("shader info log not utf8");
+            return Err(format!(
+                "shader compilation failed: status={} info_log_len={} log={}",
+                status,
+                log_len,
+                log.trim_end_matches('\0')
+            ));
         }
-        Ok(Shader { handle })
     }
+    Ok(Shader { handle })
 }
 
 impl Drop for Shader {
@@ -458,8 +460,8 @@ impl Drop for Shader {
 }
 
 pub fn create_program(vs_src: &str, fs_src: &str) -> Result<u32, String> {
-    let vs = Shader::compile(vs_src, GL_VERTEX_SHADER)?;
-    let fs = Shader::compile(fs_src, GL_FRAGMENT_SHADER)?;
+    let vs = compile(vs_src, GL_VERTEX_SHADER)?;
+    let fs = compile(fs_src, GL_FRAGMENT_SHADER)?;
     unsafe {
         let program = gl::CreateProgram();
         gl::AttachShader(program, vs.handle);
@@ -496,30 +498,30 @@ struct CityBuffer {
     vbo: u32,
     count: i32,
 }
-impl CityBuffer {
-    fn upload(vertices: &[scene::Vertex]) -> Self {
-        unsafe {
-            let mut vao = 0;
-            let mut vbo = 0;
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            gl::BufferData(
-                GL_ARRAY_BUFFER,
-                std::mem::size_of_val(vertices) as isize,
-                vertices.as_ptr().cast(),
-                GL_STATIC_DRAW,
-            );
-            scene_attributes();
-            Self {
-                vao,
-                vbo,
-                count: vertices.len() as i32,
-            }
+
+fn upload(vertices: &[scene::Vertex]) -> CityBuffer {
+    unsafe {
+        let mut vao = 0;
+        let mut vbo = 0;
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
+        gl::BufferData(
+            GL_ARRAY_BUFFER,
+            std::mem::size_of_val(vertices) as isize,
+            vertices.as_ptr().cast(),
+            GL_STATIC_DRAW,
+        );
+        scene_attributes();
+        CityBuffer {
+            vao,
+            vbo,
+            count: vertices.len() as i32,
         }
     }
 }
+
 impl Drop for CityBuffer {
     fn drop(&mut self) {
         unsafe {
@@ -571,262 +573,264 @@ impl Drop for Mesh {
     }
 }
 
-impl Mesh {
-    pub fn new(
-        track: &track::WorldLocation,
-        cars: &[std::sync::Arc<asset_car::CarSpec>],
-    ) -> Result<Self, String> {
-        let archive = if track.has_compiled_roads() {
-            Some(
-                scene_archive::Archive::open_for(
-                    track
-                        .assets()
-                        .ok_or("compiled world has no asset directory")?,
-                )
-                .map_err(|e| e.to_string())?,
+pub fn mesh_new(
+    track: &track::WorldLocation,
+    cars: &[std::sync::Arc<asset_car::CarSpec>],
+) -> Result<Mesh, String> {
+    let archive = if street_surface::has_compiled_roads(track) {
+        Some(
+            scene_archive::open_for(
+                world::assets(track).ok_or("compiled world has no asset directory")?,
             )
-        } else {
-            None
-        };
-        let prefetch = archive
-            .as_ref()
-            .map(|a| a.fork().map(prefetch::Prefetch::new))
-            .transpose()
-            .map_err(|e| e.to_string())?;
-        let city_chunks = archive
-            .as_ref()
-            .map(|a| {
-                a.entries
-                    .iter()
-                    .map(|entry| CityChunk {
-                        entry: *entry,
-                        gpu: None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let (vao, vbo, ground_vertex_count, car_ranges, wheel_range) = unsafe {
-            let mut vao: u32 = 0;
-            let mut vbo: u32 = 0;
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            let scene::Geometry {
-                vertices: verts,
-                world_count: ground_vertex_count,
-                car_ranges,
-                wheel_range,
-            } = scene::build(track, cars);
-            gl::BufferData(
-                GL_ARRAY_BUFFER,
-                (verts.len() * std::mem::size_of::<scene::Vertex>()) as isize,
-                verts.as_ptr() as *const std::ffi::c_void,
-                GL_STATIC_DRAW,
-            );
-            scene_attributes();
-            gl::BindVertexArray(0);
-            (
-                vao,
-                vbo,
-                ground_vertex_count as i32,
-                car_ranges,
-                wheel_range,
-            )
-        };
-        let concrete_region = track.origin.is_some_and(|origin| {
-            (35.10..35.24).contains(&origin.lat) && (33.24..33.48).contains(&origin.lon)
-        });
-        Ok(Mesh {
-            concrete_region,
-            vao,
-            vbo,
-            ground_vertex_count,
-            city_chunks: std::cell::RefCell::new(city_chunks),
-            archive: std::cell::RefCell::new(archive),
-            prefetch,
-            aerial: std::cell::RefCell::new(if track.has_compiled_roads() {
-                track.assets().and_then(aerial::Aerial::open)
-            } else {
-                None
-            }),
-            visible_chunks: std::cell::Cell::new(0),
+            .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+    let prefetch = archive
+        .as_ref()
+        .map(|a| scene_archive::fork(a).map(prefetch::new))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let city_chunks = archive
+        .as_ref()
+        .map(|a| {
+            a.entries
+                .iter()
+                .map(|entry| CityChunk {
+                    entry: *entry,
+                    gpu: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let (vao, vbo, ground_vertex_count, car_ranges, wheel_range) = unsafe {
+        let mut vao: u32 = 0;
+        let mut vbo: u32 = 0;
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
+        let scene::Geometry {
+            vertices: verts,
+            world_count: ground_vertex_count,
             car_ranges,
             wheel_range,
-        })
-    }
+        } = scene::build(track, cars);
+        gl::BufferData(
+            GL_ARRAY_BUFFER,
+            (verts.len() * std::mem::size_of::<scene::Vertex>()) as isize,
+            verts.as_ptr() as *const std::ffi::c_void,
+            GL_STATIC_DRAW,
+        );
+        scene_attributes();
+        gl::BindVertexArray(0);
+        (
+            vao,
+            vbo,
+            ground_vertex_count as i32,
+            car_ranges,
+            wheel_range,
+        )
+    };
+    let concrete_region = track.origin.is_some_and(|origin| {
+        (35.10..35.24).contains(&origin.lat) && (33.24..33.48).contains(&origin.lon)
+    });
+    Ok(Mesh {
+        concrete_region,
+        vao,
+        vbo,
+        ground_vertex_count,
+        city_chunks: std::cell::RefCell::new(city_chunks),
+        archive: std::cell::RefCell::new(archive),
+        prefetch,
+        aerial: std::cell::RefCell::new(if street_surface::has_compiled_roads(track) {
+            world::assets(track).and_then(aerial::open)
+        } else {
+            None
+        }),
+        visible_chunks: std::cell::Cell::new(0),
+        car_ranges,
+        wheel_range,
+    })
+}
 
-    pub fn draw(
-        &self,
-        program: u32,
-        camera: &Camera,
-        model: &[f32; 16],
-        tint: [f32; 3],
-        car: &phys_car::Vehicle,
-        car_index: usize,
-    ) {
-        unsafe {
-            gl::BindVertexArray(self.vao);
-            gl::UseProgram(program);
-            set_scene_transform(program, camera, model);
-            set_tint(program, tint);
-            let stone = CString::new("u_concrete").unwrap();
-            gl::Uniform1i(gl::GetUniformLocation(program, stone.as_ptr()), 0);
-            let brake_light = CString::new("u_brake_light").unwrap();
-            let brake_light = gl::GetUniformLocation(program, brake_light.as_ptr());
-            gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
-            let reverse_light = CString::new("u_reverse_light").unwrap();
-            let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
-            gl::Uniform1f(reverse_light, if car.gear == 0 { 1.0 } else { 0.0 });
-            let range = &self.car_ranges[car_index];
-            gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
-            gl::Uniform1f(brake_light, 0.0);
-            gl::Uniform1f(reverse_light, 0.0);
-            set_tint(program, [1.0; 3]);
-            for index in 0..4 {
-                let local = vehicle_wheel_local_matrix(car, *model, index);
-                let matrix = multiply(*model, local);
-                let clip = multiply(camera.clip_from_model(model), local);
-                set_scene_transform_clip(program, camera, &matrix, &clip);
-                gl::DrawArrays(
-                    GL_TRIANGLES,
-                    self.wheel_range[car_index][index].start,
-                    self.wheel_range[car_index][index].end
-                        - self.wheel_range[car_index][index].start,
-                );
+pub fn mesh_draw(
+    mesh: &Mesh,
+    program: u32,
+    camera: &Camera,
+    model: &[f32; 16],
+    tint: [f32; 3],
+    car: &phys_car::Vehicle,
+    car_index: usize,
+) {
+    unsafe {
+        gl::BindVertexArray(mesh.vao);
+        gl::UseProgram(program);
+        set_scene_transform(program, camera, model);
+        set_tint(program, tint);
+        let stone = CString::new("u_concrete").unwrap();
+        gl::Uniform1i(gl::GetUniformLocation(program, stone.as_ptr()), 0);
+        let brake_light = CString::new("u_brake_light").unwrap();
+        let brake_light = gl::GetUniformLocation(program, brake_light.as_ptr());
+        gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
+        let reverse_light = CString::new("u_reverse_light").unwrap();
+        let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
+        gl::Uniform1f(reverse_light, if car.gear == 0 { 1.0 } else { 0.0 });
+        let range = &mesh.car_ranges[car_index];
+        gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
+        gl::Uniform1f(brake_light, 0.0);
+        gl::Uniform1f(reverse_light, 0.0);
+        set_tint(program, [1.0; 3]);
+        for index in 0..4 {
+            let local = vehicle_wheel_local_matrix(car, *model, index);
+            let matrix = multiply(*model, local);
+            let clip = multiply(clip_from_model(camera, model), local);
+            set_scene_transform_clip(program, camera, &matrix, &clip);
+            gl::DrawArrays(
+                GL_TRIANGLES,
+                mesh.wheel_range[car_index][index].start,
+                mesh.wheel_range[car_index][index].end - mesh.wheel_range[car_index][index].start,
+            );
+        }
+    }
+}
+
+fn plan_prefetch(mesh: &Mesh, camera: &Camera) {
+    let Some(prefetch) = &mesh.prefetch else {
+        return;
+    };
+    let chunks = mesh.city_chunks.borrow();
+    let mut wanted = Vec::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let distance = chunks::distance_squared(chunk.entry.bounds, camera.eye);
+        if distance > (VIEW_DISTANCE + 128.0).powi(2) {
+            continue;
+        }
+        let visible = chunks::visible(chunk.entry.bounds, camera.view_projection);
+        let coarse = coarse_lod(chunk.gpu.as_ref().map(|g| g.coarse), distance);
+        let rank = if visible { 0 } else { 2 };
+        if let Some(gpu) = &chunk.gpu {
+            if gpu.coarse != coarse {
+                wanted.push((0, distance, (index, if coarse { 2 } else { 1 })));
+            }
+        } else {
+            wanted.push((rank, distance, (index, 0)));
+            wanted.push((rank, distance, (index, if coarse { 2 } else { 1 })));
+        }
+        if let Some(gpu) = &chunk.gpu {
+            if gpu.coarse && distance < 240.0_f32.powi(2) {
+                wanted.push((1, distance, (index, 1)));
+            }
+            if !gpu.coarse && distance > 150.0_f32.powi(2) {
+                wanted.push((1, distance, (index, 2)));
             }
         }
     }
-
-    fn plan_prefetch(&self, camera: &Camera) {
-        let Some(prefetch) = &self.prefetch else {
-            return;
-        };
-        let chunks = self.city_chunks.borrow();
-        let mut wanted = Vec::new();
-        for (index, chunk) in chunks.iter().enumerate() {
-            let distance = chunks::distance_squared(chunk.entry.bounds, camera.eye);
-            if distance > (VIEW_DISTANCE + 128.0).powi(2) {
+    wanted.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    prefetch::plan(prefetch, wanted.into_iter().map(|v| v.2).collect());
+}
+fn city_layer(
+    mesh: &Mesh,
+    archive: &mut scene_archive::Archive,
+    index: usize,
+    layer: usize,
+) -> Vec<scene::Vertex> {
+    if let Some(result) = mesh
+        .prefetch
+        .as_ref()
+        .and_then(|p| prefetch::take(p, (index, layer)))
+    {
+        return result.expect("prefetch city geometry");
+    }
+    scene_archive::read_layer(archive, index, layer).expect("read city geometry")
+}
+pub fn draw_ground(
+    mesh: &Mesh,
+    program: u32,
+    camera: &Camera,
+    contacts: &[shadows::ContactShadow],
+) {
+    plan_prefetch(mesh, camera);
+    unsafe {
+        gl::BindVertexArray(mesh.vao);
+        gl::UseProgram(program);
+        let aerial_count = CString::new("u_aerial_count").unwrap();
+        gl::Uniform1i(gl::GetUniformLocation(program, aerial_count.as_ptr()), 0);
+        if let Some(aerial) = mesh.aerial.borrow_mut().as_mut() {
+            aerial::bind(aerial, program, camera.eye);
+        }
+        let stone = CString::new("u_concrete").unwrap();
+        gl::Uniform1i(
+            gl::GetUniformLocation(program, stone.as_ptr()),
+            mesh.concrete_region as i32,
+        );
+        let name = CString::new("u_city_reference").unwrap();
+        gl::Uniform1i(
+            gl::GetUniformLocation(program, name.as_ptr()),
+            mesh.prefetch.is_some() as i32,
+        );
+        set_scene_transform(
+            program,
+            camera,
+            &model_matrix(
+                XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                0.0,
+                0.0,
+            ),
+        );
+        set_tint(program, [1.0; 3]);
+        set_contacts(program, contacts);
+        gl::DrawArrays(GL_TRIANGLES, 0, mesh.ground_vertex_count);
+        let mut visible = 0;
+        let mut archive = mesh.archive.borrow_mut();
+        for (index, chunk) in mesh.city_chunks.borrow_mut().iter_mut().enumerate() {
+            if chunks::distance_squared(chunk.entry.bounds, camera.eye)
+                > (VIEW_DISTANCE + chunks::SIZE).powi(2)
+            {
+                chunk.gpu = None;
                 continue;
             }
-            let visible = chunks::visible(chunk.entry.bounds, camera.view_projection);
-            let coarse = coarse_lod(chunk.gpu.as_ref().map(|g| g.coarse), distance);
-            let rank = if visible { 0 } else { 2 };
-            if let Some(gpu) = &chunk.gpu {
-                if gpu.coarse != coarse {
-                    wanted.push((0, distance, (index, if coarse { 2 } else { 1 })));
-                }
-            } else {
-                wanted.push((rank, distance, (index, 0)));
-                wanted.push((rank, distance, (index, if coarse { 2 } else { 1 })));
+            if !chunks::visible(chunk.entry.bounds, camera.view_projection) {
+                continue;
             }
-            if let Some(gpu) = &chunk.gpu {
-                if gpu.coarse && distance < 240.0_f32.powi(2) {
-                    wanted.push((1, distance, (index, 1)));
-                }
-                if !gpu.coarse && distance > 150.0_f32.powi(2) {
-                    wanted.push((1, distance, (index, 2)));
-                }
-            }
-        }
-        wanted.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
-        prefetch.plan(wanted.into_iter().map(|v| v.2).collect());
-    }
-    fn city_layer(
-        &self,
-        archive: &mut scene_archive::Archive,
-        index: usize,
-        layer: usize,
-    ) -> Vec<scene::Vertex> {
-        if let Some(result) = self.prefetch.as_ref().and_then(|p| p.take((index, layer))) {
-            return result.expect("prefetch city geometry");
-        }
-        archive
-            .read_layer(index, layer)
-            .expect("read city geometry")
-    }
-    pub fn draw_ground(&self, program: u32, camera: &Camera, contacts: &[shadows::ContactShadow]) {
-        self.plan_prefetch(camera);
-        unsafe {
-            gl::BindVertexArray(self.vao);
-            gl::UseProgram(program);
-            let aerial_count = CString::new("u_aerial_count").unwrap();
-            gl::Uniform1i(gl::GetUniformLocation(program, aerial_count.as_ptr()), 0);
-            if let Some(aerial) = self.aerial.borrow_mut().as_mut() {
-                aerial.bind(program, camera.eye);
-            }
-            let stone = CString::new("u_concrete").unwrap();
-            gl::Uniform1i(
-                gl::GetUniformLocation(program, stone.as_ptr()),
-                self.concrete_region as i32,
+            let coarse = coarse_lod(
+                chunk.gpu.as_ref().map(|g| g.coarse),
+                chunks::distance_squared(chunk.entry.bounds, camera.eye),
             );
-            let name = CString::new("u_city_reference").unwrap();
-            gl::Uniform1i(
-                gl::GetUniformLocation(program, name.as_ptr()),
-                self.prefetch.is_some() as i32,
-            );
-            set_scene_transform(
-                program,
-                camera,
-                &model_matrix(
-                    XYZ {
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    },
-                    0.0,
-                    0.0,
-                ),
-            );
-            set_tint(program, [1.0; 3]);
-            set_contacts(program, contacts);
-            gl::DrawArrays(GL_TRIANGLES, 0, self.ground_vertex_count);
-            let mut visible = 0;
-            let mut archive = self.archive.borrow_mut();
-            for (index, chunk) in self.city_chunks.borrow_mut().iter_mut().enumerate() {
-                if chunks::distance_squared(chunk.entry.bounds, camera.eye)
-                    > (VIEW_DISTANCE + chunks::SIZE).powi(2)
-                {
-                    chunk.gpu = None;
-                    continue;
-                }
-                if !chunks::visible(chunk.entry.bounds, camera.view_projection) {
-                    continue;
-                }
-                let coarse = coarse_lod(
-                    chunk.gpu.as_ref().map(|g| g.coarse),
-                    chunks::distance_squared(chunk.entry.bounds, camera.eye),
-                );
-                let archive = archive.as_mut().expect("city archive");
-                if chunk.gpu.is_none() {
-                    let ground = {
-                        let vertices = self.city_layer(archive, index, 0);
-                        CityBuffer::upload(&vertices)
-                    };
-                    let buildings = {
-                        let vertices = self.city_layer(archive, index, if coarse { 2 } else { 1 });
-                        CityBuffer::upload(&vertices)
-                    };
-                    chunk.gpu = Some(CityGpu {
-                        ground,
-                        buildings,
-                        coarse,
-                    });
-                }
-                let gpu = chunk.gpu.as_mut().unwrap();
-                if gpu.coarse != coarse {
-                    let vertices = self.city_layer(archive, index, if coarse { 2 } else { 1 });
-                    gpu.buildings = CityBuffer::upload(&vertices);
-                    gpu.coarse = coarse;
-                }
-                for buffer in [&gpu.ground, &gpu.buildings] {
-                    gl::BindVertexArray(buffer.vao);
-                    gl::DrawArrays(GL_TRIANGLES, 0, buffer.count);
-                }
-                visible += 1;
+            let archive = archive.as_mut().expect("city archive");
+            if chunk.gpu.is_none() {
+                let ground = {
+                    let vertices = city_layer(mesh, archive, index, 0);
+                    upload(&vertices)
+                };
+                let buildings = {
+                    let vertices = city_layer(mesh, archive, index, if coarse { 2 } else { 1 });
+                    upload(&vertices)
+                };
+                chunk.gpu = Some(CityGpu {
+                    ground,
+                    buildings,
+                    coarse,
+                });
             }
-            self.visible_chunks.set(visible);
+            let gpu = chunk.gpu.as_mut().unwrap();
+            if gpu.coarse != coarse {
+                let vertices = city_layer(mesh, archive, index, if coarse { 2 } else { 1 });
+                gpu.buildings = upload(&vertices);
+                gpu.coarse = coarse;
+            }
+            for buffer in [&gpu.ground, &gpu.buildings] {
+                gl::BindVertexArray(buffer.vao);
+                gl::DrawArrays(GL_TRIANGLES, 0, buffer.count);
+            }
+            visible += 1;
         }
+        mesh.visible_chunks.set(visible);
     }
 }
 
@@ -880,53 +884,56 @@ pub struct SkidRenderer {
     vbo: u32,
 }
 
-impl SkidRenderer {
-    pub fn new() -> Self {
-        unsafe {
-            let (mut vao, mut vbo) = (0, 0);
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            scene_attributes();
-            gl::BindVertexArray(0);
-            Self { vao, vbo }
-        }
+pub fn skid_renderer_new() -> SkidRenderer {
+    unsafe {
+        let (mut vao, mut vbo) = (0, 0);
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
+        scene_attributes();
+        gl::BindVertexArray(0);
+        SkidRenderer { vao, vbo }
     }
+}
 
-    pub fn draw(&self, program: u32, camera: &Camera, marks: &feedback::SkidMarks) {
-        let vertices = marks.vertices();
-        if vertices.is_empty() {
-            return;
-        }
-        unsafe {
-            gl::UseProgram(program);
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, self.vbo);
-            gl::BufferData(
-                GL_ARRAY_BUFFER,
-                std::mem::size_of_val(vertices.as_slice()) as isize,
-                vertices.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
-            set_scene_transform(
-                program,
-                camera,
-                &model_matrix(
-                    XYZ {
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    },
-                    0.0,
-                    0.0,
-                ),
-            );
-            set_tint(program, [1.0; 3]);
-            gl::DepthMask(gl::FALSE);
-            gl::DrawArrays(GL_TRIANGLES, 0, vertices.len() as i32);
-            gl::DepthMask(gl::TRUE);
-        }
+pub fn skid_renderer_draw(
+    skid_renderer: &SkidRenderer,
+    program: u32,
+    camera: &Camera,
+    marks: &feedback::SkidMarks,
+) {
+    let vertices = feedback::vertices(marks);
+    if vertices.is_empty() {
+        return;
+    }
+    unsafe {
+        gl::UseProgram(program);
+        gl::BindVertexArray(skid_renderer.vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, skid_renderer.vbo);
+        gl::BufferData(
+            GL_ARRAY_BUFFER,
+            std::mem::size_of_val(vertices.as_slice()) as isize,
+            vertices.as_ptr() as *const _,
+            gl::STREAM_DRAW,
+        );
+        set_scene_transform(
+            program,
+            camera,
+            &model_matrix(
+                XYZ {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                0.0,
+                0.0,
+            ),
+        );
+        set_tint(program, [1.0; 3]);
+        gl::DepthMask(gl::FALSE);
+        gl::DrawArrays(GL_TRIANGLES, 0, vertices.len() as i32);
+        gl::DepthMask(gl::TRUE);
     }
 }
 
@@ -945,103 +952,105 @@ pub struct ParticleRenderer {
     program: u32,
 }
 
-impl ParticleRenderer {
-    pub fn new() -> Result<Self, String> {
-        let program = create_program(PARTICLE_VS, PARTICLE_FS)?;
-        unsafe {
-            let (mut vao, mut vbo) = (0, 0);
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
-            let stride = std::mem::size_of::<particles::Vertex>() as i32;
-            for (attribute, size, offset) in [(0, 3, 0), (1, 2, 3), (2, 3, 5), (3, 1, 8)] {
-                gl::EnableVertexAttribArray(attribute);
-                gl::VertexAttribPointer(
-                    attribute,
-                    size,
-                    GL_FLOAT,
-                    GL_FALSE,
-                    stride,
-                    (offset * std::mem::size_of::<f32>()) as *const std::ffi::c_void,
-                );
-            }
-            gl::BindVertexArray(0);
-            Ok(Self { vao, vbo, program })
-        }
-    }
-
-    pub fn draw(&self, camera: &Camera, particles: &particles::TireParticles) -> usize {
-        let vertices = particles.vertices(camera.particle_view);
-        if vertices.is_empty() {
-            return 0;
-        }
-        unsafe {
-            let was_blend = gl::IsEnabled(gl::BLEND);
-            let was_depth_test = gl::IsEnabled(gl::DEPTH_TEST);
-            let mut depth_write = gl::TRUE;
-            gl::GetBooleanv(gl::DEPTH_WRITEMASK, &mut depth_write);
-            let mut blend = [0; 6];
-            for (i, parameter) in [
-                gl::BLEND_SRC_RGB,
-                gl::BLEND_DST_RGB,
-                gl::BLEND_SRC_ALPHA,
-                gl::BLEND_DST_ALPHA,
-                gl::BLEND_EQUATION_RGB,
-                gl::BLEND_EQUATION_ALPHA,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                gl::GetIntegerv(parameter, &mut blend[i]);
-            }
-            gl::UseProgram(self.program);
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(GL_ARRAY_BUFFER, self.vbo);
-            gl::BufferData(
-                GL_ARRAY_BUFFER,
-                std::mem::size_of_val(vertices.as_slice()) as isize,
-                vertices.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
-            let name = CString::new("u_view_projection").unwrap();
-            gl::UniformMatrix4fv(
-                gl::GetUniformLocation(self.program, name.as_ptr()),
-                1,
+pub fn particle_renderer_new() -> Result<ParticleRenderer, String> {
+    let program = create_program(PARTICLE_VS, PARTICLE_FS)?;
+    unsafe {
+        let (mut vao, mut vbo) = (0, 0);
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, vbo);
+        let stride = std::mem::size_of::<particles::Vertex>() as i32;
+        for (attribute, size, offset) in [(0, 3, 0), (1, 2, 3), (2, 3, 5), (3, 1, 8)] {
+            gl::EnableVertexAttribArray(attribute);
+            gl::VertexAttribPointer(
+                attribute,
+                size,
+                GL_FLOAT,
                 GL_FALSE,
-                camera.view_projection.as_ptr(),
+                stride,
+                (offset * std::mem::size_of::<f32>()) as *const std::ffi::c_void,
             );
-            let name = CString::new("u_eye").unwrap();
-            gl::Uniform3f(
-                gl::GetUniformLocation(self.program, name.as_ptr()),
-                camera.eye.x,
-                camera.eye.y,
-                camera.eye.z,
-            );
-            set_fog(self.program);
-            gl::Enable(gl::DEPTH_TEST);
-            gl::Enable(gl::BLEND);
-            gl::BlendEquation(gl::FUNC_ADD);
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            gl::DepthMask(gl::FALSE);
-            gl::DrawArrays(GL_TRIANGLES, 0, vertices.len() as i32);
-            gl::DepthMask(depth_write);
-            gl::BlendFuncSeparate(
-                blend[0] as u32,
-                blend[1] as u32,
-                blend[2] as u32,
-                blend[3] as u32,
-            );
-            gl::BlendEquationSeparate(blend[4] as u32, blend[5] as u32);
-            if was_blend == gl::FALSE {
-                gl::Disable(gl::BLEND);
-            }
-            if was_depth_test == gl::FALSE {
-                gl::Disable(gl::DEPTH_TEST);
-            }
         }
-        vertices.len()
+        gl::BindVertexArray(0);
+        Ok(ParticleRenderer { vao, vbo, program })
     }
+}
+
+pub fn particle_renderer_draw(
+    particle_renderer: &ParticleRenderer,
+    camera: &Camera,
+    particles: &particles::TireParticles,
+) -> usize {
+    let vertices = particles::vertices(particles, camera.particle_view);
+    if vertices.is_empty() {
+        return 0;
+    }
+    unsafe {
+        let was_blend = gl::IsEnabled(gl::BLEND);
+        let was_depth_test = gl::IsEnabled(gl::DEPTH_TEST);
+        let mut depth_write = gl::TRUE;
+        gl::GetBooleanv(gl::DEPTH_WRITEMASK, &mut depth_write);
+        let mut blend = [0; 6];
+        for (i, parameter) in [
+            gl::BLEND_SRC_RGB,
+            gl::BLEND_DST_RGB,
+            gl::BLEND_SRC_ALPHA,
+            gl::BLEND_DST_ALPHA,
+            gl::BLEND_EQUATION_RGB,
+            gl::BLEND_EQUATION_ALPHA,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            gl::GetIntegerv(parameter, &mut blend[i]);
+        }
+        gl::UseProgram(particle_renderer.program);
+        gl::BindVertexArray(particle_renderer.vao);
+        gl::BindBuffer(GL_ARRAY_BUFFER, particle_renderer.vbo);
+        gl::BufferData(
+            GL_ARRAY_BUFFER,
+            std::mem::size_of_val(vertices.as_slice()) as isize,
+            vertices.as_ptr() as *const _,
+            gl::STREAM_DRAW,
+        );
+        let name = CString::new("u_view_projection").unwrap();
+        gl::UniformMatrix4fv(
+            gl::GetUniformLocation(particle_renderer.program, name.as_ptr()),
+            1,
+            GL_FALSE,
+            camera.view_projection.as_ptr(),
+        );
+        let name = CString::new("u_eye").unwrap();
+        gl::Uniform3f(
+            gl::GetUniformLocation(particle_renderer.program, name.as_ptr()),
+            camera.eye.x,
+            camera.eye.y,
+            camera.eye.z,
+        );
+        set_fog(particle_renderer.program);
+        gl::Enable(gl::DEPTH_TEST);
+        gl::Enable(gl::BLEND);
+        gl::BlendEquation(gl::FUNC_ADD);
+        gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        gl::DepthMask(gl::FALSE);
+        gl::DrawArrays(GL_TRIANGLES, 0, vertices.len() as i32);
+        gl::DepthMask(depth_write);
+        gl::BlendFuncSeparate(
+            blend[0] as u32,
+            blend[1] as u32,
+            blend[2] as u32,
+            blend[3] as u32,
+        );
+        gl::BlendEquationSeparate(blend[4] as u32, blend[5] as u32);
+        if was_blend == gl::FALSE {
+            gl::Disable(gl::BLEND);
+        }
+        if was_depth_test == gl::FALSE {
+            gl::Disable(gl::DEPTH_TEST);
+        }
+    }
+    vertices.len()
 }
 
 impl Drop for ParticleRenderer {
@@ -1055,7 +1064,7 @@ impl Drop for ParticleRenderer {
 }
 
 unsafe fn set_scene_transform(program: u32, camera: &Camera, model: &[f32; 16]) {
-    set_scene_transform_clip(program, camera, model, &camera.clip_from_model(model));
+    set_scene_transform_clip(program, camera, model, &clip_from_model(camera, model));
 }
 
 unsafe fn set_scene_transform_clip(
@@ -1130,27 +1139,26 @@ pub struct Camera {
     eye: XYZ,
     particle_view: particles::View,
 }
-impl Camera {
-    fn clip_from_model(&self, model: &[f32; 16]) -> [f32; 16] {
-        // Cancel the large city translation before projecting millimetre-scale
-        // car detail. Adding it on the GPU first collapses nearby body panels.
-        let mut relative = *model;
-        for axis in 0..3 {
-            relative[12 + axis] -= self.eye.component(axis);
-        }
-        multiply(self.relative_view_projection, relative)
+
+fn clip_from_model(camera: &Camera, model: &[f32; 16]) -> [f32; 16] {
+    // Cancel the large city translation before projecting millimetre-scale
+    // car detail. Adding it on the GPU first collapses nearby body panels.
+    let mut relative = *model;
+    for axis in 0..3 {
+        relative[12 + axis] -= geometry::xyz_component(camera.eye, axis);
     }
-    #[cfg(test)]
-    fn project(&self, point: XYZ) -> Option<[f32; 2]> {
-        let m = self.view_projection;
-        let w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
-        if w <= 0.1 {
-            return None;
-        }
-        Some(std::array::from_fn(|i| {
-            (m[i] * point.x + m[i + 4] * point.y + m[i + 8] * point.z + m[i + 12]) / w
-        }))
+    multiply(camera.relative_view_projection, relative)
+}
+#[cfg(test)]
+fn project(camera: &Camera, point: XYZ) -> Option<[f32; 2]> {
+    let m = camera.view_projection;
+    let w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+    if w <= 0.1 {
+        return None;
     }
+    Some(std::array::from_fn(|i| {
+        (m[i] * point.x + m[i + 4] * point.y + m[i + 8] * point.z + m[i + 12]) / w
+    }))
 }
 
 pub fn set_signal_time(program: u32, seconds: f32) {
@@ -1193,7 +1201,8 @@ pub fn garage_camera(
         z: position.z + angle.cos() * 8.0,
     };
     let eye = city.map_or(eye, |city| {
-        city.camera_eye(
+        camera::camera_eye(
+            city,
             XYZ {
                 x: position.x,
                 y: position.y + 0.5,
@@ -1311,8 +1320,12 @@ fn body_model_matrix(car_position: XYZ, vehicle_heading: f32, pitch: f32, roll: 
         y: sp,
         z: c * cp,
     };
-    let rolled_right: XYZ = XYZ::from_fn(|i| right.component(i) * cr + up.component(i) * sr);
-    let rolled_up: XYZ = XYZ::from_fn(|i| up.component(i) * cr - right.component(i) * sr);
+    let rolled_right: XYZ = geometry::xyz_from_fn(|i| {
+        geometry::xyz_component(right, i) * cr + geometry::xyz_component(up, i) * sr
+    });
+    let rolled_up: XYZ = geometry::xyz_from_fn(|i| {
+        geometry::xyz_component(up, i) * cr - geometry::xyz_component(right, i) * sr
+    });
     [
         rolled_right.x,
         rolled_right.y,
@@ -1340,11 +1353,12 @@ fn vehicle_wheel_matrix(car: &phys_car::Vehicle, body: [f32; 16], index: usize) 
 
 fn vehicle_wheel_local_matrix(car: &phys_car::Vehicle, body: [f32; 16], index: usize) -> [f32; 16] {
     let mut center = car.spec.design.mounts[index];
-    let mounted: XYZ = XYZ::from_fn(|i| {
+    let mounted: XYZ = geometry::xyz_from_fn(|i| {
         body[i] * center.x + body[4 + i] * center.y + body[8 + i] * center.z + body[12 + i]
     });
-    let ground = car.track.drive_height_near(
-        mounted.xz(),
+    let ground = world_transport::drive_height_near(
+        &car.track,
+        geometry::xz(mounted),
         car.position.y - vehicle_location::VEHICLE_ORIGIN_HEIGHT,
     );
     let radius = car.spec.design.wheel_radii[index];
@@ -1363,7 +1377,11 @@ fn vehicle_wheel_local_matrix(car: &phys_car::Vehicle, body: [f32; 16], index: u
             0.0,
         ),
         center,
-        if front { car.front_wheel_angle() } else { 0.0 },
+        if front {
+            phys_car::front_wheel_angle(car)
+        } else {
+            0.0
+        },
         car.wheel_phase[usize::from(front)],
     )
 }
@@ -1480,6 +1498,12 @@ pub fn enable_depth_test() {
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::gl;
+    use crate::track;
+    use crate::vehicle_location;
+    use crate::world;
+
     use crate::camera;
     use crate::phys_car;
     use crate::test_support;
@@ -1503,7 +1527,8 @@ mod tests {
                     },
                 },
             );
-            let clip = camera.clip_from_model(&super::model_matrix((origin).into(), 0.7, 0.0));
+            let clip =
+                gl::clip_from_model(&camera, &super::model_matrix((origin).into(), 0.7, 0.0));
             let a = transform(
                 clip,
                 XYZ {
@@ -1535,7 +1560,7 @@ mod tests {
     use super::*;
 
     fn transform(m: [f32; 16], p: XYZ) -> XYZ {
-        XYZ::from_fn(|i| m[i] * p.x + m[4 + i] * p.y + m[8 + i] * p.z + m[12 + i])
+        geometry::xyz_from_fn(|i| m[i] * p.x + m[4 + i] * p.y + m[8 + i] * p.z + m[12 + i])
     }
 
     #[test]
@@ -1543,18 +1568,18 @@ mod tests {
         let track = test_support::track();
         let model = test_support::car();
 
-        let road = track.spawn();
-        let mut car = phys_car::Vehicle::on_track(
-            road.vehicle_position(0.0),
-            road.heading(),
+        let road = vehicle_location::spawn(&track);
+        let mut car = phys_car::on_track(
+            vehicle_location::vehicle_position(road, 0.0),
+            world::heading(road),
             model.clone(),
             track,
         );
         for speed in [-6.0, 0.0, 30.0, 45.0] {
             car.speed = speed;
-            car.velocity = road.tangent.map(|n| n * speed);
-            let chase = camera::ChaseCamera::new(&car);
-            let camera = chase_camera(1280.0 / 720.0, chase.pose());
+            car.velocity = geometry::xz_map(road.tangent, |n| n * speed);
+            let chase = camera::new(&car);
+            let camera = chase_camera(1280.0 / 720.0, camera::pose(&chase));
             let matrix = multiply(
                 camera.view_projection,
                 model_matrix(car.position, car.heading, 0.0),
@@ -1569,7 +1594,7 @@ mod tests {
                         assert!(
                             clip.x.abs() / w < 0.98 && clip.y.abs() / w < 0.98,
                             "car clipped for {model:?} at {speed}: {:?}",
-                            clip.map(|v| v / w)
+                            geometry::xyz_map(clip, |v| v / w)
                         );
                     }
                 }
@@ -1602,7 +1627,11 @@ mod tests {
                     },
                 );
                 for i in 0..3 {
-                    assert!((origin.component(i) - axle.component(i)).abs() < 0.0001);
+                    assert!(
+                        (geometry::xyz_component(origin, i) - geometry::xyz_component(axle, i))
+                            .abs()
+                            < 0.0001
+                    );
                 }
                 let rim = transform(
                     matrix,
@@ -1613,7 +1642,9 @@ mod tests {
                     },
                 );
                 let radius = (0..3)
-                    .map(|i| (rim.component(i) - axle.component(i)).powi(2))
+                    .map(|i| {
+                        (geometry::xyz_component(rim, i) - geometry::xyz_component(axle, i)).powi(2)
+                    })
                     .sum::<f32>()
                     .sqrt();
                 assert!((radius - 0.4_f32).abs() < 0.0001);
@@ -1624,34 +1655,38 @@ mod tests {
     #[test]
     fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
         let track = test_support::track();
-        let road = track.spawn();
-        let mut car = phys_car::Vehicle::on_track(
-            road.vehicle_position(0.0),
-            road.heading(),
+        let road = vehicle_location::spawn(&track);
+        let mut car = phys_car::on_track(
+            vehicle_location::vehicle_position(road, 0.0),
+            world::heading(road),
             test_support::car(),
             track,
         );
-        let mut chase = camera::ChaseCamera::new(&car);
-        chase.toggle_view();
-        chase.toggle_view();
+        let mut chase = camera::new(&car);
+        camera::toggle_view(&mut chase);
+        camera::toggle_view(&mut chase);
         let point = XYZ {
             x: 0.3,
             y: 0.25,
             z: 1.6,
         };
-        let reference = bonnet_camera(16.0 / 9.0, chase.pose(), &car)
-            .project(transform(vehicle_body_matrix(&car), point))
-            .unwrap();
+        let reference = gl::project(
+            &bonnet_camera(16.0 / 9.0, camera::pose(&chase), &car),
+            transform(vehicle_body_matrix(&car), point),
+        )
+        .unwrap();
         for i in 1..5 {
             car.heading += 0.7;
             car.position.y += 0.2;
             car.body_pitch = i as f32 * 0.03;
             car.body_roll = i as f32 * 0.025;
             car.curb_bump = 0.08;
-            chase.update(&car, std::time::Duration::from_millis(16));
-            let actual = bonnet_camera(16.0 / 9.0, chase.pose(), &car)
-                .project(transform(vehicle_body_matrix(&car), point))
-                .unwrap();
+            camera::update(&mut chase, &car, std::time::Duration::from_millis(16));
+            let actual = gl::project(
+                &bonnet_camera(16.0 / 9.0, camera::pose(&chase), &car),
+                transform(vehicle_body_matrix(&car), point),
+            )
+            .unwrap();
             assert!(
                 (actual[0] - reference[0]).abs() < 0.0001
                     && (actual[1] - reference[1]).abs() < 0.0001
@@ -1662,10 +1697,10 @@ mod tests {
     #[test]
     fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
         let track = std::sync::Arc::new(test_support::bumpy_track(&test_support::track()));
-        let road = track.at_distance(54.0);
-        let mut car = phys_car::Vehicle::on_track(
-            road.vehicle_position(0.0),
-            road.heading(),
+        let road = track::at_distance(&track, 54.0);
+        let mut car = phys_car::on_track(
+            vehicle_location::vehicle_position(road, 0.0),
+            world::heading(road),
             test_support::car(),
             track,
         );
@@ -1682,10 +1717,13 @@ mod tests {
                     z: 0.0,
                 },
             );
-            let ground = car.track.drive_height(XZ {
-                x: center.x,
-                z: center.z,
-            });
+            let ground = vehicle_location::drive_height(
+                &car.track,
+                XZ {
+                    x: center.x,
+                    z: center.z,
+                },
+            );
             assert!((center.y - car.spec.design.wheel_radii[i] - ground).abs() < 0.005);
             center.y
         });
@@ -1751,6 +1789,36 @@ mod tests {
 
 #[cfg(test)]
 mod renderer_tests {
+    use crate::camera;
+    use crate::city_assets;
+    use crate::ensure_mesh;
+    use crate::feedback;
+    use crate::gl;
+    use crate::hud;
+    use crate::install_location;
+    use crate::key_down;
+    use crate::menu_action;
+    use crate::mesh;
+    use crate::new;
+    use crate::on_track;
+    use crate::on_world;
+    use crate::particles;
+    use crate::phys_car;
+    use crate::recover;
+    use crate::render;
+    use crate::render_scene;
+    use crate::session_restart;
+    use crate::session_select_car;
+    use crate::session_track;
+    use crate::shadows;
+    use crate::snap_camera;
+    use crate::tick;
+    use crate::track;
+    use crate::vehicle_location;
+    use crate::with_location;
+    use crate::world;
+    use crate::world_roads;
+
     use crate::geometry;
     use crate::test_support;
 
@@ -1823,15 +1891,12 @@ mod renderer_tests {
         };
         gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
         gl::clear_screen();
-        app.mesh().draw_ground(
-            app.scene_program,
-            &camera,
-            &[shadows::ContactShadow::new(car)],
-        );
+        gl::draw_ground(mesh(app), app.scene_program, &camera, &[shadows::new(car)]);
         let before = read_color();
         let depth = read_depth();
         let previous = state();
-        let count = app.particle_renderer.draw(&camera, &app.session.particles);
+        let count =
+            gl::particle_renderer_draw(&app.particle_renderer, &camera, &app.session.particles);
         assert!(count > 0);
         assert_eq!(
             state(),
@@ -1863,14 +1928,14 @@ mod renderer_tests {
 
         // Put an opaque depth plane in front of every puff: no color may leak through.
         gl::clear_screen();
-        app.mesh().draw_ground(app.scene_program, &camera, &[]);
+        gl::draw_ground(mesh(app), app.scene_program, &camera, &[]);
         let occluded = read_color();
         unsafe {
             ::gl::ClearDepth(0.0);
             ::gl::Clear(::gl::DEPTH_BUFFER_BIT);
             ::gl::ClearDepth(1.0);
         }
-        app.particle_renderer.draw(&camera, &app.session.particles);
+        gl::particle_renderer_draw(&app.particle_renderer, &camera, &app.session.particles);
         assert_eq!(
             read_color(),
             occluded,
@@ -1885,14 +1950,15 @@ mod renderer_tests {
     #[test]
     #[ignore = "requires SDL/OpenGL; profiles a warm HUD including GPU completion"]
     fn hud_renderer_profile() {
-        let app = App::with_location(false);
+        let app = with_location(false);
         gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
         let draw = |frame: u32| {
             gl::clear_screen();
-            app.hud.draw(
+            hud::draw(
+                &app.hud,
                 app.program,
                 hud::Map {
-                    track: app.session.track(),
+                    track: session_track(&app.session),
                     player: app.session.car.position,
                 },
                 0.0,
@@ -1929,7 +1995,7 @@ mod renderer_tests {
     #[test]
     #[ignore = "requires SDL3/OpenGL; compares rear lamp pixels with the pedal up/down"]
     fn stop_lights_renderer() {
-        let app = App::new();
+        let app = new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             let mut car = test_support::vehicle(app.session.car.position, 0.0, model.clone());
             let p = car.position;
@@ -1954,7 +2020,8 @@ mod renderer_tests {
                 car.brake_lights = pressed;
                 gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
                 gl::clear_screen();
-                app.mesh().draw(
+                gl::mesh_draw(
+                    mesh(&app),
                     app.scene_program,
                     &camera,
                     &matrix,
@@ -1998,16 +2065,17 @@ mod renderer_tests {
     #[test]
     #[ignore = "requires SDL/OpenGL; compares car detail near and far from the map origin"]
     fn car_details_stay_stable_far_from_the_map_origin() {
-        let app = App::with_location(false);
+        let app = with_location(false);
         let track = std::sync::Arc::new(test_support::flat_track(
-            &LocationId::Compact.try_track().unwrap(),
+            &track::try_track(&LocationId::Compact).unwrap(),
         ));
         let mut frames = Vec::new();
         for (label, position) in [
             ("near", [0.0, 100.0, 0.0]),
             ("far", [12000.0, 100.0, 9000.0]),
         ] {
-            let car = Vehicle::on_track((position).into(), 0.0, app.cars[0].clone(), track.clone());
+            let car =
+                phys_car::on_track((position).into(), 0.0, app.cars[0].clone(), track.clone());
             let camera = gl::chase_camera(
                 WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
                 camera::Pose {
@@ -2024,7 +2092,8 @@ mod renderer_tests {
                 },
             );
             gl::clear_screen();
-            app.mesh().draw(
+            gl::mesh_draw(
+                mesh(&app),
                 app.scene_program,
                 &camera,
                 &gl::vehicle_body_matrix(&car),
@@ -2053,7 +2122,7 @@ mod renderer_tests {
     #[test]
     #[ignore = "requires SDL3/OpenGL; verifies reverse lamps in reverse, drive and neutral"]
     fn reverse_lights_renderer() {
-        let app = App::new();
+        let app = new();
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             let mut car = test_support::vehicle(app.session.car.position, 0.0, model.clone());
             let p = car.position;
@@ -2078,7 +2147,8 @@ mod renderer_tests {
                 car.gear = gear;
                 gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
                 gl::clear_screen();
-                app.mesh().draw(
+                gl::mesh_draw(
+                    mesh(&app),
                     app.scene_program,
                     &camera,
                     &matrix,
@@ -2166,19 +2236,23 @@ mod renderer_tests {
         };
         gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
         gl::clear_screen();
-        app.mesh().draw_ground(app.scene_program, &camera, &[]);
-        app.skid_renderer
-            .draw(app.scene_program, &camera, &app.session.skids);
+        gl::draw_ground(mesh(app), app.scene_program, &camera, &[]);
+        gl::skid_renderer_draw(
+            &app.skid_renderer,
+            app.scene_program,
+            &camera,
+            &app.session.skids,
+        );
         assert_eq!(contact_count(app.scene_program), 0);
         let unshadowed = read();
         gl::clear_screen();
-        app.mesh().draw_ground(
+        gl::draw_ground(mesh(app), app.scene_program, &camera, &[shadows::new(car)]);
+        gl::skid_renderer_draw(
+            &app.skid_renderer,
             app.scene_program,
             &camera,
-            &[shadows::ContactShadow::new(car)],
+            &app.session.skids,
         );
-        app.skid_renderer
-            .draw(app.scene_program, &camera, &app.session.skids);
         let shadowed = read();
         let mut changed = 0;
         for (before, after) in unshadowed
@@ -2217,27 +2291,30 @@ mod renderer_tests {
     #[test]
     #[ignore = "requires SDL/OpenGL"]
     fn feedback_renderer_smoke() {
-        let mut app = App::with_location(false);
+        let mut app = with_location(false);
         // Scenic fixtures are sampled from the route, never compact world coordinates.
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             app.selected_car = car_index;
-            app.session = Session::on_track(model.clone(), test_support::scenic_id());
-            app.ensure_mesh();
+            app.session = on_track(model.clone(), test_support::scenic_id());
+            ensure_mesh(&mut app);
             for distance in [50.0, 50.6] {
-                let road = app.session.track().at_distance(distance);
-                app.session
-                    .car
-                    .reset(road.vehicle_position(0.0), road.heading());
+                let road = track::at_distance(session_track(&app.session), distance);
+                phys_car::reset(
+                    &mut app.session.car,
+                    vehicle_location::vehicle_position(road, 0.0),
+                    world::heading(road),
+                );
                 app.session.car.tire_scrub = 0.9;
-                app.session.skids.record(0, &app.session.car);
+                feedback::record(&mut app.session.skids, 0, &app.session.car);
             }
-            assert!(!app.session.skids.vertices().is_empty());
+            assert!(!feedback::vertices(&(app.session.skids)).is_empty());
             let v = &mut app.session.car;
             v.velocity = geometry::XZ {
                 x: v.heading.sin() * 8.0,
                 z: v.heading.cos() * 8.0,
             };
-            v.update(
+            phys_car::update(
+                v,
                 TICK,
                 Controls {
                     steering: 0.8,
@@ -2246,28 +2323,30 @@ mod renderer_tests {
                 },
             );
             for _ in 0..20 {
-                app.session.particles.advance(TICK);
-                app.session.particles.record(0, &app.session.car, TICK);
+                particles::advance(&mut app.session.particles, TICK);
+                particles::record(&mut app.session.particles, 0, &app.session.car, TICK);
             }
             assert_particle_pixel_readback(&app);
             for fraction in [0.0, 0.25, 0.5, 0.75] {
-                let road = app
-                    .session
-                    .track()
-                    .at_distance(app.session.track().sampling_length() * fraction);
-                app.session
-                    .car
-                    .reset(road.vehicle_position(0.0), road.heading());
-                app.snap_camera();
+                let road = track::at_distance(
+                    session_track(&app.session),
+                    track::sampling_length(session_track(&app.session)) * fraction,
+                );
+                phys_car::reset(
+                    &mut app.session.car,
+                    vehicle_location::vehicle_position(road, 0.0),
+                    world::heading(road),
+                );
+                snap_camera(&mut app);
                 assert_contact_pixel_readback(&app);
                 for view in [camera::FollowView::Wide, camera::FollowView::Close] {
-                    while app.chase.view() != view {
-                        app.key_down(Keycode::Tab);
+                    while camera::view(&app.chase) != view {
+                        key_down(&mut app, Keycode::Tab);
                     }
                     for _ in 0..120 {
-                        app.chase.update(&app.session.car, TICK);
+                        camera::update(&mut app.chase, &app.session.car, TICK);
                     }
-                    app.render(TICK);
+                    render(&mut app, TICK);
                     assert_eq!(
                         contact_count(app.scene_program),
                         1,
@@ -2280,7 +2359,7 @@ mod renderer_tests {
                     );
                 }
                 app.session.state = GameState::Menu;
-                app.render(TICK);
+                render(&mut app, TICK);
                 assert_eq!(
                     contact_count(app.scene_program),
                     1,
@@ -2295,20 +2374,33 @@ mod renderer_tests {
     #[test]
     fn car_selection_and_restart_preserve_each_free_route() {
         for id in test_support::location_ids() {
-            let mut s = Session::on_track(test_support::car(), id.clone());
+            let mut s = on_track(test_support::car(), id.clone());
             s.state = GameState::Menu;
             for model in test_support::cars() {
-                s.select_car(model.clone());
+                session_select_car(&mut s, model.clone());
                 assert!(std::sync::Arc::ptr_eq(&s.car.spec, &model));
-                assert_eq!(s.track().id, id);
+                assert_eq!(session_track(&(s)).id, id);
                 assert!(s.state == GameState::Menu);
-                let road = s.track().at_distance(s.track().sampling_length() * 0.5);
-                s.car.reset(road.vehicle_position(0.0), road.heading());
+                let road = track::at_distance(
+                    session_track(&s),
+                    track::sampling_length(session_track(&s)) * 0.5,
+                );
+                phys_car::reset(
+                    &mut s.car,
+                    vehicle_location::vehicle_position(road, 0.0),
+                    world::heading(road),
+                );
                 s.recoveries = 2;
-                s.restart();
-                assert_eq!(s.track().id, id);
+                session_restart(&mut s);
+                assert_eq!(session_track(&(s)).id, id);
                 assert!(std::sync::Arc::ptr_eq(&s.car.spec, &model));
-                assert_eq!(s.car.position, s.track().spawn().vehicle_position(0.0));
+                assert_eq!(
+                    s.car.position,
+                    vehicle_location::vehicle_position(
+                        vehicle_location::spawn(session_track(&(s))),
+                        0.0
+                    )
+                );
                 assert_eq!(s.recoveries, 0);
                 assert!(s.state == GameState::Driving);
                 s.state = GameState::Menu;
@@ -2319,47 +2411,60 @@ mod renderer_tests {
     #[test]
     fn free_recovery_uses_selected_route() {
         for id in test_support::location_ids() {
-            let mut s = Session::on_track(test_support::car(), id.clone());
-            let road = s.track().at_distance(s.track().sampling_length() * 0.5);
-            s.car.reset(road.vehicle_position(1.0), road.heading());
-            assert!(s.recover());
-            let recovered = s.track().project(s.car.position);
+            let mut s = on_track(test_support::car(), id.clone());
+            let road = track::at_distance(
+                session_track(&s),
+                track::sampling_length(session_track(&s)) * 0.5,
+            );
+            phys_car::reset(
+                &mut s.car,
+                vehicle_location::vehicle_position(road, 1.0),
+                world::heading(road),
+            );
+            assert!(recover(&mut (s)));
+            let recovered = world_roads::project(session_track(&s), s.car.position);
             assert!((recovered.distance - road.distance).abs() < 0.1);
             assert!(recovered.offset.abs() < 0.01);
-            assert_eq!(s.track().id, id);
+            assert_eq!(session_track(&(s)).id, id);
         }
     }
 
     #[test]
     fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
-        let mut s = Session::on_track(test_support::car(), test_support::nicosia_id());
+        let mut s = on_track(test_support::car(), test_support::nicosia_id());
         let start = s.car.position;
         for _ in 0..40 {
-            s.tick(Controls {
-                throttle: 0.6,
-                ..Controls::default()
-            });
+            tick(
+                &mut s,
+                Controls {
+                    throttle: 0.6,
+                    ..Controls::default()
+                },
+            );
         }
         assert!((s.car.position.x - start.x).hypot(s.car.position.z - start.z) > 0.5);
         s.state = GameState::Paused;
         let frozen = s.car.position;
         for _ in 0..10 {
-            s.tick(Controls {
-                throttle: 1.0,
-                ..Controls::default()
-            });
+            tick(
+                &mut s,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            );
         }
         assert_eq!(s.car.position, frozen);
         s.state = GameState::Driving;
-        assert!(s.recover());
-        assert_eq!(s.track().id, test_support::nicosia_id());
-        assert!(s.track().road_clearance(s.car.position) < 0.0);
+        assert!(recover(&mut (s)));
+        assert_eq!(session_track(&(s)).id, test_support::nicosia_id());
+        assert!(world::road_clearance(session_track(&(s)), s.car.position) < 0.0);
     }
 
     #[test]
     #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
     fn no_city_startup_renderer_smoke() {
-        let mut app = App::with_location(false);
+        let mut app = with_location(false);
         assert!(app.locations.len() >= 2);
         loading::draw(
             &app.window,
@@ -2372,15 +2477,15 @@ mod renderer_tests {
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
         gl::clear_screen();
-        app.render_scene(Duration::ZERO);
+        render_scene(&mut app, Duration::ZERO);
         capture_frame(&std::env::temp_dir().join("carslop-menu.ppm"));
-        app.render(Duration::ZERO);
+        render(&mut app, Duration::ZERO);
         if app.cars.len() > 3 {
-            app.menu_action(hud::MenuAction::Car(3));
+            menu_action(&mut app, hud::MenuAction::Car(3));
             assert_eq!(app.selected_car, 3);
             assert!(std::sync::Arc::ptr_eq(&app.session.car.spec, &app.cars[3]));
-            app.render(Duration::ZERO);
-            app.menu_action(hud::MenuAction::Car(0));
+            render(&mut app, Duration::ZERO);
+            menu_action(&mut app, hud::MenuAction::Car(0));
             assert_eq!(app.selected_car, 0);
             assert!(std::sync::Arc::ptr_eq(&app.session.car.spec, &app.cars[0]));
         }
@@ -2389,44 +2494,47 @@ mod renderer_tests {
             .iter()
             .position(|entry| entry.track == test_support::nicosia_id())
             .unwrap();
-        app.menu_action(hud::MenuAction::Choice(city_choice));
-        app.key_down(Keycode::F7);
+        menu_action(&mut app, hud::MenuAction::Choice(city_choice));
+        key_down(&mut app, Keycode::F7);
         for _ in 0..6 {
             app.menu_focus = 0;
-            app.key_down(Keycode::Down);
-            app.render(Duration::ZERO);
-            assert_ne!(app.session.track().id, test_support::nicosia_id());
+            key_down(&mut app, Keycode::Down);
+            render(&mut app, Duration::ZERO);
+            assert_ne!(session_track(&(app.session)).id, test_support::nicosia_id());
         }
         assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
         let scenic_choice = app
             .locations
             .iter()
             .position(|entry| {
-                entry
-                    .track
-                    .asset_path()
-                    .is_some_and(|p| p.ends_with("scenic"))
+                track::asset_path(&entry.track).is_some_and(|p| p.ends_with("scenic"))
             })
             .unwrap();
-        app.menu_action(hud::MenuAction::Choice(scenic_choice));
-        assert_eq!(app.session.track().id, LocationId::Compact);
-        app.key_down(Keycode::Return);
-        assert_eq!(app.session.track().id, app.locations[scenic_choice].track);
+        menu_action(&mut app, hud::MenuAction::Choice(scenic_choice));
+        assert_eq!(session_track(&(app.session)).id, LocationId::Compact);
+        key_down(&mut app, Keycode::Return);
+        assert_eq!(
+            session_track(&(app.session)).id,
+            app.locations[scenic_choice].track
+        );
         assert!(app.session.state == GameState::Driving);
-        assert!(app.meshes.contains_key(&app.session.track().id));
-        app.render(Duration::ZERO);
+        assert!(app.meshes.contains_key(&session_track(&(app.session)).id));
+        render(&mut app, Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         drop(app);
         if let Ok(path) = std::path::Path::new("data/locations/nicosia").canonicalize() {
-            let mut app = App::with_location(true);
+            let mut app = with_location(true);
             let selected = &app.locations[app.selected_location];
             assert_eq!(
-                selected.track.asset_path().unwrap().canonicalize().unwrap(),
+                track::asset_path(&(selected.track))
+                    .unwrap()
+                    .canonicalize()
+                    .unwrap(),
                 path
             );
-            assert_ne!(app.session.track().id, test_support::nicosia_id());
+            assert_ne!(session_track(&(app.session)).id, test_support::nicosia_id());
             assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
-            app.render(Duration::ZERO);
+            render(&mut app, Duration::ZERO);
             assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         }
     }
@@ -2438,23 +2546,26 @@ mod renderer_tests {
             test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
         let second_assets =
             test_support::generated_location(&root.path().join("second"), 13.0, "arcgisonline.com");
-        let first_id = LocationId::asset(first_assets.directory()).unwrap();
-        let second_id = LocationId::asset(second_assets.directory()).unwrap();
+        let first_id = track::asset(city_assets::directory(&first_assets)).unwrap();
+        let second_id = track::asset(city_assets::directory(&second_assets)).unwrap();
         let mut cache = track::LocationCache::default();
-        let first = cache.prepare_for_render(&first_id).unwrap();
-        cache.install(first.clone());
-        let mut session = Session::on_world(test_support::car(), first.clone());
-        let second = cache.prepare_for_render(&second_id).unwrap();
-        cache.install(second);
-        session.restart();
+        let first = track::prepare_for_render(&cache, &first_id).unwrap();
+        track::install(&mut cache, first.clone());
+        let mut session = on_world(test_support::car(), first.clone());
+        let second = track::prepare_for_render(&cache, &second_id).unwrap();
+        track::install(&mut cache, second);
+        session_restart(&mut session);
         assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
-        assert_eq!(session.car.position, first.spawn().vehicle_position(0.0));
+        assert_eq!(
+            session.car.position,
+            vehicle_location::vehicle_position(vehicle_location::spawn(&first), 0.0)
+        );
         session.state = GameState::Menu;
-        session.select_car(test_support::car());
+        session_select_car(&mut session, test_support::car());
         assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
         let position = session.car.position;
-        std::fs::remove_file(second_assets.directory().join("scene.pack")).unwrap();
-        assert!(cache.prepare_for_render(&second_id).is_err());
+        std::fs::remove_file(city_assets::directory(&second_assets).join("scene.pack")).unwrap();
+        assert!(track::prepare_for_render(&(cache), &second_id).is_err());
         assert_eq!(session.car.position, position);
         assert!(std::sync::Arc::ptr_eq(&first, &session.car.track));
     }
@@ -2467,44 +2578,44 @@ mod renderer_tests {
             test_support::generated_location(&root.path().join("first"), 7.0, "Cyprus DLS");
         let second_assets =
             test_support::generated_location(&root.path().join("second"), 13.0, "arcgisonline.com");
-        let first_id = LocationId::asset(first_assets.directory()).unwrap();
-        let second_id = LocationId::asset(second_assets.directory()).unwrap();
-        let mut app = App::with_location(false);
-        let first = first_id.try_track().unwrap();
-        app.install_location(first.clone()).unwrap();
-        app.render(Duration::ZERO);
-        let second = second_id.try_track().unwrap();
+        let first_id = track::asset(city_assets::directory(&first_assets)).unwrap();
+        let second_id = track::asset(city_assets::directory(&second_assets)).unwrap();
+        let mut app = with_location(false);
+        let first = track::try_track(&first_id).unwrap();
+        install_location(&mut app, first.clone()).unwrap();
+        render(&mut app, Duration::ZERO);
+        let second = track::try_track(&second_id).unwrap();
         std::fs::rename(
-            second_assets.directory().join("scene.pack"),
-            second_assets.directory().join("saved.pack"),
+            city_assets::directory(&second_assets).join("scene.pack"),
+            city_assets::directory(&second_assets).join("saved.pack"),
         )
         .unwrap();
         let position = app.session.car.position;
-        assert!(app.install_location(second.clone()).is_err());
+        assert!(install_location(&mut (app), second.clone()).is_err());
         assert!(std::sync::Arc::ptr_eq(&first, &app.session.car.track));
         assert_eq!(app.session.car.position, position);
         assert!(app.meshes.contains_key(&first_id));
         assert!(!app.meshes.contains_key(&second_id));
-        app.render(Duration::ZERO);
+        render(&mut app, Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         std::fs::rename(
-            second_assets.directory().join("saved.pack"),
-            second_assets.directory().join("scene.pack"),
+            city_assets::directory(&second_assets).join("saved.pack"),
+            city_assets::directory(&second_assets).join("scene.pack"),
         )
         .unwrap();
-        app.install_location(second.clone()).unwrap();
-        assert_eq!(app.session.track().id, second_id);
+        install_location(&mut app, second.clone()).unwrap();
+        assert_eq!(session_track(&(app.session)).id, second_id);
         assert!(app.meshes.contains_key(&second_id));
         assert!(!app.meshes.contains_key(&first_id));
         assert!(std::sync::Arc::ptr_eq(
             &second,
-            &app.locations_cache.prepare_for_render(&second_id).unwrap()
+            &track::prepare_for_render(&(app.locations_cache), &second_id).unwrap()
         ));
         assert_eq!(
-            first.assets().unwrap().directory(),
-            first_assets.directory()
+            city_assets::directory(world::assets(&first).unwrap()),
+            city_assets::directory(&(first_assets))
         );
-        app.render(Duration::ZERO);
+        render(&mut app, Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
     }
 }

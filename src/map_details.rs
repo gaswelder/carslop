@@ -1,6 +1,8 @@
 //! Optional mapped appearance, scenery and transport geometry, retained by saved locations.
+
 use crate::geometry::{XYZ, XZ};
 use crate::world::RoadRise;
+use crate::world_raised_roads;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::Path};
 
@@ -132,96 +134,93 @@ impl Default for Data {
         }
     }
 }
-impl Data {
-    pub fn validate(&self, buildings: usize, roads: usize) -> Result<(), String> {
-        let color = |value: Option<[f32; 3]>| {
-            value.is_none_or(|color| {
-                color
-                    .iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+
+pub fn validate(data: &Data, buildings: usize, roads: usize) -> Result<(), String> {
+    let color = |value: Option<[f32; 3]>| {
+        value.is_none_or(|color| {
+            color
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        })
+    };
+    let position = |point: &[f32; 2]| point.iter().all(|v| v.is_finite() && v.abs() <= 100_000.0);
+    if data.version != 1 {
+        return Err("unsupported mapped details version".into());
+    }
+    for style in &data.buildings {
+        if style.volume >= buildings
+            || !style.roof_height.is_finite()
+            || !(0.0..=30.0).contains(&style.roof_height)
+            || !style.angle.is_finite()
+            || !color(style.wall_color)
+            || !color(style.roof_color)
+        {
+            return Err("invalid mapped building style".into());
+        }
+    }
+    for object in &data.objects {
+        if !position(&object.position)
+            || !object.angle.is_finite()
+            || !object.height.is_finite()
+            || !(0.1..=100.0).contains(&object.height)
+            || !object.width.is_finite()
+            || !(0.02..=30.0).contains(&object.width)
+            || object.text.len() > 512
+        {
+            return Err("invalid mapped street object".into());
+        }
+    }
+    for line in &data.lines {
+        if line.points.len() < 2
+            || line.points.iter().any(|p| !position(p))
+            || !line.height.is_finite()
+            || !(0.1..=100.0).contains(&line.height)
+        {
+            return Err("invalid mapped scenery line".into());
+        }
+    }
+    for deck in &data.decks {
+        if deck.road >= roads
+            || deck.grade == 0
+            || deck.grade.unsigned_abs() > 10
+            || !deck.width.is_finite()
+            || !(2.0..=30.0).contains(&deck.width)
+            || deck.path.len() < 2
+            || deck.path.iter().any(|p| {
+                p.iter().any(|v| !v.is_finite())
+                    || p[0].abs() > 100_000.0
+                    || p[2].abs() > 100_000.0
+                    || p[1].abs() > 10_000.0
             })
-        };
-        let position =
-            |point: &[f32; 2]| point.iter().all(|v| v.is_finite() && v.abs() <= 100_000.0);
-        if self.version != 1 {
-            return Err("unsupported mapped details version".into());
+            || deck
+                .path
+                .windows(2)
+                .any(|p| (p[1][0] - p[0][0]).hypot(p[1][2] - p[0][2]) < 0.0001)
+        {
+            return Err("invalid mapped bridge/tunnel".into());
         }
-        for style in &self.buildings {
-            if style.volume >= buildings
-                || !style.roof_height.is_finite()
-                || !(0.0..=30.0).contains(&style.roof_height)
-                || !style.angle.is_finite()
-                || !color(style.wall_color)
-                || !color(style.roof_color)
-            {
-                return Err("invalid mapped building style".into());
-            }
-        }
-        for object in &self.objects {
-            if !position(&object.position)
-                || !object.angle.is_finite()
-                || !object.height.is_finite()
-                || !(0.1..=100.0).contains(&object.height)
-                || !object.width.is_finite()
-                || !(0.02..=30.0).contains(&object.width)
-                || object.text.len() > 512
-            {
-                return Err("invalid mapped street object".into());
-            }
-        }
-        for line in &self.lines {
-            if line.points.len() < 2
-                || line.points.iter().any(|p| !position(p))
-                || !line.height.is_finite()
-                || !(0.1..=100.0).contains(&line.height)
-            {
-                return Err("invalid mapped scenery line".into());
-            }
-        }
-        for deck in &self.decks {
-            if deck.road >= roads
-                || deck.grade == 0
-                || deck.grade.unsigned_abs() > 10
-                || !deck.width.is_finite()
-                || !(2.0..=30.0).contains(&deck.width)
-                || deck.path.len() < 2
-                || deck.path.iter().any(|p| {
-                    p.iter().any(|v| !v.is_finite())
-                        || p[0].abs() > 100_000.0
-                        || p[2].abs() > 100_000.0
-                        || p[1].abs() > 10_000.0
-                })
-                || deck
-                    .path
-                    .windows(2)
-                    .any(|p| (p[1][0] - p[0][0]).hypot(p[1][2] - p[0][2]) < 0.0001)
-            {
-                return Err("invalid mapped bridge/tunnel".into());
-            }
-        }
-        Ok(())
     }
-    pub fn read(directory: &Path, buildings: usize, roads: usize) -> Result<Self, String> {
-        let data: Self = match fs::read(directory.join("details.json")) {
-            Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|error| format!("details.json: {error}"))?
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default())
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        data.validate(buildings, roads)?;
-        Ok(data)
-    }
-    pub fn write(&self, directory: &Path) -> Result<(), String> {
-        fs::write(
-            directory.join("details.json"),
-            serde_json::to_vec(self).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
-    }
+    Ok(())
 }
+pub fn read(directory: &Path, buildings: usize, roads: usize) -> Result<Data, String> {
+    let data: Data = match fs::read(directory.join("details.json")) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_err(|error| format!("details.json: {error}"))?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Data::default()),
+        Err(error) => return Err(error.to_string()),
+    };
+    validate(&data, buildings, roads)?;
+    Ok(data)
+}
+pub fn write(data: &Data, directory: &Path) -> Result<(), String> {
+    fs::write(
+        directory.join("details.json"),
+        serde_json::to_vec(data).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Debug)]
 struct IndexedObject {
     index: usize,
@@ -242,112 +241,119 @@ pub struct Prepared {
     decks: rstar::RTree<IndexedObject>,
     deck_roads: HashMap<usize, usize>,
 }
-impl Prepared {
-    pub fn new(data: Data) -> Self {
-        let buildings = data
-            .buildings
+
+pub fn new(data: Data) -> Prepared {
+    let buildings = data
+        .buildings
+        .iter()
+        .enumerate()
+        .map(|(i, style)| (style.volume, i))
+        .collect();
+    let trees = data
+        .trees
+        .iter()
+        .map(|style| (style.id, style.clone()))
+        .collect();
+    let objects = rstar::RTree::bulk_load(
+        data.objects
             .iter()
             .enumerate()
-            .map(|(i, style)| (style.volume, i))
-            .collect();
-        let trees = data
-            .trees
-            .iter()
-            .map(|style| (style.id, style.clone()))
-            .collect();
-        let objects = rstar::RTree::bulk_load(
-            data.objects
-                .iter()
-                .enumerate()
-                .map(|(index, object)| {
-                    let reach = object.width / 2. + 3.;
-                    IndexedObject {
-                        index,
-                        bounds: rstar::AABB::from_corners(
-                            object.position.map(|v| v - reach),
-                            object.position.map(|v| v + reach),
-                        ),
-                    }
-                })
-                .collect(),
-        );
-        let decks = rstar::RTree::bulk_load(
-            data.decks
-                .iter()
-                .enumerate()
-                .map(|(index, deck)| {
-                    let reach = deck.width / 2. + 3.;
-                    let min = [
-                        deck.path.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min) - reach,
-                        deck.path.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min) - reach,
-                    ];
-                    let max = [
-                        deck.path
-                            .iter()
-                            .map(|p| p[0])
-                            .fold(f32::NEG_INFINITY, f32::max)
-                            + reach,
-                        deck.path
-                            .iter()
-                            .map(|p| p[2])
-                            .fold(f32::NEG_INFINITY, f32::max)
-                            + reach,
-                    ];
-                    IndexedObject {
-                        index,
-                        bounds: rstar::AABB::from_corners(min, max),
-                    }
-                })
-                .collect(),
-        );
-        let deck_roads = data
-            .decks
+            .map(|(index, object)| {
+                let reach = object.width / 2. + 3.;
+                IndexedObject {
+                    index,
+                    bounds: rstar::AABB::from_corners(
+                        object.position.map(|v| v - reach),
+                        object.position.map(|v| v + reach),
+                    ),
+                }
+            })
+            .collect(),
+    );
+    let decks = rstar::RTree::bulk_load(
+        data.decks
             .iter()
             .enumerate()
-            .map(|(i, deck)| (deck.road, i))
-            .collect();
-        Self {
-            data,
-            buildings,
-            decks,
-            deck_roads,
-            trees,
-            objects,
-        }
+            .map(|(index, deck)| {
+                let reach = deck.width / 2. + 3.;
+                let min = [
+                    deck.path.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min) - reach,
+                    deck.path.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min) - reach,
+                ];
+                let max = [
+                    deck.path
+                        .iter()
+                        .map(|p| p[0])
+                        .fold(f32::NEG_INFINITY, f32::max)
+                        + reach,
+                    deck.path
+                        .iter()
+                        .map(|p| p[2])
+                        .fold(f32::NEG_INFINITY, f32::max)
+                        + reach,
+                ];
+                IndexedObject {
+                    index,
+                    bounds: rstar::AABB::from_corners(min, max),
+                }
+            })
+            .collect(),
+    );
+    let deck_roads = data
+        .decks
+        .iter()
+        .enumerate()
+        .map(|(i, deck)| (deck.road, i))
+        .collect();
+    Prepared {
+        data,
+        buildings,
+        decks,
+        deck_roads,
+        trees,
+        objects,
     }
-    pub fn road_deck(&self, road: usize) -> Option<&Deck> {
-        self.deck_roads.get(&road).map(|i| &self.data.decks[*i])
-    }
-    pub fn nearby_decks(&self, p: XZ<f32>) -> impl Iterator<Item = &Deck> {
-        self.decks
-            .locate_in_envelope_intersecting(&rstar::AABB::from_point([p.x, p.z]))
-            .map(|item| &self.data.decks[item.index])
-    }
-    pub fn height_on(&self, deck: &Deck, p: XZ<f32>) -> Option<f32> {
-        deck_triangles(deck)
-            .into_iter()
-            .filter_map(|triangle| triangle.offset(p))
-            .max_by(f32::total_cmp)
-    }
-    pub fn deck_height(&self, p: XZ<f32>, reference: f32) -> Option<f32> {
-        self.nearby_decks(p)
-            .filter_map(|deck| self.height_on(deck, p))
-            .min_by(|a, b| (a - reference).abs().total_cmp(&(b - reference).abs()))
-    }
-    pub fn nearby_objects(&self, p: XZ<f32>) -> impl Iterator<Item = &MapObject> {
-        self.objects
-            .locate_in_envelope_intersecting(&rstar::AABB::from_point([p.x, p.z]))
-            .map(|item| &self.data.objects[item.index])
-    }
-    pub fn data(&self) -> &Data {
-        &self.data
-    }
-    pub fn building(&self, index: usize) -> Option<&BuildingStyle> {
-        self.buildings.get(&index).map(|i| &self.data.buildings[*i])
-    }
-    pub fn tree(&self, id: u64) -> Option<&TreeStyle> {
-        self.trees.get(&id)
-    }
+}
+pub fn road_deck(prepared: &Prepared, road: usize) -> Option<&Deck> {
+    prepared
+        .deck_roads
+        .get(&road)
+        .map(|i| &prepared.data.decks[*i])
+}
+pub fn nearby_decks(prepared: &Prepared, p: XZ<f32>) -> impl Iterator<Item = &Deck> {
+    prepared
+        .decks
+        .locate_in_envelope_intersecting(&rstar::AABB::from_point([p.x, p.z]))
+        .map(|item| &prepared.data.decks[item.index])
+}
+pub fn height_on(deck: &Deck, p: XZ<f32>) -> Option<f32> {
+    deck_triangles(deck)
+        .into_iter()
+        .filter_map(|triangle| world_raised_roads::road_rise_offset(&triangle, p))
+        .max_by(f32::total_cmp)
+}
+pub fn deck_height(prepared: &Prepared, p: XZ<f32>, reference: f32) -> Option<f32> {
+    nearby_decks(prepared, p)
+        .filter_map(|deck| height_on(deck, p))
+        .min_by(|a, b| (a - reference).abs().total_cmp(&(b - reference).abs()))
+}
+pub fn nearby_objects(prepared: &Prepared, p: XZ<f32>) -> impl Iterator<Item = &MapObject> {
+    prepared
+        .objects
+        .locate_in_envelope_intersecting(&rstar::AABB::from_point([p.x, p.z]))
+        .map(|item| &prepared.data.objects[item.index])
+}
+pub fn data(prepared: &Prepared) -> &Data {
+    &prepared.data
+}
+pub fn building(prepared: &Prepared, index: usize) -> Option<&BuildingStyle> {
+    prepared
+        .buildings
+        .get(&index)
+        .map(|i| &prepared.data.buildings[*i])
+}
+pub fn tree(prepared: &Prepared, id: u64) -> Option<&TreeStyle> {
+    prepared.trees.get(&id)
 }
 
 /// Shared deck footprint and height planes for contact and scene construction.

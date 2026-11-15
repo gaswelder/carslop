@@ -1,4 +1,5 @@
 //! Resumable city-wide aerial preparation. Downloads are explicit; gameplay is offline.
+
 use crate::aerial;
 use crate::error::Result;
 use crate::file_io;
@@ -177,8 +178,11 @@ pub fn process_tiles(
             let raw = aerial::encode_jpeg(&raw, TILE + 2 * GUTTER, TILE + 2 * GUTTER)?;
             let name = format!("{}_{}_{}_{}.jpg", b.x, b.y, x, z);
             file_io::write_file(&aerial.join(&name), &raw)?;
-            let nw = local(origin, geo.lonlat(px as f64, py as f64));
-            let se = local(origin, geo.lonlat((px + TILE) as f64, (py + TILE) as f64));
+            let nw = local(origin, tree_preview::lonlat(geo, px as f64, py as f64));
+            let se = local(
+                origin,
+                tree_preview::lonlat(geo, (px + TILE) as f64, (py + TILE) as f64),
+            );
             tiles.push(TileMetadata {
                 name,
                 bounds: [nw.x, nw.z, se.x, se.z],

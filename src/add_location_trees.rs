@@ -1,4 +1,5 @@
 //! Infer tree positions and sizes from the downloaded satellite images.
+
 use crate::{add_location_download, error::Result, file_io, imagery, tree_preview};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -37,7 +38,7 @@ fn infer_trees(downloads: &Path, b: &imagery::Block) -> Result<Vec<InferredTree>
         width: im.width() as usize,
         height: im.height() as usize,
     };
-    let scale = geo.metres_per_pixel();
+    let scale = tree_preview::metres_per_pixel(geo);
     let crowns = tree_preview::proposals(&im, scale);
     Ok(crowns
         .into_iter()
@@ -48,7 +49,7 @@ fn infer_trees(downloads: &Path, b: &imagery::Block) -> Result<Vec<InferredTree>
                 && p.y < (imagery::PAD + imagery::CORE) as usize
         })
         .map(|p| {
-            let ll = geo.lonlat(p.x as f64, p.y as f64);
+            let ll = tree_preview::lonlat(geo, p.x as f64, p.y as f64);
             let radius = p.radius.clamp(0.7, 4.5);
             InferredTree {
                 longitude: ll[0],

@@ -1,10 +1,12 @@
 //! Compile mapped wall and fence ways, leaving openings at mapped gates.
+
 use crate::build_surfaces;
 use crate::codec_barriers;
 use crate::error::Result;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::osm;
+use crate::source_location;
 use crate::source_location::SourceLocation;
 use crate::world::{Barrier, BarrierKind};
 use geo::{BooleanOps, Buffer, MultiLineString, MultiPolygon};
@@ -12,16 +14,18 @@ use std::{fs, path::Path};
 
 fn opening(node: &osm::OSMElement) -> f64 {
     if matches!(
-        node.tag("barrier"),
+        osm::tag(node, "barrier"),
         "gate" | "lift_gate" | "swing_gate" | "entrance" | "kissing_gate" | "stile"
     ) {
-        osm::number(node.tag("width"))
+        osm::number(osm::tag(node, "width"))
             .filter(|width| *width > 0.0)
-            .unwrap_or(if matches!(node.tag("barrier"), "kissing_gate" | "stile") {
-                1.0
-            } else {
-                3.5
-            })
+            .unwrap_or(
+                if matches!(osm::tag(node, "barrier"), "kissing_gate" | "stile") {
+                    1.0
+                } else {
+                    3.5
+                },
+            )
             .clamp(0.5, 12.0)
             / 2.0
     } else {
@@ -34,7 +38,7 @@ fn extract(
     map: &SourceLocation<f64>,
     surfaces: &build_surfaces::Surfaces,
 ) -> Vec<Barrier> {
-    let obstacles = build_surfaces::PolygonIndex::new(&surfaces.obstacles);
+    let obstacles = build_surfaces::new(&surfaces.obstacles);
     let crop = map.boundary.clone().unwrap_or_else(|| {
         MultiPolygon(vec![geometry::polygon(&[
             map.bounding_box.min,
@@ -51,27 +55,27 @@ fn extract(
     });
     let mut result = Vec::new();
     for way in source.ways.values() {
-        let kind = match way.tag("barrier") {
+        let kind = match osm::tag(way, "barrier") {
             "wall" => BarrierKind::Wall,
             "hedge" => BarrierKind::Hedge,
             "guard_rail" => BarrierKind::GuardRail,
             "retaining_wall" => BarrierKind::RetainingWall,
-            "fence" => match way.tag("fence_type") {
+            "fence" => match osm::tag(way, "fence_type") {
                 "chain_link" => BarrierKind::ChainLink,
                 "wood" | "wooden" => BarrierKind::WoodFence,
-                _ if way.tag("material") == "wood" => BarrierKind::WoodFence,
+                _ if osm::tag(way, "material") == "wood" => BarrierKind::WoodFence,
                 _ => BarrierKind::Fence,
             },
             _ => continue,
         };
-        if !matches!(way.tag("layer"), "" | "0")
+        if !matches!(osm::tag(way, "layer"), "" | "0")
             || ["bridge", "tunnel"]
                 .iter()
-                .any(|key| !matches!(way.tag(key), "" | "no"))
+                .any(|key| !matches!(osm::tag(way, key), "" | "no"))
         {
             continue;
         }
-        let height = osm::number(way.tag("height"))
+        let height = osm::number(osm::tag(way, "height"))
             .filter(|height| *height > 0.0)
             .unwrap_or(match kind {
                 BarrierKind::GuardRail => 0.75,
@@ -80,7 +84,7 @@ fn extract(
                 _ => 1.8,
             })
             .clamp(0.2, 8.0);
-        let width = osm::number(way.tag("width"))
+        let width = osm::number(osm::tag(way, "width"))
             .filter(|width| *width > 0.0)
             .unwrap_or(if kind == BarrierKind::Hedge {
                 0.6
@@ -98,8 +102,8 @@ fn extract(
             let (Some(start_coord), Some(end_coord)) = (start.coord, end.coord) else {
                 continue;
             };
-            let a = map.metres(start_coord);
-            let b = map.metres(end_coord);
+            let a = source_location::metres(map, start_coord);
+            let b = source_location::metres(map, end_coord);
             let length = geometry::dist(a, b);
             let start_gap = opening(start);
             let end_gap = opening(end);
@@ -111,7 +115,7 @@ fn extract(
             let b = geometry::sub(b, geometry::mul(travel, end_gap));
             let lines = crop.clip(&MultiLineString(vec![geometry::line(&[a, b])]), false);
             let probe = geometry::line(&[a, b]).buffer(width / 2.0 + 0.1);
-            let nearby = obstacles.nearby(&probe);
+            let nearby = build_surfaces::nearby(&obstacles, &probe);
             // Union the small local candidates before clipping; input pieces overlap.
             let exclusion = build_surfaces::union(
                 &nearby
@@ -161,17 +165,20 @@ pub fn build_barriers(
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::source_location;
+
     use super::*;
-    use crate::geometry::{BoundingBoxXZ, LatLon};
-    use crate::source_location::SourceRoad;
+    use crate::geometry::BoundingBoxXZ;
+
     use crate::test_support;
     use crate::world;
     use std::collections::BTreeMap;
 
     #[test]
     fn mapped_barriers_clip_to_crop_avoid_roads_and_leave_gate_openings() {
-        let mut map = SourceLocation::empty();
-        let origin = LatLon::new(35.162, 33.320);
+        let mut map = source_location::empty();
+        let origin = geometry::new(35.162, 33.320);
         map.origin = Some(origin);
         map.bounding_box = BoundingBoxXZ {
             min: XZ { x: -50., z: -50. },
@@ -197,7 +204,7 @@ mod tests {
                 vec![]
             };
             let mut node = test_support::osm_element(i as i64 + 1, &tags);
-            node.coord = Some(LatLon::new(
+            node.coord = Some(geometry::new(
                 origin.lat - p.z.to_degrees() / 6371000.,
                 origin.lon + p.x.to_degrees() / 6371000. / origin.lat.to_radians().cos(),
             ));
@@ -214,10 +221,10 @@ mod tests {
         fence.nodes = vec![4, 5];
         source.ways.insert(fence.id, fence);
         map.road_nodes = vec![
-            XZ { x: -40., z: 0. }.at_height(0.),
-            XZ { x: 40., z: 0. }.at_height(0.),
+            geometry::at_height(XZ { x: -40., z: 0. }, 0.),
+            geometry::at_height(XZ { x: 40., z: 0. }, 0.),
         ];
-        let mut road = SourceRoad::new([0, 1], 8.0);
+        let mut road = source_location::new([0, 1], 8.0);
         road.osm_way_id = Some(20);
         map.road_lines.push(road);
         map.buildings.push(world::Building {

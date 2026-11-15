@@ -1,3 +1,4 @@
+use crate::location;
 use crate::{
     add_location_compile, add_location_download, add_location_trees,
     error::{invalid, Result},
@@ -16,7 +17,7 @@ pub fn add_location(area: osm::ImportArea) -> Result<()> {
     let location_dir = PathBuf::from(format!("location-{timestamp}"));
     fs::create_dir(&location_dir)?;
     println!("Writing location to {}...", location_dir.display());
-    location.write(&location_dir).map_err(invalid)?;
+    location::location_write(&location, &location_dir).map_err(invalid)?;
     println!("Created {}", location_dir.display());
     Ok(())
 }

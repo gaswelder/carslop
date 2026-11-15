@@ -1,4 +1,5 @@
 //! Offline OSM street network. Geometry, collision, recovery and minimap share it.
+
 use crate::build_buildings;
 use crate::geometry;
 #[cfg(test)]
@@ -35,7 +36,7 @@ struct LabelFootprint {
 fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
     use geo::{Area, BoundingRect, Intersects};
     let name = |e: &osm::OSMElement| {
-        [e.tag("name:en"), e.tag("name")]
+        [osm::tag(e, "name:en"), osm::tag(e, "name")]
             .into_iter()
             .map(str::trim)
             .find(|s| !s.is_empty())
@@ -51,14 +52,14 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
     for way in map.ways.values() {
         let label = name(way);
         let street = if label.is_empty() {
-            way.tag("ref").trim()
+            osm::tag(way, "ref").trim()
         } else {
             &label
         };
         if !street.is_empty() {
             labels.streets.insert(way.id, street.to_owned());
         }
-        if matches!(way.tag("building"), "" | "no") {
+        if matches!(osm::tag(way, "building"), "" | "no") {
             continue;
         }
         if !label.is_empty() {
@@ -84,7 +85,8 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
         }
     }
     for relation in map.relations.iter().filter(|relation| {
-        relation.tag("type") == "multipolygon" && !matches!(relation.tag("building"), "" | "no")
+        osm::tag(relation, "type") == "multipolygon"
+            && !matches!(osm::tag(relation, "building"), "" | "no")
     }) {
         let id = osm::relation_feature_id(relation.id);
         let label = name(relation);
@@ -125,9 +127,9 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
         // Named outdoor features and transport stops are not building tenants.
         let business = ["shop", "office", "craft"]
             .iter()
-            .any(|key| !matches!(node.tag(key), "" | "no" | "vacant"))
+            .any(|key| !matches!(osm::tag(node, key), "" | "no" | "vacant"))
             || matches!(
-                node.tag("amenity"),
+                osm::tag(node, "amenity"),
                 "bank"
                     | "bar"
                     | "cafe"
@@ -141,8 +143,8 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
                     | "doctors"
                     | "veterinary"
             )
-            || node.tag("tourism") == "gallery"
-            || !matches!(node.tag("healthcare"), "" | "no");
+            || osm::tag(node, "tourism") == "gallery"
+            || !matches!(osm::tag(node, "healthcare"), "" | "no");
         let label = name(node);
         if !business || label.is_empty() {
             continue;
@@ -173,6 +175,12 @@ fn osm_labels(map: &osm::OSMMap) -> OsmLabels {
 
 #[cfg(test)]
 mod tests {
+    use crate::camera;
+    use crate::street_surface;
+    use crate::vehicle_location;
+    use crate::world_buildings;
+    use crate::world_roads;
+
     use super::*;
     use crate::geometry;
     use crate::location;
@@ -261,8 +269,10 @@ mod tests {
         let tangent = XZ { x: -0.8, z: 0.6 };
         let mut speed = 20.0;
         for _ in 0..120 {
-            let mut velocity =
-                XZ::from_fn(|i| tangent.component(i) * speed + normal.component(i) * 0.01);
+            let mut velocity = geometry::xz_from_fn(|i| {
+                geometry::xz_component(tangent, i) * speed
+                    + geometry::xz_component(normal, i) * 0.01
+            });
             let impact = deflect(&mut velocity, normal);
             assert!((impact - 0.01).abs() < 0.00001);
             assert!(velocity.x * normal.x + velocity.z * normal.z <= 0.0);
@@ -289,26 +299,29 @@ mod tests {
         let city = test_support::parse_world(CROSS).unwrap();
         for i in 0..4 {
             for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                let s = city.sample(i, t);
-                let mut p = s.vehicle_position(0.0);
+                let s = world_roads::sample(&city, i, t);
+                let mut p = vehicle_location::vehicle_position(s, 0.0);
                 let before = p;
-                city.constrain(&mut p, &mut XZ::default(), 1.7);
+                vehicle_location::constrain(&city, &mut p, &mut XZ::default(), 1.7);
                 assert_eq!(p, before);
             }
         }
         assert!(
-            city.road_clearance(geometry::XYZ {
-                x: 25.0,
-                y: 0.0,
-                z: 25.0
-            }) > 10.0
+            world::road_clearance(
+                &(city),
+                geometry::XYZ {
+                    x: 25.0,
+                    y: 0.0,
+                    z: 25.0
+                }
+            ) > 10.0
         );
         let mut p = geometry::XYZ {
             x: 0.0,
             y: 0.48,
             z: 45.0,
         };
-        city.constrain(&mut p, &mut XZ { x: 0.0, z: 10.0 }, 1.7);
+        vehicle_location::constrain(&city, &mut p, &mut XZ { x: 0.0, z: 10.0 }, 1.7);
         assert!(p.z <= 42.61);
     }
     #[test]
@@ -322,16 +335,20 @@ mod tests {
             z: 0.0,
         };
         let mut velocity = XZ { x: 10.0, z: 0.0 };
-        assert!(collision.constrain(&mut position, &mut velocity, 1.7) > 0.0);
-        assert!(!collision.buildings()[0].contains(XZ {
-            x: position.x,
-            z: position.z
-        }));
+        assert!(vehicle_location::constrain(&(collision), &mut position, &mut velocity, 1.7) > 0.0);
+        assert!(!world::contains(
+            &(world_buildings::buildings(&(collision))[0]),
+            XZ {
+                x: position.x,
+                z: position.z
+            }
+        ));
         let city = test_support::parse_world(CROSS).unwrap();
-        let b = &city.buildings()[0];
-        assert!(b.contains(XZ { x: 10.0, z: 10.0 }));
-        assert!(!b.contains(XZ { x: 7.0, z: 10.0 }));
-        let eye = city.camera_eye(
+        let b = &world_buildings::buildings(&city)[0];
+        assert!(world::contains(b, XZ { x: 10.0, z: 10.0 }));
+        assert!(!world::contains(b, XZ { x: 7.0, z: 10.0 }));
+        let eye = camera::camera_eye(
+            &city,
             geometry::XYZ {
                 x: 0.0,
                 y: 1.0,
@@ -345,7 +362,8 @@ mod tests {
         );
         assert!(eye.x < 7.6);
         assert_eq!(
-            city.camera_eye(
+            camera::camera_eye(
+                &(city),
                 geometry::XYZ {
                     x: 0.0,
                     y: 12.0,
@@ -370,40 +388,51 @@ mod tests {
         let city = &city_track;
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
-        for i in 0..city.road_lines().len() {
+        for i in 0..world_roads::road_lines(city).len() {
             for t in [0.0, 0.37, 1.0] {
-                let sample = city.sample(i, t);
+                let sample = world_roads::sample(city, i, t);
                 min = min.min(sample.point.y);
                 max = max.max(sample.point.y);
                 assert!(
                     (sample.point.y
-                        - city.height(XZ {
-                            x: sample.point.x,
-                            z: sample.point.z
-                        }))
+                        - world::height(
+                            city,
+                            XZ {
+                                x: sample.point.x,
+                                z: sample.point.z
+                            }
+                        ))
                     .abs()
                         < 0.001
                 );
-                let mut p = sample.vehicle_position(0.7);
-                city.constrain(&mut p, &mut XZ::default(), 1.7);
-                assert!((p.y - city.drive_height(XZ { x: p.x, z: p.z }) - 0.48).abs() < 0.001);
+                let mut p = vehicle_location::vehicle_position(sample, 0.7);
+                vehicle_location::constrain(city, &mut p, &mut XZ::default(), 1.7);
+                assert!(
+                    (p.y - vehicle_location::drive_height(city, XZ { x: p.x, z: p.z }) - 0.48)
+                        .abs()
+                        < 0.001
+                );
             }
         }
         assert!(max - min > 20.0 && max - min < 1000.0);
         for prop in &city.furniture {
             assert!(
                 (prop.coords.y
-                    - city.height(XZ {
-                        x: prop.coords.x,
-                        z: prop.coords.z
-                    }))
+                    - world::height(
+                        city,
+                        XZ {
+                            x: prop.coords.x,
+                            z: prop.coords.z
+                        }
+                    ))
                 .abs()
                     < 0.001
             );
         }
-        for building in city.buildings() {
+        for building in world_buildings::buildings(city) {
             for i in 0..building.ground_outline.len() {
-                for p in city.ground_segment(
+                for p in world::ground_segment(
+                    city,
                     building.ground_outline[i],
                     building.ground_outline[(i + 1) % building.ground_outline.len()],
                 ) {
@@ -417,7 +446,7 @@ mod tests {
         let city_track = test_support::nicosia_world();
         let city = &city_track;
         let mut checked = 0;
-        for triangle in city.road_triangles() {
+        for triangle in world_roads::road_triangles(city) {
             if !matches!(
                 triangle.usage,
                 world::TriangleUsage::Pavement(world::CurbStyle::MajorRoad)
@@ -436,7 +465,7 @@ mod tests {
                 let b = triangle.points[(i + 1) % 3];
                 let edge = nearest_edge(q, a.into(), b.into());
                 (q.x - edge.x).hypot(q.z - edge.z) < 0.02
-            }) || city.building_clearance(q) < CAR_RADIUS + 0.1
+            }) || world_buildings::building_clearance(city, q) < CAR_RADIUS + 0.1
             {
                 continue;
             }
@@ -446,16 +475,21 @@ mod tests {
                 z: q.z,
             };
             let mut velocity = XZ { x: 0.0, z: 0.0 };
-            assert_eq!(city.constrain(&mut p, &mut velocity, 1.7), 0.0);
+            assert_eq!(
+                vehicle_location::constrain(city, &mut p, &mut velocity, 1.7),
+                0.0
+            );
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
             assert!(
-                (p.y - city.height(q) - (0.48 + city.pavement_height_meters() - 0.05)).abs()
+                (p.y - world::height(city, q)
+                    - (0.48 + world_roads::pavement_height_meters(city) - 0.05))
+                    .abs()
                     < 0.001,
                 "q={q:?} offset={} style={:?}",
-                p.y - city.height(q),
+                p.y - world::height(city, q),
                 triangle.usage
             );
-            assert!(city.paved(q));
+            assert!(street_surface::paved(city, q));
             checked += 1;
             if checked == 20 {
                 break;
@@ -463,7 +497,7 @@ mod tests {
         }
         assert_eq!(checked, 20);
         let mut parking = 0;
-        for triangle in city.ground_triangles() {
+        for triangle in world::ground_triangles(city) {
             if triangle.material != world::Material::Asphalt {
                 continue;
             }
@@ -472,7 +506,9 @@ mod tests {
                 z: triangle.points.iter().map(|p| p.z).sum::<f32>() / 3.0,
             };
             // Land cover is layered underneath streets; test exposed parking.
-            if city.paving_height(q).is_some() || city.building_clearance(q) < CAR_RADIUS + 0.1 {
+            if street_surface::paving_height(city, q).is_some()
+                || world_buildings::building_clearance(city, q) < CAR_RADIUS + 0.1
+            {
                 continue;
             }
             let mut p = geometry::XYZ {
@@ -480,9 +516,9 @@ mod tests {
                 y: 0.0,
                 z: q.z,
             };
-            city.constrain(&mut p, &mut XZ::default(), 1.7);
+            vehicle_location::constrain(city, &mut p, &mut XZ::default(), 1.7);
             assert!((p.x - q.x).hypot(p.z - q.z) < 0.001);
-            assert!(city.paved(q));
+            assert!(street_surface::paved(city, q));
             parking += 1;
             if parking == 20 {
                 break;
@@ -490,20 +526,23 @@ mod tests {
         }
         assert_eq!(parking, 20);
         let mut p = geometry::XYZ {
-            x: city.bounding_box().max.x + 10.0,
+            x: world::bounding_box(city).max.x + 10.0,
             y: 0.0,
             z: 0.0,
         };
         let mut velocity = XZ { x: 10.0, z: 0.0 };
-        assert!(city.constrain(&mut p, &mut velocity, 1.7) > 0.0);
-        assert!(p.x <= city.bounding_box().max.x - CAR_RADIUS && velocity.x <= 0.0);
+        assert!(vehicle_location::constrain(city, &mut p, &mut velocity, 1.7) > 0.0);
+        assert!(p.x <= world::bounding_box(city).max.x - CAR_RADIUS && velocity.x <= 0.0);
     }
 
     #[test]
     fn urban_map_covers_centres_on_both_sides_and_queries_only_nearby_streets() {
         let city_track = test_support::nicosia_world();
         let city = &city_track;
-        assert!(city.road_lines().len() > 100_000 && city.buildings().len() > 70_000);
+        assert!(
+            world_roads::road_lines(city).len() > 100_000
+                && world_buildings::buildings(city).len() > 70_000
+        );
         for (name, lat, lon) in [
             ("Nicosia", 35.1746503, 33.3638783),
             ("Strovolos", 35.1328993, 33.3454972),
@@ -518,7 +557,7 @@ mod tests {
                 y: 0.0,
                 z: (-(lat - 35.162_f64).to_radians() * 6_371_000.0) as f32,
             };
-            let road = city.project(p);
+            let road = world_roads::project(city, p);
             assert!(
                 (road.point.x - p.x).hypot(road.point.z - p.z) < 250.0,
                 "missing public surface roads near {name}"
@@ -537,11 +576,10 @@ mod tests {
                 && a.z.min(b.z) <= bounds.max.z
                 && a.z.max(b.z) >= bounds.min.z
         };
-        let nearby = city.road_segments_in(bounds);
-        assert!(nearby.len() < city.road_lines().len() / 10);
+        let nearby = world_roads::road_segments_in(city, bounds);
+        assert!(nearby.len() < world_roads::road_lines(city).len() / 10);
         let actual = nearby.iter().filter(|(a, b)| intersects(*a, *b)).count();
-        let all = city
-            .road_lines()
+        let all = world_roads::road_lines(city)
             .iter()
             .flat_map(|r| r.path.windows(2))
             .filter(|p| intersects(p[0], p[1]))
@@ -560,9 +598,9 @@ mod tests {
             [-200.0, 0.0, -300.0],
             [10.0, 0.0, 1000.0],
         ] {
-            let indexed = city.project((p).into());
-            let brute = (0..city.road_lines().len())
-                .map(|i| city.projected(i, (p).into()))
+            let indexed = world_roads::project(&city, (p).into());
+            let brute = (0..world_roads::road_lines(&city).len())
+                .map(|i| world_roads::projected(&city, i, (p).into()))
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .unwrap()
                 .1;

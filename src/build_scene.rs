@@ -1,11 +1,11 @@
 //! Compile render geometry from prepared location assets.
+
 use crate::chunks;
+use crate::osm;
 use crate::scene;
+use crate::scene_archive;
 use crate::world_preparation;
-use crate::{
-    osm::OSMArea,
-    scene_archive::{write_spooled, Archive},
-};
+use crate::{osm::OSMArea, scene_archive::write_spooled};
 use std::path::Path;
 
 pub fn build_scene(
@@ -22,7 +22,7 @@ pub fn build_scene(
         let origin = city
             .origin
             .ok_or_else(|| std::io::Error::other("boundary needs a geographic origin"))?;
-        Some(boundary.local(origin))
+        Some(osm::local(boundary, origin))
     } else {
         None
     };
@@ -38,7 +38,7 @@ pub fn build_scene(
     // load decorations
     //
     let mut decorations = if decorations_path.is_file() {
-        Some(Archive::open(decorations_path)?)
+        Some(scene_archive::open(decorations_path)?)
     } else {
         None
     };
@@ -68,15 +68,18 @@ pub fn build_scene(
                 //
                 // push triangles into builder
                 //
-                for tri in archive.read_layer(entry, layer)?.as_chunks::<3>().0 {
-                    builder.push(*tri);
+                for tri in scene_archive::read_layer(archive, entry, layer)?
+                    .as_chunks::<3>()
+                    .0
+                {
+                    chunks::push(&mut builder, *tri);
                 }
 
                 //
                 // ?
                 //
-                for chunk in builder.finish() {
-                    spool.append(chunk)?;
+                for chunk in chunks::finish(builder) {
+                    scene_archive::append(&mut spool, chunk)?;
                 }
             }
         }

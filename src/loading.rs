@@ -1,4 +1,5 @@
 //! A responsive startup screen; map work stays off the OpenGL thread.
+
 use crate::city_assets;
 use crate::gl::swap_window;
 use crate::track;
@@ -22,22 +23,22 @@ pub fn prepare(
     hud: &hud::Hud,
     program: u32,
 ) -> Option<std::sync::Arc<world::WorldLocation>> {
-    if id.asset_path().is_none() {
-        return cache
-            .prepare_for_render(&id)
+    if track::asset_path(&id).is_none() {
+        return track::prepare_for_render(&cache, &id)
             .map_err(|error| log::warn!("Cannot load track: {error}"))
             .ok();
     }
     let started = Instant::now();
     let title = window.title().to_owned();
-    let name = city_assets::CityAsset::new(id.asset_path().unwrap().to_path_buf())
-        .name()
-        .to_owned();
+    let name = city_assets::name(&city_assets::new(
+        track::asset_path(&id).unwrap().to_path_buf(),
+    ))
+    .to_owned();
     draw(window, hud, program, &name, 0.0);
     swap_window(window);
     let worker = std::thread::Builder::new()
         .name("location-loader".into())
-        .spawn(move || cache.prepare_for_render(&id))
+        .spawn(move || track::prepare_for_render(&cache, &id))
         .expect("failed to start location loader");
     while !worker.is_finished() {
         while let Some(event) = events.poll_event() {
@@ -94,5 +95,5 @@ pub fn draw(window: &Window, hud: &hud::Hud, program: u32, name: &str, elapsed: 
         gl::ClearColor(0.025, 0.05, 0.075, 1.0);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
-    hud.draw_loading(program, name, elapsed);
+    hud::draw_loading(hud, program, name, elapsed);
 }

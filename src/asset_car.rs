@@ -128,121 +128,119 @@ struct CarDefinition {
     turbo: Option<Turbo>,
 }
 
-impl CarDefinition {
-    fn validate(&self) -> Result<(), String> {
-        if self.name.trim().is_empty() {
-            return Err("expected nonempty text".into());
+fn validate(car_definition: &CarDefinition) -> Result<(), String> {
+    if car_definition.name.trim().is_empty() {
+        return Err("expected nonempty text".into());
+    }
+    for channel in car_definition.paint_color {
+        fraction(channel)?;
+    }
+    for value in [
+        car_definition.weight_kg,
+        car_definition.brake_force,
+        car_definition.engine_power_hp,
+        car_definition.drag_coefficient,
+        car_definition.yaw_inertia,
+        car_definition.engine_max_torque_nm,
+        car_definition.redline_rpm,
+        car_definition.suspension_hz,
+        car_definition.corner_stiffness[0],
+        car_definition.corner_stiffness[1],
+        car_definition.gearbox.final_drive,
+        car_definition.gearbox.reverse_ratio,
+        car_definition.gearbox.upshift_rpm,
+        car_definition.gearbox.downshift_rpm,
+        car_definition.audio.gain,
+        car_definition.audio.pulses_per_revolution,
+    ] {
+        positive(value)?;
+    }
+    for value in [
+        car_definition.front_weight,
+        car_definition.cg_height_fraction,
+        car_definition.drive_bias,
+        car_definition.brake_bias,
+        car_definition.audio.coast_gain,
+    ] {
+        fraction(value)?;
+    }
+    if let Some(values) = car_definition.rear_combined_slip {
+        fraction(values[0])?;
+        fraction(values[1])?;
+        positive(values[2])?;
+        if values[1] > values[0] {
+            return Err("combined slip reduction exceeds baseline".into());
         }
-        for channel in self.paint_color {
-            fraction(channel)?;
-        }
+    }
+    if car_definition.gearbox.ratios.is_empty() || car_definition.gearbox.ratios.len() > 254 {
+        return Err("expected 1..254 ratios".into());
+    }
+    for &ratio in &car_definition.gearbox.ratios {
+        positive(ratio)?;
+    }
+    if !car_definition
+        .gearbox
+        .ratios
+        .windows(2)
+        .all(|ratios| ratios[0] > ratios[1])
+    {
+        return Err("ratios must descend".into());
+    }
+    if car_definition.gearbox.downshift_rpm >= car_definition.gearbox.upshift_rpm {
+        return Err("invalid shift thresholds".into());
+    }
+    if car_definition.redline_rpm <= phys_car::IDLE_RPM + 250.0 {
+        return Err("redline RPM must leave limiter recovery above idle".into());
+    }
+    if car_definition.gearbox.upshift_rpm >= car_definition.redline_rpm {
+        return Err("upshift RPM must be below redline RPM".into());
+    }
+    if car_definition.engine_torque_curve.len() < 2 {
+        return Err("torque curve requires at least two points".into());
+    }
+    for point in &car_definition.engine_torque_curve {
+        nonnegative(point.rpm)?;
+        fraction(point.torque)?;
+    }
+    if !car_definition
+        .engine_torque_curve
+        .windows(2)
+        .all(|points| points[0].rpm < points[1].rpm)
+    {
+        return Err("torque curve RPM must strictly increase".into());
+    }
+    if !car_definition
+        .engine_torque_curve
+        .iter()
+        .any(|point| point.torque > 0.0)
+    {
+        return Err("torque curve requires positive torque".into());
+    }
+    if car_definition.audio.harmonics.is_empty() {
+        return Err("expected engine harmonics".into());
+    }
+    for &[frequency, amplitude] in &car_definition.audio.harmonics {
+        positive(frequency)?;
+        nonnegative(amplitude)?;
+    }
+    if let Some([knee, headroom]) = car_definition.audio.soft_limit {
+        positive(knee)?;
+        positive(headroom)?;
+    }
+    if let Some(turbo) = &car_definition.turbo {
         for value in [
-            self.weight_kg,
-            self.brake_force,
-            self.engine_power_hp,
-            self.drag_coefficient,
-            self.yaw_inertia,
-            self.engine_max_torque_nm,
-            self.redline_rpm,
-            self.suspension_hz,
-            self.corner_stiffness[0],
-            self.corner_stiffness[1],
-            self.gearbox.final_drive,
-            self.gearbox.reverse_ratio,
-            self.gearbox.upshift_rpm,
-            self.gearbox.downshift_rpm,
-            self.audio.gain,
-            self.audio.pulses_per_revolution,
+            turbo.spool_start_rpm,
+            turbo.full_boost_rpm,
+            turbo.spool_seconds,
+            turbo.decay_seconds,
         ] {
             positive(value)?;
         }
-        for value in [
-            self.front_weight,
-            self.cg_height_fraction,
-            self.drive_bias,
-            self.brake_bias,
-            self.audio.coast_gain,
-        ] {
-            fraction(value)?;
+        if turbo.full_boost_rpm <= turbo.spool_start_rpm {
+            return Err("full boost RPM must exceed spool start RPM".into());
         }
-        if let Some(values) = self.rear_combined_slip {
-            fraction(values[0])?;
-            fraction(values[1])?;
-            positive(values[2])?;
-            if values[1] > values[0] {
-                return Err("combined slip reduction exceeds baseline".into());
-            }
-        }
-        if self.gearbox.ratios.is_empty() || self.gearbox.ratios.len() > 254 {
-            return Err("expected 1..254 ratios".into());
-        }
-        for &ratio in &self.gearbox.ratios {
-            positive(ratio)?;
-        }
-        if !self
-            .gearbox
-            .ratios
-            .windows(2)
-            .all(|ratios| ratios[0] > ratios[1])
-        {
-            return Err("ratios must descend".into());
-        }
-        if self.gearbox.downshift_rpm >= self.gearbox.upshift_rpm {
-            return Err("invalid shift thresholds".into());
-        }
-        if self.redline_rpm <= phys_car::IDLE_RPM + 250.0 {
-            return Err("redline RPM must leave limiter recovery above idle".into());
-        }
-        if self.gearbox.upshift_rpm >= self.redline_rpm {
-            return Err("upshift RPM must be below redline RPM".into());
-        }
-        if self.engine_torque_curve.len() < 2 {
-            return Err("torque curve requires at least two points".into());
-        }
-        for point in &self.engine_torque_curve {
-            nonnegative(point.rpm)?;
-            fraction(point.torque)?;
-        }
-        if !self
-            .engine_torque_curve
-            .windows(2)
-            .all(|points| points[0].rpm < points[1].rpm)
-        {
-            return Err("torque curve RPM must strictly increase".into());
-        }
-        if !self
-            .engine_torque_curve
-            .iter()
-            .any(|point| point.torque > 0.0)
-        {
-            return Err("torque curve requires positive torque".into());
-        }
-        if self.audio.harmonics.is_empty() {
-            return Err("expected engine harmonics".into());
-        }
-        for &[frequency, amplitude] in &self.audio.harmonics {
-            positive(frequency)?;
-            nonnegative(amplitude)?;
-        }
-        if let Some([knee, headroom]) = self.audio.soft_limit {
-            positive(knee)?;
-            positive(headroom)?;
-        }
-        if let Some(turbo) = &self.turbo {
-            for value in [
-                turbo.spool_start_rpm,
-                turbo.full_boost_rpm,
-                turbo.spool_seconds,
-                turbo.decay_seconds,
-            ] {
-                positive(value)?;
-            }
-            if turbo.full_boost_rpm <= turbo.spool_start_rpm {
-                return Err("full boost RPM must exceed spool start RPM".into());
-            }
-        }
-        Ok(())
     }
+    Ok(())
 }
 
 fn default_paint_color() -> [f32; 3] {
@@ -274,14 +272,14 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     let mut definition: CarDefinition =
         serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-    definition.validate()?;
+    validate(&definition)?;
 
     let design = load_model(path)?;
-    let height = design.height();
+    let height = car_glb::height(&design);
     if !height.is_finite() || height <= 0.0 {
         return Err("model must have finite positive height".into());
     }
-    let frontal_area_m2 = design.frontal_area_m2();
+    let frontal_area_m2 = car_glb::frontal_area_m2(&design);
     if !frontal_area_m2.is_finite() || frontal_area_m2 <= 0.0 {
         return Err("model must have finite positive frontal area".into());
     }
@@ -323,7 +321,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         frontal_area_m2,
         turbo: definition.turbo,
     };
-    spec.top_speed = spec.calculate_top_speed();
+    spec.top_speed = phys_car::calculate_top_speed(&spec);
     Ok(spec)
 }
 
@@ -373,6 +371,8 @@ fn load_model(path: &std::path::Path) -> Result<std::sync::Arc<car_glb::Design>,
 
 #[cfg(test)]
 mod tests {
+    use crate::car_glb;
+
     use super::*;
     use crate::test_support;
 
@@ -399,7 +399,7 @@ mod tests {
         let car = load_car(std::path::Path::new("data/cars/2016-pitsunda-2/car.json"))
             .expect("Pitsunda must load with its traced body and separate wheel pivots");
         assert_eq!(car.paint_color, [0.36, 0.355, 0.35]);
-        assert!((car.design.height() - 1.495).abs() < 0.002);
+        assert!((car_glb::height(&car.design) - 1.495).abs() < 0.002);
         for radius in car.design.wheel_radii {
             assert!((radius - 0.318).abs() < 0.002);
         }

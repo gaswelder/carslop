@@ -1,7 +1,9 @@
 //! LANDSCAPE 1 records, shared by runtime loading and compiler exclusion checks.
 //! Legacy trailing header fields remain accepted. Unknown/malformed records fail.
-use crate::codec_number::Number;
+
+use crate::codec_number;
 use crate::geometry::XZ;
+use crate::landscape;
 use crate::world::{Material, Tree};
 use std::{fmt::Display, io, str::FromStr};
 
@@ -49,7 +51,7 @@ where
         };
         let record = match f.first().copied() {
             Some("a") if f.len() == 8 => Record::Ground {
-                material: Material::from_ground_id(
+                material: landscape::from_ground_id(
                     f[1].parse().map_err(|_| "invalid landscape style")?,
                 )?,
                 points: [
@@ -108,73 +110,78 @@ pub struct Writer<W> {
     output: W,
     precision: Precision,
 }
-impl<W: io::Write> Writer<W> {
-    pub fn new(mut output: W, precision: Precision) -> io::Result<Self> {
-        writeln!(output, "LANDSCAPE 1")?;
-        Ok(Self { output, precision })
-    }
-    pub fn ground<T: Copy + Display>(
-        &mut self,
-        material: Material,
-        points: [XZ<T>; 3],
-    ) -> io::Result<()> {
-        let digits = match self.precision {
-            Precision::Imported => Some(6),
-            Precision::Authored => None,
-        };
-        write!(
-            self.output,
-            "a {}",
-            material.ground_id().map_err(io::Error::other)?
-        )?;
-        for p in points {
-            write!(
-                self.output,
-                " {} {}",
-                Number::new(p.x, digits),
-                Number::new(p.z, digits)
-            )?;
-        }
-        writeln!(self.output)
-    }
-    pub fn tree<T: Copy + Display>(&mut self, tree: &Tree<T>) -> io::Result<()> {
-        self.tree_fields(
-            tree.id,
-            tree.coords,
-            tree.height_meters,
-            tree.crown_radius_meters,
-        )
-    }
 
-    /// Signed source IDs are retained verbatim by the mapped compiler, as before.
-    pub fn tree_fields<T: Copy + Display>(
-        &mut self,
-        id: impl Display,
-        coords: XZ<T>,
-        height: T,
-        radius: T,
-    ) -> io::Result<()> {
-        let digits = match self.precision {
-            Precision::Imported => Some(3),
-            Precision::Authored => None,
-        };
-        writeln!(
-            self.output,
-            "t {} {} {} {} {}",
-            id,
-            Number::new(coords.x, digits),
-            Number::new(coords.z, digits),
-            Number::new(height, digits),
-            Number::new(radius, digits)
-        )
+pub fn new<W: io::Write>(mut output: W, precision: Precision) -> io::Result<Writer<W>> {
+    writeln!(output, "LANDSCAPE 1")?;
+    Ok(Writer::<W> { output, precision })
+}
+pub fn ground<W: io::Write, T: Copy + Display>(
+    writer: &mut Writer<W>,
+    material: Material,
+    points: [XZ<T>; 3],
+) -> io::Result<()> {
+    let digits = match writer.precision {
+        Precision::Imported => Some(6),
+        Precision::Authored => None,
+    };
+    write!(
+        writer.output,
+        "a {}",
+        landscape::ground_id(material).map_err(io::Error::other)?
+    )?;
+    for p in points {
+        write!(
+            writer.output,
+            " {} {}",
+            codec_number::new(p.x, digits),
+            codec_number::new(p.z, digits)
+        )?;
     }
-    pub fn flush(&mut self) -> io::Result<()> {
-        self.output.flush()
-    }
+    writeln!(writer.output)
+}
+pub fn tree<W: io::Write, T: Copy + Display>(
+    writer: &mut Writer<W>,
+    tree: &Tree<T>,
+) -> io::Result<()> {
+    tree_fields(
+        writer,
+        tree.id,
+        tree.coords,
+        tree.height_meters,
+        tree.crown_radius_meters,
+    )
+}
+
+/// Signed source IDs are retained verbatim by the mapped compiler, as before.
+pub fn tree_fields<W: io::Write, T: Copy + Display>(
+    writer: &mut Writer<W>,
+    id: impl Display,
+    coords: XZ<T>,
+    height: T,
+    radius: T,
+) -> io::Result<()> {
+    let digits = match writer.precision {
+        Precision::Imported => Some(3),
+        Precision::Authored => None,
+    };
+    writeln!(
+        writer.output,
+        "t {} {} {} {} {}",
+        id,
+        codec_number::new(coords.x, digits),
+        codec_number::new(coords.z, digits),
+        codec_number::new(height, digits),
+        codec_number::new(radius, digits)
+    )
+}
+pub fn flush<W: io::Write>(writer: &mut Writer<W>) -> io::Result<()> {
+    writer.output.flush()
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::codec_landscape;
+
     use super::*;
     use std::io::Cursor;
 
@@ -202,10 +209,10 @@ mod tests {
             (Precision::Authored, "LANDSCAPE 1\na 1 0.123456789 0 10 0 0 10\nt 18446744073709551615 1.123456 -2.654321 4.123456 0.7\n"),
         ] {
             let mut bytes = vec![];
-            let mut writer = Writer::new(&mut bytes, precision).unwrap();
-            writer.ground(Material::Park, points).unwrap();
-            writer.tree(&tree).unwrap();
-            writer.flush().unwrap();
+            let mut writer = codec_landscape::new(&mut bytes, precision).unwrap();
+            codec_landscape::ground(&mut writer, Material::Park, points).unwrap();
+            codec_landscape::tree(&mut writer, &tree).unwrap();
+            codec_landscape::flush(&mut writer).unwrap();
             assert_eq!(std::str::from_utf8(&bytes).unwrap(), expected);
             let mut runtime_tree = None;
             read::<f32>(Cursor::new(&bytes), |r| {
@@ -245,9 +252,11 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error, "stop");
-        assert!(Writer::new(std::io::sink(), Precision::Imported)
-            .unwrap()
-            .ground(Material::Paint, [XZ { x: 0., z: 0. }; 3])
-            .is_err());
+        assert!(codec_landscape::ground(
+            &mut (codec_landscape::new(std::io::sink(), Precision::Imported).unwrap()),
+            Material::Paint,
+            [XZ { x: 0., z: 0. }; 3]
+        )
+        .is_err());
     }
 }

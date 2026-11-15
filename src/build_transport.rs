@@ -1,14 +1,18 @@
 //! Grade-separated carriageways. Layer supplies ordering; absent surveys use a 5 m clearance.
+
 use crate::build_details;
 use crate::build_surfaces;
 use crate::codec_road_rises;
+use crate::elevation;
 use crate::error::Result;
 use crate::geometry;
 use crate::geometry::XZ;
 use crate::map_details::{Data, Deck};
 use crate::osm;
+use crate::source_location;
 use crate::source_location::{SourceLocation, SourceRoad};
 use crate::world::{HeightField, RoadRise};
+use crate::world_raised_roads;
 use geo::algorithm::orient::Direction;
 use geo::{BooleanOps, BoundingRect, MultiPolygon, Orient, Polygon};
 use std::{
@@ -28,15 +32,18 @@ struct SurveyPath {
 }
 
 pub fn grade(way: &osm::OSMElement) -> i8 {
-    if way.tag("tunnel") == "building_passage" || way.tag("ford") == "yes" {
+    if osm::tag(way, "tunnel") == "building_passage" || osm::tag(way, "ford") == "yes" {
         return 0;
     }
-    let layer = way.tag("layer").parse::<i8>().unwrap_or(0).clamp(-10, 10);
+    let layer = osm::tag(way, "layer")
+        .parse::<i8>()
+        .unwrap_or(0)
+        .clamp(-10, 10);
     if layer != 0 {
         layer
-    } else if !matches!(way.tag("bridge"), "" | "no" | "low_water_crossing") {
+    } else if !matches!(osm::tag(way, "bridge"), "" | "no" | "low_water_crossing") {
         1
-    } else if !matches!(way.tag("tunnel"), "" | "no") {
+    } else if !matches!(osm::tag(way, "tunnel"), "" | "no") {
         -1
     } else {
         0
@@ -83,7 +90,7 @@ pub fn build(
             .filter_map(|node| {
                 node.coord.map(|p| SurveyNode {
                     node,
-                    position: map.metres(p),
+                    position: source_location::metres(map, p),
                 })
             })
             .collect();
@@ -94,10 +101,10 @@ pub fn build(
         let g = grade(way);
         let height = |index: usize| {
             let SurveyNode { node, position: p } = points[index];
-            (if node.tag("ele").is_empty() {
-                way.tag("ele")
+            (if osm::tag(node, "ele").is_empty() {
+                osm::tag(way, "ele")
             } else {
-                node.tag("ele")
+                osm::tag(node, "ele")
             })
             .trim()
             .trim_end_matches(" m")
@@ -105,7 +112,7 @@ pub fn build(
             .ok()
             .filter(|h| h.is_finite())
             .map(|h| h - datum)
-            .unwrap_or(field.height(p.map(|v| v as f32)) + g as f32 * 5.)
+            .unwrap_or(elevation::height(field, geometry::xz_map(p, |v| v as f32)) + g as f32 * 5.)
         };
         heights.insert(
             id,
@@ -130,9 +137,10 @@ pub fn build(
         };
         let length = geometry::path_length(path).max(0.01);
         for n in road.ends {
-            let p = map.road_nodes[n].xz();
+            let p = geometry::xz(map.road_nodes[n]);
             let t = (geometry::project(path, p).1 / length) as f32;
-            let lift = a + (b - a) * t - field.height(p.map(|v| v as f32));
+            let lift =
+                a + (b - a) * t - elevation::height(field, geometry::xz_map(p, |v| v as f32));
             if !fixed[n] || lift.abs() > lifts[n].abs() {
                 lifts[n] = lift;
                 fixed[n] = true;
@@ -168,7 +176,10 @@ pub fn build(
             if fixed[other] {
                 continue;
             }
-            let length = geometry::dist(map.road_nodes[n].xz(), map.road_nodes[other].xz()) as f32;
+            let length = geometry::dist(
+                geometry::xz(map.road_nodes[n]),
+                geometry::xz(map.road_nodes[other]),
+            ) as f32;
             let lift = lifts[n].signum() * (lifts[n].abs() - length * 0.08).max(0.);
             if lift.abs() > lifts[other].abs() + 0.0001 {
                 lifts[other] = lift;
@@ -190,19 +201,24 @@ pub fn build(
                     .iter()
                     .map(|p| {
                         let t = (geometry::project(path, *p).1 / length) as f32;
-                        let a = map.road_nodes[road.ends[0]].xz().map(|v| v as f32);
-                        let b = map.road_nodes[road.ends[1]].xz().map(|v| v as f32);
+                        let a = geometry::xz_map(geometry::xz(map.road_nodes[road.ends[0]]), |v| {
+                            v as f32
+                        });
+                        let b = geometry::xz_map(geometry::xz(map.road_nodes[road.ends[1]]), |v| {
+                            v as f32
+                        });
                         [
                             p.x as f32,
-                            (field.height(a) + lifts[road.ends[0]]) * (1. - t)
-                                + (field.height(b) + lifts[road.ends[1]]) * t,
+                            (elevation::height(field, a) + lifts[road.ends[0]]) * (1. - t)
+                                + (elevation::height(field, b) + lifts[road.ends[1]]) * t,
                             p.z as f32,
                         ]
                     })
                     .collect(),
-                surface: build_details::road_surface(
-                    source.ways[&road.osm_way_id.unwrap()].tag("surface"),
-                ),
+                surface: build_details::road_surface(osm::tag(
+                    &source.ways[&road.osm_way_id.unwrap()],
+                    "surface",
+                )),
             });
         } else if road.ends.iter().any(|n| lifts[*n].abs() > 0.001) {
             // Include an interior zero knot: long approaches retain an 8% maximum grade.
@@ -238,12 +254,19 @@ pub fn build(
                     lift(station as f32)
                 };
                 sections.push([-1., 1.].map(|side| {
-                    geometry::add(
-                        p,
-                        geometry::mul(normal, side * (road.road_width_start_meters / 2. + 2.5)),
+                    geometry::at_height(
+                        geometry::xz_map(
+                            geometry::add(
+                                p,
+                                geometry::mul(
+                                    normal,
+                                    side * (road.road_width_start_meters / 2. + 2.5),
+                                ),
+                            ),
+                            |v| v as f32,
+                        ),
+                        offset,
                     )
-                    .map(|v| v as f32)
-                    .at_height(offset)
                 }));
             }
             for pair in sections.windows(2) {
@@ -280,84 +303,87 @@ struct Footprints {
     polygons: Vec<Polygon<f64>>,
     tree: rstar::RTree<IndexedFootprint>,
 }
-impl Footprints {
-    fn new() -> Self {
-        Self {
-            polygons: vec![],
-            tree: rstar::RTree::new(),
-        }
-    }
 
-    fn bounds(polygon: &Polygon<f64>) -> Option<rstar::AABB<XZ>> {
-        let bounds = polygon.bounding_rect()?;
-        Some(rstar::AABB::from_corners(
-            XZ {
-                x: bounds.min().x,
-                z: bounds.min().y,
-            },
-            XZ {
-                x: bounds.max().x,
-                z: bounds.max().y,
-            },
-        ))
-    }
-
-    fn insert(&mut self, polygon: Polygon<f64>) {
-        if let Some(bounds) = Self::bounds(&polygon) {
-            self.tree.insert(IndexedFootprint {
-                index: self.polygons.len(),
-                bounds,
-            });
-            self.polygons.push(polygon);
-        }
-    }
-
-    fn candidates(&self, polygon: &Polygon<f64>) -> Vec<usize> {
-        let Some(bounds) = Self::bounds(polygon) else {
-            return vec![];
-        };
-        let mut indices: Vec<_> = self
-            .tree
-            .locate_in_envelope_intersecting(&bounds)
-            .map(|item| item.index)
-            .collect();
-        indices.sort_unstable();
-        indices
-    }
-
-    fn subtract(&self, polygon: &Polygon<f64>) -> MultiPolygon<f64> {
-        let indices = self.candidates(polygon);
-        if indices.is_empty() {
-            return MultiPolygon(vec![polygon.clone()]);
-        }
-        // Input ramp triangles overlap; union them before using them as a clip.
-        let nearby = MultiPolygon(
-            indices
-                .into_iter()
-                .map(|index| self.polygons[index].clone())
-                .collect(),
-        );
-        polygon.difference(&build_surfaces::union(&[nearby.orient(Direction::Default)]))
+fn new() -> Footprints {
+    Footprints {
+        polygons: vec![],
+        tree: rstar::RTree::new(),
     }
 }
 
+fn bounds(polygon: &Polygon<f64>) -> Option<rstar::AABB<XZ>> {
+    let bounds = polygon.bounding_rect()?;
+    Some(rstar::AABB::from_corners(
+        XZ {
+            x: bounds.min().x,
+            z: bounds.min().y,
+        },
+        XZ {
+            x: bounds.max().x,
+            z: bounds.max().y,
+        },
+    ))
+}
+
+fn insert(footprints: &mut Footprints, polygon: Polygon<f64>) {
+    if let Some(bounds) = bounds(&polygon) {
+        footprints.tree.insert(IndexedFootprint {
+            index: footprints.polygons.len(),
+            bounds,
+        });
+        footprints.polygons.push(polygon);
+    }
+}
+
+fn candidates(footprints: &Footprints, polygon: &Polygon<f64>) -> Vec<usize> {
+    let Some(bounds) = bounds(polygon) else {
+        return vec![];
+    };
+    let mut indices: Vec<_> = footprints
+        .tree
+        .locate_in_envelope_intersecting(&bounds)
+        .map(|item| item.index)
+        .collect();
+    indices.sort_unstable();
+    indices
+}
+
+fn subtract(footprints: &Footprints, polygon: &Polygon<f64>) -> MultiPolygon<f64> {
+    let indices = candidates(footprints, polygon);
+    if indices.is_empty() {
+        return MultiPolygon(vec![polygon.clone()]);
+    }
+    // Input ramp triangles overlap; union them before using them as a clip.
+    let nearby = MultiPolygon(
+        indices
+            .into_iter()
+            .map(|index| footprints.polygons[index].clone())
+            .collect(),
+    );
+    polygon.difference(&build_surfaces::union(&[nearby.orient(Direction::Default)]))
+}
+
 fn footprint(rise: &RoadRise) -> Polygon<f64> {
-    geometry::polygon(&rise.points.map(|p| p.xz().map(f64::from)))
+    geometry::polygon(
+        &rise
+            .points
+            .map(|p| geometry::xz_map(geometry::xz(p), f64::from)),
+    )
 }
 
 fn partition_ramps(ramps: &[RoadRise]) -> Result<Vec<RoadRise>> {
     println!("  Partitioning {} approach ramp triangles...", ramps.len());
-    let mut covered = Footprints::new();
+    let mut covered = new();
     let mut result = Vec::new();
     let mut last_progress = Instant::now();
     for (index, ramp) in ramps.iter().enumerate() {
         let shape = footprint(ramp);
-        let available = covered.subtract(&shape);
+        let available = subtract(&covered, &shape);
         emit(&available, ramp, &mut result)?;
         // The union of previous ramps and this entire input footprint is the
         // same coverage as adding only its available pieces. Keep the original
         // triangle so clipping round-off and tiny fragments cannot accumulate.
-        covered.insert(shape);
+        insert(&mut covered, shape);
         if index + 1 == ramps.len() || last_progress.elapsed() >= Duration::from_secs(5) {
             println!("  Ramp triangles: {}/{}", index + 1, ramps.len());
             last_progress = Instant::now();
@@ -368,7 +394,7 @@ fn partition_ramps(ramps: &[RoadRise]) -> Result<Vec<RoadRise>> {
 
 fn emit(geometry: &MultiPolygon<f64>, plane: &RoadRise, result: &mut Vec<RoadRise>) -> Result<()> {
     build_surfaces::triangulate(geometry, |points| {
-        let points = points.map(|p| p.map(|v| v as f32));
+        let points = points.map(|p| geometry::xz_map(p, |v| v as f32));
         let [a, b, c] = points;
         let area = ((b.x - a.x) as f64 * (c.z - a.z) as f64
             - (b.z - a.z) as f64 * (c.x - a.x) as f64)
@@ -377,7 +403,12 @@ fn emit(geometry: &MultiPolygon<f64>, plane: &RoadRise, result: &mut Vec<RoadRis
             return Ok(());
         }
         result.push(RoadRise {
-            points: points.map(|p| p.at_height(plane.offset(p).unwrap_or(0.))),
+            points: points.map(|p| {
+                geometry::at_height(
+                    p,
+                    world_raised_roads::road_rise_offset(plane, p).unwrap_or(0.),
+                )
+            }),
         });
         Ok(())
     })?;
@@ -386,26 +417,35 @@ fn emit(geometry: &MultiPolygon<f64>, plane: &RoadRise, result: &mut Vec<RoadRis
 
 #[cfg(test)]
 mod tests {
+    use crate::geometry;
+    use crate::world_raised_roads;
+
     use super::*;
     use geo::Area;
 
     fn square(min: XZ<f32>, side: f32, height: f32, slope: f32) -> Vec<RoadRise> {
-        let a = min.at_height(height);
-        let b = XZ {
-            x: min.x + side,
-            z: min.z,
-        }
-        .at_height(height + slope * side);
-        let c = XZ {
-            x: min.x + side,
-            z: min.z + side,
-        }
-        .at_height(height + slope * side);
-        let d = XZ {
-            x: min.x,
-            z: min.z + side,
-        }
-        .at_height(height);
+        let a = geometry::at_height(min, height);
+        let b = geometry::at_height(
+            XZ {
+                x: min.x + side,
+                z: min.z,
+            },
+            height + slope * side,
+        );
+        let c = geometry::at_height(
+            XZ {
+                x: min.x + side,
+                z: min.z + side,
+            },
+            height + slope * side,
+        );
+        let d = geometry::at_height(
+            XZ {
+                x: min.x,
+                z: min.z + side,
+            },
+            height,
+        );
         vec![
             RoadRise { points: [a, b, c] },
             RoadRise { points: [a, c, d] },
@@ -448,7 +488,7 @@ mod tests {
                 geometry::sub(geometry::add(center, direction), normal),
                 geometry::sub(geometry::sub(center, direction), normal),
             ]
-            .map(|p| p.map(|v| v as f32).at_height(1.));
+            .map(|p| geometry::at_height(geometry::xz_map(p, |v| v as f32), 1.));
             ramps.extend([
                 RoadRise {
                     points: [points[0], points[1], points[2]],
@@ -494,8 +534,11 @@ mod tests {
                         x: col as f32 * 0.3 + 0.137,
                         z: row as f32 * 0.3 + 0.193,
                     };
-                    let height =
-                        |rises: &[RoadRise]| rises.iter().find_map(|rise| rise.offset(point));
+                    let height = |rises: &[RoadRise]| {
+                        rises
+                            .iter()
+                            .find_map(|rise| world_raised_roads::road_rise_offset(rise, point))
+                    };
                     match (height(&expected), height(&actual)) {
                         (Some(expected), Some(actual)) => {
                             assert!((expected - actual).abs() < 0.0001)
@@ -515,21 +558,27 @@ mod tests {
     fn clipped_ramps_remain_readable_after_large_coordinate_quantization() {
         let plane = RoadRise {
             points: [
-                XZ {
-                    x: 40000.,
-                    z: 40000.,
-                }
-                .at_height(-2.),
-                XZ {
-                    x: 40010.,
-                    z: 40000.,
-                }
-                .at_height(-2.),
-                XZ {
-                    x: 40000.,
-                    z: 40010.,
-                }
-                .at_height(-1.),
+                geometry::at_height(
+                    XZ {
+                        x: 40000.,
+                        z: 40000.,
+                    },
+                    -2.,
+                ),
+                geometry::at_height(
+                    XZ {
+                        x: 40010.,
+                        z: 40000.,
+                    },
+                    -2.,
+                ),
+                geometry::at_height(
+                    XZ {
+                        x: 40000.,
+                        z: 40010.,
+                    },
+                    -1.,
+                ),
             ],
         };
         let sliver = MultiPolygon(vec![geometry::polygon(&[

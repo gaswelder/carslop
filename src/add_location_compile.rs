@@ -4,9 +4,11 @@ use crate::build_details;
 use crate::build_transport;
 use crate::city_assets;
 use crate::codec_landscape;
+use crate::geometry;
 use crate::geometry::{add, cross, dist, dot, length, line, mul, polygon, sub};
-use crate::geometry::{BoundingBox, BoundingBoxXZ, LatLon, XZ};
+use crate::geometry::{BoundingBox, BoundingBoxXZ, XZ};
 use crate::location;
+use crate::map_details;
 use crate::scene_archive;
 use crate::source_location;
 use crate::source_location::Sidewalks;
@@ -54,27 +56,26 @@ struct ImportPaths {
     scene: PathBuf,
     decorations: PathBuf,
 }
-impl ImportPaths {
-    fn new(output: &Path, downloads: &Path) -> Self {
-        Self {
-            downloads: downloads.into(),
-            output: output.into(),
-            source_osm: output.join("source.osm"),
-            city: output.join("city.txt"),
-            streets: output.join("streets.txt"),
-            landscape: output.join("landscape.txt"),
-            furniture: output.join("furniture.txt"),
-            collisions: output.join("streets.bin"),
-            heightfield: output.join("elevation/heightfield.txt"),
-            elevation: output.join("elevation"),
-            manifest: output.join("manifest.json"),
-            imagery: output.join("imagery"),
-            aerial: output.join("aerial"),
-            trees: output.join("imagery-trees.txt"),
-            catalog: output.join("aerial/tiles.txt"),
-            scene: output.join("scene.pack"),
-            decorations: output.join("decorations.pack"),
-        }
+
+fn new(output: &Path, downloads: &Path) -> ImportPaths {
+    ImportPaths {
+        downloads: downloads.into(),
+        output: output.into(),
+        source_osm: output.join("source.osm"),
+        city: output.join("city.txt"),
+        streets: output.join("streets.txt"),
+        landscape: output.join("landscape.txt"),
+        furniture: output.join("furniture.txt"),
+        collisions: output.join("streets.bin"),
+        heightfield: output.join("elevation/heightfield.txt"),
+        elevation: output.join("elevation"),
+        manifest: output.join("manifest.json"),
+        imagery: output.join("imagery"),
+        aerial: output.join("aerial"),
+        trees: output.join("imagery-trees.txt"),
+        catalog: output.join("aerial/tiles.txt"),
+        scene: output.join("scene.pack"),
+        decorations: output.join("decorations.pack"),
     }
 }
 
@@ -83,7 +84,7 @@ pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
     let workspace = tempfile::Builder::new()
         .prefix("carslop-compile-")
         .tempdir()?;
-    let paths = ImportPaths::new(workspace.path(), download_dir);
+    let paths = new(workspace.path(), download_dir);
     let data = add_location_download::read_manifest(&paths.downloads)?;
     if data.height_tiles.is_empty() || data.imagery_blocks.is_empty() {
         return Err(invalid("downloaded location data is incomplete"));
@@ -98,7 +99,7 @@ pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
         ));
     }
     let acquired = CompileSources {
-        boundary: data.area.geometry()?,
+        boundary: osm::geometry(&data.area)?,
         height_tiles: data.height_tiles.clone(),
     };
     println!("converting OSM map");
@@ -111,9 +112,9 @@ pub fn compile_location(download_dir: &Path) -> Result<location::Location> {
     println!("baking scene");
     bake(&paths, &prepared, Some(&acquired.boundary))?;
     drop(prepared);
-    scene_archive::Archive::open(&paths.scene)?;
+    scene_archive::open(&paths.scene)?;
     println!("loading compiled location");
-    location::Location::from_compilation(workspace).map_err(invalid)
+    location::from_compilation(workspace).map_err(invalid)
 }
 
 struct ConvertedMap {
@@ -207,8 +208,8 @@ fn generate_assets(
     let mut details = build_details::build(source_osm_map, location_map, &streets_result.surfaces);
     details.trees.extend(tree_styles);
     println!("loading elevation grid");
-    let assets = city_assets::CityAsset::new(paths.output.clone());
-    let field = assets.get_heightfield().map_err(invalid)?;
+    let assets = city_assets::new(paths.output.clone());
+    let field = city_assets::get_heightfield(&assets).map_err(invalid)?;
     let header = fs::read_to_string(&paths.heightfield)?;
     let datum = header
         .lines()
@@ -227,10 +228,13 @@ fn generate_assets(
         &paths.output.join("road-rises.txt"),
     )?;
     println!("validating and writing mapped details");
-    details
-        .validate(location_map.buildings.len(), location_map.road_lines.len())
-        .map_err(invalid)?;
-    details.write(&paths.output).map_err(invalid)?;
+    map_details::validate(
+        &details,
+        location_map.buildings.len(),
+        location_map.road_lines.len(),
+    )
+    .map_err(invalid)?;
+    map_details::write(&details, &paths.output).map_err(invalid)?;
 
     let origin = location_map
         .origin
@@ -250,7 +254,7 @@ fn generate_assets(
                 / origin.lat.to_radians().cos(),
     ];
     let manifest = serde_json::json!({
-        "boundary": boundary.to_geojson(),
+        "boundary": osm::to_geojson(boundary),
     });
     fs::write(
         &paths.manifest,
@@ -285,7 +289,7 @@ fn compile_imagery(
     println!("Compiling satellite textures and inferred trees...");
 
     let bbox = generated.bbox;
-    if !bbox.is_valid_for_imagery() {
+    if !geometry::is_valid_for_imagery(&bbox) {
         return Err(invalid("invalid city geographic bounds"));
     }
 
@@ -297,7 +301,7 @@ fn compile_imagery(
         .origin
         .ok_or_else(|| invalid("imported location requires a geographic origin"))?;
     let origin = [origin.lat, origin.lon];
-    let local_boundary = boundary.local(LatLon::new(origin[0], origin[1]));
+    let local_boundary = osm::local(boundary, geometry::new(origin[0], origin[1]));
     let all = &data.imagery_blocks;
     let mut catalog = format!("AERIAL 1\nsize {} {}\n", imagery::TILE, imagery::GUTTER);
 
@@ -338,7 +342,7 @@ fn compile_imagery(
         return Err(invalid("source returned no usable imagery"));
     }
 
-    let obstacles = tree_obstacles::Obstacles::read_paths(
+    let obstacles = tree_obstacles::read_paths(
         &paths.city,
         &paths.streets,
         [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat],
@@ -356,7 +360,7 @@ fn compile_imagery(
 
     // Start output
     let tree_file = fs::File::create(&paths.trees)?;
-    let mut tree_output = codec_landscape::Writer::new(
+    let mut tree_output = codec_landscape::new(
         std::io::BufWriter::new(tree_file),
         codec_landscape::Precision::Imported,
     )?;
@@ -373,13 +377,13 @@ fn compile_imagery(
     };
 
     let mut append = |p: XZ, radius: f64, height: f64| -> Result<()> {
-        let p = p.map(|v| (v * 1000.).round() / 1000.);
+        let p = geometry::xz_map(p, |v| (v * 1000.).round() / 1000.);
 
         if !inside(p) || !local_boundary.intersects(&geo::Point::new(p.x, p.z)) {
             return Ok(());
         }
 
-        if obstacles.rejection_at(p).is_some() {
+        if tree_obstacles::rejection_at(&obstacles, p).is_some() {
             return Ok(());
         }
 
@@ -392,12 +396,15 @@ fn compile_imagery(
 
         let id = (1_u64 << 63) | count;
 
-        tree_output.tree(&world::Tree {
-            id,
-            coords: p,
-            height_meters: height.clamp(3.5, 14.),
-            crown_radius_meters: radius.clamp(0.7, 4.5),
-        })?;
+        codec_landscape::tree(
+            &mut tree_output,
+            &world::Tree {
+                id,
+                coords: p,
+                height_meters: height.clamp(3.5, 14.),
+                crown_radius_meters: radius.clamp(0.7, 4.5),
+            },
+        )?;
 
         index.insert(p);
         count += 1;
@@ -412,7 +419,7 @@ fn compile_imagery(
         )?;
     }
 
-    tree_output.flush()?;
+    codec_landscape::flush(&mut tree_output)?;
 
     file_io::write_file(&paths.catalog, catalog.as_bytes())?;
 
@@ -420,7 +427,7 @@ fn compile_imagery(
 }
 
 fn prepare(paths: &ImportPaths) -> Result<world_preparation::CompiledLocation> {
-    world_preparation::CompiledLocation::load(&city_assets::CityAsset::new(paths.output.clone()))
+    world_preparation::compiled_location_load(&city_assets::new(paths.output.clone()))
         .map_err(|e| invalid(format!("preparing staged import: {e}")))
 }
 
@@ -441,9 +448,9 @@ fn bake(
 
 // More specific side tags override sidewalk:both and the general sidewalk tag.
 fn sidewalks(way: &osm::OSMElement) -> Sidewalks {
-    let general = way.tag("sidewalk");
+    let general = osm::tag(way, "sidewalk");
     let side = |key: &str, name: &str| {
-        for value in [way.tag(key), way.tag("sidewalk:both")] {
+        for value in [osm::tag(way, key), osm::tag(way, "sidewalk:both")] {
             match value {
                 "yes" => return true,
                 "no" | "none" | "separate" => return false,
@@ -467,7 +474,7 @@ fn create_location_map(
     source: &osm::OSMMap,
     boundary: &osm::OSMArea,
 ) -> Result<SourceLocation<f64>> {
-    let bbox = Some(boundary.bbox().to_array());
+    let bbox = Some(geometry::bounding_box_to_array(osm::bbox(boundary)));
     let bbox = bbox.or(source.bounds).unwrap_or_else(|| {
         let mut b = [90.0_f64, 180.0_f64, -90.0_f64, -180.0_f64];
         for e in source.nodes.values() {
@@ -490,7 +497,7 @@ fn create_location_map(
         return Err(invalid("invalid bounding box (south west north east)"));
     }
     let boundary = Some(boundary);
-    let origin = LatLon::new((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
+    let origin = geometry::new((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
     if origin.lat.abs() > 85.0 {
         return Err(invalid(
             "locations within 5 degrees of the poles are unsupported",
@@ -498,15 +505,15 @@ fn create_location_map(
     }
     let mut map = SourceLocation {
         origin: Some(origin),
-        ..SourceLocation::<f64>::empty()
+        ..source_location::empty::<f64>()
     };
-    let a = map.metres(LatLon::new(bbox[0], bbox[1]));
-    let b = map.metres(LatLon::new(bbox[2], bbox[3]));
+    let a = source_location::metres(&map, geometry::new(bbox[0], bbox[1]));
+    let b = source_location::metres(&map, geometry::new(bbox[2], bbox[3]));
     map.bounding_box = BoundingBoxXZ {
         min: XZ { x: a.x, z: b.z },
         max: XZ { x: b.x, z: a.z },
     };
-    map.boundary = boundary.map(|b| b.local(origin));
+    map.boundary = boundary.map(|b| osm::local(b, origin));
     // Bound geometry and height-field allocations before processing an accidental country extract.
     if b.x - a.x > 80000.0 + 1e-6 || a.z - b.z > 80000.0 + 1e-6 {
         return Err(invalid(
@@ -516,7 +523,7 @@ fn create_location_map(
     let coords: BTreeMap<_, _> = source
         .nodes
         .iter()
-        .map(|(id, e)| (*id, map.metres(e.coord.unwrap())))
+        .map(|(id, e)| (*id, source_location::metres(&map, e.coord.unwrap())))
         .collect();
     #[derive(Hash, PartialEq, Eq)]
     enum NodeKey {
@@ -538,9 +545,9 @@ fn create_location_map(
     ];
     let mut ways: Vec<_> = source.ways.values().collect();
     // Put circuits first so a circuit location starts on its drivable track.
-    ways.sort_by_key(|way| way.tag("highway") != "raceway");
+    ways.sort_by_key(|way| osm::tag(way, "highway") != "raceway");
     for way in ways {
-        let kind = way.tag("highway");
+        let kind = osm::tag(way, "highway");
         if !major.contains(&kind)
             && ![
                 "unclassified",
@@ -558,8 +565,8 @@ fn create_location_map(
         if (kind != "raceway"
             && ["access", "vehicle", "motor_vehicle"]
                 .iter()
-                .any(|k| matches!(way.tag(k), "no" | "private")))
-            || way.tag("area") == "yes"
+                .any(|k| matches!(osm::tag(way, k), "no" | "private")))
+            || osm::tag(way, "area") == "yes"
         {
             continue;
         }
@@ -573,9 +580,9 @@ fn create_location_map(
             "service" | "living_street" => 5.5,
             _ => 6.5,
         };
-        let width = osm::number(way.tag("width"))
+        let width = osm::number(osm::tag(way, "width"))
             .unwrap_or_else(|| {
-                let w = osm::number(way.tag("lanes"))
+                let w = osm::number(osm::tag(way, "lanes"))
                     .filter(|n| *n > 0.0)
                     .map(|n| n * 3.1)
                     .unwrap_or(default);
@@ -586,10 +593,10 @@ fn create_location_map(
                 }
             })
             .clamp(5.5, 18.0);
-        let direction = if way.tag("oneway") == "-1" {
+        let direction = if osm::tag(way, "oneway") == "-1" {
             -1
-        } else if matches!(way.tag("oneway"), "yes" | "1" | "true")
-            || way.tag("junction") == "roundabout"
+        } else if matches!(osm::tag(way, "oneway"), "yes" | "1" | "true")
+            || osm::tag(way, "junction") == "roundabout"
         {
             1
         } else {
@@ -650,13 +657,13 @@ fn create_location_map(
                             );
                         ends[i] = *positions.entry(key).or_insert_with(|| {
                             let id = map.road_nodes.len();
-                            map.road_nodes.push(
+                            map.road_nodes.push(geometry::at_height(
                                 XZ {
                                     x: x as f64 / 1000.,
                                     z: z as f64 / 1000.,
-                                }
-                                .at_height(0.),
-                            );
+                                },
+                                0.,
+                            ));
                             id
                         });
                     }
@@ -671,13 +678,13 @@ fn create_location_map(
                         } else {
                             1
                         },
-                        lanes: (osm::number(way.tag("lanes")).unwrap_or(if direction == 0 {
+                        lanes: (osm::number(osm::tag(way, "lanes")).unwrap_or(if direction == 0 {
                             2.0
                         } else {
                             1.0
                         }) as usize)
                             .clamp(1, 6),
-                        ..SourceRoad::new(ends, width)
+                        ..source_location::new(ends, width)
                     });
                 }
             }
@@ -688,8 +695,8 @@ fn create_location_map(
     }
     map.road_lines.sort_by(|a, b| {
         let key = |r: &SourceRoad<f64>| {
-            let a = map.road_nodes[r.ends[0]].xz();
-            let b = map.road_nodes[r.ends[1]].xz();
+            let a = geometry::xz(map.road_nodes[r.ends[0]]);
+            let b = geometry::xz(map.road_nodes[r.ends[1]]);
             (
                 dist(a, b) < 25.0,
                 length(mul(add(a, b), 0.5)),
@@ -708,15 +715,15 @@ fn create_location_map(
         .relations
         .iter()
         .filter(|e| {
-            e.tag("type") == "multipolygon"
-                && (!matches!(e.tag("building"), "" | "no")
-                    || !matches!(e.tag("building:part"), "" | "no"))
+            osm::tag(e, "type") == "multipolygon"
+                && (!matches!(osm::tag(e, "building"), "" | "no")
+                    || !matches!(osm::tag(e, "building:part"), "" | "no"))
         })
         .flat_map(|e| e.members.iter().filter(|m| m.0 == "way").map(|m| m.1))
         .collect();
     for way in source.ways.values() {
-        if (matches!(way.tag("building"), "" | "no")
-            && matches!(way.tag("building:part"), "" | "no"))
+        if (matches!(osm::tag(way, "building"), "" | "no")
+            && matches!(osm::tag(way, "building:part"), "" | "no"))
             || complex.contains(&way.id)
             || way.nodes.len() < 4
             || way.nodes.first() != way.nodes.last()
@@ -737,7 +744,7 @@ fn create_location_map(
             .filter(|(i, p)| dist(**p, original[(*i + original.len() - 1) % original.len()]) > 0.05)
             .map(|(_, p)| *p)
             .collect();
-        if points.len() < 3 || points.iter().any(|p| !map.contains(*p)) {
+        if points.len() < 3 || points.iter().any(|p| !source_location::contains(&map, *p)) {
             continue;
         }
         if map
@@ -760,9 +767,9 @@ fn create_location_map(
         if area < 0.0 {
             points.reverse();
         }
-        let height = osm::number(way.tag("height")).filter(|height| *height > 0.0);
-        let min_height = osm::number(way.tag("min_height"))
-            .or_else(|| osm::number(way.tag("building:min_level")).map(|levels| levels * 3.1))
+        let height = osm::number(osm::tag(way, "height")).filter(|height| *height > 0.0);
+        let min_height = osm::number(osm::tag(way, "min_height"))
+            .or_else(|| osm::number(osm::tag(way, "building:min_level")).map(|levels| levels * 3.1))
             .unwrap_or(0.0)
             .clamp(0.0, 69.0);
         if height.is_some_and(|height| height <= min_height) {
@@ -772,12 +779,14 @@ fn create_location_map(
             id: way.id as u64,
             height_meters: height
                 .unwrap_or_else(|| {
-                    osm::number(way.tag("building:levels"))
+                    osm::number(osm::tag(way, "building:levels"))
                         .filter(|n| *n > 0.0)
                         .map(|n| n * 3.1 + osm::roof_height(way))
                         .unwrap_or(
-                            if matches!(way.tag("building"), "apartments" | "commercial" | "office")
-                            {
+                            if matches!(
+                                osm::tag(way, "building"),
+                                "apartments" | "commercial" | "office"
+                            ) {
                                 9.3
                             } else {
                                 6.2
@@ -796,13 +805,13 @@ fn create_location_map(
             let Some(node) = source.nodes.get(&node_id) else {
                 continue;
             };
-            if matches!(node.tag("entrance"), "" | "no") {
+            if matches!(osm::tag(node, "entrance"), "" | "no") {
                 continue;
             }
             if let Some(coord) = node.coord {
                 map.entrances.push(world::Entrance {
                     building_id: way.id as u64,
-                    position: map.metres(coord),
+                    position: source_location::metres(&map, coord),
                 });
             }
         }

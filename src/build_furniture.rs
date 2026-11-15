@@ -1,4 +1,5 @@
 //! Compile mapped road controls into furniture assets.
+
 use crate::build_surfaces;
 use crate::build_surfaces::Surfaces;
 use crate::codec_furniture;
@@ -7,6 +8,7 @@ use crate::geometry::XZ;
 use crate::geometry::{add, along, dist, dot, mul, path_length, project, sub, unit};
 use crate::osm;
 use crate::osm::{OSMElement, OSMMap};
+use crate::source_location;
 use crate::source_location::SourceLocation;
 use crate::world;
 use geo::MultiPolygon;
@@ -34,10 +36,10 @@ fn directions(e: &OSMElement, kind: usize) -> (Vec<i8>, bool, Option<XZ>) {
         "give_way:direction",
         "traffic_sign:direction",
     ][kind];
-    let value = if e.tag(key).is_empty() {
-        e.tag("direction")
+    let value = if osm::tag(e, key).is_empty() {
+        osm::tag(e, "direction")
     } else {
-        e.tag(key)
+        osm::tag(e, key)
     };
     match value {
         "forward" => (vec![1], false, None),
@@ -84,8 +86,8 @@ fn place_furniture(
     s: &Surfaces,
 ) -> Vec<codec_furniture::FurnitureRecord> {
     let tree = build_surfaces::index(&s.paths);
-    let obstacles = build_surfaces::PolygonIndex::new(&s.obstacles);
-    let conflicts = |probe: &MultiPolygon<f64>| obstacles.intersects(probe);
+    let obstacles = build_surfaces::new(&s.obstacles);
+    let conflicts = |probe: &MultiPolygon<f64>| build_surfaces::intersects(&obstacles, probe);
     let lookup: std::collections::HashMap<_, _> = map
         .road_nodes
         .iter()
@@ -109,13 +111,13 @@ fn place_furniture(
     }
     let mut features: Vec<Feature> = vec![];
     for e in source.nodes.values() {
-        let highway = e.tag("highway");
-        let sign = e.tag("traffic_sign");
+        let highway = osm::tag(e, "highway");
+        let sign = osm::tag(e, "traffic_sign");
         let kind = if highway == "traffic_signals"
             || (highway == "crossing"
-                && (e.tag("crossing:signals") == "yes"
-                    || (e.tag("crossing:signals").is_empty()
-                        && e.tag("crossing") == "traffic_signals")))
+                && (osm::tag(e, "crossing:signals") == "yes"
+                    || (osm::tag(e, "crossing:signals").is_empty()
+                        && osm::tag(e, "crossing") == "traffic_signals")))
         {
             0
         } else if highway == "stop" || sign == "stop" {
@@ -127,12 +129,12 @@ fn place_furniture(
         } else {
             continue;
         };
-        let p = map.metres(e.coord.unwrap());
-        if !map.contains(p) {
+        let p = source_location::metres(map, e.coord.unwrap());
+        if !source_location::contains(map, p) {
             continue;
         }
         let value = if kind == 3 {
-            let Some(v) = osm::number(e.tag("maxspeed")).filter(|v| *v >= 5.0 && *v <= 150.0)
+            let Some(v) = osm::number(osm::tag(e, "maxspeed")).filter(|v| *v >= 5.0 && *v <= 150.0)
             else {
                 continue;
             };
@@ -241,7 +243,9 @@ fn place_furniture(
                             r.road_width_start_meters / 2.0 + 0.35 + step as f64 * 0.25,
                         ),
                     );
-                    if map.contains(q) && !conflicts(&Point::new(q.x, q.z).buffer(0.18)) {
+                    if source_location::contains(map, q)
+                        && !conflicts(&Point::new(q.x, q.z).buffer(0.18))
+                    {
                         position = Some(q);
                         break;
                     }
@@ -275,7 +279,7 @@ fn place_furniture(
     features.sort_by_key(|f| {
         (
             f.kind,
-            source.nodes[&f.id].tag("highway") != "traffic_signals",
+            osm::tag(&source.nodes[&f.id], "highway") != "traffic_signals",
             f.id,
         )
     });
@@ -359,17 +363,19 @@ fn place_furniture(
 
 #[cfg(test)]
 mod tests {
+    use crate::source_location;
+
     use super::*;
     use crate::build_surfaces;
     use crate::geometry;
-    use crate::geometry::{BoundingBoxXZ, LatLon};
+    use crate::geometry::BoundingBoxXZ;
     use crate::source_location::SourceRoad;
     use crate::test_support;
     use crate::world::FurnitureKind;
 
     fn element(id: i64, p: XZ, tags: &[(&str, &str)]) -> OSMElement {
         let mut element = test_support::osm_element(id, tags);
-        element.coord = Some(LatLon::new(
+        element.coord = Some(geometry::new(
             -p.z.to_degrees() / 6371000.,
             p.x.to_degrees() / 6371000.,
         ));
@@ -408,21 +414,24 @@ mod tests {
                 way
             });
         }
-        let mut map = SourceLocation::empty();
-        map.origin = Some(LatLon::new(0., 0.));
+        let mut map = source_location::empty();
+        map.origin = Some(geometry::new(0., 0.));
         map.bounding_box = BoundingBoxXZ {
             min: XZ { x: -50., z: -50. },
             max: XZ { x: 50., z: 50. },
         };
-        map.road_nodes = points.into_iter().map(|p| p.at_height(0.)).collect();
+        map.road_nodes = points
+            .into_iter()
+            .map(|p| geometry::at_height(p, 0.))
+            .collect();
         map.road_lines = vec![
             SourceRoad {
                 osm_way_id: Some(101),
-                ..SourceRoad::new([0, 1], 8.)
+                ..source_location::new([0, 1], 8.)
             },
             SourceRoad {
                 osm_way_id: Some(102),
-                ..SourceRoad::new([2, 1], 6.5)
+                ..source_location::new([2, 1], 6.5)
             },
         ];
         let output = tempfile::tempdir().unwrap();
