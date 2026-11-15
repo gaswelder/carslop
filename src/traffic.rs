@@ -24,7 +24,7 @@ mod tests {
 
     #[test]
     fn mapped_furniture_is_typed_finite_and_outside_the_driving_surface() {
-        let city_track = test_support::nicosia_world();
+        let city_track = test_support::city_world();
         let city = &city_track;
         assert!(!city.furniture.is_empty());
         for f in &city.furniture {

@@ -1004,7 +1004,7 @@ mod tests {
 
     #[test]
     fn scenic_blockout_is_finite_bounded_and_uses_the_selected_road() {
-        let route = track::try_track(&test_support::scenic_id()).unwrap();
+        let route = track::try_track(&test_support::authored_id()).unwrap();
         let geometry = build(&route, &test_support::cars());
         assert!(
             geometry.world_count > 100_000 && geometry.world_count < 1_800_000,

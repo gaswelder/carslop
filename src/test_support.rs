@@ -278,7 +278,18 @@ pub fn write_car(directory: &std::path::Path) -> serde_json::Value {
 }
 
 pub fn cars() -> Vec<std::sync::Arc<asset_car::CarSpec>> {
-    asset_car::load(std::path::Path::new("data/cars")).unwrap()
+    [0.0, 0.5, 1.0]
+        .into_iter()
+        .map(|drive_bias| {
+            let mut spec = car_spec().clone();
+            spec.drive_bias = drive_bias;
+            spec.weight_kg *= 1.0 + drive_bias * 0.5;
+            // Include a launch-capable AWD fixture as well as both driven axles.
+            spec.engine_max_torque_nm *= 3.0;
+            spec.engine_power_watts *= 3.0;
+            Arc::new(spec)
+        })
+        .collect()
 }
 
 /// Tiny generated world with a real scene archive and one raw aerial tile.
@@ -336,20 +347,80 @@ pub fn car() -> Arc<asset_car::CarSpec> {
     Arc::new(car_spec().clone())
 }
 
-pub fn scenic_id() -> track::LocationId {
-    track::register_file(std::path::Path::new(
-        "data/locations/scenic/source.track.json",
-    ))
-    .expect("cannot load Coastal Highway track definition")
-    .0
+/// A generated elevated loop, deliberately much larger than the compact route.
+pub fn authored_id() -> track::LocationId {
+    static ID: OnceLock<track::LocationId> = OnceLock::new();
+    ID.get_or_init(|| {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"version":2,"name":"Test coastal loop","scenery":"coastal","points":[[0,0,0,8],[600,50,0,8],[600,80,500,8],[0,20,500,8]]}"#).unwrap();
+        track::register_file(file.path()).unwrap().0
+    }).clone()
 }
 
-pub fn nicosia_id() -> track::LocationId {
-    track::asset("data/locations/nicosia").expect("bundled Nicosia assets")
+struct CityFixture {
+    id: track::LocationId,
+    _directory: tempfile::TempDir,
+}
+
+/// Parallel streets, raised pavements, parking, buildings and controls on a slope.
+/// Keep the temporary files alive for tests that reload the location by its ID.
+fn city_fixture() -> &'static CityFixture {
+    static FIXTURE: OnceLock<CityFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut city = String::from("CITY 2\nbounds -1050 -1050 1050 1050\n");
+        let mut streets = String::from("STREETS 1 21\n");
+        let mut landscape = String::from("LANDSCAPE 1\n");
+        let mut furniture = String::from("FURNITURE 3\n");
+        for i in 0..21 {
+            let z = i * 100 - 1000;
+            city.push_str(&format!("n -1000 {z}\nn 1000 {z}\nr {} {} 8 0 {}\n", i * 2, i * 2 + 1, i + 1));
+            city.push_str(&format!("b {} 8 0 4 200 {} 220 {} 220 {} 200 {}\n", i + 1, z + 30, z + 30, z + 50, z + 50));
+            streets.push_str(&format!("p {i} 3 -1000 {z} 0 {z} 1000 {z}\n"));
+            struct Strip {
+                usage: u8,
+                near: i32,
+                far: i32,
+            }
+            for strip in [
+                Strip { usage: 1, near: z - 4, far: z + 4 },
+                Strip { usage: 6, near: z - 10, far: z - 4 },
+                Strip { usage: 6, near: z + 4, far: z + 10 },
+            ] {
+                let Strip { usage, near, far } = strip;
+                streets.push_str(&format!("t {usage} -1000 {near} 1000 {near} 1000 {far}\nt {usage} -1000 {near} 1000 {far} -1000 {far}\n"));
+            }
+            streets.push_str(&format!("c 1 -1000 {} 1000 {} 0 1\nc 1 -1000 {} 1000 {} 0 -1\n", z - 4, z - 4, z + 4, z + 4));
+            landscape.push_str(&format!("a 3 -100 {} 100 {} 100 {}\na 3 -100 {} 100 {} -100 {}\n", z + 30, z + 30, z + 60, z + 30, z + 60, z + 60));
+            let kind = ["stop", "yield", "signal", "speed_limit"][i as usize % 4];
+            furniture.push_str(&format!("{} {kind} 0 {} 1 0 30 0\n", i + 1, z + 8));
+        }
+        std::fs::write(root.join("city.txt"), &city).unwrap();
+        std::fs::write(root.join("streets.txt"), &streets).unwrap();
+        std::fs::write(root.join("landscape.txt"), landscape).unwrap();
+        std::fs::write(root.join("furniture.txt"), furniture).unwrap();
+        std::fs::write(root.join("manifest.json"), "{}").unwrap();
+        std::fs::create_dir(root.join("elevation")).unwrap();
+        let mut elevation = String::from("ELEVATION 1\ngrid 22 22 -1050 -1050 100 0\n");
+        for _ in 0..22 {
+            for column in 0..22 {
+                elevation.push_str(&format!("{} ", -21 + column * 2));
+            }
+            elevation.push('\n');
+        }
+        std::fs::write(root.join("elevation/heightfield.txt"), elevation).unwrap();
+        build_collision::build_collisions(&root.join("streets.bin"), &source_location::parse(&city).unwrap(), streets).unwrap();
+        CityFixture { id: track::asset(root).unwrap(), _directory: directory }
+    })
+}
+
+pub fn city_id() -> track::LocationId {
+    city_fixture().id.clone()
 }
 
 pub fn location_ids() -> [track::LocationId; 3] {
-    [track::LocationId::Compact, scenic_id(), nicosia_id()]
+    [track::LocationId::Compact, authored_id(), city_id()]
 }
 
 pub fn variable_width_track() -> Arc<track::WorldLocation> {
@@ -429,10 +500,10 @@ pub fn osm_element(id: i64, tags: &[(&str, &str)]) -> osm::OSMElement {
     element
 }
 
-pub fn nicosia_world() -> Arc<track::WorldLocation> {
+pub fn city_world() -> Arc<track::WorldLocation> {
     static WORLD: OnceLock<Arc<track::WorldLocation>> = OnceLock::new();
     WORLD
-        .get_or_init(|| track::try_track(&nicosia_id()).unwrap())
+        .get_or_init(|| track::try_track(&city_id()).unwrap())
         .clone()
 }
 

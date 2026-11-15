@@ -1351,7 +1351,7 @@ mod tests {
     #[test]
     fn map_zoom_factor_applies_to_every_location() {
         let track = track::try_track(&LocationId::Compact).unwrap();
-        let other = track::try_track(&test_support::scenic_id()).unwrap();
+        let other = track::try_track(&test_support::authored_id()).unwrap();
         let viewport = [1280.0, 720.0];
 
         let mut view =
@@ -1536,7 +1536,7 @@ mod tests {
                     let width = (east[0] - center[0]) * viewport[0];
                     let height = (south[1] - center[1]).abs() * viewport[1];
                     assert!((width - height).abs() < 0.001);
-                    assert_eq!(south[1] < center[1], id == test_support::nicosia_id());
+                    assert_eq!(south[1] < center[1], id == test_support::city_id());
                 }
             }
         }
@@ -1544,7 +1544,7 @@ mod tests {
 
     #[test]
     fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = track::try_track(&test_support::scenic_id()).unwrap();
+        let track = track::try_track(&test_support::authored_id()).unwrap();
         let player = vehicle_location::spawn(&track).point;
         for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
             for steps in [-100.0, 0.0, 100.0] {

@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn spatial_projection_matches_full_search_and_route_caches_are_isolated() {
-        let scenic = track::try_track(&test_support::scenic_id()).unwrap();
+        let scenic = track::try_track(&test_support::authored_id()).unwrap();
         for i in 0..400 {
             let s = track::at_distance(&scenic, track::sampling_length(&scenic) * i as f32 / 400.0);
             for offset in [-45.0, -3.0, 0.0, 3.0, 45.0] {

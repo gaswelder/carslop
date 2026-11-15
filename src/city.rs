@@ -383,8 +383,8 @@ mod tests {
         );
     }
     #[test]
-    fn engomi_ground_contact_props_and_foundations_share_elevation() {
-        let city_track = test_support::nicosia_world();
+    fn ground_contact_props_and_foundations_share_elevation() {
+        let city_track = test_support::city_world();
         let city = &city_track;
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
@@ -443,7 +443,7 @@ mod tests {
     }
     #[test]
     fn sidewalks_and_parking_are_drivable_at_rendered_height_and_crop_stays_solid() {
-        let city_track = test_support::nicosia_world();
+        let city_track = test_support::city_world();
         let city = &city_track;
         let mut checked = 0;
         for triangle in world_roads::road_triangles(city) {
@@ -536,39 +536,47 @@ mod tests {
     }
 
     #[test]
-    fn urban_map_covers_centres_on_both_sides_and_queries_only_nearby_streets() {
-        let city_track = test_support::nicosia_world();
+    fn city_map_covers_its_extent_and_queries_only_nearby_streets() {
+        let city_track = test_support::city_world();
         let city = &city_track;
-        assert!(
-            world_roads::road_lines(city).len() > 100_000
-                && world_buildings::buildings(city).len() > 70_000
-        );
-        for (name, lat, lon) in [
-            ("Nicosia", 35.1746503, 33.3638783),
-            ("Strovolos", 35.1328993, 33.3454972),
-            ("Lakatamia", 35.1200946, 33.3078496),
-            ("Aglandjia", 35.1474032, 33.4002217),
-            ("Gonyeli", 35.2164170, 33.3058171),
-            ("Taskinkoy", 35.2070072, 33.3457502),
-        ] {
-            let p = geometry::XYZ {
-                x: ((lon - 33.32_f64).to_radians() * 6_371_000.0 * 35.162_f64.to_radians().cos())
-                    as f32,
+        assert_eq!(world_roads::road_lines(city).len(), 21);
+        assert_eq!(world_buildings::buildings(city).len(), 21);
+        for p in [
+            geometry::XYZ {
+                x: -900.0,
                 y: 0.0,
-                z: (-(lat - 35.162_f64).to_radians() * 6_371_000.0) as f32,
-            };
+                z: -1000.0,
+            },
+            geometry::XYZ {
+                x: 900.0,
+                y: 0.0,
+                z: -500.0,
+            },
+            geometry::XYZ {
+                x: -900.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            geometry::XYZ {
+                x: 900.0,
+                y: 0.0,
+                z: 500.0,
+            },
+            geometry::XYZ {
+                x: -900.0,
+                y: 0.0,
+                z: 1000.0,
+            },
+        ] {
             let road = world_roads::project(city, p);
             assert!(
-                (road.point.x - p.x).hypot(road.point.z - p.z) < 250.0,
-                "missing public surface roads near {name}"
+                (road.point.x - p.x).hypot(road.point.z - p.z) < 0.001,
+                "missing fixture road near {p:?}"
             );
         }
         let bounds = BoundingBoxXZ {
-            min: XZ {
-                x: -200.0,
-                z: -130.0,
-            },
-            max: XZ { x: 200.0, z: 130.0 },
+            min: XZ { x: -40.0, z: -40.0 },
+            max: XZ { x: 40.0, z: 40.0 },
         };
         let intersects = |a: geometry::XYZ, b: geometry::XYZ| {
             a.x.min(b.x) <= bounds.max.x
@@ -577,7 +585,11 @@ mod tests {
                 && a.z.max(b.z) >= bounds.min.z
         };
         let nearby = world_roads::road_segments_in(city, bounds);
-        assert!(nearby.len() < world_roads::road_lines(city).len() / 10);
+        let total_segments: usize = world_roads::road_lines(city)
+            .iter()
+            .map(|road| road.path.len() - 1)
+            .sum();
+        assert!(!nearby.is_empty() && nearby.len() < total_segments / 10);
         let actual = nearby.iter().filter(|(a, b)| intersects(*a, *b)).count();
         let all = world_roads::road_lines(city)
             .iter()

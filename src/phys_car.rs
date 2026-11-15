@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     fn hill_car(uphill: bool) -> Vehicle {
-        let route = track::try_track(&test_support::scenic_id()).unwrap();
+        let route = track::try_track(&test_support::authored_id()).unwrap();
         let road = (0..200)
             .map(|i| track::at_distance(&route, i as f32 * 10.0))
             .max_by(|a, b| {
@@ -1244,7 +1244,7 @@ mod tests {
     fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
         for model in test_support::cars() {
             for initial_speed in [12.0, -4.0] {
-                let mut car = level_route_car(test_support::scenic_id(), model.clone());
+                let mut car = level_route_car(test_support::authored_id(), model.clone());
                 car.manual = true;
                 if initial_speed < 0.0 {
                     phys_car::shift(&mut car, false);
@@ -1416,7 +1416,7 @@ mod tests {
     fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
         let run = |hz: u32| {
             let track = std::sync::Arc::new(test_support::bumpy_track(
-                &track::try_track(&test_support::scenic_id()).unwrap(),
+                &track::try_track(&test_support::authored_id()).unwrap(),
             ));
             let road = track::at_distance(&track, 50.0);
             let mut car = phys_car::on_track(
@@ -1458,7 +1458,7 @@ mod tests {
 
     #[test]
     fn chassis_can_unload_land_and_settle() {
-        let mut car = level_route_car(test_support::scenic_id(), test_support::car());
+        let mut car = level_route_car(test_support::authored_id(), test_support::car());
         let ground = phys_car::ride_height(&car);
         car.suspension_initialized = true;
         car.position.y = ground + 0.5;
@@ -1832,7 +1832,7 @@ mod tests {
     #[test]
     fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
         for model in test_support::cars() {
-            let mut car = route_car(test_support::scenic_id(), model.clone());
+            let mut car = route_car(test_support::authored_id(), model.clone());
             let road = track::at_distance(&car.track, 50.0);
             let g = &model.gearbox;
             for gear in 1..phys_car::gears(g) {
@@ -1870,7 +1870,7 @@ mod tests {
 
     #[test]
     fn city_curb_is_crossable_with_a_single_small_speed_loss_and_settling_bump() {
-        let track = test_support::nicosia_world();
+        let track = test_support::city_world();
         let city = &track;
         let (q, normal) = world_roads::curbs(city)
             .iter()
@@ -1952,7 +1952,7 @@ mod tests {
     fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         for model in test_support::cars() {
             let mut compact = level_route_car(track::LocationId::Compact, model.clone());
-            let mut scenic = level_route_car(test_support::scenic_id(), model.clone());
+            let mut scenic = level_route_car(test_support::authored_id(), model.clone());
             assert!(
                 phys_car::toggle_direction(&mut (compact))
                     && phys_car::toggle_direction(&mut (scenic))
@@ -2012,7 +2012,7 @@ mod tests {
 
     #[test]
     fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
-        let track = track::try_track(&test_support::scenic_id()).unwrap();
+        let track = track::try_track(&test_support::authored_id()).unwrap();
         let road = track::at_distance(&track, 50.0);
         for side in [-1.0, 1.0] {
             let position =
@@ -2046,8 +2046,9 @@ mod tests {
 
     #[test]
     fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
-        let mut car = route_car(test_support::scenic_id(), test_support::car());
+        let mut car = route_car(test_support::authored_id(), test_support::car());
         let model = car.spec.clone();
+        let route = car.track.clone();
         phys_car::toggle_direction(&mut car);
         treadmill_tick(
             &mut car,
@@ -2064,10 +2065,7 @@ mod tests {
             vehicle_location::vehicle_position(road, 0.0),
             world::heading(road),
         );
-        assert!(std::sync::Arc::ptr_eq(
-            &car.track,
-            &track::try_track(&(test_support::scenic_id())).unwrap()
-        ));
+        assert!(std::sync::Arc::ptr_eq(&car.track, &route));
         assert!(std::sync::Arc::ptr_eq(&car.spec, &model));
         assert_eq!(car.position, vehicle_location::vehicle_position(road, 0.0));
         assert_eq!(car.heading, world::heading(road));

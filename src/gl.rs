@@ -2295,7 +2295,7 @@ mod renderer_tests {
         // Scenic fixtures are sampled from the route, never compact world coordinates.
         for (car_index, model) in app.cars.clone().into_iter().enumerate() {
             app.selected_car = car_index;
-            app.session = on_track(model.clone(), test_support::scenic_id());
+            app.session = on_track(model.clone(), test_support::authored_id());
             ensure_mesh(&mut app);
             for distance in [50.0, 50.6] {
                 let road = track::at_distance(session_track(&app.session), distance);
@@ -2430,10 +2430,10 @@ mod renderer_tests {
     }
 
     #[test]
-    fn engomi_drive_recovery_pause_and_return_preserve_the_map() {
-        let mut s = on_track(test_support::car(), test_support::nicosia_id());
+    fn city_drive_recovery_pause_and_return_preserve_the_map() {
+        let mut s = on_track(test_support::car(), test_support::city_id());
         let start = s.car.position;
-        for _ in 0..40 {
+        for _ in 0..240 {
             tick(
                 &mut s,
                 Controls {
@@ -2457,15 +2457,27 @@ mod renderer_tests {
         assert_eq!(s.car.position, frozen);
         s.state = GameState::Driving;
         assert!(recover(&mut (s)));
-        assert_eq!(session_track(&(s)).id, test_support::nicosia_id());
+        assert_eq!(session_track(&(s)).id, test_support::city_id());
         assert!(world::road_clearance(session_track(&(s)), s.car.position) < 0.0);
     }
 
     #[test]
     #[ignore = "requires SDL/OpenGL; verifies startup without a selected city"]
     fn no_city_startup_renderer_smoke() {
+        let fixtures = tempfile::tempdir().unwrap();
         let mut app = with_location(false);
-        assert!(app.locations.len() >= 2);
+        app.locations = ["first", "second"]
+            .map(|name| {
+                let assets = test_support::generated_location(
+                    &fixtures.path().join(name),
+                    7.0,
+                    "test imagery",
+                );
+                city_assets::from_assets(assets).unwrap()
+            })
+            .to_vec();
+        app.selected_location = 0;
+        let city_id = app.locations[0].track.clone();
         loading::draw(
             &app.window,
             &app.hud,
@@ -2492,7 +2504,7 @@ mod renderer_tests {
         let city_choice = app
             .locations
             .iter()
-            .position(|entry| entry.track == test_support::nicosia_id())
+            .position(|entry| entry.track == city_id)
             .unwrap();
         menu_action(&mut app, hud::MenuAction::Choice(city_choice));
         key_down(&mut app, Keycode::F7);
@@ -2500,16 +2512,10 @@ mod renderer_tests {
             app.menu_focus = 0;
             key_down(&mut app, Keycode::Down);
             render(&mut app, Duration::ZERO);
-            assert_ne!(session_track(&(app.session)).id, test_support::nicosia_id());
+            assert_ne!(session_track(&(app.session)).id, city_id);
         }
-        assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
-        let scenic_choice = app
-            .locations
-            .iter()
-            .position(|entry| {
-                track::asset_path(&entry.track).is_some_and(|p| p.ends_with("scenic"))
-            })
-            .unwrap();
+        assert!(!app.meshes.contains_key(&city_id));
+        let scenic_choice = 1;
         menu_action(&mut app, hud::MenuAction::Choice(scenic_choice));
         assert_eq!(session_track(&(app.session)).id, LocationId::Compact);
         key_down(&mut app, Keycode::Return);
@@ -2522,21 +2528,6 @@ mod renderer_tests {
         render(&mut app, Duration::ZERO);
         assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
         drop(app);
-        if let Ok(path) = std::path::Path::new("data/locations/nicosia").canonicalize() {
-            let mut app = with_location(true);
-            let selected = &app.locations[app.selected_location];
-            assert_eq!(
-                track::asset_path(&(selected.track))
-                    .unwrap()
-                    .canonicalize()
-                    .unwrap(),
-                path
-            );
-            assert_ne!(session_track(&(app.session)).id, test_support::nicosia_id());
-            assert!(!app.meshes.contains_key(&test_support::nicosia_id()));
-            render(&mut app, Duration::ZERO);
-            assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
-        }
     }
 
     #[test]

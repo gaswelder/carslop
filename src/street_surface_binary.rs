@@ -360,9 +360,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a location with baked collision data"]
-    fn full_collision_cache_matches_source() {
-        let world = test_support::nicosia_world();
+    fn generated_collision_cache_matches_source() {
+        let world = test_support::city_world();
         let assets = world::assets(&world).unwrap();
         let root = city_assets::directory(assets);
         let source = std::fs::read_to_string(root.join("city.txt")).unwrap();
