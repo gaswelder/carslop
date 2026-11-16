@@ -125,13 +125,6 @@ fn speed_at_rpm(gearbox: &model::car::Gearbox, rpm: f32, gear: u8) -> f32 {
 const STEERING_RATE: f32 = 9.0;
 // Forward speed (m/s) at which released steering reaches its full return rate.
 const STEERING_CENTERING_SPEED: f32 = 10.0;
-// Below this speed the full lock is available for parking and tight turns.
-const STEERING_LOCK_SPEED: f32 = 6.0;
-// Speed range over which the lock fades from full to its minimum fraction.
-const STEERING_LOCK_FADE_SPEED: f32 = 20.0;
-// Fraction of full lock available once the fade is complete. It keeps a held
-// input from asking for several times the slip angle the tires can use.
-const STEERING_HIGH_SPEED_LOCK: f32 = 0.35;
 // Front axle grip relative to the rear. With equal grip the limit yaw moment
 // is exactly neutral (each axle's capacity scales with its static load), so a
 // fully developed slide never straightens itself. The front deficit also
@@ -844,11 +837,7 @@ fn update_engine_feedback(vehicle: &mut Vehicle, controls: Controls, dt: f32) {
 }
 
 fn update_steering(vehicle: &mut Vehicle, requested: f32, dt: f32) {
-    // The lock available at this speed bounds both the held angle and the
-    // new request, so speeding up mid-corner also unwinds the wheels.
-    let lock = steering_lock_fraction(vehicle);
-    vehicle.steering = vehicle.steering.clamp(-lock, lock);
-    let requested = requested.clamp(-lock, lock);
+    let requested = requested.clamp(-1.0, 1.0);
     if requested == 0.0 {
         // Stationary wheels hold their angle. Forward motion progressively
         // restores self-centering, independently of deliberate countersteering.
@@ -857,23 +846,18 @@ fn update_steering(vehicle: &mut Vehicle, requested: f32, dt: f32) {
         vehicle.steering -= vehicle.steering.clamp(-step, step);
         return;
     }
-    // Cross the centre quickly when countersteering, then build and release
-    // the turn at the same speed-dependent rate. Release no faster than
-    // build stops the wheel snapping back when a key is let go.
-    let reversing = requested * vehicle.steering < 0.0;
-    let target = if reversing { 0.0 } else { requested };
-    let rate = if reversing {
-        STEERING_RATE * 0.85
-    } else {
-        STEERING_RATE * 0.45 / (1.0 + vehicle.speed.abs() * 0.008)
-    };
-    vehicle.steering += (target - vehicle.steering).clamp(-rate * dt, rate * dt);
-}
-
-fn steering_lock_fraction(vehicle: &Vehicle) -> f32 {
-    let fade =
-        ((vehicle.speed.abs() - STEERING_LOCK_SPEED) / STEERING_LOCK_FADE_SPEED).clamp(0.0, 1.0);
-    1.0 - (1.0 - STEERING_HIGH_SPEED_LOCK) * fade
+    // Cross the centre quickly when countersteering, then use the remaining
+    // time to build the opposite angle so response is independent of step size.
+    let mut remaining = dt;
+    if requested * vehicle.steering < 0.0 {
+        let rate = STEERING_RATE * 0.85;
+        let centering_time = vehicle.steering.abs() / rate;
+        let elapsed = remaining.min(centering_time);
+        vehicle.steering -= vehicle.steering.clamp(-rate * elapsed, rate * elapsed);
+        remaining -= elapsed;
+    }
+    let rate = STEERING_RATE * 0.45 / (1.0 + vehicle.speed.abs() * 0.008);
+    vehicle.steering += (requested - vehicle.steering).clamp(-rate * remaining, rate * remaining);
 }
 
 fn steering_angle(vehicle: &Vehicle) -> f32 {

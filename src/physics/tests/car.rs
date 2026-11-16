@@ -552,9 +552,10 @@ fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
         for speed_kmh in [0.0, 40.0, 80.0, 120.0, 200.0] {
             car.speed = speed_kmh / 3.6;
             for direction in [-1.0, 1.0] {
+                car.steering = 0.0;
                 let mut previous = 0.0;
                 for step in 1..=100 {
-                    car.steering = direction * step as f32 / 100.0;
+                    physics::car::update_steering(&mut car, direction * step as f32 / 100.0, 1.0);
                     let angle = physics::car::front_wheel_angle(&car).abs();
                     assert!(
                         angle > previous,
@@ -569,7 +570,7 @@ fn adding_steering_always_increases_wheel_angle_at_road_speeds() {
 }
 
 #[test]
-fn steering_lock_tapers_with_speed_but_stays_full_for_parking() {
+fn accelerating_through_a_corner_does_not_unwind_held_steering() {
     let mut car = new(
         XYZ {
             x: 0.0,
@@ -579,23 +580,17 @@ fn steering_lock_tapers_with_speed_but_stays_full_for_parking() {
         0.0,
         test::support::car(),
     );
-    for speed in [-5.0, 0.0, 5.0] {
-        car.speed = speed;
+    for direction in [-1.0, 1.0] {
         car.steering = 0.0;
-        physics::car::update_steering(&mut car, 1.0, 1.0);
-        assert!(
-            (physics::car::steering_angle(&(car)).abs() - 0.54).abs() < 0.001,
-            "parking speed {speed} must keep full lock"
-        );
+        car.speed = 5.0;
+        physics::car::update_steering(&mut car, direction, 1.0);
+        for speed in [10.0, 20.0, 30.0, 55.0, -55.0] {
+            car.speed = speed;
+            physics::car::update_steering(&mut car, direction, 1.0 / 240.0);
+            assert_eq!(car.steering, direction, "held steering at {speed} m/s");
+            assert!((physics::car::steering_angle(&car).abs() - 0.54).abs() < 0.001);
+        }
     }
-    car.speed = 30.0;
-    physics::car::update_steering(&mut car, 1.0, 1.0);
-    let fast = physics::car::steering_angle(&car).abs();
-    assert!(fast > 0.1, "some lock must remain at speed");
-    assert!(
-        fast < 0.54 * 0.4,
-        "high speed must not offer parking lock: {fast}"
-    );
 }
 
 #[test]
@@ -604,8 +599,6 @@ fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
     for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         let heading = car.heading;
-        // Stay below the high-speed lock so this measures tap versus hold
-        // rather than the speed-dependent lock taper.
         steering_run(&mut car, speed, 0.2, 0.1, 120.0);
         let tap_yaw = car.yaw_rate.abs();
         steering_run(&mut car, speed, 0.0, 0.4, 120.0);
