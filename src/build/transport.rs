@@ -40,15 +40,15 @@ pub fn grade(way: &build::osm::OSMElement) -> i8 {
         .parse::<i8>()
         .unwrap_or(0)
         .clamp(-10, 10);
-    if layer != 0 {
-        layer
-    } else if !matches!(
+    // Layer orders overlapping features; it does not describe a structure.
+    // In particular, bridge=no must not become a bridge because layer=1.
+    if !matches!(
         build::osm::tag(way, "bridge"),
         "" | "no" | "low_water_crossing"
     ) {
-        1
+        layer.max(1)
     } else if !matches!(build::osm::tag(way, "tunnel"), "" | "no") {
-        -1
+        layer.min(-1)
     } else {
         0
     }
@@ -262,28 +262,52 @@ pub fn build(
                 } else {
                     lift(station as f32)
                 };
-                sections.push([-1., 1.].map(|side| {
-                    util::geometry::at_height(
-                        util::geometry::xz_map(
-                            util::geometry::add(
-                                p,
-                                util::geometry::mul(
-                                    normal,
-                                    side * (road.road_width_start_meters / 2. + 2.5),
-                                ),
+                let half_width = road.road_width_start_meters / 2. + 2.5;
+                sections.push(
+                    [-half_width - 2.5, -half_width, half_width, half_width + 2.5].map(|lateral| {
+                        util::geometry::at_height(
+                            util::geometry::xz_map(
+                                util::geometry::add(p, util::geometry::mul(normal, lateral)),
+                                |v| v as f32,
                             ),
-                            |v| v as f32,
-                        ),
-                        offset,
-                    )
-                }));
+                            if lateral.abs() > half_width {
+                                0.
+                            } else {
+                                offset
+                            },
+                        )
+                    }),
+                );
+            }
+            // Fade each independent ribbon to zero at its ends as well as its
+            // shoulders. The envelope of these continuous ribbons has no steps.
+            for start in [true, false] {
+                let direction = util::geometry::unit(util::geometry::sub(
+                    util::geometry::along(path, if start { 0. } else { length }),
+                    util::geometry::along(path, if start { 0.01 } else { length - 0.01 }),
+                ));
+                let cap = sections[if start { 0 } else { sections.len() - 1 }].map(|mut p| {
+                    p.x += direction.x as f32 * 2.5;
+                    p.z += direction.z as f32 * 2.5;
+                    p.y = 0.;
+                    p
+                });
+                if start {
+                    sections.insert(0, cap);
+                } else {
+                    sections.push(cap);
+                }
             }
             for pair in sections.windows(2) {
-                for points in [
-                    [pair[0][0], pair[0][1], pair[1][1]],
-                    [pair[0][0], pair[1][1], pair[1][0]],
-                ] {
-                    ramps.push(RoadRise { points });
+                for strip in 0..3 {
+                    for points in [
+                        [pair[0][strip], pair[0][strip + 1], pair[1][strip + 1]],
+                        [pair[0][strip], pair[1][strip + 1], pair[1][strip]],
+                    ] {
+                        if points.iter().any(|p| p.y.abs() > 0.00001) {
+                            ramps.push(RoadRise { points });
+                        }
+                    }
                 }
             }
         }
@@ -307,7 +331,7 @@ impl rstar::RTreeObject for IndexedFootprint {
     }
 }
 
-// Keep source indices stable so overlapping ramps retain their original precedence.
+// Keep source indices stable to break ties between coincident planes.
 struct Footprints {
     polygons: Vec<Polygon<f64>>,
     tree: rstar::RTree<IndexedFootprint>,
@@ -357,21 +381,60 @@ fn candidates(footprints: &Footprints, polygon: &Polygon<f64>) -> Vec<usize> {
     indices
 }
 
-fn subtract(footprints: &Footprints, polygon: &Polygon<f64>) -> MultiPolygon<f64> {
-    let indices = candidates(footprints, polygon);
-    if indices.is_empty() {
-        return MultiPolygon(vec![polygon.clone()]);
+fn plane_height(rise: &RoadRise, p: XZ) -> f64 {
+    let [a, b, c] = rise.points;
+    let dx = f64::from(b.x) - f64::from(a.x);
+    let dz = f64::from(b.z) - f64::from(a.z);
+    let ex = f64::from(c.x) - f64::from(a.x);
+    let ez = f64::from(c.z) - f64::from(a.z);
+    let px = p.x - f64::from(a.x);
+    let pz = p.z - f64::from(a.z);
+    let denominator = dx * ez - dz * ex;
+    f64::from(a.y)
+        + (px * ez - pz * ex) / denominator * f64::from(b.y - a.y)
+        + (dx * pz - dz * px) / denominator * f64::from(c.y - a.y)
+}
+
+fn sign(rise: &RoadRise) -> f64 {
+    rise.points
+        .iter()
+        .max_by(|a, b| a.y.abs().total_cmp(&b.y.abs()))
+        .map_or(0., |p| f64::from(p.y.signum()))
+}
+
+// Clip a candidate footprint to the half-plane where it overrides this ramp.
+fn overriding(ramp: &RoadRise, candidate: &RoadRise, earlier: bool) -> Option<Polygon<f64>> {
+    let ramp_sign = sign(ramp);
+    let candidate_sign = sign(candidate);
+    if ramp_sign != candidate_sign {
+        return earlier.then(|| footprint(candidate));
     }
-    // Input ramp triangles overlap; union them before using them as a clip.
-    let nearby = MultiPolygon(
-        indices
-            .into_iter()
-            .map(|index| footprints.polygons[index].clone())
-            .collect(),
-    );
-    polygon.difference(&build::surfaces::union(
-        &[nearby.orient(Direction::Default)],
-    ))
+    let points = candidate
+        .points
+        .map(|p| util::geometry::xz_map(util::geometry::xz(p), f64::from));
+    let distance = |p| (plane_height(candidate, p) - plane_height(ramp, p)) * ramp_sign;
+    let distances = points.map(distance);
+    if distances.iter().all(|d| d.abs() < 0.000001) {
+        return earlier.then(|| footprint(candidate));
+    }
+    let mut clipped = Vec::new();
+    for i in 0..3 {
+        let a = points[i];
+        let b = points[(i + 1) % 3];
+        let before = distances[i];
+        let after = distances[(i + 1) % 3];
+        if before >= 0. {
+            clipped.push(a);
+        }
+        if (before >= 0.) != (after >= 0.) {
+            let t = before / (before - after);
+            clipped.push(util::geometry::add(
+                a,
+                util::geometry::mul(util::geometry::sub(b, a), t),
+            ));
+        }
+    }
+    (clipped.len() >= 3).then(|| util::geometry::polygon(&clipped))
 }
 
 fn footprint(rise: &RoadRise) -> Polygon<f64> {
@@ -385,16 +448,26 @@ fn footprint(rise: &RoadRise) -> Polygon<f64> {
 fn partition_ramps(ramps: &[RoadRise]) -> Result<Vec<RoadRise>> {
     println!("  Partitioning {} approach ramp triangles...", ramps.len());
     let mut covered = new();
+    for ramp in ramps {
+        insert(&mut covered, footprint(ramp));
+    }
     let mut result = Vec::new();
     let mut last_progress = Instant::now();
     for (index, ramp) in ramps.iter().enumerate() {
         let shape = footprint(ramp);
-        let available = subtract(&covered, &shape);
+        let clips = MultiPolygon(
+            candidates(&covered, &shape)
+                .into_iter()
+                .filter(|other| *other != index)
+                .filter_map(|other| overriding(ramp, &ramps[other], other < index))
+                .collect(),
+        );
+        let available = if clips.0.is_empty() {
+            MultiPolygon(vec![shape])
+        } else {
+            shape.difference(&build::surfaces::union(&[clips.orient(Direction::Default)]))
+        };
         emit(&available, ramp, &mut result)?;
-        // The union of previous ramps and this entire input footprint is the
-        // same coverage as adding only its available pieces. Keep the original
-        // triangle so clipping round-off and tiny fragments cannot accumulate.
-        insert(&mut covered, shape);
         if index + 1 == ramps.len() || last_progress.elapsed() >= Duration::from_secs(5) {
             println!("  Ramp triangles: {}/{}", index + 1, ramps.len());
             last_progress = Instant::now();
@@ -417,7 +490,7 @@ fn emit(geometry: &MultiPolygon<f64>, plane: &RoadRise, result: &mut Vec<RoadRis
             points: points.map(|p| {
                 util::geometry::at_height(
                     p,
-                    world::raised_roads::road_rise_offset(plane, p).unwrap_or(0.),
+                    plane_height(plane, util::geometry::xz_map(p, f64::from)) as f32,
                 )
             }),
         });

@@ -111,9 +111,19 @@ pub fn road_deck(prepared: &Prepared, road: usize) -> Option<&Deck> {
         .map(|i| &prepared.data.decks[*i])
 }
 pub fn nearby_decks(prepared: &Prepared, p: XZ<f32>) -> impl Iterator<Item = &Deck> {
+    decks_near_segment(prepared, p, p)
+}
+pub fn decks_near_segment(
+    prepared: &Prepared,
+    a: XZ<f32>,
+    b: XZ<f32>,
+) -> impl Iterator<Item = &Deck> {
     prepared
         .decks
-        .locate_in_envelope_intersecting(&rstar::AABB::from_point([p.x, p.z]))
+        .locate_in_envelope_intersecting(&rstar::AABB::from_corners(
+            [a.x.min(b.x), a.z.min(b.z)],
+            [a.x.max(b.x), a.z.max(b.z)],
+        ))
         .map(|item| &prepared.data.decks[item.index])
 }
 pub fn height_on(deck: &Deck, p: XZ<f32>) -> Option<f32> {

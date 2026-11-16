@@ -115,10 +115,17 @@ fn load_assets(assets: &storage::city_assets::CityAsset) -> Result<WorldLocation
             phase: f.phase,
         })
         .collect();
+    let mut trees = stored.trees;
+    world::landscape::clear_transport_trees(
+        &mut trees,
+        &field,
+        &stored.details,
+        &stored.road_rises,
+    );
     city.details = world::map_details::new(stored.details);
     city.barriers = world::barriers::new(stored.barriers);
     city.raised_roads = world::raised_roads::new(stored.road_rises);
-    city.ground = world::landscape::new(stored.ground, stored.trees);
+    city.ground = world::landscape::new(stored.ground, trees);
     city.elevation = Some(field);
     city.id = LocationId::Asset(storage::city_assets::directory(assets).to_path_buf());
     city.assets = Some(assets.clone());

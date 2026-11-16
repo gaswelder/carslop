@@ -67,26 +67,44 @@ pub fn build(builder: &mut Builder, city: &WorldLocation) {
                     render::scene::quad(builder, p, concrete);
                     render::scene::quad(builder, [p[3], p[2], p[1], p[0]], concrete);
                 } else {
-                    render::details::beam(builder, point(a, -0.2), point(b, -0.2), 0.4, concrete);
-                    for height in [0.5, 0.95] {
+                    for edge in world::transport::exposed_bridge_edge(
+                        city,
+                        deck,
+                        point(a, 0.),
+                        point(b, 0.),
+                    ) {
+                        let raised = |p: XYZ, height: f32| XYZ {
+                            y: p.y + height,
+                            ..p
+                        };
                         render::details::beam(
                             builder,
-                            point(a, height),
-                            point(b, height),
-                            0.08,
-                            metal,
+                            raised(edge.start, -0.2),
+                            raised(edge.end, -0.2),
+                            0.4,
+                            concrete,
                         );
-                    }
-                    let steps = (length / 3.).ceil() as usize;
-                    for i in 0..=steps {
-                        let t = i as f32 / steps.max(1) as f32;
-                        let p = util::geometry::xyz_from_fn(|j| {
-                            util::geometry::xyz_component(a, j)
-                                + (util::geometry::xyz_component(b, j)
-                                    - util::geometry::xyz_component(a, j))
-                                    * t
-                        });
-                        render::details::beam(builder, point(p, 0.), point(p, 1.), 0.08, metal);
+                        for height in [0.5, 0.95] {
+                            render::details::beam(
+                                builder,
+                                raised(edge.start, height),
+                                raised(edge.end, height),
+                                0.08,
+                                metal,
+                            );
+                        }
+                        let length = (edge.end.x - edge.start.x).hypot(edge.end.z - edge.start.z);
+                        let steps = (length / 3.).ceil() as usize;
+                        for i in 0..=steps {
+                            let t = i as f32 / steps.max(1) as f32;
+                            let p = util::geometry::xyz_from_fn(|j| {
+                                util::geometry::xyz_component(edge.start, j)
+                                    + (util::geometry::xyz_component(edge.end, j)
+                                        - util::geometry::xyz_component(edge.start, j))
+                                        * t
+                            });
+                            render::details::beam(builder, p, raised(p, 1.), 0.08, metal);
+                        }
                     }
                 }
             }

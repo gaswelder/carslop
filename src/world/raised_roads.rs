@@ -29,8 +29,12 @@ pub struct RaisedRoads {
     index: RTree<IndexedRise>,
 }
 
-/// Linear height offset inside this triangle, with tolerance for shared edges.
-pub fn road_rise_offset(road_rise: &RoadRise, p: XZ<f32>) -> Option<f32> {
+struct Projection {
+    offset: f32,
+    inside: bool,
+}
+
+fn project(road_rise: &RoadRise, p: XZ<f32>) -> Projection {
     let [a, b, c] = road_rise.points;
     let cross = |a: XZ<f32>, b: XZ<f32>| a.x as f64 * b.z as f64 - a.z as f64 * b.x as f64;
     let delta = |a: XYZ, b: XYZ| XZ {
@@ -41,11 +45,21 @@ pub fn road_rise_offset(road_rise: &RoadRise, p: XZ<f32>) -> Option<f32> {
     let denominator = cross(delta(b, a), delta(c, a));
     let u = cross(delta(p, a), delta(c, a)) / denominator;
     let v = cross(delta(b, a), delta(p, a)) / denominator;
-    if u >= -0.0001 && v >= -0.0001 && u + v <= 1.0001 {
-        Some((a.y as f64 + u * (b.y - a.y) as f64 + v * (c.y - a.y) as f64) as f32)
-    } else {
-        None
+    Projection {
+        offset: (a.y as f64 + u * (b.y - a.y) as f64 + v * (c.y - a.y) as f64) as f32,
+        inside: u >= -0.0001 && v >= -0.0001 && u + v <= 1.0001,
     }
+}
+
+/// Linear height offset inside this triangle, with tolerance for shared edges.
+pub fn road_rise_offset(road_rise: &RoadRise, p: XZ<f32>) -> Option<f32> {
+    let projection = project(road_rise, p);
+    projection.inside.then_some(projection.offset)
+}
+
+/// Evaluate the height plane without restricting the point to its footprint.
+pub fn plane_offset(road_rise: &RoadRise, p: XZ<f32>) -> f32 {
+    project(road_rise, p).offset
 }
 
 fn bounds(points: impl Iterator<Item = XZ<f64>>) -> AABB<XZ<f64>> {
@@ -105,12 +119,18 @@ pub fn new(triangles: Vec<RoadRise>) -> RaisedRoads {
     RaisedRoads { triangles, index }
 }
 fn raised_roads_offset(raised_roads: &RaisedRoads, p: XZ<f32>) -> f32 {
+    supporting_rise(raised_roads, p)
+        .map(|rise| project(rise, p).offset)
+        .unwrap_or(0.0)
+}
+
+fn supporting_rise(raised_roads: &RaisedRoads, p: XZ<f32>) -> Option<&RoadRise> {
     raised_roads
         .index
         .locate_in_envelope_intersecting(&AABB::from_point(util::geometry::xz_map(p, f64::from)))
-        .filter_map(|item| road_rise_offset(&raised_roads.triangles[item.index], p))
-        .max_by(f32::total_cmp)
-        .unwrap_or(0.0)
+        .map(|item| &raised_roads.triangles[item.index])
+        .filter(|rise| project(rise, p).inside)
+        .max_by(|a, b| project(a, p).offset.total_cmp(&project(b, p).offset))
 }
 fn drape(
     raised_roads: &RaisedRoads,
@@ -130,6 +150,26 @@ fn drape(
         world::elevation::drape(field, points, emit);
         return;
     }
+    // Boolean clipping can leave thin fragments on either side of a ramp edge.
+    // Select each fragment's height plane through the contact query, including
+    // pieces classified as remaining ground, so rounding cannot lower slivers.
+    let mut emit = |mut triangle: [XYZ; 3]| {
+        let center = util::geometry::xz_from_fn(|axis| {
+            triangle
+                .iter()
+                .map(|p| util::geometry::xz_component(util::geometry::xz(*p), axis))
+                .sum::<f32>()
+                / 3.
+        });
+        // Preserve the ground side of intentional vertical edges on authored
+        // humps; only a fragment supported by a ramp inherits its height.
+        if let Some(rise) = supporting_rise(raised_roads, center) {
+            for point in &mut triangle {
+                point.y += project(rise, util::geometry::xz(*point)).offset;
+            }
+        }
+        emit(triangle);
+    };
     let mut remaining = polygon(points);
     for item in candidates {
         let rise = &raised_roads.triangles[item.index];
@@ -144,12 +184,7 @@ fn drape(
                 x: p.x as f32,
                 z: p.y as f32,
             });
-            world::elevation::drape(field, points, |mut triangle| {
-                for point in &mut triangle {
-                    point.y += road_rise_offset(rise, util::geometry::xz(*point)).unwrap_or(0.0);
-                }
-                emit(triangle);
-            });
+            world::elevation::drape(field, points, &mut emit);
         }
         remaining = remaining.difference(&footprint);
     }

@@ -550,6 +550,24 @@ pub fn write_streets_txt(
     }
     let mut material_zones = Vec::new();
     if let Some(source) = source {
+        // An unpaved route can cross or run beside a paved carriageway. Keep
+        // its gravel outside the paved road's footprint instead of painting
+        // the gravel buffer across the entire shared road mesh.
+        let paved_roads = union(
+            &buffers
+                .iter()
+                .zip(&map.road_lines)
+                .filter(|(_, road)| {
+                    road.osm_way_id
+                        .and_then(|id| source.ways.get(&id))
+                        .is_some_and(|way| {
+                            build::details::road_surface(build::osm::tag(way, "surface"))
+                                != RoadSurface::Unpaved
+                        })
+                })
+                .map(|(geometry, _)| geometry.clone())
+                .collect::<Vec<_>>(),
+        );
         for material in [
             RoadSurface::Concrete,
             RoadSurface::Paving,
@@ -570,7 +588,11 @@ pub fn write_streets_txt(
                 .collect();
             material_zones.push(MaterialZone {
                 material,
-                geometry: union(&pieces),
+                geometry: if material == RoadSurface::Unpaved {
+                    union(&pieces).difference(&paved_roads)
+                } else {
+                    union(&pieces)
+                },
             });
         }
     }

@@ -19,6 +19,22 @@ use geo::MultiPolygon;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+pub fn bridge_deck(
+    road: usize,
+    height: f32,
+    z: f32,
+    start: f32,
+    end: f32,
+) -> model::map_details::Deck {
+    model::map_details::Deck {
+        road,
+        grade: 1,
+        width: 8.,
+        path: vec![[start, height, z], [end, height, z]],
+        surface: model::map_details::RoadSurface::Asphalt,
+    }
+}
+
 pub fn road_footprint(surface: &world::street_surface::StreetSurface) -> MultiPolygon<f64> {
     build::surfaces::union(
         &world::street_surface::road_triangles(surface)

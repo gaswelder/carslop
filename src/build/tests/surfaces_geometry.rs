@@ -9,6 +9,103 @@ use crate::util::geometry::project;
 use crate::util::geometry::BoundingBoxXZ;
 use crate::world;
 use geo::{Contains, Point};
+use std::collections::BTreeMap;
+
+#[test]
+fn gravel_routes_do_not_replace_overlapping_paved_carriageways() {
+    struct Case {
+        surface: &'static str,
+        material: model::world::Material,
+    }
+    for case in [
+        Case {
+            surface: "asphalt",
+            material: model::world::Material::Asphalt,
+        },
+        Case {
+            surface: "concrete",
+            material: model::world::Material::Concrete,
+        },
+        Case {
+            surface: "paving_stones",
+            material: model::world::Material::Paving,
+        },
+    ] {
+        for reverse in [false, true] {
+            let mut location = model::source_location::empty();
+            location.bounding_box = BoundingBoxXZ {
+                min: XZ { x: -80., z: -80. },
+                max: XZ { x: 80., z: 80. },
+            };
+            location.road_nodes = [
+                XZ { x: -60., z: 0. },
+                XZ { x: 60., z: 0. },
+                XZ { x: 0., z: -40. },
+                XZ { x: 0., z: 40. },
+            ]
+            .map(|p| util::geometry::at_height(p, 0.))
+            .into();
+            let mut paved = model::source_location::new([0, 1], 10.);
+            paved.osm_way_id = Some(100);
+            let mut gravel = model::source_location::new([2, 3], 6.);
+            gravel.osm_way_id = Some(200);
+            location.road_lines = vec![paved, gravel];
+            if reverse {
+                location.road_lines.reverse();
+            }
+            let source = build::osm::OSMMap {
+                nodes: BTreeMap::new(),
+                ways: BTreeMap::from([
+                    (
+                        100,
+                        test::support::osm_element(
+                            100,
+                            &[("highway", "raceway"), ("surface", case.surface)],
+                        ),
+                    ),
+                    (
+                        200,
+                        test::support::osm_element(
+                            200,
+                            &[("highway", "raceway"), ("surface", "gravel")],
+                        ),
+                    ),
+                ]),
+                relations: vec![],
+                bounds: None,
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("streets.txt");
+            write_streets_txt(&location, &path, Some(&source)).unwrap();
+            let loaded = world::street_surface::load(&std::fs::read_to_string(path).unwrap(), 2)
+                .unwrap()
+                .0;
+            let material_at = |p: XZ| {
+                world::street_surface::road_triangles(&loaded)
+                    .iter()
+                    .find(|triangle| {
+                        matches!(triangle.usage, model::world::TriangleUsage::Road(_))
+                            && util::geometry::polygon(
+                                &triangle
+                                    .points
+                                    .map(|p| util::geometry::xz_map(p, f64::from)),
+                            )
+                            .contains(&Point::new(p.x, p.z))
+                    })
+                    .expect("road surface")
+                    .material
+            };
+            assert_eq!(material_at(XZ { x: 0.137, z: 0.193 }), case.material);
+            assert_eq!(
+                material_at(XZ {
+                    x: 0.137,
+                    z: 20.193
+                }),
+                model::world::Material::BareGround
+            );
+        }
+    }
+}
 fn map(
     nodes: &[XZ],
     roads: &[(usize, usize, f64, usize)],

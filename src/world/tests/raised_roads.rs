@@ -4,6 +4,79 @@ use crate::util::geometry::BoundingBoxXZ;
 use crate::world;
 
 #[test]
+fn clipped_ramp_fragments_match_contact_even_when_thin() {
+    let field = world::elevation::generate(
+        BoundingBoxXZ {
+            min: XZ { x: -180., z: 190. },
+            max: XZ { x: -130., z: 240. },
+        },
+        |_| -6.,
+    );
+    let rise = RoadRise {
+        points: [
+            util::geometry::at_height(
+                XZ {
+                    x: -155.231,
+                    z: 217.486,
+                },
+                4.6416945,
+            ),
+            util::geometry::at_height(
+                XZ {
+                    x: -147.85423,
+                    z: 218.83997,
+                },
+                4.6416807,
+            ),
+            util::geometry::at_height(
+                XZ {
+                    x: -148.4366,
+                    z: 218.83043,
+                },
+                4.4638968,
+            ),
+        ],
+    };
+    let rises = new(vec![rise]);
+    let mut count = 0;
+    for step in 0..40 {
+        let shift = step as f32 * 0.017;
+        let points = [
+            XZ {
+                x: -165. + shift,
+                z: 215. + shift,
+            },
+            XZ {
+                x: -140.,
+                z: 220. - shift,
+            },
+            XZ {
+                x: -150. + shift,
+                z: 230.,
+            },
+        ];
+        drape(&rises, &field, points, |triangle| {
+            count += 1;
+            let center = util::geometry::xz_from_fn(|axis| {
+                triangle
+                    .iter()
+                    .map(|p| util::geometry::xz_component(util::geometry::xz(*p), axis))
+                    .sum::<f32>()
+                    / 3.
+            });
+            let expected =
+                world::elevation::height(&field, center) + raised_roads_offset(&rises, center);
+            let height = triangle.iter().map(|p| p.y).sum::<f32>() / 3.;
+            assert!(
+                (height - expected).abs() < 0.001,
+                "mesh {triangle:?} differs from contact {expected} at {center:?}"
+            );
+        });
+    }
+    assert!(count > 0);
+}
+
+#[test]
 fn raised_road_drape_and_contact_share_the_same_piecewise_surface() {
     let mut triangles = Vec::new();
     struct Section {

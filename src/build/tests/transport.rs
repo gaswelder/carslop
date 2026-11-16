@@ -1,4 +1,37 @@
 use super::*;
+use crate::test;
+
+#[test]
+fn layers_only_order_explicit_structures() {
+    for tags in [
+        vec![("layer", "1"), ("bridge", "no")],
+        vec![("layer", "1")],
+        vec![("layer", "-1")],
+        vec![("layer", "-1"), ("tunnel", "no")],
+        vec![("layer", "2"), ("tunnel", "building_passage")],
+        vec![("layer", "1"), ("bridge", "low_water_crossing")],
+    ] {
+        assert_eq!(grade(&test::support::osm_element(1, &tags)), 0, "{tags:?}");
+    }
+    for layer in ["", "1", "2"] {
+        assert_eq!(
+            grade(&test::support::osm_element(
+                1,
+                &[("bridge", "yes"), ("layer", layer)]
+            )),
+            layer.parse::<i8>().unwrap_or(1)
+        );
+    }
+    for layer in ["", "-1", "-2"] {
+        assert_eq!(
+            grade(&test::support::osm_element(
+                1,
+                &[("tunnel", "yes"), ("layer", layer)]
+            )),
+            layer.parse::<i8>().unwrap_or(-1)
+        );
+    }
+}
 use crate::util;
 use crate::world;
 use geo::Area;
@@ -130,6 +163,54 @@ fn indexed_partition_preserves_overlaps_slopes_and_source_precedence() {
         let mut bytes = vec![];
         storage::codec_road_rises::write(&mut bytes, &actual).unwrap();
         storage::codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn intersecting_approaches_meet_on_equal_height_lines_in_either_source_order() {
+    for direction in [-1., 1.] {
+        let mut ramps = square(XZ { x: 0., z: 0. }, 10., 1. * direction, 0.2 * direction);
+        ramps.extend(square(
+            XZ { x: 0., z: 0. },
+            10.,
+            3. * direction,
+            -0.2 * direction,
+        ));
+        for reverse in [false, true] {
+            if reverse {
+                ramps.reverse();
+            }
+            let joined = partition_ramps(&ramps).unwrap();
+            for row in 0..30 {
+                for column in 0..30 {
+                    let p = XZ {
+                        x: column as f32 * 0.3 + 0.137,
+                        z: row as f32 * 0.3 + 0.193,
+                    };
+                    let expected = direction * (1. + 0.2 * p.x).max(3. - 0.2 * p.x);
+                    let heights: Vec<_> = joined
+                        .iter()
+                        .filter_map(|rise| world::raised_roads::road_rise_offset(rise, p))
+                        .collect();
+                    assert!(!heights.is_empty(), "missing surface at {p:?}");
+                    assert!(
+                        heights
+                            .iter()
+                            .all(|height| (*height - expected).abs() < 0.0001),
+                        "{p:?}: {heights:?} != {expected}"
+                    );
+                }
+            }
+            // Include the boundary where the selected plane switches.
+            let heights: Vec<_> = joined
+                .iter()
+                .filter_map(|rise| world::raised_roads::road_rise_offset(rise, XZ { x: 5., z: 2. }))
+                .collect();
+            assert!(heights.len() >= 2);
+            assert!(heights
+                .iter()
+                .all(|height| (*height - 2. * direction).abs() < 0.0001));
+        }
     }
 }
 

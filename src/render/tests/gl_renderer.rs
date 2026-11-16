@@ -153,6 +153,33 @@ fn assert_particle_pixel_readback(app: &App) {
 use crate::*;
 
 #[test]
+#[ignore = "requires SDL/OpenGL and CARSLOP_PREVIEW_LOCATION; exports a fixed-camera map preview"]
+fn location_renderer_preview() {
+    let path = std::env::var("CARSLOP_PREVIEW_LOCATION").expect("location directory");
+    let pose: [[f32; 3]; 2] = serde_json::from_str(
+        &std::env::var("CARSLOP_PREVIEW_POSE").expect("JSON [eye, target] coordinates"),
+    )
+    .unwrap();
+    let mut app = new();
+    let id = world::locations::asset(&path).unwrap();
+    install_location(&mut app, world::locations::try_track(&id).unwrap()).unwrap();
+    let camera = render::gl::chase_camera(
+        WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+        render::camera::Pose {
+            eye: pose[0].into(),
+            target: pose[1].into(),
+        },
+    );
+    render::gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
+    for _ in 0..12 {
+        render::gl::clear_screen();
+        render::gl::draw_ground(mesh(&app), app.scene_program, &camera, &[]);
+    }
+    assert_eq!(unsafe { ::gl::GetError() }, ::gl::NO_ERROR);
+    capture_frame(&std::env::temp_dir().join("carslop-location-preview.ppm"));
+}
+
+#[test]
 #[ignore = "requires SDL/OpenGL; profiles a warm HUD including GPU completion"]
 fn hud_renderer_profile() {
     let app = with_location(false);
