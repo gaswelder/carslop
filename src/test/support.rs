@@ -311,7 +311,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     fs::write(directory.join("city.txt"), city).unwrap();
     fs::write(directory.join("manifest.json"), "{}").unwrap();
     fs::write(directory.join("landscape.txt"), "LANDSCAPE 1\n").unwrap();
-    fs::write(directory.join("furniture.txt"), "FURNITURE 3\n").unwrap();
+    fs::write(directory.join("furniture.txt"), "").unwrap();
     fs::write(
         directory.join("elevation/heightfield.txt"),
         format!("ELEVATION 1\ngrid 2 2 -10 -10 40 0\n{height} {height} {height} {height}\n"),
@@ -386,7 +386,7 @@ fn city_fixture() -> &'static CityFixture {
         let mut city = String::from("CITY 2\nbounds -1050 -1050 1050 1050\n");
         let mut streets = String::from("STREETS 1 21\n");
         let mut landscape = String::from("LANDSCAPE 1\n");
-        let mut furniture = String::from("FURNITURE 3\n");
+        let mut furniture = String::new();
         for i in 0..21 {
             let z = i * 100 - 1000;
             city.push_str(&format!("n -1000 {z}\nn 1000 {z}\nr {} {} 8 0 {}\n", i * 2, i * 2 + 1, i + 1));
@@ -584,9 +584,9 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
     std::fs::write(
         directory.join("furniture.txt"),
         if populated {
-            "FURNITURE 3\n1 stop 5 5 1 0 0 0\n"
+            "1 stop 5 5 1 0 0 0\n"
         } else {
-            "FURNITURE 3\n"
+            ""
         },
     )
     .unwrap();

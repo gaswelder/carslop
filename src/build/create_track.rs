@@ -133,7 +133,11 @@ fn compile(source: &Path, track: &world::locations::WorldLocation, output: &Path
     write_streets(&samples, output)?;
     write_elevation(track, output)?;
     write_landscape(track, model::world::trees(track), output)?;
-    storage::codec_furniture::write(&mut fs::File::create(output.join("furniture.txt"))?, &[])?;
+    storage::codec_furniture::write(
+        &mut fs::File::create(output.join("furniture.txt"))?,
+        &[],
+        &[],
+    )?;
     fs::copy(source, output.join("source.track.json"))?;
     // Keep the existing label reader independent of the authoring format.
     fs::write(

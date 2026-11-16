@@ -133,6 +133,8 @@ pub fn location_read(dirpath: impl AsRef<Path>) -> Result<Location, String> {
 
 fn read_inner(directory: &Path) -> Result<Location, String> {
     let assets = storage::city_assets::new(directory.to_path_buf());
+    let furniture =
+        storage::city_assets::get_furniture(&assets).map_err(|e| format!("furniture.txt: {e}"))?;
     let source = storage::city_assets::get_city(&assets).map_err(|e| format!("city.txt: {e}"))?;
     let streets = storage::street_surface_binary::load_geometry(directory, source.road_lines.len())
         .map_err(|e| format!("streets.bin: {e}"))?;
@@ -208,8 +210,8 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
             .map_err(|e| format!("elevation/heightfield.txt: {e}"))?,
         ground,
         trees,
-        furniture: storage::city_assets::get_furniture(&assets)
-            .map_err(|e| format!("furniture.txt: {e}"))?
+        furniture: furniture
+            .controls
             .into_iter()
             .map(|f| Furniture {
                 id: f._source_id,
@@ -220,13 +222,7 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
                 phase: f.phase,
             })
             .collect(),
-        barriers: match fs::read_to_string(directory.join("barriers.txt")) {
-            Ok(text) => {
-                storage::codec_barriers::parse(&text).map_err(|e| format!("barriers.txt: {e}"))?
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(format!("barriers.txt: {e}")),
-        },
+        barriers: furniture.barriers,
         road_rises: match fs::read_to_string(directory.join("road-rises.txt")) {
             Ok(text) => storage::codec_road_rises::parse(&text)
                 .map_err(|e| format!("road-rises.txt: {e}"))?,
@@ -351,7 +347,6 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
         }
         storage::codec_landscape::flush(&mut landscape)?;
         let mut furniture = BufWriter::new(fs::File::create(directory.join("furniture.txt"))?);
-        writeln!(furniture, "FURNITURE 3")?;
         for f in &location.furniture {
             let kind = match f.kind {
                 FurnitureKind::Signal => "signal",
@@ -365,11 +360,7 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
                 f.id, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
             )?;
         }
-        furniture.flush()?;
-        storage::codec_barriers::write(
-            &mut BufWriter::new(fs::File::create(directory.join("barriers.txt"))?),
-            &location.barriers,
-        )?;
+        storage::codec_furniture::write_barriers(&mut furniture, &location.barriers)?;
         storage::codec_road_rises::write(
             &mut BufWriter::new(fs::File::create(directory.join("road-rises.txt"))?),
             &location.road_rises,

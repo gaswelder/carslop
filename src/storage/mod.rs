@@ -1,6 +1,5 @@
 pub mod aerial;
 pub mod city_assets;
-pub mod codec_barriers;
 pub mod codec_city;
 pub mod codec_furniture;
 pub mod codec_landscape;

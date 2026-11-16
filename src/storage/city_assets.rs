@@ -58,10 +58,10 @@ pub fn get_city(assets: &CityAsset) -> Result<SourceLocation<f32>, String> {
     model::source_location::parse(&read_text(assets, "city.txt")?)
 }
 
-// Returns the city's furniture - signs and traffic lights.
+// Returns the city's road controls and barriers.
 pub fn get_furniture(
     assets: &CityAsset,
-) -> Result<Vec<model::traffic_controls::Furniture>, String> {
+) -> Result<storage::codec_furniture::FurnitureData, String> {
     storage::codec_furniture::parse(&read_text(assets, "furniture.txt")?)
 }
 

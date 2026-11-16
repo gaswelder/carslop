@@ -1,5 +1,6 @@
 use super::*;
 use crate::model;
+use crate::storage;
 use crate::test;
 use crate::util;
 use crate::util::geometry::BoundingBoxXZ;
@@ -97,6 +98,16 @@ fn mapped_barriers_clip_to_crop_avoid_roads_and_leave_gate_openings() {
             assert!(barrier.ends[0].z * barrier.ends[1].z > 0.);
         }
     }
+    source.ways.insert(
+        20,
+        test::support::osm_element(20, &[("highway", "residential")]),
+    );
+    let furniture_path = folder.path().join("furniture.txt");
+    build::furniture::build_furniture(&source, &map, &surfaces, &furniture_path).unwrap();
+    let text = std::fs::read_to_string(furniture_path).unwrap();
+    let stored = storage::codec_furniture::parse(&text).unwrap();
+    assert_eq!(stored.barriers, barriers);
+    assert!(!folder.path().join("barriers.txt").exists());
     source.ways.get_mut(&11).unwrap().nodes = vec![4, 999, 5];
     assert!(extract(&source, &map, &surfaces)
         .iter()

@@ -981,6 +981,7 @@ mod location_compilation {
             &std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap(),
         )
         .unwrap()
+        .controls
     }
 
     #[test]

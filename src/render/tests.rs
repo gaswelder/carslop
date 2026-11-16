@@ -113,8 +113,9 @@ mod barriers {
                 height_meters: 2.,
                 width_meters: 0.12,
             }];
-            storage::codec_barriers::write(
-                &mut std::fs::File::create(folder.path().join("barriers.txt")).unwrap(),
+            storage::codec_furniture::write(
+                &mut std::fs::File::create(folder.path().join("furniture.txt")).unwrap(),
+                &[],
                 &barriers,
             )
             .unwrap();

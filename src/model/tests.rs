@@ -203,7 +203,9 @@ mod traffic_controls {
         let furniture =
             std::fs::read_to_string(storage::city_assets::directory(assets).join("furniture.txt"))
                 .unwrap();
-        let loaded = storage::codec_furniture::parse(&furniture).unwrap();
+        let loaded = storage::codec_furniture::parse(&furniture)
+            .unwrap()
+            .controls;
         assert_eq!(loaded.len(), city.furniture.len());
         for (raw, placed) in loaded.iter().zip(&city.furniture) {
             assert_eq!(raw._source_id, placed._source_id);
@@ -332,6 +334,7 @@ mod location {
                 location.trees[0].coords.x = -5.1234565;
             }
             model::location::location_write(&location, output.path()).unwrap();
+            assert!(!output.path().join("barriers.txt").exists());
             let reread = model::location::location_read(output.path()).unwrap();
             assert_data_equal(&location, &reread);
             assert_eq!(

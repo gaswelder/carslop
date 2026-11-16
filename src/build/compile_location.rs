@@ -155,14 +155,6 @@ fn generate_assets(
     );
     let streets_result = write_streets_txt(location_map, &paths.streets, Some(source_osm_map))?;
 
-    println!("building barriers");
-    build::barriers::build_barriers(
-        source_osm_map,
-        location_map,
-        &streets_result.surfaces,
-        &paths.output.join("barriers.txt"),
-    )?;
-
     println!("building landscape");
     let tree_styles = build_landscape(
         source_osm_map,

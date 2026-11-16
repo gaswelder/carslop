@@ -5,12 +5,9 @@ use crate::model;
 use crate::model::source_location::SourceLocation;
 use crate::model::world::Barrier;
 use crate::model::world::BarrierKind;
-use crate::storage;
 use crate::util;
-use crate::util::error::Result;
 use crate::util::geometry::XZ;
 use geo::{BooleanOps, Buffer, MultiLineString, MultiPolygon};
-use std::{fs, path::Path};
 
 fn opening(node: &build::osm::OSMElement) -> f64 {
     if matches!(
@@ -33,7 +30,7 @@ fn opening(node: &build::osm::OSMElement) -> f64 {
     }
 }
 
-fn extract(
+pub fn extract(
     source: &build::osm::OSMMap,
     map: &SourceLocation<f64>,
     surfaces: &build::surfaces::Surfaces,
@@ -146,21 +143,6 @@ fn extract(
         }
     }
     result
-}
-
-pub fn build_barriers(
-    source: &build::osm::OSMMap,
-    map: &SourceLocation<f64>,
-    surfaces: &build::surfaces::Surfaces,
-    path: &Path,
-) -> Result<()> {
-    let records = extract(source, map, surfaces);
-    println!("  Writing {} mapped wall/fence segments...", records.len());
-    storage::codec_barriers::write(
-        &mut std::io::BufWriter::new(fs::File::create(path)?),
-        &records,
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]

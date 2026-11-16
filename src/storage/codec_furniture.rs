@@ -1,4 +1,6 @@
-//! FURNITURE 3: placement precision and runtime validation are separate concerns.
+//! Road controls and terrain-following barriers, identified by record kind.
+use crate::model::world::Barrier;
+use crate::model::world::BarrierKind;
 use crate::model::world::Furniture;
 use crate::model::world::FurnitureKind;
 use crate::util::geometry::XYZ;
@@ -16,8 +18,11 @@ pub struct FurnitureRecord {
     pub phase: u8,
 }
 
-pub fn write(writer: &mut impl io::Write, records: &[FurnitureRecord]) -> io::Result<()> {
-    writeln!(writer, "FURNITURE 3")?;
+pub fn write(
+    writer: &mut impl io::Write,
+    records: &[FurnitureRecord],
+    barriers: &[Barrier],
+) -> io::Result<()> {
     for f in records {
         let kind = match f.kind {
             FurnitureKind::Signal => "signal",
@@ -31,24 +36,25 @@ pub fn write(writer: &mut impl io::Write, records: &[FurnitureRecord]) -> io::Re
             f.source_id, kind, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
         )?;
     }
-    Ok(())
+    write_barriers(writer, barriers)
 }
 
-pub fn parse(text: &str) -> Result<Vec<Furniture>, String> {
-    let mut lines = text.lines();
-    let header: Vec<_> = lines
-        .next()
-        .ok_or("missing furniture header")?
-        .split_whitespace()
-        .collect();
-    if header.len() < 2 || header[0] != "FURNITURE" || header[1] != "3" {
-        return Err("unsupported furniture header".into());
-    }
+pub struct FurnitureData {
+    pub controls: Vec<Furniture>,
+    pub barriers: Vec<Barrier>,
+}
+
+pub fn parse(text: &str) -> Result<FurnitureData, String> {
     let mut result = Vec::new();
-    for line in lines {
+    let mut barriers = Vec::new();
+    for line in text.lines() {
         let f: Vec<_> = line.split_whitespace().collect();
         if f.len() != 8 {
             return Err("invalid road furniture record".into());
+        }
+        if !matches!(f[1], "signal" | "stop" | "yield" | "speed_limit") {
+            barriers.push(parse_barrier(&f)?);
+            continue;
         }
         let n = |i: usize| -> Result<u64, String> {
             f[i].parse().map_err(|_| "invalid furniture index".into())
@@ -92,5 +98,87 @@ pub fn parse(text: &str) -> Result<Vec<Furniture>, String> {
             phase: phase as u8,
         });
     }
-    Ok(result)
+    Ok(FurnitureData {
+        controls: result,
+        barriers,
+    })
 }
+
+pub fn write_barriers(writer: &mut impl io::Write, records: &[Barrier]) -> io::Result<()> {
+    for barrier in records {
+        let kind = match barrier.kind {
+            BarrierKind::Wall => "wall",
+            BarrierKind::Hedge => "hedge",
+            BarrierKind::GuardRail => "guard_rail",
+            BarrierKind::RetainingWall => "retaining_wall",
+            BarrierKind::Fence => "fence",
+            BarrierKind::ChainLink => "chain_link",
+            BarrierKind::WoodFence => "wood_fence",
+        };
+        writeln!(
+            writer,
+            "{} {} {} {} {} {} {} {}",
+            barrier.source_id,
+            kind,
+            barrier.ends[0].x,
+            barrier.ends[0].z,
+            barrier.ends[1].x,
+            barrier.ends[1].z,
+            barrier.height_meters,
+            barrier.width_meters
+        )?;
+    }
+    writer.flush()
+}
+
+fn parse_barrier(fields: &[&str]) -> Result<Barrier, String> {
+    let number = |i: usize| -> Result<f32, String> {
+        fields[i]
+            .parse::<f32>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| "invalid barrier number".into())
+    };
+    let kind = match fields[1] {
+        "wall" => BarrierKind::Wall,
+        "hedge" => BarrierKind::Hedge,
+        "guard_rail" => BarrierKind::GuardRail,
+        "retaining_wall" => BarrierKind::RetainingWall,
+        "fence" => BarrierKind::Fence,
+        "chain_link" => BarrierKind::ChainLink,
+        "wood_fence" => BarrierKind::WoodFence,
+        _ => return Err("invalid barrier kind".into()),
+    };
+    let ends = [
+        XZ {
+            x: number(2)?,
+            z: number(3)?,
+        },
+        XZ {
+            x: number(4)?,
+            z: number(5)?,
+        },
+    ];
+    let height_meters = number(6)?;
+    let width_meters = number(7)?;
+    if ends
+        .iter()
+        .any(|p| p.x.abs() > 100_000.0 || p.z.abs() > 100_000.0)
+        || (ends[1].x - ends[0].x).hypot(ends[1].z - ends[0].z) < 0.1
+        || !(0.2..=8.0).contains(&height_meters)
+        || !(0.04..=2.0).contains(&width_meters)
+    {
+        return Err("invalid barrier dimensions".into());
+    }
+    Ok(Barrier {
+        source_id: fields[0].parse().map_err(|_| "invalid barrier ID")?,
+        kind,
+        ends,
+        height_meters,
+        width_meters,
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/codec_furniture.rs"]
+mod tests;

@@ -10,44 +10,6 @@ mod aerial {
     }
 }
 
-mod codec_barriers {
-
-    use crate::storage::codec_barriers::*;
-
-    #[test]
-    fn rejects_nonfinite_degenerate_and_unknown_barriers() {
-        for record in [
-            "1 wall 0 0 0 0 2 0.2",
-            "1 wall NaN 0 10 0 2 0.2",
-            "1 wall 0 0 10 0 inf 0.2",
-            "1 wall 0 0 10 0 2 0",
-            "1 wall 0 0 10 0 20 0.2",
-            "1 unknown 0 0 10 0 2 0.2",
-            "1 wall 0 0 10 0 2",
-            "1 wall 0 0 100001 0 2 0.2",
-        ] {
-            assert!(
-                parse(&format!("BARRIERS 1\n{record}\n")).is_err(),
-                "{record}"
-            );
-        }
-        assert!(parse("BARRIERS 2\n").is_err());
-        assert!(parse("BARRIERS 1\n").unwrap().is_empty());
-        for kind in ["wall", "fence", "chain_link", "wood_fence"] {
-            let records = parse(&format!(
-                "BARRIERS 1\n1 {kind} -5.1234565 0 10 0 1.8765432 0.1234567\n"
-            ))
-            .unwrap();
-            let mut bytes = Vec::new();
-            write(&mut bytes, &records).unwrap();
-            assert_eq!(
-                parse(std::str::from_utf8(&bytes).unwrap()).unwrap(),
-                records
-            );
-        }
-    }
-}
-
 mod codec_city {
     use crate::model;
     use crate::model::source_location::SourceLocation;

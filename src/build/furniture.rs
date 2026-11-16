@@ -84,7 +84,8 @@ pub fn build_furniture(
 ) -> Result<()> {
     let placements = place_furniture(source, map, s);
     let mut file = BufWriter::new(fs::File::create(output_path)?);
-    storage::codec_furniture::write(&mut file, &placements)?;
+    let barriers = build::barriers::extract(source, map, s);
+    storage::codec_furniture::write(&mut file, &placements, &barriers)?;
     file.flush()?;
     Ok(())
 }
