@@ -82,31 +82,7 @@ fn capsules(object: &MapObject) -> Vec<Capsule> {
     };
     let mut result = Vec::new();
     match object.kind {
-        ObjectKind::Gate => {
-            for side in [-1., 1.] {
-                result.push(Capsule {
-                    ends: [transform(side * object.width / 2., 0.); 2],
-                    radius: 0.08,
-                });
-            }
-            if object.locked {
-                result.push(Capsule {
-                    ends: [
-                        transform(-object.width / 2., 0.),
-                        transform(object.width / 2., 0.),
-                    ],
-                    radius: 0.06,
-                });
-            } else {
-                result.push(Capsule {
-                    ends: [
-                        transform(-object.width / 2., 0.),
-                        transform(-object.width / 2., object.width * 0.9),
-                    ],
-                    radius: 0.06,
-                });
-            }
-        }
+        ObjectKind::Gate => {}
         ObjectKind::Bench => result.push(Capsule {
             ends: [
                 transform(-object.width / 2., 0.),

@@ -288,6 +288,10 @@ pub fn build(
         }
         if build::osm::tag(node, "indoor") == "yes"
             || !matches!(build::osm::tag(node, "level"), "" | "0")
+            || matches!(
+                build::osm::tag(node, "barrier"),
+                "gate" | "lift_gate" | "swing_gate"
+            )
         {
             continue;
         }
@@ -304,7 +308,6 @@ pub fn build(
         })
         .or_else(|| match build::osm::tag(node, "barrier") {
             "bollard" | "block" => Some(ObjectKind::Bollard),
-            "gate" | "lift_gate" | "swing_gate" => Some(ObjectKind::Gate),
             _ => None,
         })
         .or_else(|| match build::osm::tag(node, "power") {
@@ -322,7 +325,7 @@ pub fn build(
         let Some(kind) = kind else {
             continue;
         };
-        if !matches!(kind, ObjectKind::Bollard | ObjectKind::Gate)
+        if kind != ObjectKind::Bollard
             && build::surfaces::intersects(
                 &obstacles,
                 &geo::Buffer::buffer(&Point::new(p.x, p.z), 0.08),
@@ -357,10 +360,7 @@ pub fn build(
                 height: 0.9,
                 width: 0.18,
             },
-            ObjectKind::Gate => ObjectDimensions {
-                height: 1.4,
-                width: 3.5,
-            },
+            ObjectKind::Gate => continue,
             ObjectKind::PowerPole => ObjectDimensions {
                 height: 9.0,
                 width: 0.2,
@@ -552,3 +552,7 @@ pub fn build(
     }
     data
 }
+
+#[cfg(test)]
+#[path = "tests/details.rs"]
+mod tests;

@@ -354,7 +354,7 @@ mod mapped_objects {
     use crate::world;
 
     #[test]
-    fn open_gates_leave_the_driving_gap_clear_and_locked_gates_stop_a_car() {
+    fn legacy_gates_are_ignored_whether_open_or_locked() {
         let mut city = test::support::empty_world();
         for locked in [false, true] {
             let mut data = model::map_details::Data::default();
@@ -376,12 +376,12 @@ mod mapped_objects {
             let mut velocity = XZ { x: 0., z: -5. };
             let impact =
                 world::mapped_objects::constrain_mapped_objects(&city, &mut p, &mut velocity);
-            assert_eq!(impact > 0., locked);
-            assert_eq!(
-                world::mapped_objects::mapped_object_clearance(&(city), XZ { x: 0., z: 0. })
-                    < world::locations::CAR_RADIUS,
-                locked
+            assert_eq!(impact, 0.);
+            assert!(
+                world::mapped_objects::mapped_object_clearance(&city, XZ { x: 0., z: 0. })
+                    .is_infinite()
             );
+            assert!(world::map_details::data(&city.details).objects.is_empty());
             let mut above = XYZ {
                 x: 0.,
                 y: 5.48,

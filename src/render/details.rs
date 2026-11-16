@@ -298,46 +298,7 @@ pub fn build(b: &mut Builder, city: &WorldLocation, detailed: bool) {
                     );
                 }
             }
-            ObjectKind::Gate => {
-                for x in [-w / 2., w / 2.] {
-                    cylinder(&mut local, x, 0., 0.065, 0., h, metal);
-                }
-                let a = XYZ {
-                    x: -w / 2.,
-                    y: h * 0.2,
-                    z: 0.,
-                };
-                let c = if object.locked {
-                    XYZ { x: w / 2., ..a }
-                } else {
-                    XYZ {
-                        x: a.x,
-                        z: w * 0.9,
-                        ..a
-                    }
-                };
-                for lift in [0., h * 0.65] {
-                    beam(
-                        &mut local,
-                        XYZ { y: a.y + lift, ..a },
-                        XYZ { y: c.y + lift, ..c },
-                        0.055,
-                        metal,
-                    );
-                }
-                if detailed {
-                    beam(
-                        &mut local,
-                        a,
-                        XYZ {
-                            y: c.y + h * 0.65,
-                            ..c
-                        },
-                        0.035,
-                        metal,
-                    );
-                }
-            }
+            ObjectKind::Gate => {}
             ObjectKind::PowerTower => {
                 for side in [-1., 1.] {
                     for depth in [-1., 1.] {

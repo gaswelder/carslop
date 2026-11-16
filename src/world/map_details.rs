@@ -4,6 +4,7 @@ use crate::model::map_details::BuildingStyle;
 use crate::model::map_details::Data;
 use crate::model::map_details::Deck;
 use crate::model::map_details::MapObject;
+use crate::model::map_details::ObjectKind;
 use crate::model::map_details::TreeStyle;
 use crate::model::world::RoadRise;
 use crate::util::geometry::XYZ;
@@ -32,7 +33,10 @@ pub struct Prepared {
     deck_roads: HashMap<usize, usize>,
 }
 
-pub fn new(data: Data) -> Prepared {
+pub fn new(mut data: Data) -> Prepared {
+    // Retain the legacy serialized variant, but never install gates from old imports.
+    data.objects
+        .retain(|object| object.kind != ObjectKind::Gate);
     let buildings = data
         .buildings
         .iter()
