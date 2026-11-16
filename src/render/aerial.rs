@@ -113,8 +113,9 @@ pub struct Aerial {
 }
 
 pub fn open(assets: &storage::city_assets::CityAsset) -> Option<Aerial> {
-    let directory = storage::city_assets::directory(assets).join("aerial");
-    let path = directory.join("tiles.txt");
+    let location = storage::city_assets::directory(assets);
+    let directory = location.join("aerial");
+    let path = location.join("aerial.txt");
     if !path.is_file() {
         return None;
     }

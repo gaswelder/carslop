@@ -310,7 +310,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     )
     .unwrap();
     fs::write(
-        directory.join("aerial/tiles.txt"),
+        directory.join("aerial.txt"),
         "AERIAL 1\nsize 64 1\ntile -10 -10 30 30 tile.rgb 00000000\n",
     )
     .unwrap();
@@ -319,9 +319,14 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
         vec![height as u8; 66 * 66 * 3],
     )
     .unwrap();
+    let attribution = if provider.contains("Cyprus") {
+        "AERIAL: CYPRUS DLS / 2019"
+    } else {
+        "AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY"
+    };
     fs::write(
-        directory.join("aerial/source.json"),
-        serde_json::json!({"source":provider, "provider":provider}).to_string(),
+        directory.join("manifest.json"),
+        serde_json::json!({"aerial_attribution": attribution}).to_string(),
     )
     .unwrap();
     let assets = storage::city_assets::new(directory.to_path_buf());

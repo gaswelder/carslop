@@ -377,40 +377,45 @@ mod location {
         fs::write(input.path().join("scene.pack"), b"opaque compiled scene").unwrap();
         fs::create_dir(input.path().join("aerial")).unwrap();
         fs::write(
-            input.path().join("aerial/tiles.txt"),
+            input.path().join("aerial.txt"),
             "AERIAL 1\nsize 64 1\ntile -10 -10 30 30 tile.rgb\n",
         )
         .unwrap();
         fs::write(input.path().join("aerial/tile.rgb"), b"opaque tile").unwrap();
         fs::write(
-            input.path().join("aerial/source.json"),
-            br#"{"provider":"Cyprus"}"#,
+            input.path().join("manifest.json"),
+            br#"{"aerial_attribution":"AERIAL: CYPRUS DLS / 2019"}"#,
         )
         .unwrap();
         fs::write(input.path().join("aerial/service.json"), b"build-only").unwrap();
         let mut location = model::location::location_read(input.path()).unwrap();
         model::location::location_write(&location, output.path()).unwrap();
-        for file in [
-            "scene.pack",
-            "aerial/tiles.txt",
-            "aerial/tile.rgb",
-            "aerial/source.json",
-        ] {
+        for file in ["scene.pack", "aerial.txt", "aerial/tile.rgb"] {
             assert_eq!(
                 fs::read(input.path().join(file)).unwrap(),
                 fs::read(output.path().join(file)).unwrap()
             );
         }
+        let assets = storage::city_assets::new(output.path().to_path_buf());
+        assert_eq!(
+            storage::city_assets::aerial_attribution(&assets),
+            Some("AERIAL: CYPRUS DLS / 2019")
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["aerial_attribution"], "AERIAL: CYPRUS DLS / 2019");
         assert!(!output.path().join("aerial/service.json").exists());
         model::location::location_write(&location, input.path()).unwrap();
         fs::remove_file(input.path().join("scene.pack")).unwrap();
         fs::remove_dir_all(input.path().join("aerial")).unwrap();
+        fs::remove_file(input.path().join("aerial.txt")).unwrap();
         location = model::location::location_read(input.path()).unwrap();
         fs::write(output.path().join("imagery-trees.txt"), "stale").unwrap();
         model::location::location_write(&location, output.path()).unwrap();
         let reread = model::location::location_read(output.path()).unwrap();
         assert!(!output.path().join("scene.pack").exists());
-        assert!(!output.path().join("aerial/tiles.txt").exists());
+        assert!(!output.path().join("aerial.txt").exists());
         assert!(!output.path().join("aerial/tile.rgb").exists());
         assert_data_equal(&location, &reread);
     }

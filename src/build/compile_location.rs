@@ -59,7 +59,7 @@ fn new(output: &Path, downloads: &Path) -> ImportPaths {
         imagery: output.join("imagery"),
         aerial: output.join("aerial"),
         trees: output.join("imagery-trees.txt"),
-        catalog: output.join("aerial/tiles.txt"),
+        catalog: output.join("aerial.txt"),
         scene: output.join("scene.pack"),
         decorations: output.join("decorations.pack"),
     }
@@ -241,6 +241,7 @@ fn generate_assets(
     ];
     let manifest = serde_json::json!({
         "boundary": build::osm::to_geojson(boundary),
+        "aerial_attribution": "AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY",
     });
     fs::write(
         &paths.manifest,

@@ -11,9 +11,11 @@ fn two_imagery_workers_and_attributions_stay_with_their_asset_directories() {
     let mut workers = Vec::new();
     for (assets, expected) in [(&first, 7), (&second, 13)] {
         let directory = storage::city_assets::directory(assets).join("aerial");
-        let catalog =
-            storage::aerial::parse(&std::fs::read_to_string(directory.join("tiles.txt")).unwrap())
-                .unwrap();
+        let catalog = storage::aerial::parse(
+            &std::fs::read_to_string(storage::city_assets::directory(assets).join("aerial.txt"))
+                .unwrap(),
+        )
+        .unwrap();
         let loader = render::aerial::new(directory, catalog);
         render::aerial::request(&loader, std::iter::once(0));
         workers.push((loader, expected));

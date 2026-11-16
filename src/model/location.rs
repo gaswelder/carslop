@@ -41,6 +41,7 @@ pub struct Location {
     pub details: model::map_details::Data,
     /// Large render payloads stay on disk and are streamed when writing.
     media: Media,
+    aerial_attribution: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -152,18 +153,15 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
     if directory.join("scene.pack").exists() {
         media.scene = Some(payload_read(directory, "scene.pack".into())?);
     }
-    // Keep only the catalog, tiles, and attribution used by the renderer.
+    // Keep only the catalog and tiles used by the renderer.
     // Service requests and download/build metadata are not location data.
-    if directory.join("aerial/tiles.txt").is_file() {
+    if directory.join("aerial.txt").is_file() {
         let catalog = storage::aerial::tile_filenames(
-            &fs::read_to_string(directory.join("aerial/tiles.txt")).map_err(|e| e.to_string())?,
+            &fs::read_to_string(directory.join("aerial.txt")).map_err(|e| e.to_string())?,
         )?;
-        let mut files = vec![PathBuf::from("aerial/tiles.txt")];
+        let mut files = vec![PathBuf::from("aerial.txt")];
         for name in catalog {
             files.push(PathBuf::from("aerial").join(name));
-        }
-        if directory.join("aerial/source.json").exists() {
-            files.push("aerial/source.json".into());
         }
         files.sort();
         files.dedup();
@@ -173,6 +171,7 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
             .collect::<Result<_, _>>()?;
     }
     Ok(Location {
+        aerial_attribution: manifest["aerial_attribution"].as_str().map(str::to_owned),
         name: storage::city_assets::name(&assets).to_owned(),
         origin: source.origin,
         extent: source.bounding_box,
@@ -304,11 +303,15 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
             )?;
         }
         city.flush()?;
+        let mut manifest = serde_json::json!({
+            "pavement_height_metres": location.pavement_height_meters,
+        });
+        if let Some(attribution) = &location.aerial_attribution {
+            manifest["aerial_attribution"] = attribution.clone().into();
+        }
         fs::write(
             directory.join("manifest.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "pavement_height_metres": location.pavement_height_meters,
-            }))?,
+            serde_json::to_vec_pretty(&manifest)?,
         )?;
         fs::write(
             directory.join("labels.json"),
@@ -386,17 +389,14 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
         remove_optional(&directory.join("scene.pack"))?;
     }
     // Remove only files referenced by the previous renderer catalog.
-    let previous_tiles = fs::read_to_string(directory.join("aerial/tiles.txt"))
+    let previous_tiles = fs::read_to_string(directory.join("aerial.txt"))
         .ok()
         .and_then(|text| storage::aerial::tile_filenames(&text).ok())
         .unwrap_or_default();
     let previous_files = previous_tiles
         .into_iter()
         .map(|name| PathBuf::from("aerial").join(name))
-        .chain([
-            PathBuf::from("aerial/tiles.txt"),
-            PathBuf::from("aerial/source.json"),
-        ]);
+        .chain([PathBuf::from("aerial.txt")]);
     for relative in previous_files {
         if !location.media.aerial.iter().any(|p| p.relative == relative) {
             remove_optional(&directory.join(relative))?;

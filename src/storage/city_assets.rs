@@ -12,7 +12,7 @@ pub const LOCATIONS_DIRECTORY: &str = "data/locations";
 pub struct CityAsset {
     directory: PathBuf,
     name: String,
-    aerial_attribution: Option<&'static str>,
+    aerial_attribution: Option<String>,
 }
 
 pub fn new(directory: PathBuf) -> CityAsset {
@@ -28,8 +28,8 @@ pub fn new(directory: PathBuf) -> CityAsset {
 pub fn resolved(assets: &CityAsset) -> std::io::Result<CityAsset> {
     Ok(new(assets.directory.canonicalize()?))
 }
-pub fn aerial_attribution(assets: &CityAsset) -> Option<&'static str> {
-    assets.aerial_attribution
+pub fn aerial_attribution(assets: &CityAsset) -> Option<&str> {
+    assets.aerial_attribution.as_deref()
 }
 
 pub fn directory(assets: &CityAsset) -> &Path {

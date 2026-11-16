@@ -101,28 +101,13 @@ pub fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u
         .map_err(|e| e.to_string())
 }
 
-pub fn attribution_label(directory: &std::path::Path) -> Option<&'static str> {
-    if !directory.join("aerial/tiles.txt").is_file() {
+pub fn attribution_label(directory: &Path) -> Option<String> {
+    if !directory.join("aerial.txt").is_file() {
         return None;
     }
-    let metadata = std::fs::read(directory.join("aerial/source.json"))
+    let attribution = std::fs::read(directory.join("manifest.json"))
         .ok()
-        .and_then(|s| serde_json::from_slice::<serde_json::Value>(&s).ok());
-    Some(
-        if metadata
-            .as_ref()
-            .and_then(|v| v["source"].as_str())
-            .is_some_and(|s| s.contains("arcgisonline.com"))
-        {
-            "AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY"
-        } else if metadata
-            .as_ref()
-            .and_then(|v| v["provider"].as_str())
-            .is_some_and(|s| s.contains("Cyprus"))
-        {
-            "AERIAL: CYPRUS DLS / 2019"
-        } else {
-            "AERIAL: LOCAL IMAGERY"
-        },
-    )
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|manifest| manifest["aerial_attribution"].as_str().map(str::to_owned));
+    Some(attribution.unwrap_or_else(|| "AERIAL: LOCAL IMAGERY".into()))
 }

@@ -245,9 +245,9 @@ mod imagery_raster {
         let first =
             process_tiles(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap();
         assert_eq!(first.tiles.len(), 16);
-        let a = fs::read(aerial.join("0_0_0_0.jpg")).unwrap();
+        let a = fs::read(aerial.join(&first.tiles[0].name)).unwrap();
         let decoded = image::load_from_memory(&a).unwrap().to_rgb8().into_raw();
-        let right = image::open(aerial.join("0_0_1_0.jpg"))
+        let right = image::open(aerial.join(&first.tiles[1].name))
             .unwrap()
             .to_rgb8()
             .into_raw();
@@ -261,12 +261,12 @@ mod imagery_raster {
             first,
             process_tiles(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap()
         );
-        fs::remove_file(aerial.join("0_0_0_0.jpg")).unwrap();
+        fs::remove_file(aerial.join(&first.tiles[0].name)).unwrap();
         assert_eq!(
             first,
             process_tiles(&work.join("downloads"), work, &aerial, &b, [35.162, 33.32]).unwrap()
         );
-        assert_eq!(a, fs::read(aerial.join("0_0_0_0.jpg")).unwrap());
+        assert_eq!(a, fs::read(aerial.join(&first.tiles[0].name)).unwrap());
     }
 }
 
