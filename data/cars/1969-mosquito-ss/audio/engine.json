@@ -1,0 +1,305 @@
+{
+  "version": 1,
+  "sample_rate": 48000,
+  "bands": [
+    {
+      "rpm": 850,
+      "load": {
+        "pulse_hz": 56.666666666666664,
+        "overlap": 6776,
+        "repeat_seconds": 2.4,
+        "source_start_seconds": 36,
+        "source_duration_seconds": 3,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 60
+          },
+          {
+            "seconds": 3,
+            "hz": 60
+          }
+        ],
+        "tracked_firing_multiple": 2,
+        "pitch_stabilized": true,
+        "firing_cycles": 136,
+        "source_gain": 5.508336238727871,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 639,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-850-load.wav"
+      },
+      "coast": {
+        "pulse_hz": 56.666666666666664,
+        "overlap": 6776,
+        "repeat_seconds": 2.4,
+        "source_start_seconds": 36,
+        "source_duration_seconds": 3,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 60
+          },
+          {
+            "seconds": 3,
+            "hz": 60
+          }
+        ],
+        "tracked_firing_multiple": 2,
+        "pitch_stabilized": true,
+        "firing_cycles": 136,
+        "source_gain": 5.508336238727871,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 639,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-850-coast.wav"
+      }
+    },
+    {
+      "rpm": 1700,
+      "load": {
+        "pulse_hz": 113.33348468681181,
+        "overlap": 3388,
+        "repeat_seconds": 2.7529375,
+        "source_start_seconds": 81.7,
+        "source_duration_seconds": 2.2,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 165
+          },
+          {
+            "seconds": 2.2,
+            "hz": 188
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 312,
+        "source_gain": 2.0096232676243604,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 10,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-1700-load.wav"
+      },
+      "coast": {
+        "pulse_hz": 113.33337519702098,
+        "overlap": 3388,
+        "repeat_seconds": 3.317645833333333,
+        "source_start_seconds": 213,
+        "source_duration_seconds": 2.4,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 194
+          },
+          {
+            "seconds": 2.4,
+            "hz": 178
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 376,
+        "source_gain": 2.4388994922245484,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 2058,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-1700-coast.wav"
+      }
+    },
+    {
+      "rpm": 2800,
+      "load": {
+        "pulse_hz": 186.66666666666666,
+        "overlap": 2057,
+        "repeat_seconds": 2.1,
+        "source_start_seconds": 86,
+        "source_duration_seconds": 2.5,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 177
+          },
+          {
+            "seconds": 2.5,
+            "hz": 215
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 392,
+        "source_gain": 2.4808526307435335,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 0,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-2800-load.wav"
+      },
+      "coast": {
+        "pulse_hz": 186.66711366645993,
+        "overlap": 2057,
+        "repeat_seconds": 2.485708333333333,
+        "source_start_seconds": 132.5,
+        "source_duration_seconds": 3,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 185
+          },
+          {
+            "seconds": 3,
+            "hz": 183
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 464,
+        "source_gain": 2.214877830900126,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 1046,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-2800-coast.wav"
+      }
+    },
+    {
+      "rpm": 4000,
+      "load": {
+        "pulse_hz": 266.6666666666667,
+        "overlap": 1440,
+        "repeat_seconds": 2.28,
+        "source_start_seconds": 103.2,
+        "source_duration_seconds": 2.7,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 253
+          },
+          {
+            "seconds": 2.7,
+            "hz": 278
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 608,
+        "source_gain": 2.3499950250192456,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 505,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-4000-load.wav"
+      },
+      "coast": {
+        "pulse_hz": 266.6666666666667,
+        "overlap": 1440,
+        "repeat_seconds": 2.52,
+        "source_start_seconds": 92,
+        "source_duration_seconds": 3.4,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 256
+          },
+          {
+            "seconds": 3.4,
+            "hz": 223
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 672,
+        "source_gain": 2.495607622092926,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 551,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-4000-coast.wav"
+      }
+    },
+    {
+      "rpm": 5200,
+      "load": {
+        "pulse_hz": 346.6666666666667,
+        "overlap": 1108,
+        "repeat_seconds": 5.7,
+        "source_start_seconds": 188,
+        "source_duration_seconds": 6.8,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 266
+          },
+          {
+            "seconds": 1,
+            "hz": 289
+          },
+          {
+            "seconds": 2,
+            "hz": 290
+          },
+          {
+            "seconds": 3,
+            "hz": 312
+          },
+          {
+            "seconds": 4,
+            "hz": 316
+          },
+          {
+            "seconds": 5,
+            "hz": 324
+          },
+          {
+            "seconds": 6,
+            "hz": 347
+          },
+          {
+            "seconds": 6.8,
+            "hz": 368
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 1976,
+        "source_gain": 2.044649391531189,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 413,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-5200-load.wav"
+      },
+      "coast": {
+        "pulse_hz": 346.6656199709542,
+        "overlap": 1108,
+        "repeat_seconds": 2.6538541666666666,
+        "source_start_seconds": 104.4,
+        "source_duration_seconds": 3.5,
+        "source_pitch_guide": [
+          {
+            "seconds": 0,
+            "hz": 265
+          },
+          {
+            "seconds": 3.5,
+            "hz": 335
+          }
+        ],
+        "tracked_firing_multiple": 1,
+        "pitch_stabilized": true,
+        "firing_cycles": 920,
+        "source_gain": 2.5021470930319847,
+        "engine_order_leveling": true,
+        "cycle_alignment_frames": 685,
+        "bass_gain_db": 7.958800173440752,
+        "seam_baked": true,
+        "file": "v8-5200-coast.wav"
+      }
+    }
+  ]
+}

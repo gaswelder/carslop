@@ -94,9 +94,12 @@
         0.15
       ]
     ],
-    "gain": 2,
-    "coast_gain": 0.35,
-    "soft_limit": null,
+    "gain": 2.1,
+    "coast_gain": 0.45,
+    "soft_limit": [
+      0.22,
+      0.06
+    ],
     "pulses_per_revolution": 4
   }
 }
