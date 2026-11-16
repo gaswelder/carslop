@@ -1,7 +1,11 @@
+use crate::model::map_details::RoadSurface;
+use crate::model::world::Material;
 use crate::physics;
 use crate::render;
 use crate::sound;
 use crate::sound::SAMPLE_RATE;
+use crate::util;
+use crate::world;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 const QUEUE_SAMPLES: usize = 2400;
 
@@ -73,6 +77,7 @@ pub fn update(
             car.engine_load
         },
         scrub: car.tire_scrub,
+        surface: tire_material(car),
         tuning: &car.spec.audio,
         enabled,
     };
@@ -104,3 +109,29 @@ fn output_sample(driving: f32) -> f32 {
 fn engine_frequency(rpm: f32) -> f32 {
     rpm.max(physics::car::IDLE_RPM) / 30.0
 }
+
+// Use the supporting deck before the ground beneath it, including on bridges.
+fn tire_material(car: &physics::car::Vehicle) -> Material {
+    let location = &car.track;
+    let position = util::geometry::xz(car.position);
+    let reference = car.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+    if let Some(deck) = world::map_details::nearby_decks(&location.details, position).find(|deck| {
+        world::map_details::height_on(deck, position)
+            .is_some_and(|height| (height - reference).abs() < 1.5)
+    }) {
+        return match deck.surface {
+            RoadSurface::Asphalt => Material::Asphalt,
+            RoadSurface::Concrete => Material::Concrete,
+            RoadSurface::Paving => Material::Paving,
+            RoadSurface::Unpaved => Material::BareGround,
+        };
+    }
+    world::street_surface::world_location_triangle_at(location, position, false)
+        .map(|triangle| triangle.material)
+        .or_else(|| world::landscape::material(&location.ground, position))
+        .unwrap_or(Material::Asphalt)
+}
+
+#[cfg(test)]
+#[path = "tests/car.rs"]
+mod tests;

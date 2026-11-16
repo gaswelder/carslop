@@ -1,6 +1,7 @@
 //! Tests through the group's production interfaces.
 
 mod synthesis {
+    use crate::model::world::Material;
     use crate::render;
     use crate::sound;
     use crate::sound::spatial::SpatialAudio;
@@ -24,6 +25,7 @@ mod synthesis {
                         frequency: 150.0,
                         load,
                         scrub: 0.0,
+                        surface: Material::Asphalt,
                         tuning: test::support::audio_voice(),
                         enabled: true,
                     },
@@ -165,6 +167,7 @@ mod synthesis {
             frequency: 180.0,
             load: 1.0,
             scrub: 1.0,
+            surface: Material::Asphalt,
             tuning: test::support::audio_voice(),
             enabled: true,
         };
@@ -198,7 +201,7 @@ mod synthesis {
         let mut energy = 0.0;
         let mut difference_energy = 0.0;
         for _ in 0..48000 {
-            let sample = sound::tires::sample(&mut tires, 1.0, 30.0);
+            let sample = sound::tires::sample(&mut tires, 1.0, 30.0, Material::Asphalt);
             assert!(sample.is_finite() && sample.abs() < 0.2);
             energy += sample * sample;
             difference_energy += (sample - previous).powi(2);
@@ -206,11 +209,11 @@ mod synthesis {
         }
         // Broadband hiss has roughly twice as much first-difference energy.
         assert!(energy > 1.0 && difference_energy < energy * 0.4);
-        let released = sound::tires::sample(&mut tires, 0.0, 30.0);
+        let released = sound::tires::sample(&mut tires, 0.0, 30.0, Material::Asphalt);
         assert!((released - previous).abs() < 0.1, "release must not click");
         let mut tail = 0.0_f32;
         for i in 0..48000 {
-            let sample = sound::tires::sample(&mut tires, 0.0, 30.0);
+            let sample = sound::tires::sample(&mut tires, 0.0, 30.0, Material::Asphalt);
             if i > 40000 {
                 tail = tail.max(sample.abs());
             }
@@ -224,6 +227,7 @@ mod synthesis {
             frequency: 30.0,
             load: 0.0,
             scrub: 0.0,
+            surface: Material::Asphalt,
             tuning: test::support::audio_voice(),
             enabled: true,
             turbo_target: 0.0,

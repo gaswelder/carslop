@@ -1,5 +1,6 @@
 //! Device-independent engine, road, impact, and tire synthesis.
 
+use crate::model::world::Material;
 use crate::sound::SAMPLE_RATE;
 use crate::{model, sound};
 use std::f32::consts::TAU;
@@ -9,6 +10,7 @@ pub struct Voice<'a> {
     pub frequency: f32,
     pub load: f32,
     pub scrub: f32,
+    pub surface: Material,
     pub tuning: &'a model::car::EngineVoice,
     pub enabled: bool,
     pub turbo_target: f32,
@@ -120,7 +122,7 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     synth.road_gain += (road_target - synth.road_gain) * 0.0005;
     synth.road_noise += (noise - synth.road_noise) * 0.025;
     let rolling = (synth.road_noise * 0.18 + synth.filtered_noise * 0.035) * synth.road_gain;
-    let tires = sound::tires::sample(&mut synth.tires, tire, voice.road_speed);
+    let tires = sound::tires::sample(&mut synth.tires, tire, voice.road_speed, voice.surface);
     synth.impact_phase = (synth.impact_phase + (48.0 + synth.impact * 42.0) / SAMPLE_RATE).fract();
     let impact = ((synth.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * synth.impact * 0.22;
     synth.impact *= 0.99981;
