@@ -10,3 +10,6 @@ pub mod codec_streets;
 pub mod legacy_labels;
 pub mod source_files;
 pub mod street_surface_binary;
+
+#[cfg(test)]
+mod tests;

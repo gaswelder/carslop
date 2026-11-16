@@ -170,35 +170,3 @@ pub fn proposals(im: &RgbImage, scale: [f64; 2]) -> Vec<Candidate> {
     selected.sort_by_key(|p| (p.y, p.x));
     selected
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use image::Rgb;
-    #[test]
-    fn muted_textured_crowns_are_detected_but_smooth_muted_surfaces_are_not() {
-        let mut im = RgbImage::from_pixel(160, 100, Rgb([110, 110, 110]));
-        for y in 10..90 {
-            for x in 10..150 {
-                if (x as i32 - 45).pow(2) + (y as i32 - 50).pow(2) < 20 * 20 {
-                    let noise = ((x * 13 + y * 7) % 25) as i16 - 12;
-                    im.put_pixel(
-                        x,
-                        y,
-                        Rgb([(65 + noise) as u8, (64 + noise) as u8, (59 + noise) as u8]),
-                    );
-                }
-                if (x as i32 - 115).pow(2) + (y as i32 - 50).pow(2) < 20 * 20 {
-                    im.put_pixel(x, y, Rgb([65, 64, 59]));
-                }
-            }
-        }
-        let found = proposals(&im, [0.25, 0.25]);
-        assert!(found
-            .iter()
-            .any(|p| (p.x as i32 - 45).abs() < 5 && (p.y as i32 - 50).abs() < 5));
-        assert!(
-            found.iter().all(|p| p.x < 85),
-            "smooth muted surfaces must not become crowns"
-        );
-    }
-}

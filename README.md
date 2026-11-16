@@ -77,6 +77,17 @@ Location baking combines these parts with mapped building shells into
 [architectural asset conventions](data/buildings/README.md) for editing and export
 instructions. Rebuild edited artwork with `cargo run -- bake-scene --location nicosia`.
 
+## Tests
+
+Run the suite with `cargo test`. Group API tests live in `src/<group>/tests.rs`.
+Targeted implementation tests live in `src/<group>/tests/<module>.rs`, attached
+to their owning module with `#[path]` so implementation details stay private.
+Settings tests use the group's single test file with the same ownership rule.
+Shared fixture builders belong in test support modules.
+
+Audio synthesis and spatialization, map projection, and OSM map translation have
+device-independent production interfaces used by both callers and tests.
+
 ## Credits and distribution
 
 - **UI and sign font:** Noto Sans SemiBold and Bold, © 2018 The Noto Project Authors,

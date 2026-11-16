@@ -3,12 +3,8 @@ use crate::physics;
 use crate::storage;
 use crate::ui;
 use crate::util;
-use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XYZ;
-use crate::util::geometry::XZ;
 use crate::world;
-#[cfg(test)]
-use crate::world::locations::LocationId;
 use crate::world::locations::WorldLocation;
 use std::ffi::CString;
 
@@ -131,133 +127,10 @@ pub struct PauseMenu<'a> {
     pub audio: &'a str,
 }
 
-const MAP_CONTENT: [[f32; 2]; 2] = [[0.61, 0.49], [0.95, 0.88]];
-const FULL_MAP_CONTENT: [[f32; 2]; 2] = [[-0.94, -0.72], [0.94, 0.75]];
-const MAP_WIDTH_METRES: f32 = 1000.0;
-
-struct MapFit {
-    center: XZ<f32>,
-    scale: [f32; 2],
-    north_up: bool,
-    heading: Option<f32>,
-    content: [[f32; 2]; 2],
-}
-
-fn map_fit_new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> MapFit {
-    let x_scale = (MAP_CONTENT[1][0] - MAP_CONTENT[0][0]) / MAP_WIDTH_METRES;
-    MapFit {
-        center: util::geometry::xz(player),
-        scale: [x_scale, x_scale * viewport[0] / viewport[1]],
-        north_up: world::street_surface::has_compiled_roads(track),
-        heading: None,
-        content: MAP_CONTENT,
-    }
-}
-fn world_bounds(map_fit: &MapFit) -> BoundingBoxXZ<f32> {
-    let mut x = (map_fit.content[1][0] - map_fit.content[0][0]) * 0.5 / map_fit.scale[0];
-    let mut z = (map_fit.content[1][1] - map_fit.content[0][1]) * 0.5 / map_fit.scale[1];
-    if let Some(heading) = map_fit.heading {
-        let (sin, cos) = heading.sin_cos();
-        (x, z) = (x * cos.abs() + z * sin.abs(), x * sin.abs() + z * cos.abs());
-    }
-    BoundingBoxXZ {
-        min: XZ {
-            x: map_fit.center.x - x,
-            z: map_fit.center.z - z,
-        },
-        max: XZ {
-            x: map_fit.center.x + x,
-            z: map_fit.center.z + z,
-        },
-    }
-}
-fn map_fit_point(map_fit: &MapFit, p: XYZ) -> [f32; 2] {
-    let dx = p.x - map_fit.center.x;
-    let dz = p.z - map_fit.center.z;
-    let [x, y] = if let Some(heading) = map_fit.heading {
-        let (sin, cos) = heading.sin_cos();
-        [dz * sin - dx * cos, dx * sin + dz * cos]
-    } else {
-        [dx, dz * if map_fit.north_up { -1.0 } else { 1.0 }]
-    };
-    [
-        (map_fit.content[0][0] + map_fit.content[1][0]) * 0.5 + x * map_fit.scale[0],
-        (map_fit.content[0][1] + map_fit.content[1][1]) * 0.5 + y * map_fit.scale[1],
-    ]
-}
-
-struct FullMapView {
-    copy_status: Option<&'static str>,
-    fit: MapFit,
-    min_scale: f32,
-    max_scale: f32,
-}
-
-fn full_map_view_new(track: &WorldLocation, player: XYZ, viewport: [f32; 2]) -> FullMapView {
-    // Keep the minimap's metres per pixel, expanding the visible area.
-    let mut fit = map_fit_new(track, player, viewport);
-    fit.content = FULL_MAP_CONTENT;
-    let mut bounds = model::world::bounding_box(track);
-    for p in map_segments(track).flat_map(|(a, b)| [a, b]) {
-        bounds.min.x = bounds.min.x.min(p.x);
-        bounds.min.z = bounds.min.z.min(p.z);
-        bounds.max.x = bounds.max.x.max(p.x);
-        bounds.max.z = bounds.max.z.max(p.z);
-    }
-    // Zooming out can reveal the entire network while keeping the car centered.
-    let size: [f32; 2] = std::array::from_fn(|i| {
-        2.0 * ([bounds.min.x, bounds.min.z][i] - util::geometry::xz_component(fit.center, i))
-            .abs()
-            .max(
-                ([bounds.max.x, bounds.max.z][i] - util::geometry::xz_component(fit.center, i))
-                    .abs(),
-            )
-            .max(1.0)
-    });
-    let available: [f32; 2] =
-        std::array::from_fn(|i| (FULL_MAP_CONTENT[1][i] - FULL_MAP_CONTENT[0][i]) * 0.9);
-    let min_scale = (available[0] / size[0])
-        .min(available[1] / (size[1] * viewport[0] / viewport[1]))
-        .min(fit.scale[0]);
-    FullMapView {
-        copy_status: None,
-        min_scale,
-        max_scale: fit.scale[0] * 16.0,
-        fit,
-    }
-}
-
-fn zoom_full_map(full_map_view: &mut FullMapView, steps: f32) -> bool {
-    if !steps.is_finite() || steps == 0.0 {
-        return false;
-    }
-    let scale = (full_map_view.fit.scale[0] * 1.25_f32.powf(steps.clamp(-100.0, 100.0)))
-        .clamp(full_map_view.min_scale, full_map_view.max_scale);
-    if scale == full_map_view.fit.scale[0] {
-        return false;
-    }
-    full_map_view.fit.scale[1] *= scale / full_map_view.fit.scale[0];
-    full_map_view.fit.scale[0] = scale;
-    true
-}
-
-fn zoom_factor(full_map_view: &FullMapView) -> f32 {
-    full_map_view.fit.scale[0] / (full_map_view.max_scale / 16.0)
-}
-
-fn set_zoom_factor(full_map_view: &mut FullMapView, factor: f32) {
-    let scale = (full_map_view.max_scale / 16.0 * factor)
-        .clamp(full_map_view.min_scale, full_map_view.max_scale);
-    if scale != full_map_view.fit.scale[0] {
-        full_map_view.fit.scale[1] *= scale / full_map_view.fit.scale[0];
-        full_map_view.fit.scale[0] = scale;
-    }
-}
-
 /// Liang–Barsky clipping keeps crossing roads even when both endpoints are
 /// outside the vicinity. Padding includes the stroke width at the boundary.
 fn clip_map_line(a: [f32; 2], b: [f32; 2], padding: f32) -> Option<[[f32; 2]; 2]> {
-    clip_line(a, b, MAP_CONTENT, [padding; 2])
+    clip_line(a, b, ui::map::MAP_CONTENT, [padding; 2])
 }
 fn clip_line(
     a: [f32; 2],
@@ -291,7 +164,9 @@ fn clip_line(
     ])
 }
 fn map_marker(v: &mut Vec<Vertex>, point: [f32; 2], size: f32, aspect: f32, color: [f32; 3]) {
-    if (0..2).any(|i| point[i] < MAP_CONTENT[0][i] || point[i] > MAP_CONTENT[1][i]) {
+    if (0..2)
+        .any(|i| point[i] < ui::map::MAP_CONTENT[0][i] || point[i] > ui::map::MAP_CONTENT[1][i])
+    {
         return;
     }
     // A bordered navigation chevron. Pixel aspect keeps its silhouette consistent.
@@ -303,9 +178,10 @@ fn map_marker(v: &mut Vec<Vertex>, point: [f32; 2], size: f32, aspect: f32, colo
         let shape = [[0.0, 1.35], [-0.8, -1.0], [0.0, -0.55], [0.8, -1.0]];
         let points = shape.map(|p| {
             [
-                (point[0] + p[0] * size * scale).clamp(MAP_CONTENT[0][0], MAP_CONTENT[1][0]),
+                (point[0] + p[0] * size * scale)
+                    .clamp(ui::map::MAP_CONTENT[0][0], ui::map::MAP_CONTENT[1][0]),
                 (point[1] + p[1] * size * scale * aspect)
-                    .clamp(MAP_CONTENT[0][1], MAP_CONTENT[1][1]),
+                    .clamp(ui::map::MAP_CONTENT[0][1], ui::map::MAP_CONTENT[1][1]),
             ]
         });
         for i in [1, 2] {
@@ -321,7 +197,7 @@ pub struct Hud {
     vao: u32,
     vbo: u32,
     full_map_vertices: i32,
-    full_map_view: Option<FullMapView>,
+    full_map_view: Option<ui::map::FullMapView>,
 }
 
 impl Drop for Hud {
@@ -405,7 +281,7 @@ pub fn draw(
         [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
     );
     quad(&mut v, [0.59, 0.47], [0.97, 0.90], [0.025, 0.05, 0.075]);
-    let mut fit = map_fit_new(
+    let mut fit = ui::map::map_fit_new(
         map.track,
         map.player,
         [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
@@ -416,16 +292,18 @@ pub fn draw(
     } else {
         0.006
     };
-    for (from, to) in map_segments_near(map.track, world_bounds(&fit)) {
-        if let Some([a, b]) =
-            clip_map_line(map_fit_point(&fit, from), map_fit_point(&fit, to), width)
-        {
+    for (from, to) in ui::map::map_segments_near(map.track, ui::map::world_bounds(&fit)) {
+        if let Some([a, b]) = clip_map_line(
+            ui::map::map_fit_point(&fit, from),
+            ui::map::map_fit_point(&fit, to),
+            width,
+        ) {
             line(&mut v, a, b, width, [0.4, 0.49, 0.52]);
         }
     }
     map_marker(
         &mut v,
-        map_fit_point(&fit, map.player),
+        ui::map::map_fit_point(&fit, map.player),
         0.014,
         fit.scale[1] / fit.scale[0],
         [0.15, 0.85, 0.95],
@@ -445,9 +323,9 @@ pub fn prepare_full_map(
     viewport: [f32; 2],
     zoom: Option<f32>,
 ) {
-    let mut view = full_map_view_new(map.track, map.player, viewport);
+    let mut view = ui::map::full_map_view_new(map.track, map.player, viewport);
     if let Some(zoom) = zoom {
-        set_zoom_factor(&mut view, zoom);
+        ui::map::set_zoom_factor(&mut view, zoom);
     }
     hud.full_map_view = Some(view);
     rebuild_full_map(hud, map, heading, viewport);
@@ -462,8 +340,8 @@ pub fn hud_zoom_full_map(
 ) -> Option<f32> {
     let mut zoom = None;
     if let Some(view) = hud.full_map_view.as_mut() {
-        if zoom_full_map(view, steps) {
-            zoom = Some(zoom_factor(view));
+        if ui::map::zoom_full_map(view, steps) {
+            zoom = Some(ui::map::zoom_factor(view));
         }
     }
     if zoom.is_some() {
@@ -694,7 +572,7 @@ fn append_full_map(
     map: Map<'_>,
     heading: f32,
     viewport: [f32; 2],
-    fit: &MapFit,
+    fit: &ui::map::MapFit,
 ) {
     let white = [0.9, 0.95, 1.0];
     let muted = [0.55, 0.66, 0.70];
@@ -703,8 +581,8 @@ fn append_full_map(
     quad(v, [-1.0, -1.0], [1.0, 1.0], [0.015, 0.025, 0.04]);
     quad(
         v,
-        FULL_MAP_CONTENT[0],
-        FULL_MAP_CONTENT[1],
+        ui::map::FULL_MAP_CONTENT[0],
+        ui::map::FULL_MAP_CONTENT[1],
         [0.025, 0.05, 0.075],
     );
     text(v, "Full map", [-0.94, 0.92], 0.006, cyan);
@@ -727,10 +605,10 @@ fn append_full_map(
     };
     let road_width = if fit.north_up { 1.5 } else { 3.0 };
     let padding = [road_width / viewport[0], road_width / viewport[1]];
-    for (a, b) in map_segments_near(map.track, world_bounds(fit)) {
+    for (a, b) in ui::map::map_segments_near(map.track, ui::map::world_bounds(fit)) {
         if let Some([a, b]) = clip_line(
-            map_fit_point(fit, a),
-            map_fit_point(fit, b),
+            ui::map::map_fit_point(fit, a),
+            ui::map::map_fit_point(fit, b),
             fit.content,
             padding,
         ) {
@@ -743,7 +621,7 @@ fn append_full_map(
             );
         }
     }
-    let player = pixel(map_fit_point(fit, map.player));
+    let player = pixel(ui::map::map_fit_point(fit, map.player));
     disc(&mut canvas, player, 15.0, white);
     disc(&mut canvas, player, 12.0, [0.025, 0.05, 0.075]);
     let forward = [
@@ -1177,7 +1055,7 @@ fn line(v: &mut Vec<Vertex>, a: [f32; 2], b: [f32; 2], width: f32, color: [f32; 
 
 fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
     let size = 0.0025;
-    let available_width = MAP_CONTENT[1][0] - MAP_CONTENT[0][0];
+    let available_width = ui::map::MAP_CONTENT[1][0] - ui::map::MAP_CONTENT[0][0];
     // Bound the label to two lines at a readable size, including long OSM names.
     let chars: Vec<_> = name.chars().collect();
     let mut lines = Vec::new();
@@ -1217,15 +1095,18 @@ fn append_street_name(v: &mut Vec<Vertex>, name: &str) {
     if lines.is_empty() {
         return;
     }
-    let top = MAP_CONTENT[0][1] - 0.04;
-    let center = (MAP_CONTENT[0][0] + MAP_CONTENT[1][0]) * 0.5;
+    let top = ui::map::MAP_CONTENT[0][1] - 0.04;
+    let center = (ui::map::MAP_CONTENT[0][0] + ui::map::MAP_CONTENT[1][0]) * 0.5;
     quad(
         v,
         [
-            MAP_CONTENT[0][0] - 0.02,
+            ui::map::MAP_CONTENT[0][0] - 0.02,
             top - (lines.len() - 1) as f32 * 0.045 - 0.045,
         ],
-        [MAP_CONTENT[1][0] + 0.02, MAP_CONTENT[0][1] - 0.02],
+        [
+            ui::map::MAP_CONTENT[1][0] + 0.02,
+            ui::map::MAP_CONTENT[0][1] - 0.02,
+        ],
         [0.025, 0.05, 0.075],
     );
     for (i, line) in lines.iter().enumerate() {
@@ -1269,20 +1150,6 @@ fn text_with_font(
     });
 }
 
-fn map_segments(world: &WorldLocation) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
-    Box::new(
-        world::roads::road_lines(world)
-            .iter()
-            .flat_map(|street| street.path.windows(2).map(|p| (p[0], p[1]))),
-    )
-}
-fn map_segments_near(
-    world: &WorldLocation,
-    bounds: BoundingBoxXZ<f32>,
-) -> Box<dyn Iterator<Item = (XYZ, XYZ)> + '_> {
-    Box::new(world::roads::road_segments_in(world, bounds).into_iter())
-}
-
 pub fn google_maps_url(world: &WorldLocation, position: XYZ) -> Option<String> {
     let p = util::geometry::geographic_position(world, position)?;
     Some(format!(
@@ -1307,283 +1174,5 @@ fn street_name(world: &WorldLocation, p: XYZ) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model;
-    use crate::physics;
-    use crate::test;
-    use crate::ui;
-    use crate::world;
-
-    #[test]
-    #[ignore = "reports HUD generation time and geometry size"]
-    fn hud_geometry_profile() {
-        let mut vertices = Vec::new();
-        let mut triangles = 0;
-        let cold = std::time::Instant::now();
-        let atlas = ui::hud_atlas::get();
-        eprintln!(
-            "Atlas: {}x{}, {:.3} s to initialize",
-            atlas.width,
-            atlas.height,
-            cold.elapsed().as_secs_f64()
-        );
-        let started = std::time::Instant::now();
-        for frame in 0..1000 {
-            vertices.clear();
-            append_instruments(
-                &mut vertices,
-                Gauges {
-                    rpm: 3000.0 + frame as f32,
-                    redline_rpm: 6500.0,
-                    speed_kmh: 90.0,
-                    gear: 3,
-                },
-                [1280.0, 720.0],
-            );
-            append_street_name(&mut vertices, "ΛΕΩΦΟΡΟΣ ΑΡΧΙΕΠΙΣΚΟΠΟΥ ΜΑΚΑΡΙΟΥ III");
-            std::hint::black_box(&vertices);
-            triangles = vertices.len() / 3;
-        }
-        eprintln!(
-            "HUD: {triangles} triangles, {} bytes, {:.3} ms/frame",
-            std::mem::size_of_val(vertices.as_slice()),
-            started.elapsed().as_secs_f64()
-        );
-    }
-
-    #[test]
-    fn map_zoom_factor_applies_to_every_location() {
-        let track = world::locations::try_track(&LocationId::Compact).unwrap();
-        let other = world::locations::try_track(&test::support::authored_id()).unwrap();
-        let viewport = [1280.0, 720.0];
-
-        let mut view = ui::hud::full_map_view_new(
-            &track,
-            physics::vehicle_location::spawn(&track).point,
-            viewport,
-        );
-        assert!(ui::hud::zoom_full_map(&mut (view), 3.0));
-        let factor = ui::hud::zoom_factor(&view);
-        assert!(factor > 1.0);
-
-        for track in [&track, &other] {
-            let mut view = ui::hud::full_map_view_new(
-                track,
-                physics::vehicle_location::spawn(track).point,
-                viewport,
-            );
-            assert!((ui::hud::zoom_factor(&(view)) - 1.0).abs() < 0.000001);
-            ui::hud::set_zoom_factor(&mut view, factor);
-            assert!((ui::hud::zoom_factor(&(view)) - factor).abs() < 0.00001);
-        }
-    }
-
-    #[test]
-    fn location_pages_hit_only_visible_entries() {
-        assert_eq!(
-            location_menu_hit_test(-0.5, 0.76, CHOICES_PER_PAGE, CHOICES_PER_PAGE + 1),
-            Some(MenuAction::Choice(CHOICES_PER_PAGE))
-        );
-        assert_eq!(
-            location_menu_hit_test(-0.5, 0.66, CHOICES_PER_PAGE, CHOICES_PER_PAGE + 1),
-            None
-        );
-        assert_eq!(location_menu_hit_test(-0.5, 0.71, 0, 4), None);
-        assert_eq!(location_menu_hit_test(-0.5, 0.91, 0, 4), None);
-        assert_eq!(
-            location_menu_hit_test(-0.5, 0.56, 0, 4),
-            Some(MenuAction::Choice(2))
-        );
-        assert_eq!(location_menu_hit_test(-0.5, -0.07, 0, 4), None);
-    }
-
-    #[test]
-    fn car_pages_select_visible_rows_and_ignore_empty_rows() {
-        let car_count = CHOICES_PER_PAGE + 2;
-        for selected in 0..car_count {
-            for slot in 0..CHOICES_PER_PAGE {
-                let r = car_box(slot);
-                let index = selected / CHOICES_PER_PAGE * CHOICES_PER_PAGE + slot;
-                let expected = (index < car_count).then_some(MenuAction::Car(index));
-                assert_eq!(
-                    selection_menu_hit_test(0.5, (r[1] + r[3]) * 0.5, 0, 4, selected, car_count),
-                    expected
-                );
-            }
-            assert_eq!(
-                selection_menu_hit_test(0.5, 0.91, 0, 4, selected, car_count),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn minimap_heading_keeps_forward_up_and_queries_rotated_corners() {
-        let track = world::locations::try_track(&LocationId::Compact).unwrap();
-        for heading in [0.0, 0.7, 1.57, 3.14, -2.0] {
-            let mut fit = ui::hud::map_fit_new(
-                &track,
-                XYZ {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                [1280.0, 720.0],
-            );
-            fit.heading = Some(heading);
-            let center = ui::hud::map_fit_point(
-                &fit,
-                XYZ {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            );
-            let forward = ui::hud::map_fit_point(
-                &fit,
-                XYZ {
-                    x: heading.sin() * 30.0,
-                    y: 0.0,
-                    z: heading.cos() * 30.0,
-                },
-            );
-            assert!((forward[0] - center[0]).abs() < 0.00001);
-            assert!(forward[1] > center[1]);
-            let camera_right = ui::hud::map_fit_point(
-                &fit,
-                XYZ {
-                    x: -heading.cos() * 30.0,
-                    y: 0.0,
-                    z: heading.sin() * 30.0,
-                },
-            );
-            assert!(camera_right[0] > center[0]);
-            assert!((camera_right[1] - center[1]).abs() < 0.00001);
-            let bounds = ui::hud::world_bounds(&fit);
-            for x in [MAP_CONTENT[0][0], MAP_CONTENT[1][0]] {
-                for y in [MAP_CONTENT[0][1], MAP_CONTENT[1][1]] {
-                    let right = (x - center[0]) / fit.scale[0];
-                    let ahead = (y - center[1]) / fit.scale[1];
-                    let world = [
-                        -right * heading.cos() + ahead * heading.sin(),
-                        right * heading.sin() + ahead * heading.cos(),
-                    ];
-                    for i in 0..2 {
-                        assert!(
-                            world[i] >= [bounds.min.x, bounds.min.z][i] - 0.001
-                                && world[i] <= [bounds.max.x, bounds.max.z][i] + 0.001
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn full_map_zoom_matches_minimap_and_can_fit_every_road() {
-        for id in test::support::location_ids() {
-            let track = world::locations::try_track(&id).unwrap();
-            for player in [
-                physics::vehicle_location::spawn(&track).point,
-                XYZ {
-                    x: model::world::bounding_box(&track).max.x + 100.0,
-                    y: 0.0,
-                    z: model::world::bounding_box(&track).max.z + 100.0,
-                },
-            ] {
-                for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-                    let mini = ui::hud::map_fit_new(&track, player, viewport);
-                    let mut view = ui::hud::full_map_view_new(&track, player, viewport);
-                    assert_eq!(view.fit.scale, mini.scale);
-                    assert_eq!(view.fit.center, mini.center);
-                    let center = ui::hud::map_fit_point(&view.fit, player);
-                    assert!(center[0].abs() < 0.00001);
-                    assert!((center[1] - 0.015).abs() < 0.00001);
-                    assert!(ui::hud::zoom_full_map(&mut (view), 1.0));
-                    assert!((view.fit.scale[0] / mini.scale[0] - 1.25).abs() < 0.00001);
-                    assert_eq!(ui::hud::map_fit_point(&(view.fit), player), center);
-                    assert!(ui::hud::zoom_full_map(&mut (view), -1.0));
-                    assert!((view.fit.scale[0] - mini.scale[0]).abs() < 0.00001);
-                    assert!(ui::hud::zoom_full_map(&mut (view), 100.0));
-                    assert!(!ui::hud::zoom_full_map(&mut (view), 1.0));
-                    assert_eq!(view.fit.scale[0], view.max_scale);
-                    assert!(ui::hud::zoom_full_map(&mut (view), -100.0));
-                    assert!(!ui::hud::zoom_full_map(&mut (view), -1.0));
-                    assert_eq!(view.fit.scale[0], view.min_scale);
-                    for invalid in [0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                        assert!(!ui::hud::zoom_full_map(&mut (view), invalid));
-                    }
-                    assert_eq!(ui::hud::map_fit_point(&(view.fit), player), center);
-                    let fit = &view.fit;
-                    for p in ui::hud::map_segments(&track)
-                        .flat_map(|(a, b)| [a, b])
-                        .chain([player])
-                    {
-                        let point = ui::hud::map_fit_point(fit, p);
-                        for axis in 0..2 {
-                            assert!(point[axis] > FULL_MAP_CONTENT[0][axis]);
-                            assert!(point[axis] < FULL_MAP_CONTENT[1][axis]);
-                        }
-                    }
-                    let center = ui::hud::map_fit_point(fit, player);
-                    let east = ui::hud::map_fit_point(
-                        fit,
-                        XYZ {
-                            x: player.x + 100.0,
-                            y: 0.0,
-                            z: player.z,
-                        },
-                    );
-                    let south = ui::hud::map_fit_point(
-                        fit,
-                        XYZ {
-                            x: player.x,
-                            y: 0.0,
-                            z: player.z + 100.0,
-                        },
-                    );
-                    let width = (east[0] - center[0]) * viewport[0];
-                    let height = (south[1] - center[1]).abs() * viewport[1];
-                    assert!((width - height).abs() < 0.001);
-                    assert_eq!(south[1] < center[1], id == test::support::city_id());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn full_map_zoom_clips_road_strokes_inside_the_panel() {
-        let track = world::locations::try_track(&test::support::authored_id()).unwrap();
-        let player = physics::vehicle_location::spawn(&track).point;
-        for viewport in [[1280.0, 720.0], [1024.0, 768.0], [2560.0, 1080.0]] {
-            for steps in [-100.0, 0.0, 100.0] {
-                let mut view = ui::hud::full_map_view_new(&track, player, viewport);
-                ui::hud::zoom_full_map(&mut view, steps);
-                let mut vertices = Vec::new();
-                append_full_map(
-                    &mut vertices,
-                    Map {
-                        track: &track,
-                        player,
-                    },
-                    0.0,
-                    viewport,
-                    &view.fit,
-                );
-                let roads: Vec<_> = vertices
-                    .iter()
-                    .filter(|p| p.color == [0.40, 0.55, 0.60])
-                    .map(|p| p.position)
-                    .collect();
-                assert!(!roads.is_empty());
-                for p in roads {
-                    for axis in 0..2 {
-                        assert!(p[axis] >= FULL_MAP_CONTENT[0][axis] - 0.00001);
-                        assert!(p[axis] <= FULL_MAP_CONTENT[1][axis] + 0.00001);
-                    }
-                }
-            }
-        }
-    }
-}
+#[path = "tests/hud.rs"]
+mod tests;

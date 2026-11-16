@@ -65,25 +65,3 @@ pub fn parse(text: &str) -> Result<Vec<RoadRise>, String> {
     }
     Ok(result)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn road_rise_codec_preserves_offsets_and_rejects_invalid_triangles() {
-        let text = "ROAD_RISES 1\nt 0 0 0 2 0.1234567 0 0 0 2\n";
-        let rises = parse(text).unwrap();
-        let mut bytes = Vec::new();
-        write(&mut bytes, &rises).unwrap();
-        assert_eq!(parse(std::str::from_utf8(&bytes).unwrap()).unwrap(), rises);
-        for invalid in [
-            "t 0 0 0 0 0 0 0 0 0",
-            "t 0 0 0 2 NaN 0 0 0 2",
-            "t 0 0 0 2 0.5 0 0 0 2",
-            "t 0 0 0 2 -0.1 0 0 0 2",
-            "t 0 0 0 2 0 0 0 0",
-        ] {
-            assert!(parse(&format!("ROAD_RISES 1\n{invalid}\n")).is_err());
-        }
-    }
-}

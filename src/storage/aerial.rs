@@ -126,14 +126,3 @@ pub fn attribution_label(directory: &std::path::Path) -> Option<&'static str> {
         },
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_rejects_unsafe_filenames_and_nonfinite_bounds() {
-        assert!(parse("AERIAL 1\nsize 512 8\ntile 0 0 100 100 ../a.rgb 00000000\n").is_err());
-        assert!(parse("AERIAL 1\nsize 512 8\ntile NaN 0 100 100 a.rgb 00000000\n").is_err());
-    }
-}

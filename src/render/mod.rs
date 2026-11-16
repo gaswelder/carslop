@@ -15,3 +15,6 @@ pub mod shadows;
 pub mod skid_marks;
 pub mod tire_particles;
 mod transport;
+
+#[cfg(test)]
+mod tests;

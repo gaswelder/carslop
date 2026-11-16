@@ -11,3 +11,6 @@ pub mod roads;
 pub mod spatial;
 pub mod street_surface;
 pub mod transport;
+
+#[cfg(test)]
+mod tests;

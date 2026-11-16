@@ -196,38 +196,3 @@ impl Drop for Texture {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui;
-
-    #[test]
-    fn both_weights_pack_greek_latin_and_spaces_without_overlap() {
-        let atlas = get();
-        assert_eq!(atlas.pixels.len(), atlas.width * atlas.height);
-        for font in [&atlas.labels, &atlas.digits] {
-            let mut count = 0;
-            ui::hud_atlas::draw(font, "A Ωά 09", |sprite| {
-                count += 1;
-                for p in sprite.uv {
-                    assert!(p.iter().all(|n| (0.0..=1.0).contains(n)));
-                }
-                assert!(sprite.bounds[1][0] > sprite.bounds[0][0]);
-                assert!(sprite.bounds[1][1] > sprite.bounds[0][1]);
-            });
-            assert_eq!(count, 5);
-            for glyph in &font.glyphs {
-                let [left, top] = glyph.pixels[0];
-                let [right, bottom] = glyph.pixels[1];
-                assert!(right < atlas.width && bottom < atlas.height);
-                assert_eq!(atlas.pixels[top * atlas.width + left - 1], 0);
-                assert_eq!(atlas.pixels[top * atlas.width + right], 0);
-                assert!(atlas.pixels
-                    [(top - 1) * atlas.width + left..(top - 1) * atlas.width + right]
-                    .iter()
-                    .all(|n| *n == 0));
-            }
-        }
-    }
-}

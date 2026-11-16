@@ -88,15 +88,6 @@ pub fn finish(chunk_builder: ChunkBuilder) -> Vec<Chunk> {
     chunk_builder.bins.into_values().collect()
 }
 
-#[cfg(test)]
-fn partition(vertices: Vec<Vertex>) -> Vec<Chunk> {
-    assert_eq!(vertices.len() % 3, 0);
-    let mut builder = ChunkBuilder::default();
-    for tri in vertices.as_chunks::<3>().0 {
-        push(&mut builder, *tri);
-    }
-    finish(builder)
-}
 pub fn distance_squared(bounds: [XYZ; 2], eye: XYZ) -> f32 {
     [0, 2]
         .into_iter()
@@ -122,100 +113,4 @@ pub fn visible(bounds: [XYZ; 2], matrix: [f32; 16]) -> bool {
     !(0..3).any(|axis| {
         corners.iter().all(|p| p[axis] < -p[3]) || corners.iter().all(|p| p[axis] > p[3])
     })
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::util;
-    #[test]
-    fn partition_keeps_triangles_whole_and_bounds_include_vertices_across_seams() {
-        let tri = |x: f32| {
-            [[x - 10.0, 0.0, 0.0], [x + 10.0, 0.0, 0.0], [x, 3.0, 5.0]].map(|position| Vertex {
-                position,
-                color: [1.0; 3],
-                normal: [0.0, 1.0, 0.0],
-                material: [0.0; 2],
-            })
-        };
-        let vertices = [tri(-256.0), tri(256.0), tri(900.0)].concat();
-        let chunks = partition(vertices.clone());
-        assert_eq!(
-            chunks.iter().map(|c| c.vertices.len()).sum::<usize>(),
-            vertices.len()
-        );
-        assert_eq!(chunks.len(), 3);
-        for chunk in &chunks {
-            assert_eq!(chunk.vertices.len() % 3, 0);
-            for v in &chunk.vertices {
-                for axis in 0..3 {
-                    assert!(
-                        v.position[axis] >= util::geometry::xyz_component(chunk.bounds[0], axis)
-                            && v.position[axis]
-                                <= util::geometry::xyz_component(chunk.bounds[1], axis)
-                    );
-                }
-            }
-        }
-        assert!(chunks
-            .iter()
-            .any(|c| c.bounds[0].x < 256.0 && c.bounds[1].x > 256.0));
-    }
-    #[test]
-    fn culling_keeps_intersecting_bounds_and_rejects_distant_bounds() {
-        let identity = [
-            1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
-        ];
-        assert!(visible(
-            [
-                XYZ {
-                    x: -2.,
-                    y: -2.,
-                    z: -2.
-                },
-                XYZ {
-                    x: 2.,
-                    y: 2.,
-                    z: 2.
-                }
-            ],
-            identity
-        ));
-        assert!(!visible(
-            [
-                XYZ {
-                    x: 2.,
-                    y: 0.,
-                    z: 0.
-                },
-                XYZ {
-                    x: 3.,
-                    y: 1.,
-                    z: 1.
-                }
-            ],
-            identity
-        ));
-        assert_eq!(
-            distance_squared(
-                [
-                    XYZ {
-                        x: 0.,
-                        y: 0.,
-                        z: 0.
-                    },
-                    XYZ {
-                        x: 10.,
-                        y: 10.,
-                        z: 10.
-                    }
-                ],
-                XYZ {
-                    x: 15.,
-                    y: 100.,
-                    z: 5.
-                }
-            ),
-            25.
-        );
-    }
 }

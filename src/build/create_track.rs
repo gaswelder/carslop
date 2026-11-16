@@ -330,35 +330,3 @@ fn write_landscape(
     storage::codec_landscape::flush(&mut file)?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-
-    use crate::build;
-    use crate::model;
-    use crate::util;
-
-    #[test]
-    fn invalid_circuit_authoring_input_is_rejected_before_building_runtime_geometry() {
-        for points in [
-            vec![],
-            vec![[0.0, 0.0, 0.0, 1.0]; 4],
-            vec![[f32::NAN, 0.0, 0.0, 8.0]; 4],
-        ] {
-            let circuit = build::authoring::Circuit {
-                control_points: points
-                    .into_iter()
-                    .map(|[x, y, z, width]| build::authoring::ControlPoint {
-                        position: util::geometry::XYZ { x, y, z },
-                        width,
-                    })
-                    .collect(),
-                coastal: false,
-            };
-            assert!(
-                build::authoring::circuit_build(&(circuit), model::world::LocationId::Compact)
-                    .is_err()
-            );
-        }
-    }
-}

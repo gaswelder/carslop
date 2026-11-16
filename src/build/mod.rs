@@ -28,3 +28,8 @@ mod tree_proposals;
 #[cfg(test)]
 #[path = "../test/support.rs"]
 pub mod test_support;
+
+#[cfg(test)]
+mod tests;
+
+mod map;
