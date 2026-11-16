@@ -41,6 +41,10 @@ Subcommands:
 - add-location <openstreetmap-url> <width-km> <height-km> - download and compile a rectangular location
 - create-track track.json - compile a track from waypoints and add it to the location directory
 
+## Env vars
+
+- DISABLE_TILE_PROCESSING=1 to disable satellite tile post-processing
+
 ## GLB models of the cars
 
 Export static triangulated glTF 2.0 as `model.glb`: metres, Y up, +Z forward, one embedded
