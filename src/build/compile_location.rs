@@ -412,7 +412,7 @@ fn compile_imagery(
 
     storage::codec_landscape::flush(&mut tree_output)?;
 
-    util::file_io::write_file(&paths.catalog, catalog.as_bytes())?;
+    fs::write(&paths.catalog, catalog.as_bytes())?;
 
     Ok(())
 }

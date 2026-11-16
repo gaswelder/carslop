@@ -1,5 +1,4 @@
 use crate::build;
-use crate::util;
 use crate::util::error::Result;
 use crate::util::geometry::XZ;
 use serde::{Deserialize, Serialize};
@@ -194,7 +193,7 @@ pub fn process_tiles(
             .into_raw();
             let raw = encode_jpeg(&raw, TILE + 2 * GUTTER, TILE + 2 * GUTTER)?;
             let name = tile_name(b, x, z);
-            util::file_io::write_file(&aerial.join(&name), &raw)?;
+            fs::write(aerial.join(&name), &raw)?;
             let nw = local(
                 origin,
                 build::tree_proposals::lonlat(geo, px as f64, py as f64),
@@ -216,7 +215,7 @@ pub fn process_tiles(
         missing_tiles: missing,
         trees: vec![],
     };
-    util::file_io::write_file(&meta_path, &serde_json::to_vec(&value)?)?;
+    fs::write(&meta_path, serde_json::to_vec(&value)?)?;
     Ok(value)
 }
 

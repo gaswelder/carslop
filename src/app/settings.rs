@@ -2,7 +2,7 @@
 
 use crate::render;
 use crate::render::camera::FollowView;
-use crate::util;
+use std::fs;
 use std::path::PathBuf;
 
 const PATH: &str = "./settings.ini";
@@ -62,7 +62,7 @@ fn save(settings: &Settings, key: &str, value: &str) {
     };
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let text = set_value(&text, key, value);
-    if let Err(error) = util::file_io::write_file(path, text.as_bytes()) {
+    if let Err(error) = fs::write(path, text.as_bytes()) {
         log::warn!("Cannot save {}: {error}", path.display());
     }
 }

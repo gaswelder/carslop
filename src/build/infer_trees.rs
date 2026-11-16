@@ -1,9 +1,9 @@
 //! Infer tree positions and sizes from the downloaded satellite images.
 
 use crate::build;
-use crate::util;
 use crate::util::error::Result;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::Path;
 
 pub const TREES_FILE: &str = "trees.json";
@@ -28,7 +28,7 @@ pub fn add_trees(download_dir: &Path) -> Result<()> {
             block,
         )?);
     }
-    util::file_io::write_file(&download_dir.join(TREES_FILE), &serde_json::to_vec(&trees)?)?;
+    fs::write(download_dir.join(TREES_FILE), serde_json::to_vec(&trees)?)?;
     Ok(())
 }
 
