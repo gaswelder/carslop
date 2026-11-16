@@ -414,3 +414,96 @@ fn storefront_glyphs_read_left_to_right_on_each_outward_wall_face() {
         }
     }
 }
+
+#[test]
+fn tree_meshes_preserve_triangle_budgets_and_mapped_clearance() {
+    #[derive(serde::Serialize)]
+    struct PreviewVertex {
+        position: [f32; 3],
+        normal: [f32; 3],
+        color: [f32; 3],
+    }
+    #[derive(serde::Serialize)]
+    struct PreviewTree {
+        kind: String,
+        vertices: Vec<PreviewVertex>,
+    }
+    let mut previews = Vec::new();
+    let mut city =
+        test::support::parse_world("CITY 2\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n").unwrap();
+    for kind in [
+        None,
+        Some(TreeKind::Broadleaf),
+        Some(TreeKind::Conifer),
+        Some(TreeKind::Cypress),
+        Some(TreeKind::Olive),
+        Some(TreeKind::Palm),
+    ] {
+        for inferred in [false, true] {
+            for seed in 0..32 {
+                let id = seed | if inferred { 1 << 63 } else { 0 };
+                let mut details = model::map_details::Data::default();
+                if let Some(kind) = kind {
+                    details.trees.push(model::map_details::TreeStyle {
+                        id,
+                        kind,
+                        evergreen: true,
+                    });
+                }
+                city.details = world::map_details::new(details);
+                let tree = world::landscape::Tree {
+                    id,
+                    coords: XZ { x: 3., z: 7. },
+                    height_meters: 8.,
+                    crown_radius_meters: 3.,
+                };
+                let mut builder = Builder::default();
+                mapped_tree(&mut builder, &city, &tree);
+                let triangles = if kind == Some(TreeKind::Palm) {
+                    52
+                } else if inferred {
+                    36
+                } else {
+                    72
+                };
+                assert_eq!(builder.vertices.len(), triangles * 3, "{kind:?}, {id}");
+                let ground = world::elevation::world_height(&city, tree.coords);
+                for vertex in &builder.vertices {
+                    assert!(
+                        (vertex.position[0] - tree.coords.x)
+                            .hypot(vertex.position[2] - tree.coords.z)
+                            <= tree.crown_radius_meters,
+                        "tree exceeds cleared crown radius: {kind:?}, {id}"
+                    );
+                    assert!(
+                        vertex.position[1] >= ground - 0.051
+                            && vertex.position[1] <= ground + tree.height_meters + 0.001
+                    );
+                    let length = vertex.normal.iter().map(|n| n * n).sum::<f32>().sqrt();
+                    assert!((length - 1.).abs() < 0.001);
+                    assert!(vertex
+                        .color
+                        .iter()
+                        .all(|c| c.is_finite() && (0.0..=1.0).contains(c)));
+                }
+                if seed == 3 && (!inferred || kind.is_none()) {
+                    previews.push(PreviewTree {
+                        kind: format!("{kind:?} / inferred={inferred}"),
+                        vertices: builder
+                            .vertices
+                            .iter()
+                            .map(|v| PreviewVertex {
+                                position: v.position,
+                                normal: v.normal,
+                                color: v.color,
+                            })
+                            .collect(),
+                    });
+                }
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("CARSLOP_TREE_PREVIEW_JSON") {
+        std::fs::write(path, serde_json::to_vec(&previews).unwrap()).unwrap();
+    }
+}

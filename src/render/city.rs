@@ -823,8 +823,9 @@ fn apartment_balconies(
     }
 }
 
-// Smooth ellipsoid normals round the canopy without adding triangles to the
-// city-wide inferred vegetation. Trunks and building edges keep flat normals.
+// Smooth normals and baked foliage shading give the crown volume without an
+// extra texture, draw call or runtime shader work. Shared positions use identical
+// colors, including the seam between the first and last sector.
 fn canopy_quad(
     b: &mut Builder,
     points: [XYZ; 4],
@@ -848,10 +849,13 @@ fn canopy_quad(
                 .sum::<f32>()
                 .sqrt()
                 .max(0.00001);
+            let normal = util::geometry::xyz_map(delta, |n| n / length);
+            let mottling = (position.x * 2.3 + position.z * 1.7 + position.y * 3.1).sin();
+            let shade = 0.90 + 0.14 * normal.y + 0.055 * mottling;
             render::scene::Vertex {
-                position: (position).into(),
-                normal: (util::geometry::xyz_map(delta, |n| n / length)).into(),
-                color,
+                position: position.into(),
+                normal: normal.into(),
+                color: tinted(color, shade),
                 material: [0.0, 0.0],
             }
         });
@@ -861,6 +865,12 @@ fn canopy_quad(
             b.vertices.extend(vertices);
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct CrownRing {
+    height: f32,
+    radius: f32,
 }
 
 fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::Tree) {
@@ -874,6 +884,7 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
     let family = match kind {
         Some(TreeKind::Conifer | TreeKind::Cypress) => 2,
         Some(TreeKind::Olive) => 3,
+        Some(TreeKind::Broadleaf) => 0,
         _ => visual_seed(id, 20) % 4,
     };
     let rotation = variation(id, 21) * std::f32::consts::TAU;
@@ -914,91 +925,136 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
         for frond in 0..10 {
             let angle = rotation + frond as f32 * std::f32::consts::TAU / 10.0;
             let center = XYZ {
-                x,
+                x: x + lean.x,
                 y: y + h * 0.88,
-                z,
+                z: z + lean.z,
             };
             let middle = XYZ {
-                x: x + angle.cos() * r * 0.6,
+                x: x + lean.x + angle.cos() * r * 0.55,
                 y: y + h,
-                z: z + angle.sin() * r * 0.6,
+                z: z + lean.z + angle.sin() * r * 0.55,
             };
             let tip = XYZ {
-                x: x + angle.cos() * r,
-                y: y + h * 0.77,
-                z: z + angle.sin() * r,
+                x: x + lean.x + angle.cos() * r * 0.90,
+                y: y + h * (0.74 + variation(id, frond + 40) * 0.08),
+                z: z + lean.z + angle.sin() * r * 0.90,
             };
             let side = XZ {
                 x: -angle.sin() * r * 0.14,
                 z: angle.cos() * r * 0.14,
             };
-            for pair in [[center, middle], [middle, tip]] {
+            for segment in 0..2 {
+                let pair = [[center, middle], [middle, tip]][segment];
+                let widths = [[0.12, 1.0], [1.0, 0.02]][segment];
                 render::scene::upward_quad(
                     b,
                     [
                         XYZ {
-                            x: pair[0].x - side.x,
-                            z: pair[0].z - side.z,
+                            x: pair[0].x - side.x * widths[0],
+                            z: pair[0].z - side.z * widths[0],
                             ..pair[0]
                         },
                         XYZ {
-                            x: pair[1].x - side.x * 0.15,
-                            z: pair[1].z - side.z * 0.15,
+                            x: pair[1].x - side.x * widths[1],
+                            z: pair[1].z - side.z * widths[1],
                             ..pair[1]
                         },
                         XYZ {
-                            x: pair[1].x + side.x * 0.15,
-                            z: pair[1].z + side.z * 0.15,
+                            x: pair[1].x + side.x * widths[1],
+                            z: pair[1].z + side.z * widths[1],
                             ..pair[1]
                         },
                         XYZ {
-                            x: pair[0].x + side.x,
-                            z: pair[0].z + side.z,
+                            x: pair[0].x + side.x * widths[0],
+                            z: pair[0].z + side.z * widths[0],
                             ..pair[0]
                         },
                     ],
-                    green,
+                    render::scene::matte(tinted(
+                        green.color,
+                        if segment == 0 { 1.08 } else { 0.83 },
+                    )),
                 );
             }
         }
         return;
     }
-    // Broad, oval, upright and spreading crowns; all remain inside the mapped
-    // height/radius envelope so vegetation does not spread into cleared roads.
-    let rings: &[(f32, f32)] = match (inferred, family) {
-        (true, 0) => &[(0.30, 0.0), (0.48, 0.92), (0.76, 0.84), (1.0, 0.0)],
-        (true, 1) => &[(0.35, 0.0), (0.57, 0.78), (0.82, 0.72), (1.0, 0.0)],
-        (true, 2) => &[(0.26, 0.0), (0.46, 0.53), (0.78, 0.48), (1.0, 0.0)],
-        (true, _) => &[(0.40, 0.0), (0.57, 0.94), (0.78, 0.88), (0.95, 0.0)],
-        (false, 0) => &[
-            (0.30, 0.0),
-            (0.43, 0.70),
-            (0.63, 0.94),
-            (0.84, 0.72),
-            (1.0, 0.0),
+    let rings: &[CrownRing] = match kind {
+        Some(TreeKind::Conifer) => &[
+            CrownRing {
+                height: 0.24,
+                radius: 0.0,
+            },
+            CrownRing {
+                height: 0.32,
+                radius: 0.94,
+            },
+            CrownRing {
+                height: 0.57,
+                radius: 0.63,
+            },
+            CrownRing {
+                height: 0.78,
+                radius: 0.37,
+            },
+            CrownRing {
+                height: 1.0,
+                radius: 0.0,
+            },
         ],
-        (false, 1) => &[
-            (0.35, 0.0),
-            (0.48, 0.60),
-            (0.69, 0.83),
-            (0.88, 0.55),
-            (1.0, 0.0),
+        Some(TreeKind::Cypress) => &[
+            CrownRing {
+                height: 0.16,
+                radius: 0.0,
+            },
+            CrownRing {
+                height: 0.30,
+                radius: 0.48,
+            },
+            CrownRing {
+                height: 0.57,
+                radius: 0.55,
+            },
+            CrownRing {
+                height: 0.82,
+                radius: 0.32,
+            },
+            CrownRing {
+                height: 1.0,
+                radius: 0.0,
+            },
         ],
-        (false, 2) => &[
-            (0.26, 0.0),
-            (0.39, 0.43),
-            (0.61, 0.55),
-            (0.83, 0.35),
-            (1.0, 0.0),
-        ],
-        (false, _) => &[
-            (0.40, 0.0),
-            (0.51, 0.72),
-            (0.65, 0.94),
-            (0.83, 0.81),
-            (0.95, 0.0),
+        _ => &[
+            CrownRing {
+                height: 0.26,
+                radius: 0.0,
+            },
+            CrownRing {
+                height: 0.39,
+                radius: 0.43,
+            },
+            CrownRing {
+                height: 0.61,
+                radius: 0.55,
+            },
+            CrownRing {
+                height: 0.83,
+                radius: 0.35,
+            },
+            CrownRing {
+                height: 1.0,
+                radius: 0.0,
+            },
         ],
     };
+    // Imagery trees keep their four-ring budget even with a mapped species.
+    let sparse_rings = [
+        rings[0],
+        rings[1],
+        rings[rings.len() - 2],
+        rings[rings.len() - 1],
+    ];
+    let rings = if inferred { &sparse_rings[..] } else { rings };
     let palette = [
         [0.22, 0.35, 0.17],
         [0.28, 0.38, 0.22],
@@ -1020,11 +1076,82 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
                 1.0
             },
     );
+    if family != 2 {
+        // Three overlapping foliage masses replace the single balloon-shaped
+        // crown. Each mass costs 20 triangles (8 for imagery trees), preserving
+        // the old 60/24-triangle canopy budget and mapped clearance envelope.
+        let segments = if inferred { 4 } else { 5 };
+        let equators = [
+            CrownRing {
+                height: -1.0,
+                radius: 0.0,
+            },
+            CrownRing {
+                height: -0.38,
+                radius: 0.92,
+            },
+            CrownRing {
+                height: 0.38,
+                radius: 0.92,
+            },
+            CrownRing {
+                height: 1.0,
+                radius: 0.0,
+            },
+        ];
+        let sparse = [
+            equators[0],
+            CrownRing {
+                height: 0.0,
+                radius: 1.0,
+            },
+            equators[3],
+        ];
+        let profile = if inferred { &sparse[..] } else { &equators[..] };
+        for lobe in 0..3 {
+            let angle = rotation + lobe as f32 * std::f32::consts::TAU / 3.0;
+            let top = lobe == 2;
+            let half_height = h * if top { 0.28 } else { 0.25 };
+            let radius = r * (0.61 + variation(id, 60 + lobe) * 0.04);
+            let center = XYZ {
+                x: x + angle.cos() * r * 0.28 + lean.x * 0.4,
+                y: y + h * if top { 0.72 } else { 0.55 + lobe as f32 * 0.05 },
+                z: z + angle.sin() * r * 0.28 + lean.z * 0.4,
+            };
+            let color = tinted(base, 0.95 + lobe as f32 * 0.055);
+            for pair in profile.windows(2) {
+                for sector in 0..segments {
+                    let point = |sector: usize, ring: CrownRing| {
+                        let angle = rotation
+                            + (sector % segments) as f32 * std::f32::consts::TAU / segments as f32;
+                        XYZ {
+                            x: center.x + angle.cos() * radius * ring.radius,
+                            y: center.y + half_height * ring.height,
+                            z: center.z + angle.sin() * radius * ring.radius,
+                        }
+                    };
+                    canopy_quad(
+                        b,
+                        [
+                            point(sector, pair[0]),
+                            point(sector, pair[1]),
+                            point(sector + 1, pair[1]),
+                            point(sector + 1, pair[0]),
+                        ],
+                        center,
+                        (radius / half_height).powi(2),
+                        color,
+                    );
+                }
+            }
+        }
+        return;
+    }
     let segments = if inferred { 6 } else { 10 };
     let oval = 0.72 + variation(id, 28) * 0.24;
     let (rotation_sin, rotation_cos) = rotation.sin_cos();
-    let crown_bottom = rings.first().unwrap().0;
-    let crown_top = rings.last().unwrap().0;
+    let crown_bottom = rings.first().unwrap().height;
+    let crown_top = rings.last().unwrap().height;
     let crown_center = XYZ {
         x: x + lean.x * 0.2,
         y: y + h * (crown_bottom + crown_top) * 0.5,
@@ -1033,18 +1160,29 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
     let vertical_scale = (r / (h * (crown_top - crown_bottom) * 0.5)).powi(2);
     for pair in rings.windows(2) {
         for i in 0..segments {
-            let p = |index: usize, ring: (f32, f32)| {
-                let angle = (index % segments) as f32 * std::f32::consts::TAU / segments as f32;
-                let ripple = 0.88 + variation(id ^ (index % segments) as u64, 29) * 0.12;
-                let radius = r * ring.1 * ripple;
-                let drift = (ring.0 - 0.3).max(0.0);
+            let p = |index: usize, ring: CrownRing| {
+                let sector = (index % segments) as u64;
+                let noise = variation(id ^ sector.wrapping_mul(0x9e3779b97f4a7c15), 29);
+                // Offset the rings and scallop their edges to break the lathed
+                // silhouette. Tips stay shared and the mapped envelope is kept.
+                let angle = sector as f32 * std::f32::consts::TAU / segments as f32
+                    + (ring.height * 9.0).sin() * 0.16;
+                let ripple = 0.80 + noise * 0.18;
+                let radius = r * ring.radius * ripple;
+                let drift = (ring.height - 0.3).max(0.0);
+                let height = ring.height
+                    + if ring.radius > 0.0 {
+                        (noise - 0.5) * 0.075
+                    } else {
+                        0.0
+                    };
                 let local = XZ {
                     x: angle.cos() * radius,
                     z: angle.sin() * radius * oval,
                 };
                 XYZ {
                     x: x + local.x * rotation_cos - local.z * rotation_sin + lean.x * drift,
-                    y: y + h * ring.0,
+                    y: y + h * height,
                     z: z + local.x * rotation_sin + local.z * rotation_cos + lean.z * drift,
                 }
             };
