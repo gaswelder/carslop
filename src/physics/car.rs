@@ -134,9 +134,10 @@ const STEERING_LOCK_FADE_SPEED: f32 = 20.0;
 const STEERING_HIGH_SPEED_LOCK: f32 = 0.35;
 // Front axle grip relative to the rear. With equal grip the limit yaw moment
 // is exactly neutral (each axle's capacity scales with its static load), so a
-// fully developed slide never straightens itself. A small front deficit makes
-// the front saturate first, so the car pushes wide instead of spinning.
-const FRONT_LIMIT_GRIP: f32 = 0.94;
+// fully developed slide never straightens itself. The front deficit also
+// balances the rear's reduced lateral force under engine braking when sliding
+// grip reduces the entire friction circle, so lifting can unwind a slide.
+const FRONT_LIMIT_GRIP: f32 = 0.86;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
@@ -427,7 +428,6 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
                 * (1.0 - 0.18 * imbalance * imbalance)
                 * if axle == 0 { FRONT_LIMIT_GRIP } else { 1.0 }
         });
-        let rear_v = lateral - vehicle.yaw_rate * b;
         let throttle = controls.throttle.clamp(0.0, 1.0);
         update_fuel_cut(vehicle, vehicle.engine_rpm);
         update_turbo(vehicle, seconds, throttle);
@@ -461,19 +461,11 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             } else {
                 1.0 - drive_bias
             };
-            let spinning = drive.abs() * drive_share > capacity;
-            let drive_limit = if spinning {
-                let sideways = (vehicle.slip.abs() / 2.0).clamp(0.0, 1.0);
-                if let Some([baseline, reduction, slip_angle]) =
-                    spec.rear_combined_slip.filter(|_| axle == 1)
-                {
-                    let angle = rear_v.abs().atan2(longitudinal.abs().max(2.5));
-                    capacity * (baseline - reduction * (angle / slip_angle).clamp(0.0, 1.0))
-                } else {
-                    capacity * (0.97 - 0.05 * sideways)
-                }
+            let wheel_speed = if axle == 0 { front_speed } else { longitudinal };
+            let longitudinal_slip = if drive_share > 0.0 && drivetrain.is_some() {
+                vehicle.driven_wheel_omega * spec.gearbox.rolling_radius - wheel_speed
             } else {
-                capacity
+                0.0
             };
             physics::tire::Contact {
                 offset: if axle == 0 { a } else { -b },
@@ -481,7 +473,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
                 cos: if axle == 0 { cos } else { 1.0 },
                 capacity,
                 drive_force: drive * drive_share,
-                drive_limit,
+                longitudinal_slip,
                 brake_force: brake
                     * if axle == 0 {
                         spec.brake_bias

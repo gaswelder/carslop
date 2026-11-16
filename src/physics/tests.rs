@@ -129,7 +129,7 @@ mod tire {
             cos: 1.0,
             capacity: 6000.0,
             drive_force: 0.0,
-            drive_limit: 6000.0,
+            longitudinal_slip: 0.0,
             brake_force: 8000.0,
             corner_stiffness: 60000.0,
             locked: false,
@@ -140,7 +140,7 @@ mod tire {
             cos: 1.0,
             capacity: 6000.0,
             drive_force: 0.0,
-            drive_limit: 6000.0,
+            longitudinal_slip: 0.0,
             brake_force: 4000.0,
             corner_stiffness: 80000.0,
             locked: false,
@@ -223,7 +223,6 @@ mod tire {
             let contacts = CONTACTS.map(|mut contact| {
                 if airborne {
                     contact.capacity = 0.0;
-                    contact.drive_limit = 0.0;
                 } else {
                     contact.brake_force = 100.0;
                 }
@@ -254,7 +253,7 @@ mod tire {
                 capacity: 6000.0,
                 corner_stiffness: 60000.0,
                 drive_force: 0.0,
-                drive_limit: 0.0,
+                longitudinal_slip: 0.0,
                 brake_force: 0.0,
                 locked: false,
             };

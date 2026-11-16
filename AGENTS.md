@@ -16,5 +16,10 @@ are not a reason to expose implementation details: put such tests in the owning
 module or remove them. Keep shared fixture builders in test support modules.
 Don't use pub(crate) when simply pub works.
 
+Keep tests in separate files, following the existing module layout. For tests
+owned by a production module, declare `#[cfg(test)]` and
+`#[path = "tests/<module>.rs"] mod tests;` in that module instead of writing
+an inline test module.
+
 Use `impl` blocks only for trait implementations. Define other operations as
 module-level functions.

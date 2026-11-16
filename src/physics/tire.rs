@@ -1,35 +1,37 @@
 //! Planar, two-axle tire contact. Forces are solved implicitly in wheel space.
-//! Rolling tires have lateral damping C_alpha / |v_long|, with a secant
-//! stiffness that falls once the tire is past its peak so slides decay. A
-//! bounded brake opposes wheel motion, with the same static-friction limit at
-//! zero speed. The coupled impulse is constrained by the contact's friction
-//! circle. Foot braking approximates a rolling wheel under ideal ABS; a
-//! handbraked rear axle instead uses sliding Coulomb friction in both
-//! directions.
+//! Cornering stiffness builds lateral force up to a shared friction circle.
+//! Combined lateral and longitudinal slip reduces that circle smoothly from
+//! peak grip to sliding grip. Locked wheels use the same sliding grip while
+//! stationary contacts retain their full holding capacity. Foot braking
+//! approximates a rolling wheel under ideal ABS.
 
-// Slip speed below which the tire is treated as gripping, matching the
-// zero-speed no-slip constraint that holds a parked car.
+// Regularize slip ratios near rest and preserve static holding grip.
 const MIN_SLIP_SPEED: f32 = 0.5;
-// Fraction of lateral force lost once the tire is fully past its peak.
 const SLIP_FALLOFF: f32 = 0.20;
-// Extra slip angle (radians) over which that loss is reached.
+// Extra equivalent lateral slip over which post-peak grip falls to sliding grip.
 const SLIP_FALLOFF_RANGE: f32 = 0.35;
+// Model tuning: longitudinal post-peak grip loss begins at 10% tread slip.
+const LONGITUDINAL_PEAK_SLIP: f32 = 0.10;
 
-/// Secant lateral stiffness at a given slip angle. Up to saturation this is the
-/// authored cornering stiffness, so the linear region is unchanged. Past the
-/// peak the force declines instead of holding a flat plateau, which lets a
-/// slide decay when the driver unwinds rather than staying fully developed.
-fn lateral_stiffness(along: f32, corner_stiffness: f32, capacity: f32, lateral: f32) -> f32 {
-    if along <= MIN_SLIP_SPEED || capacity <= 0.0 {
-        return corner_stiffness;
-    }
-    let alpha = lateral.abs() / along;
-    let saturated = capacity / corner_stiffness;
-    if alpha <= saturated {
-        return corner_stiffness;
-    }
-    let drop = SLIP_FALLOFF * ((alpha - saturated) / SLIP_FALLOFF_RANGE).clamp(0.0, 1.0);
-    (capacity * (1.0 - drop) / alpha).max(corner_stiffness * 0.02)
+fn capacity(contact: &Contact, wheel: &WheelVelocity) -> f32 {
+    let slip_speed = if contact.locked {
+        wheel.longitudinal.hypot(wheel.lateral)
+    } else {
+        contact.longitudinal_slip.hypot(wheel.lateral)
+    };
+    let moving = ((slip_speed - MIN_SLIP_SPEED) / MIN_SLIP_SPEED).clamp(0.0, 1.0);
+    let sliding = if contact.locked {
+        moving
+    } else {
+        let speed = wheel.longitudinal.abs().max(MIN_SLIP_SPEED);
+        let peak = contact.capacity / contact.corner_stiffness;
+        let lateral = wheel.lateral / speed;
+        // Express longitudinal slip in equivalent lateral-slip units so
+        // both components contribute to one peak and one falloff curve.
+        let longitudinal = contact.longitudinal_slip / speed * peak / LONGITUDINAL_PEAK_SLIP;
+        moving * ((lateral.hypot(longitudinal) - peak) / SLIP_FALLOFF_RANGE).clamp(0.0, 1.0)
+    };
+    contact.capacity * (1.0 - SLIP_FALLOFF * sliding)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -51,7 +53,8 @@ pub struct Contact {
     pub cos: f32,
     pub capacity: f32,
     pub drive_force: f32,
-    pub drive_limit: f32,
+    /// Wheel tread speed minus road speed along the wheel (m/s).
+    pub longitudinal_slip: f32,
     pub brake_force: f32,
     pub corner_stiffness: f32,
     pub locked: bool,
@@ -97,14 +100,25 @@ struct Constraint {
 fn new(contact: &Contact, motion: Motion, mass: f32, inertia: f32, dt: f32) -> Constraint {
     let wheel = velocity(contact, motion);
     let along = wheel.longitudinal.abs();
-    let radius = contact.capacity * dt;
+    let capacity = capacity(contact, &wheel);
+    let radius = capacity * dt;
     let drive = contact.drive_force * dt;
     let brake = contact.brake_force * dt;
-    let limit = if brake > 0.0 {
-        radius
+    // Project the requested driving and cornering forces together. Giving
+    // driving force the entire circle would erase cornering under power or
+    // engine braking, even when longitudinal tread slip is still small.
+    let drive_limit = if !contact.locked && along > MIN_SLIP_SPEED {
+        let side_force = contact.corner_stiffness * wheel.lateral / along;
+        let demand = contact.drive_force.hypot(side_force);
+        if demand > 0.0 {
+            radius * contact.drive_force.abs() / demand
+        } else {
+            radius
+        }
     } else {
-        contact.drive_limit * dt
+        radius
     };
+    let drive = drive.clamp(-drive_limit, drive_limit);
     Constraint {
         mass: EffectiveMass {
             along: 1.0 / mass + (contact.offset * contact.sin).powi(2) / inertia,
@@ -121,17 +135,24 @@ fn new(contact: &Contact, motion: Motion, mass: f32, inertia: f32, dt: f32) -> C
         side_compliance: if contact.locked {
             0.0
         } else {
-            let stiffness = lateral_stiffness(
-                along,
-                contact.corner_stiffness,
-                contact.capacity,
-                wheel.lateral,
-            );
-            along / (stiffness * dt)
+            // Use the secant stiffness past saturation so implicit damping
+            // follows the declining force curve while a slide unwinds.
+            let stiffness = if along > MIN_SLIP_SPEED && wheel.lateral != 0.0 {
+                contact
+                    .corner_stiffness
+                    .min(capacity * along / wheel.lateral.abs())
+            } else {
+                contact.corner_stiffness
+            };
+            if stiffness > 0.0 {
+                along / (stiffness * dt)
+            } else {
+                0.0
+            }
         },
         drive,
-        minimum: (drive - brake).clamp(-limit, limit),
-        maximum: (drive + brake).clamp(-limit, limit),
+        minimum: (drive - brake).clamp(-radius, radius),
+        maximum: (drive + brake).clamp(-radius, radius),
         radius,
     }
 }
@@ -233,3 +254,7 @@ pub fn solve(
     }
     Solution { motion, impulses }
 }
+
+#[cfg(test)]
+#[path = "tests/tire.rs"]
+mod tests;

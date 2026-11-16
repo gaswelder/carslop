@@ -121,7 +121,6 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             brake_force: 22000.0,
             wheelbase: 2.5,
             audio: audio_voice().clone(),
-            rear_combined_slip: None,
             front_weight: 0.5,
             cg_height: 0.5,
             track_width: 1.5,

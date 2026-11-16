@@ -66,11 +66,6 @@
   ],
   "redline_rpm": 6500,
   "suspension_hz": 1.65,
-  "rear_combined_slip": [
-    0.94,
-    0.14,
-    0.6
-  ],
   "gearbox": {
     "ratios": [
       2.833,

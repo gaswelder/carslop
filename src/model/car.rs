@@ -21,7 +21,6 @@ pub struct CarSpec {
     pub brake_force: f32,
     pub wheelbase: f32,
     pub audio: EngineVoice,
-    pub rear_combined_slip: Option<[f32; 3]>, // baseline, reduction, slip angle
     pub front_weight: f32,
     /// Metres above ground, derived from the authored fraction and model height.
     pub cg_height: f32,
@@ -122,7 +121,6 @@ struct CarDefinition {
     engine_torque_curve: Vec<TorquePoint>,
     redline_rpm: f32,
     suspension_hz: f32,
-    rear_combined_slip: Option<[f32; 3]>,
     gearbox: Gearbox,
     audio: EngineVoice,
     turbo: Option<Turbo>,
@@ -163,14 +161,6 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
         car_definition.audio.coast_gain,
     ] {
         fraction(value)?;
-    }
-    if let Some(values) = car_definition.rear_combined_slip {
-        fraction(values[0])?;
-        fraction(values[1])?;
-        positive(values[2])?;
-        if values[1] > values[0] {
-            return Err("combined slip reduction exceeds baseline".into());
-        }
     }
     if car_definition.gearbox.ratios.is_empty() || car_definition.gearbox.ratios.len() > 254 {
         return Err("expected 1..254 ratios".into());
@@ -307,7 +297,6 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         brake_force: definition.brake_force,
         wheelbase,
         audio: definition.audio,
-        rear_combined_slip: definition.rear_combined_slip,
         front_weight: definition.front_weight,
         cg_height,
         track_width,
