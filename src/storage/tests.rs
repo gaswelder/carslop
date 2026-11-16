@@ -120,7 +120,7 @@ mod codec_city {
             (
                 Precision::Imported,
                 concat!(
-                    "CITY 2\norigin 35.123456789 33.987654321\nbounds -10.000 -10.000 30.000 30.000\n",
+                    "CITY 2\n",
                     "n 0.000 -0.000\nn 20.123 0.000\nr 0 1 6.12 -1 42 0 3\n",
                     "b 7 7.99 0 3 1.123 2.000 3.000 4.000 5.000 6.000\n"
                 ),
@@ -130,9 +130,10 @@ mod codec_city {
             (
                 Precision::Authored,
                 concat!(
-                "CITY 2\norigin 35.123456789 33.987654321\nbounds -10.0004 -10.0004 30.0004 30.0004\n",
-                "n 0.00049 -0.00049\nn 20.123456 0\nr 0 1 6.123456 -1 42 0 3\n",
-                "b 7 7.987654 0 3 1.123456 2 3 4 5 6\n"),
+                    "CITY 2\n",
+                    "n 0.00049 -0.00049\nn 20.123456 0\nr 0 1 6.123456 -1 42 0 3\n",
+                    "b 7 7.987654 0 3 1.123456 2 3 4 5 6\n"
+                ),
                 0.00049,
                 6.123456,
             ),
@@ -146,7 +147,7 @@ mod codec_city {
             assert_eq!(parsed.road_lines[0].direction, -1);
             assert_eq!(parsed.road_lines[0].osm_way_id, Some(42));
             assert_eq!(parsed.road_lines[0].lanes, 3);
-            assert_eq!(parsed.origin, fixture().origin);
+            assert_eq!(parsed.origin, None);
             assert!(!parsed.buildings[0].tagged);
         }
     }
@@ -273,7 +274,7 @@ mod street_surface_binary {
     use std::{io, path::Path};
 
     fn fixture(root: &Path) -> String {
-        let source = "CITY 2\nbounds 0 0 20 20\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
+        let source = "CITY 2\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
         std::fs::write(root.join("city.txt"), source).unwrap();
         let streets = format!(
             "STREETS 1 1 {:08x}\nj 0\np 0 3 0 0 10 1 20 0\nt 0 0 0 20 0 0 20\nt 4 20 0 20 20 0 20\nc 0 0 0 20 0 0 1\n",

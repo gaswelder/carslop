@@ -4,6 +4,7 @@ use super::*;
 use crate::build;
 use crate::model;
 use crate::storage;
+use crate::util;
 use crate::world;
 
 pub fn empty_world() -> WorldLocation {
@@ -11,7 +12,21 @@ pub fn empty_world() -> WorldLocation {
 }
 
 pub fn parse_world(text: &str) -> Result<WorldLocation, String> {
-    world::roads::world_location_from_source(model::source_location::parse(text)?)
+    let mut source = model::source_location::parse(text)?;
+    source.bounding_box = world::spatial::bounds(
+        source
+            .road_nodes
+            .iter()
+            .map(|point| util::geometry::xz(*point))
+            .chain(
+                source
+                    .buildings
+                    .iter()
+                    .flat_map(|building| building.ground_outline.iter().copied()),
+            ),
+        10.0,
+    );
+    world::roads::world_location_from_source(source)
 }
 
 pub fn landscape(text: &str) -> Result<WorldLocation, String> {

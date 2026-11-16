@@ -12,7 +12,6 @@ use crate::util;
 use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::LatLon;
 use crate::util::geometry::XZ;
-use crate::world;
 use std::{
     fs,
     io::{BufWriter, Write},
@@ -23,7 +22,6 @@ use std::{
 pub struct Location {
     pub name: String,
     pub origin: Option<LatLon>,
-    /// Explicit authored extent from CITY; query bounds are derived by the game.
     pub extent: BoundingBoxXZ<f32>,
     pub road_nodes: Vec<XZ<f32>>,
     pub roads: Vec<Road>,
@@ -137,16 +135,8 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
     let source = storage::city_assets::get_city(&assets).map_err(|e| format!("city.txt: {e}"))?;
     let streets = storage::street_surface_binary::load_geometry(directory, source.road_lines.len())
         .map_err(|e| format!("streets.bin: {e}"))?;
-    let manifest =
-        storage::city_assets::get_manifest(&assets).map_err(|e| format!("manifest.json: {e}"))?;
-    let pavement_height_meters = match manifest.get("pavement_height_metres") {
-        Some(v) => v
-            .as_f64()
-            .filter(|h| (0.08..=0.25).contains(h))
-            .ok_or("manifest.json: pavement_height_metres must be between 0.08 and 0.25")?
-            as f32,
-        None => world::street_surface::DEFAULT_PAVEMENT_HEIGHT,
-    };
+    let manifest = storage::city_assets::get_manifest(&assets)?;
+    let pavement_height_meters = manifest.pavement_height_metres;
     let (ground, trees) = storage::city_assets::get_landscape_data(&assets)?;
     let details =
         model::map_details::read(directory, source.buildings.len(), source.road_lines.len())?;
@@ -172,7 +162,7 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
             .collect::<Result<_, _>>()?;
     }
     Ok(Location {
-        aerial_attribution: manifest["aerial_attribution"].as_str().map(str::to_owned),
+        aerial_attribution: manifest.aerial_attribution,
         name: storage::city_assets::name(&assets).to_owned(),
         origin: source.origin,
         extent: source.bounding_box,
@@ -249,17 +239,6 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
     let write = || -> util::error::Result<()> {
         let mut city = BufWriter::new(fs::File::create(directory.join("city.txt"))?);
         writeln!(city, "CITY 2")?;
-        if let Some(p) = location.origin {
-            writeln!(city, "origin {} {}", p.lat, p.lon)?;
-        }
-        writeln!(
-            city,
-            "bounds {} {} {} {}",
-            location.extent.min.x,
-            location.extent.min.z,
-            location.extent.max.x,
-            location.extent.max.z
-        )?;
         for p in &location.road_nodes {
             writeln!(city, "n {} {}", p.x, p.z)?;
         }
@@ -298,15 +277,14 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
             )?;
         }
         city.flush()?;
-        let mut manifest = serde_json::json!({
-            "pavement_height_metres": location.pavement_height_meters,
-        });
-        if let Some(attribution) = &location.aerial_attribution {
-            manifest["aerial_attribution"] = attribution.clone().into();
-        }
-        fs::write(
-            directory.join("manifest.json"),
-            serde_json::to_vec_pretty(&manifest)?,
+        storage::manifest::write(
+            directory,
+            &storage::manifest::Manifest {
+                origin: location.origin,
+                bounds_metres: location.extent,
+                pavement_height_metres: location.pavement_height_meters,
+                aerial_attribution: location.aerial_attribution.clone(),
+            },
         )?;
         storage::codec_labels::write(directory, &location.labels)?;
         // Serialize at full f32 precision; compiler writers deliberately quantize.

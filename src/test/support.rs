@@ -307,9 +307,13 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     use std::fs;
     fs::create_dir_all(directory.join("elevation")).unwrap();
     fs::create_dir_all(directory.join("aerial")).unwrap();
-    let city = "CITY 2\nbounds -10 -10 30 30\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
+    let city = "CITY 2\nn 0 0\nn 20 0\nr 0 1 8 0 1\n";
     fs::write(directory.join("city.txt"), city).unwrap();
-    fs::write(directory.join("manifest.json"), "{}").unwrap();
+    fs::write(
+        directory.join("manifest.json"),
+        r#"{"bounds_metres":[-10,-10,30,30]}"#,
+    )
+    .unwrap();
     fs::write(directory.join("landscape.txt"), "LANDSCAPE 1\n").unwrap();
     fs::write(directory.join("furniture.txt"), "").unwrap();
     fs::write(
@@ -341,7 +345,8 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     };
     fs::write(
         directory.join("manifest.json"),
-        serde_json::json!({"aerial_attribution": attribution}).to_string(),
+        serde_json::json!({"aerial_attribution": attribution, "bounds_metres": [-10, -10, 30, 30]})
+            .to_string(),
     )
     .unwrap();
     let assets = storage::city_assets::new(directory.to_path_buf());
@@ -383,7 +388,7 @@ fn city_fixture() -> &'static CityFixture {
     FIXTURE.get_or_init(|| {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let mut city = String::from("CITY 2\nbounds -1050 -1050 1050 1050\n");
+        let mut city = String::from("CITY 2\n");
         let mut streets = String::from("STREETS 1 21\n");
         let mut landscape = String::from("LANDSCAPE 1\n");
         let mut furniture = String::new();
@@ -414,7 +419,7 @@ fn city_fixture() -> &'static CityFixture {
         std::fs::write(root.join("streets.txt"), &streets).unwrap();
         std::fs::write(root.join("landscape.txt"), landscape).unwrap();
         std::fs::write(root.join("furniture.txt"), furniture).unwrap();
-        std::fs::write(root.join("manifest.json"), "{}").unwrap();
+        std::fs::write(root.join("manifest.json"), r#"{"bounds_metres":[-1050,-1050,1050,1050]}"#).unwrap();
         std::fs::create_dir(root.join("elevation")).unwrap();
         let mut elevation = String::from("ELEVATION 1\ngrid 22 22 -1050 -1050 100 0\n");
         for _ in 0..22 {
@@ -560,7 +565,15 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
     let parsed = storage::source_files::write_city_txt(&source, &directory.join("city.txt"))
         .unwrap()
         .city;
-    std::fs::write(directory.join("manifest.json"), "{}").unwrap();
+    std::fs::write(
+        directory.join("manifest.json"),
+        serde_json::json!({
+            "origin": {"latitude": 34.7, "longitude": 33.0},
+            "bounds_metres": util::geometry::bounding_box_xz_to_array(parsed.bounding_box),
+        })
+        .to_string(),
+    )
+    .unwrap();
     // The bent compiled path differs from the CITY endpoints.
     build::collision::build_collisions(
             &directory.join("streets.bin"), &parsed,

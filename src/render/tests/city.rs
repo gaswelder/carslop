@@ -18,7 +18,7 @@ fn building_parts_keep_stepped_and_inset_roofs_in_both_detail_levels() {
         Case { buildings: "b 1 3 0 4 0 0 10 0 10 10 0 10\nb 1 9 0 4 10 0 20 0 20 10 10 10\n", expected_height: 3. },
         Case { buildings: "b 1 6 0 4 0 0 20 0 20 20 0 20\nv 0 0 1 4 3 3 3 15 15 15 15 3\nb 1 12 0 4 3 3 15 3 15 15 3 15\n", expected_height: 12. },
     ] {
-        let city = test::support::parse_world(&format!("CITY 2\nbounds -50 -50 50 50\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n{}", case.buildings)).unwrap();
+        let city = test::support::parse_world(&format!("CITY 2\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n{}", case.buildings)).unwrap();
         let models = render::building_parts::load_default().unwrap();
         for detailed in [false, true] {
             let mut builder = Builder::default();
@@ -40,7 +40,7 @@ fn building_parts_keep_stepped_and_inset_roofs_in_both_detail_levels() {
 #[test]
 fn mapped_doors_use_their_walls_and_local_ground_without_an_extra_default() {
     let mut city = test::support::parse_world(concat!(
-        "CITY 2\nbounds -50 -50 50 50\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n",
+        "CITY 2\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\n",
         "b 1 6 1 5 0 5 0 0 12 0 12 10 0 10\ne 1 0 5\ne 1 12 7\n",
     ))
     .unwrap();
@@ -96,7 +96,10 @@ fn mapped_doors_use_their_walls_and_local_ground_without_an_extra_default() {
             );
         }
     }
-    let city = test::support::parse_world("CITY 2\nbounds -50 -50 50 50\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\nb 1 6 1 4 0 0 12 0 12 10 0 10\n").unwrap();
+    let city = test::support::parse_world(
+        "CITY 2\nn -40 -20\nn 40 -20\nr 0 1 8 0 1\nb 1 6 1 4 0 0 12 0 12 10 0 10\n",
+    )
+    .unwrap();
     assert_eq!(
         door_placements(
             &world::buildings::buildings(&(city))[0],
@@ -160,8 +163,7 @@ fn shared_building_storefronts_load_and_render_separate_panels() {
 }
 
 fn small_city() -> WorldLocation {
-    test::support::parse_world("CITY 2\nbounds -50 -50 50 50\nn -40 0\nn 40 0\nr 0 1 8 0 1\n")
-        .unwrap()
+    test::support::parse_world("CITY 2\nn -40 0\nn 40 0\nr 0 1 8 0 1\n").unwrap()
 }
 
 #[test]

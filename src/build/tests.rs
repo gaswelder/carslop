@@ -142,8 +142,13 @@ mod tree_obstacles {
     #[test]
     fn reads_matching_map_surfaces_and_preserves_pavement() {
         let temp = tempfile::tempdir().unwrap();
-        let city="CITY 2\norigin 35.162 33.32\nbounds -50 -50 50 50\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
+        let city = "CITY 2\nn -20 0\nn 20 0\nr 0 1 8 0 1\nb 1 10 1 4 10 10 20 10 20 20 10 20\n";
         fs::write(temp.path().join("city.txt"), city).unwrap();
+        fs::write(
+            temp.path().join("manifest.json"),
+            r#"{"origin":{"latitude":35.162,"longitude":33.32},"bounds_metres":[-50,-50,50,50]}"#,
+        )
+        .unwrap();
         let header = format!("STREETS 1 1 {:08x}\n", 0);
         let mesh = "t 0 -20 -2 20 -2 20 2\nt 0 -20 -2 20 2 -20 2\nt 4 -20 3 20 3 20 6\n";
         fs::write(temp.path().join("streets.txt"), format!("{header}{mesh}")).unwrap();
@@ -352,9 +357,12 @@ mod location_compilation {
         fs::copy(options.source, output.join("source.osm"))?;
         fs::write(
             output.join("manifest.json"),
-            serde_json::to_string_pretty(
-                &json!({"name": options.name, "boundary": build::osm::to_geojson(&(boundary))}),
-            )? + "\n",
+            serde_json::to_string_pretty(&json!({
+                "name": options.name,
+                "boundary": build::osm::to_geojson(&(boundary)),
+                "origin": map.origin.map(|origin| json!({"latitude": origin.lat, "longitude": origin.lon})),
+                "bounds_metres": util::geometry::bounding_box_xz_to_array(city.bounding_box),
+            }))? + "\n",
         )?;
         build::collision::build_collisions(
             &output.join("streets.bin"),
@@ -2238,7 +2246,7 @@ mod osm_labels {
         assert_eq!(velocity, departing);
     }
 
-    const CROSS:&str="CITY 2\norigin 0 0\nbounds -50 -50 50 50\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
+    const CROSS:&str="CITY 2\nn -40 0\nn 0 0\nn 40 0\nn 0 -40\nn 0 40\nr 0 1 8 0 1\nr 1 2 8 0 1\nr 3 1 8 0 2\nr 1 4 8 0 2\nb 1 10 1 4 8 8 18 8 18 18 8 18\n";
 
     #[test]
     fn branches_are_open_and_dead_ends_do_not_join_other_streets() {

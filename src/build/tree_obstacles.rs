@@ -1,7 +1,7 @@
 //! Map-space exclusion of proposed tree centres, using the actual road mesh.
 
 use crate::build;
-use crate::model;
+use crate::storage;
 use crate::util;
 use crate::util::error::invalid;
 use crate::util::error::Result;
@@ -65,23 +65,15 @@ pub fn read_paths(
     streets_path: &Path,
     lonlat_bounds: [f64; 4],
 ) -> Result<Obstacles> {
-    let text = std::fs::read_to_string(city_path)?;
-    let city = model::source_location::parse(&text).map_err(invalid)?;
-    let origin_line = text
-        .lines()
-        .find(|l| l.starts_with("origin "))
-        .ok_or_else(|| invalid("city missing origin"))?;
-    let mut parts = origin_line.split_whitespace().skip(1);
-    let origin = [
-        parts
-            .next()
-            .ok_or_else(|| invalid("missing origin latitude"))?
-            .parse::<f64>()?,
-        parts
-            .next()
-            .ok_or_else(|| invalid("missing origin longitude"))?
-            .parse::<f64>()?,
-    ];
+    let directory = city_path
+        .parent()
+        .ok_or_else(|| invalid("city path has no directory"))?;
+    let city = storage::city_assets::get_city(&storage::city_assets::new(directory.to_path_buf()))
+        .map_err(invalid)?;
+    let origin = city
+        .origin
+        .ok_or_else(|| invalid("manifest missing origin"))?;
+    let origin = [origin.lat, origin.lon];
     let nw = local(origin, lonlat_bounds[0], lonlat_bounds[3]);
     let se = local(origin, lonlat_bounds[2], lonlat_bounds[1]);
     let region = AABB::from_corners(nw, se);

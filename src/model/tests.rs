@@ -247,6 +247,47 @@ mod location {
     }
 
     #[test]
+    fn manifest_coordinates_are_required_and_validated() {
+        let input = tempfile::tempdir().unwrap();
+        let assets = test::support::stored_location(input.path(), false);
+        let city_path = input.path().join("city.txt");
+        let city = fs::read_to_string(&city_path).unwrap();
+        for record in ["origin 1 2", "bounds -1 -1 1 1"] {
+            fs::write(
+                &city_path,
+                city.replacen("CITY 2\n", &format!("CITY 2\n{record}\n"), 1),
+            )
+            .unwrap();
+            assert!(storage::city_assets::get_city(&assets).is_err(), "{record}");
+        }
+        fs::write(&city_path, city).unwrap();
+        let loaded = storage::city_assets::get_city(&assets).unwrap();
+        assert_eq!(loaded.origin, Some(util::geometry::new(34.7, 33.0)));
+        assert_eq!(loaded.bounding_box.min, XZ { x: -10., z: -10. });
+        for manifest in [
+            serde_json::json!({}),
+            serde_json::json!({"bounds_metres": [0, 0, 0, 1]}),
+            serde_json::json!({"bounds_metres": [0, 2, 1, 1]}),
+            serde_json::json!({"bounds_metres": [0, 0, 1]}),
+            serde_json::json!({"bounds_metres": [0, 0, 1e100, 1]}),
+            serde_json::json!({"bounds_metres": [0, 0, 1, 1], "origin": {"latitude": 91, "longitude": 0}}),
+            serde_json::json!({"bounds_metres": [0, 0, 1, 1], "origin": {"latitude": 0, "longitude": -181}}),
+            serde_json::json!({"bounds_metres": [0, 0, 1, 1], "origin": {"latitude": 0}}),
+            serde_json::json!({"bounds_metres": [0, 0, 1, 1], "pavement_height_metres": 1.0}),
+            serde_json::json!({"bounds_metres": [0, 0, 1, 1], "pavement_height_metres": null}),
+        ] {
+            fs::write(input.path().join("manifest.json"), manifest.to_string()).unwrap();
+            assert!(
+                storage::city_assets::get_city(&assets)
+                    .err()
+                    .unwrap()
+                    .contains("manifest.json"),
+                "{manifest}"
+            );
+        }
+    }
+
+    #[test]
     fn labels_never_fall_back_to_build_inputs() {
         let input = tempfile::tempdir().unwrap();
         test::support::stored_location(input.path(), false);
@@ -283,6 +324,9 @@ mod location {
             fs::write(input.path().join("source.osm"), "unused build input").unwrap();
             fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
             let mut location = model::location::location_read(input.path()).unwrap();
+            if !populated {
+                location.origin = None;
+            }
             location.pavement_height_meters = 0.17345679;
             location.roads[0].way_id = None;
             location.roads[0].width_meters = 8.123457;
@@ -380,7 +424,24 @@ mod location {
             let manifest: serde_json::Value =
                 serde_json::from_slice(&fs::read(output.path().join("manifest.json")).unwrap())
                     .unwrap();
-            assert_eq!(manifest.as_object().unwrap().len(), 1);
+            assert_eq!(
+                manifest["bounds_metres"],
+                serde_json::json!(util::geometry::bounding_box_xz_to_array(location.extent))
+            );
+            if let Some(origin) = location.origin {
+                assert_eq!(
+                    manifest["origin"],
+                    serde_json::json!({
+                        "latitude": origin.lat, "longitude": origin.lon,
+                    })
+                );
+            } else {
+                assert!(manifest.get("origin").is_none());
+            }
+            let city = fs::read_to_string(output.path().join("city.txt")).unwrap();
+            assert!(!city
+                .lines()
+                .any(|line| line.starts_with("origin ") || line.starts_with("bounds ")));
             let world = world::preparation::world_location_load(&storage::city_assets::new(
                 output.path().to_path_buf(),
             ))
@@ -420,7 +481,7 @@ mod location {
         fs::write(input.path().join("aerial/tile.rgb"), b"opaque tile").unwrap();
         fs::write(
             input.path().join("manifest.json"),
-            br#"{"aerial_attribution":"AERIAL: CYPRUS DLS / 2019"}"#,
+            br#"{"aerial_attribution":"AERIAL: CYPRUS DLS / 2019","origin":{"latitude":34.7,"longitude":33.0},"bounds_metres":[-10,-10,30,30]}"#,
         )
         .unwrap();
         fs::write(input.path().join("aerial/service.json"), b"build-only").unwrap();

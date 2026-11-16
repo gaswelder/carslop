@@ -34,7 +34,6 @@ struct ImportPaths {
     collisions: PathBuf,
     heightfield: PathBuf,
     elevation: PathBuf,
-    manifest: PathBuf,
     imagery: PathBuf,
     aerial: PathBuf,
     trees: PathBuf,
@@ -55,7 +54,6 @@ fn new(output: &Path, downloads: &Path) -> ImportPaths {
         collisions: output.join("streets.bin"),
         heightfield: output.join("elevation/heightfield.txt"),
         elevation: output.join("elevation"),
-        manifest: output.join("manifest.json"),
         imagery: output.join("imagery"),
         aerial: output.join("aerial"),
         trees: output.join("imagery-trees.txt"),
@@ -141,7 +139,6 @@ fn generate_assets(
     acquired: &CompileSources,
     converted: &ConvertedMap,
 ) -> Result<GeneratedAssets> {
-    let boundary = &acquired.boundary;
     let height_tiles = &acquired.height_tiles;
     let source_osm_map = &converted.osm;
     let location_map = &converted.location;
@@ -231,17 +228,18 @@ fn generate_assets(
                 / 6371000.0
                 / origin.lat.to_radians().cos(),
     ];
-    let manifest = serde_json::json!({
-        "boundary": build::osm::to_geojson(boundary),
-        "aerial_attribution": "AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY",
-    });
-    fs::write(
-        &paths.manifest,
-        serde_json::to_string_pretty(&manifest)? + "\n",
+    storage::manifest::write(
+        &paths.output,
+        &storage::manifest::Manifest {
+            origin: Some(origin),
+            bounds_metres: city_result.city.bounding_box,
+            pavement_height_metres: world::street_surface::DEFAULT_PAVEMENT_HEIGHT,
+            aerial_attribution: Some("AERIAL: ESRI / VANTOR / EARTHSTAR / GIS COMMUNITY".into()),
+        },
     )?;
 
     println!("building labels");
-    build::osm_labels::write_labels(paths.manifest.parent().unwrap())?;
+    build::osm_labels::write_labels(&paths.output)?;
 
     println!("building collision data");
     let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
@@ -260,7 +258,7 @@ fn generate_assets(
 }
 
 fn compile_imagery(
-    data: &build::download_location::Manifest,
+    data: &build::download_location::DownloadedSources,
     paths: &ImportPaths,
     generated: &GeneratedAssets,
     boundary: &build::osm::OSMArea,

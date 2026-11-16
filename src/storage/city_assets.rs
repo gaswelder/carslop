@@ -48,14 +48,17 @@ fn load_name(directory: &Path) -> String {
         .into_owned()
 }
 
-pub fn get_manifest(assets: &CityAsset) -> Result<serde_json::Value, String> {
-    serde_json::from_str(&read_text(assets, "manifest.json")?)
-        .map_err(|e| format!("invalid location manifest: {e}"))
+pub fn get_manifest(assets: &CityAsset) -> Result<storage::manifest::Manifest, String> {
+    storage::manifest::read(&assets.directory)
 }
 
 /// Load the road graph and building footprints; other getters supply its layers.
 pub fn get_city(assets: &CityAsset) -> Result<SourceLocation<f32>, String> {
-    model::source_location::parse(&read_text(assets, "city.txt")?)
+    let mut city = model::source_location::parse(&read_text(assets, "city.txt")?)?;
+    let manifest = get_manifest(assets)?;
+    city.origin = manifest.origin;
+    city.bounding_box = manifest.bounds_metres;
+    Ok(city)
 }
 
 // Returns the city's road controls and barriers.

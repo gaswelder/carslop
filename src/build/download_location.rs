@@ -24,19 +24,20 @@ pub const SATELLITE_IMAGES_DIR: &str = "satellite_images";
 pub const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Serialize, Deserialize)]
-pub struct Manifest {
+/// Acquisition state retained alongside downloaded source files.
+pub struct DownloadedSources {
     pub name: String,
     pub area: build::osm::ImportArea,
     pub height_tiles: Vec<String>,
     pub imagery_blocks: Vec<build::imagery::Block>,
 }
 
-pub fn read_manifest(directory: &Path) -> Result<Manifest> {
+pub fn read_manifest(directory: &Path) -> Result<DownloadedSources> {
     let bytes = fs::read(directory.join(MANIFEST_FILE))?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-fn write_manifest(directory: &Path, manifest: &Manifest) -> Result<()> {
+fn write_manifest(directory: &Path, manifest: &DownloadedSources) -> Result<()> {
     fs::write(
         directory.join(MANIFEST_FILE),
         serde_json::to_vec_pretty(manifest)?,
@@ -114,7 +115,7 @@ pub fn download_map_data(area: build::osm::ImportArea) -> Result<PathBuf> {
         )
         .map_err(|error| invalid(format!("block {},{}: {error}", block.x, block.y)))?;
     }
-    let data = Manifest {
+    let data = DownloadedSources {
         name,
         area,
         height_tiles,

@@ -146,14 +146,17 @@ fn compile(source: &Path, track: &world::locations::WorldLocation, output: &Path
             ..model::location::Labels::default()
         },
     )?;
-    fs::write(
-        &output.join("manifest.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "compiler": "native-track-v1", "raceways_only": true,
-            "source_file": "source.track.json",
-            "bounds_metres": util::geometry::bounding_box_xz_to_array(map.bounding_box), "coordinates": "local metres: X east, Y up, Z south",
-            "statistics": {"nodes": count, "road_segments": count, "buildings": map.buildings.len(), "trees": model::world::trees(track).len()}
-        }))? + "\n",
+    storage::manifest::write(
+        output,
+        &storage::manifest::Manifest {
+            origin: None,
+            bounds_metres: BoundingBoxXZ {
+                min: util::geometry::xz_map(map.bounding_box.min, |value| value as f32),
+                max: util::geometry::xz_map(map.bounding_box.max, |value| value as f32),
+            },
+            pavement_height_metres: world::street_surface::DEFAULT_PAVEMENT_HEIGHT,
+            aerial_attribution: None,
+        },
     )?;
     println!("Building stored scenery decorations...");
     render::scene_archive::write(

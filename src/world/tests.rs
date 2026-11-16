@@ -96,7 +96,7 @@ mod buildings {
     #[test]
     fn raised_building_parts_leave_vehicle_and_camera_clearance() {
         let city = test::support::parse_world(concat!(
-            "CITY 2\nbounds -50 -50 50 50\nn 10 -30\nn 10 30\nr 0 1 8 0 1\n",
+            "CITY 2\nn 10 -30\nn 10 30\nr 0 1 8 0 1\n",
             "b 100 9 0 4 0 0 5 0 5 10 0 10\n",
             "b 100 9 0 4 5 0 15 0 15 10 5 10\nv 1 3.1 0\n",
             "b 100 9 0 4 15 0 20 0 20 10 15 10\n",
@@ -410,7 +410,7 @@ mod roads {
     fn prepared_road_grids_match_full_projection_for_centrelines_and_compiled_paths() {
         for compiled in [false, true] {
             let mut world = test::support::parse_world(concat!(
-                "CITY 2\nbounds -100 -100 100 100\n",
+                "CITY 2\n",
                 "n -90 0\nn 90 0\nn -90 70\nn 90 70\n",
                 "r 0 1 8 0 1\nr 2 3 6.5 0 2\n",
             ))

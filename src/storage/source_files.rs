@@ -1,8 +1,10 @@
 use crate::model;
 use crate::model::source_location::SourceLocation;
 use crate::storage;
+use crate::util;
 use crate::util::error::invalid;
 use crate::util::error::Result;
+use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XZ;
 use std::{fs, path::PathBuf};
 
@@ -46,7 +48,12 @@ pub fn write_city_txt(
         storage::codec_city::Precision::Imported,
     )?;
     file.flush()?;
-    let city =
+    let mut city =
         model::source_location::parse(&fs::read_to_string(path_city_txt)?).map_err(invalid)?;
+    city.origin = location_map.origin;
+    city.bounding_box = BoundingBoxXZ {
+        min: util::geometry::xz_map(location_map.bounding_box.min, |v| v as f32),
+        max: util::geometry::xz_map(location_map.bounding_box.max, |v| v as f32),
+    };
     Ok(WriteCityResult { city })
 }

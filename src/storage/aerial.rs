@@ -1,5 +1,6 @@
 //! Aerial catalog validation, tile decoding, and source attribution.
 
+use crate::storage;
 use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XZ;
 use std::{collections::HashSet, path::Path};
@@ -105,9 +106,8 @@ pub fn attribution_label(directory: &Path) -> Option<String> {
     if !directory.join("aerial.txt").is_file() {
         return None;
     }
-    let attribution = std::fs::read(directory.join("manifest.json"))
+    let attribution = storage::manifest::read(directory)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|manifest| manifest["aerial_attribution"].as_str().map(str::to_owned));
+        .and_then(|manifest| manifest.aerial_attribution);
     Some(attribution.unwrap_or_else(|| "AERIAL: LOCAL IMAGERY".into()))
 }

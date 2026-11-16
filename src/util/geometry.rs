@@ -1,5 +1,6 @@
 use crate::model;
 use geo::{Coord, LineString, MultiPolygon, Polygon};
+use serde::{Deserialize, Serialize};
 
 /// Local point or vector in metres.
 /// x is world X (east), z is world Z (south).
@@ -126,12 +127,32 @@ impl<T> From<XYZ<T>> for [T; 3] {
 }
 
 /// Axis-aligned local bounds in metres, with inclusive minimum and maximum corners.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "[T; 4]", into = "[T; 4]")]
+#[serde(bound(
+    serialize = "T: Serialize + Clone",
+    deserialize = "T: Deserialize<'de>"
+))]
 pub struct BoundingBoxXZ<T = f64> {
     /// Minimum eastward X and southward Z coordinates.
     pub min: XZ<T>,
     /// Maximum eastward X and southward Z coordinates.
     pub max: XZ<T>,
+}
+
+impl<T> From<[T; 4]> for BoundingBoxXZ<T> {
+    fn from([min_x, min_z, max_x, max_z]: [T; 4]) -> Self {
+        Self {
+            min: XZ { x: min_x, z: min_z },
+            max: XZ { x: max_x, z: max_z },
+        }
+    }
+}
+
+impl<T> From<BoundingBoxXZ<T>> for [T; 4] {
+    fn from(bounds: BoundingBoxXZ<T>) -> Self {
+        [bounds.min.x, bounds.min.z, bounds.max.x, bounds.max.z]
+    }
 }
 
 /// Ordering used by the location manifest and external geometry records.
@@ -140,9 +161,11 @@ pub fn bounding_box_xz_to_array<T>(bounds: BoundingBoxXZ<T>) -> [T; 4] {
 }
 
 /// Geographic position in latitude and longitude degrees.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LatLon {
+    #[serde(rename = "latitude")]
     pub lat: f64, // Latitude in degrees, positive northward.
+    #[serde(rename = "longitude")]
     pub lon: f64, // Longitude in degrees, positive eastward.
 }
 

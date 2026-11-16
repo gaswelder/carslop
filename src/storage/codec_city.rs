@@ -6,7 +6,6 @@ use crate::model::world::Entrance;
 use crate::storage;
 use crate::util;
 use crate::util::error::invalid;
-use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
 use std::collections::BTreeSet;
@@ -72,17 +71,6 @@ pub fn write(
         Precision::Authored => (None, None),
     };
     writeln!(writer, "CITY 2")?;
-    if let Some(origin) = map.origin {
-        writeln!(writer, "origin {} {}", origin.lat, origin.lon)?;
-    }
-    writeln!(
-        writer,
-        "bounds {} {} {} {}",
-        storage::codec_number::new(map.bounding_box.min.x, coords),
-        storage::codec_number::new(map.bounding_box.min.z, coords),
-        storage::codec_number::new(map.bounding_box.max.x, coords),
-        storage::codec_number::new(map.bounding_box.max.z, coords)
-    )?;
     for p in &map.road_nodes {
         writeln!(
             writer,
@@ -176,28 +164,6 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
                 .map_err(|_| "invalid index".into())
         };
         match fields.first().copied() {
-            Some("origin") => {
-                let latitude: f64 = fields
-                    .get(1)
-                    .ok_or("missing latitude")?
-                    .parse()
-                    .map_err(|_| "invalid latitude")?;
-                let longitude: f64 = fields
-                    .get(2)
-                    .ok_or("missing longitude")?
-                    .parse()
-                    .map_err(|_| "invalid longitude")?;
-                if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
-                    return Err("invalid geographic origin".into());
-                }
-                city.origin = Some(util::geometry::new(latitude, longitude));
-            }
-            Some("bounds") => {
-                city.bounding_box = BoundingBoxXZ {
-                    min: XZ { x: f(1)?, z: f(2)? },
-                    max: XZ { x: f(3)?, z: f(4)? },
-                }
-            }
             Some("n") => city.road_nodes.push(XYZ {
                 x: f(1)?,
                 y: 0.0,
@@ -325,13 +291,8 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
             _ => return Err("unknown city record".into()),
         }
     }
-    if city.road_lines.is_empty()
-        || [city.bounding_box.min.x, city.bounding_box.min.z]
-            .into_iter()
-            .zip([city.bounding_box.max.x, city.bounding_box.max.z])
-            .any(|(a, b)| a >= b)
-    {
-        return Err("empty city or invalid bounds".into());
+    if city.road_lines.is_empty() {
+        return Err("empty city".into());
     }
     let buildings: BTreeSet<_> = city.buildings.iter().map(|building| building.id).collect();
     if city

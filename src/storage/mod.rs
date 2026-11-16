@@ -7,6 +7,7 @@ pub mod codec_landscape;
 mod codec_number;
 pub mod codec_road_rises;
 pub mod codec_streets;
+pub mod manifest;
 pub mod source_files;
 pub mod street_surface_binary;
 
