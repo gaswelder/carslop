@@ -21,7 +21,7 @@ pub enum FollowView {
 fn dimensions(follow_view: FollowView) -> (f32, f32) {
     // Distances are from the car centre; close sits roughly 3.4 m behind the bumper.
     match follow_view {
-        FollowView::Wide => (9.0, 4.5),
+        FollowView::Wide => (9.0, 3.5),
         FollowView::Close => (5.5, 2.1),
         FollowView::Bonnet => (0.0, 0.0),
     }
@@ -101,7 +101,6 @@ pub fn snap(chase_camera: &mut ChaseCamera, car: &Vehicle) {
     chase_camera.heading = car.heading.rem_euclid(TAU);
     chase_camera.look_ahead = desired_look(car);
     (chase_camera.distance, chase_camera.height) = dimensions(chase_camera.view);
-    chase_camera.distance += speed_pullback(car.speed);
 }
 
 pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duration) {
@@ -111,12 +110,8 @@ pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duratio
     }
     let dt = frame_time.as_secs_f32().min(0.25);
     chase_camera.bonnet = bonnet_pose(car);
-    let position_blend = damp(7.0, dt);
-    for axis in 0..3 {
-        *util::geometry::xyz_component_mut(&mut chase_camera.anchor, axis) +=
-            (util::geometry::xyz_component(car.position, axis)
-                - util::geometry::xyz_component(chase_camera.anchor, axis))
-                * position_blend;
+    if dt > 0.0 {
+        chase_camera.anchor = car.position;
     }
 
     // A little velocity alignment stabilizes slides without swinging away
@@ -139,8 +134,7 @@ pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duratio
         *current += (desired - *current) * damp(4.5, dt);
     }
     let (distance, height) = dimensions(chase_camera.view);
-    chase_camera.distance +=
-        (distance + speed_pullback(car.speed) - chase_camera.distance) * damp(5.0, dt);
+    chase_camera.distance += (distance - chase_camera.distance) * damp(5.0, dt);
     chase_camera.height += (height - chase_camera.height) * damp(5.0, dt);
 }
 
@@ -218,9 +212,6 @@ fn desired_look(car: &Vehicle) -> XYZ {
     }
 }
 
-fn speed_pullback(speed: f32) -> f32 {
-    (speed.abs() * 0.03).min(0.8)
-}
 fn damp(rate: f32, seconds: f32) -> f32 {
     1.0 - (-rate * seconds).exp()
 }
