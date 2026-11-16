@@ -247,12 +247,40 @@ mod location {
     }
 
     #[test]
+    fn labels_never_fall_back_to_build_inputs() {
+        let input = tempfile::tempdir().unwrap();
+        test::support::stored_location(input.path(), false);
+        fs::write(
+            input.path().join("source.osm"),
+            r#"<osm><way id="1"><tag k="name" v="Unused legacy name"/></way></osm>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            model::location::location_read(input.path()).unwrap().labels,
+            Labels::default()
+        );
+        fs::write(
+            input.path().join(storage::codec_labels::FILE_NAME),
+            "invalid label",
+        )
+        .unwrap();
+        assert!(model::location::location_read(input.path())
+            .unwrap_err()
+            .contains("labels.txt"));
+    }
+
+    #[test]
     fn stored_location_round_trip_is_lossless_without_build_inputs() {
         for populated in [false, true] {
             let input = tempfile::tempdir().unwrap();
             let output = tempfile::tempdir().unwrap();
             test::support::stored_location(input.path(), populated);
-            fs::write(input.path().join("source.osm"), r#"<osm><way id="1"><tag k="name" v="Road &amp; Square"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
+            fs::write(
+                input.path().join(storage::codec_labels::FILE_NAME),
+                "street 1 Road & Square\nbuilding 1 Road & Square\n",
+            )
+            .unwrap();
+            fs::write(input.path().join("source.osm"), "unused build input").unwrap();
             fs::write(input.path().join("source.track.json"), b"build-only").unwrap();
             let mut location = model::location::location_read(input.path()).unwrap();
             location.pavement_height_meters = 0.17345679;
@@ -335,6 +363,11 @@ mod location {
             }
             model::location::location_write(&location, output.path()).unwrap();
             assert!(!output.path().join("barriers.txt").exists());
+            assert!(output
+                .path()
+                .join(storage::codec_labels::FILE_NAME)
+                .is_file());
+            assert!(!output.path().join("labels.json").exists());
             let reread = model::location::location_read(output.path()).unwrap();
             assert_data_equal(&location, &reread);
             assert_eq!(

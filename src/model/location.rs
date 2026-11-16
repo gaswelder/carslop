@@ -78,11 +78,10 @@ pub struct Streets {
     pub curbs: Vec<Curb>,
 }
 
-#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Labels {
     pub streets: Vec<(i64, String)>,
     pub buildings: Vec<(u64, String)>,
-    #[serde(default)]
     pub storefronts: Vec<(u64, String)>,
 }
 
@@ -309,10 +308,7 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
             directory.join("manifest.json"),
             serde_json::to_vec_pretty(&manifest)?,
         )?;
-        fs::write(
-            directory.join("labels.json"),
-            serde_json::to_vec(&location.labels)?,
-        )?;
+        storage::codec_labels::write(directory, &location.labels)?;
         // Serialize at full f32 precision; compiler writers deliberately quantize.
         let mut elevation = BufWriter::new(fs::File::create(
             directory.join("elevation/heightfield.txt"),
@@ -409,11 +405,9 @@ fn remove_optional(path: &Path) -> Result<(), String> {
 }
 
 fn read_labels(directory: &Path) -> Result<Labels, String> {
-    match fs::read(directory.join("labels.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("labels.json: {e}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            storage::legacy_labels::read_legacy_labels(directory)
-        }
-        Err(e) => Err(format!("labels.json: {e}")),
+    match storage::codec_labels::parse(directory) {
+        Ok(labels) => Ok(labels),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Labels::default()),
+        Err(e) => Err(format!("{}: {e}", storage::codec_labels::FILE_NAME)),
     }
 }

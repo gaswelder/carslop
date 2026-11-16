@@ -1,6 +1,7 @@
 //! Extract playable street, building, and storefront labels from source OSM.
 
 use crate::build;
+use crate::model;
 pub use crate::model::world::Building;
 use crate::storage;
 use crate::util;
@@ -167,11 +168,18 @@ fn osm_labels(map: &build::osm::OSMMap) -> OsmLabels {
 
 /// Build-stage adapter: reduce source tags to playable labels on every rebuild.
 pub fn write_labels(directory: &std::path::Path) -> util::error::Result<()> {
-    std::fs::write(
-        directory.join("labels.json"),
-        serde_json::to_vec(
-            &storage::legacy_labels::read_legacy_labels(directory).map_err(util::error::invalid)?,
-        )?,
-    )?;
+    let source = std::fs::File::open(directory.join("source.osm"))?;
+    let extracted =
+        read_osm_labels(std::io::BufReader::new(source)).map_err(util::error::invalid)?;
+    let mut streets: Vec<_> = extracted.streets.into_iter().collect();
+    let mut buildings: Vec<_> = extracted.buildings.into_iter().collect();
+    streets.sort();
+    buildings.sort();
+    let labels = model::location::Labels {
+        streets,
+        buildings,
+        storefronts: extracted.storefronts,
+    };
+    storage::codec_labels::write(directory, &labels)?;
     Ok(())
 }

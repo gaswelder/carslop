@@ -2,6 +2,7 @@ use super::*;
 use crate::build;
 use crate::model;
 use crate::render;
+use crate::storage;
 use crate::test;
 use crate::util;
 use crate::world;
@@ -117,11 +118,7 @@ fn shared_building_storefronts_load_and_render_separate_panels() {
         buildings: vec![(1, "Centre".into())],
         storefronts: vec![(1, "Centre".into()), (1, "Shop".into()), (1, "Cafe".into())],
     };
-    std::fs::write(
-        directory.path().join("labels.json"),
-        serde_json::to_vec(&labels).unwrap(),
-    )
-    .unwrap();
+    storage::codec_labels::write(directory.path(), &labels).unwrap();
     let city = world::preparation::world_location_load(&asset).unwrap();
     assert_eq!(model::world::storefront_names(&(city), 1).len(), 3);
     let mut builder = Builder::default();

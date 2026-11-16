@@ -139,13 +139,12 @@ fn compile(source: &Path, track: &world::locations::WorldLocation, output: &Path
         &[],
     )?;
     fs::copy(source, output.join("source.track.json"))?;
-    // Keep the existing label reader independent of the authoring format.
-    fs::write(
-        output.join("source.osm"),
-        format!(
-            "<osm version=\"0.6\"><way id=\"1\"><tag k=\"name\" v=\"{}\"/></way></osm>\n",
-            quick_xml::escape::escape(&track.display_name),
-        ),
+    storage::codec_labels::write(
+        output,
+        &model::location::Labels {
+            streets: vec![(1, track.display_name.clone())],
+            ..model::location::Labels::default()
+        },
     )?;
     fs::write(
         &output.join("manifest.json"),
@@ -170,7 +169,6 @@ fn compile(source: &Path, track: &world::locations::WorldLocation, output: &Path
         &model::source_location::parse(&city_txt_source).map_err(invalid)?,
         streets_txt_source,
     )?;
-    build::osm_labels::write_labels(output)?;
     // Validate using the regular runtime loader before publishing the directory.
     let loaded = world::preparation::compiled_location_load(&storage::city_assets::new(
         output.to_path_buf(),

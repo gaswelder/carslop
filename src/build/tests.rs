@@ -2121,6 +2121,21 @@ mod osm_labels {
     use crate::world::spatial::*;
 
     #[test]
+    fn label_compilation_requires_valid_source_and_writes_text() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(write_labels(directory.path()).is_err());
+        std::fs::write(directory.path().join("source.osm"), "<osm>").unwrap();
+        assert!(write_labels(directory.path()).is_err());
+        std::fs::write(directory.path().join("source.osm"), r#"<osm><way id="7"><tag k="name" v="Town Hall"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
+        write_labels(directory.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(storage::codec_labels::FILE_NAME))
+                .unwrap(),
+            "street 7 Town Hall\nbuilding 7 Town Hall\n"
+        );
+    }
+
+    #[test]
     fn business_nodes_share_buildings_without_losing_names_or_label_precedence() {
         let source = r#"<osm>
     <node id="1" lat="0" lon="0"/><node id="2" lat="0" lon="1"/>
@@ -2146,23 +2161,24 @@ mod osm_labels {
             buildings: labels.buildings.into_iter().collect(),
             storefronts: labels.storefronts,
         };
-        let bytes = serde_json::to_vec(&stored).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        storage::codec_labels::write(directory.path(), &stored).unwrap();
         assert_eq!(
-            serde_json::from_slice::<model::location::Labels>(&bytes).unwrap(),
+            storage::codec_labels::parse(directory.path()).unwrap(),
             stored
         );
-        let legacy: model::location::Labels =
-            serde_json::from_str(r#"{"streets":[],"buildings":[]}"#).unwrap();
-        assert!(legacy.storefronts.is_empty());
     }
 
     #[test]
-    #[ignore = "requires the downloaded Engomi OSM extract; exports labels to /tmp/carslop-engomi-labels.json"]
+    #[ignore = "requires the downloaded Engomi OSM extract; exports labels to /tmp/carslop-engomi-labels/labels.txt"]
     fn downloaded_engomi_businesses_have_storefronts() {
-        let labels = storage::legacy_labels::read_legacy_labels(std::path::Path::new(
-            "src-locations/relation-17716182",
-        ))
-        .unwrap();
+        let source = std::fs::File::open("src-locations/relation-17716182/source.osm").unwrap();
+        let extracted = read_osm_labels(std::io::BufReader::new(source)).unwrap();
+        let labels = model::location::Labels {
+            streets: extracted.streets.into_iter().collect(),
+            buildings: extracted.buildings.into_iter().collect(),
+            storefronts: extracted.storefronts,
+        };
         for (id, expected) in [
             (1019204039, "Stephanis Electronics"),
             (1019204039, "EuroBank"),
@@ -2187,11 +2203,9 @@ mod osm_labels {
             labels.buildings.len(),
             labels.storefronts.len()
         );
-        std::fs::write(
-            std::env::temp_dir().join("carslop-engomi-labels.json"),
-            serde_json::to_vec(&labels).unwrap(),
-        )
-        .unwrap();
+        let directory = std::env::temp_dir().join("carslop-engomi-labels");
+        std::fs::create_dir_all(&directory).unwrap();
+        storage::codec_labels::write(&directory, &labels).unwrap();
     }
 
     #[test]
