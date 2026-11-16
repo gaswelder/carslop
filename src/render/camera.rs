@@ -18,12 +18,40 @@ pub enum FollowView {
     Bonnet,
 }
 
-fn dimensions(follow_view: FollowView) -> (f32, f32) {
-    // Distances are from the car centre; close sits roughly 3.4 m behind the bumper.
+struct ChaseDimensions {
+    distance: f32,
+    height: f32,
+}
+
+struct BonnetMount {
+    forward: f32,
+    height: f32,
+    downward_slope: f32,
+    look_distance: f32,
+}
+
+// Chase distances are behind the car centre; heights are above it.
+const WIDE: ChaseDimensions = ChaseDimensions {
+    distance: 9.0,
+    height: 3.5,
+};
+const CLOSE: ChaseDimensions = ChaseDimensions {
+    distance: 5.5,
+    height: 2.1,
+};
+// Body-relative mount near the windscreen, in metres from the car centre.
+const BONNET: BonnetMount = BonnetMount {
+    forward: 0.2,
+    height: 0.95,
+    downward_slope: 0.08,
+    look_distance: 30.0,
+};
+
+fn chase_dimensions(follow_view: FollowView) -> Option<ChaseDimensions> {
     match follow_view {
-        FollowView::Wide => (9.0, 3.5),
-        FollowView::Close => (5.5, 2.1),
-        FollowView::Bonnet => (0.0, 0.0),
+        FollowView::Wide => Some(WIDE),
+        FollowView::Close => Some(CLOSE),
+        FollowView::Bonnet => None,
     }
 }
 
@@ -59,7 +87,6 @@ pub struct ChaseCamera {
 }
 
 pub fn new(car: &Vehicle) -> ChaseCamera {
-    let (distance, height) = dimensions(FollowView::Close);
     let mut camera = ChaseCamera {
         track: car.track.clone(),
         view: FollowView::Close,
@@ -70,8 +97,8 @@ pub fn new(car: &Vehicle) -> ChaseCamera {
             y: 0.0,
             z: 0.0,
         },
-        distance,
-        height,
+        distance: CLOSE.distance,
+        height: CLOSE.height,
         bonnet: bonnet_pose(car),
     };
     snap(&mut camera, car);
@@ -100,7 +127,10 @@ pub fn snap(chase_camera: &mut ChaseCamera, car: &Vehicle) {
     chase_camera.anchor = car.position;
     chase_camera.heading = car.heading.rem_euclid(TAU);
     chase_camera.look_ahead = desired_look(car);
-    (chase_camera.distance, chase_camera.height) = dimensions(chase_camera.view);
+    if let Some(dimensions) = chase_dimensions(chase_camera.view) {
+        chase_camera.distance = dimensions.distance;
+        chase_camera.height = dimensions.height;
+    }
 }
 
 pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duration) {
@@ -133,9 +163,10 @@ pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duratio
     for (current, desired) in util::geometry::xyz_iter_mut(&mut chase_camera.look_ahead).zip(look) {
         *current += (desired - *current) * damp(4.5, dt);
     }
-    let (distance, height) = dimensions(chase_camera.view);
-    chase_camera.distance += (distance - chase_camera.distance) * damp(5.0, dt);
-    chase_camera.height += (height - chase_camera.height) * damp(5.0, dt);
+    if let Some(dimensions) = chase_dimensions(chase_camera.view) {
+        chase_camera.distance += (dimensions.distance - chase_camera.distance) * damp(5.0, dt);
+        chase_camera.height += (dimensions.height - chase_camera.height) * damp(5.0, dt);
+    }
 }
 
 pub fn pose(chase_camera: &ChaseCamera) -> Pose {
@@ -180,12 +211,14 @@ pub fn pose(chase_camera: &ChaseCamera) -> Pose {
 
 fn bonnet_pose(car: &Vehicle) -> Pose {
     let body = render::gl::vehicle_body_matrix(car);
-    let eye =
-        util::geometry::xyz_from_fn(|i| body[12 + i] + body[4 + i] * 0.85 + body[8 + i] * 0.95);
+    let eye = util::geometry::xyz_from_fn(|i| {
+        body[12 + i] + body[4 + i] * BONNET.height + body[8 + i] * BONNET.forward
+    });
     Pose {
         eye: (eye),
         target: util::geometry::xyz_from_fn(|i| {
-            util::geometry::xyz_component(eye, i) + (body[8 + i] - body[4 + i] * 0.08) * 30.0
+            util::geometry::xyz_component(eye, i)
+                + (body[8 + i] - body[4 + i] * BONNET.downward_slope) * BONNET.look_distance
         }),
     }
 }
