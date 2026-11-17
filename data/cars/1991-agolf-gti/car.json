@@ -9,10 +9,6 @@
   "yaw_inertia": 1100,
   "drive_bias": 1.0,
   "brake_bias": 0.68,
-  "corner_stiffness": [
-    70000,
-    51000
-  ],
   "engine_max_torque_nm": 168,
   "engine_torque_curve": [
     {

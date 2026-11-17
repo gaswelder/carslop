@@ -13,7 +13,20 @@ const SLIP_FALLOFF_RANGE: f32 = 0.35;
 // Model tuning: longitudinal post-peak grip loss begins at 10% tread slip.
 const LONGITUDINAL_PEAK_SLIP: f32 = 0.10;
 
+// Shared tire model: lateral force per radian per newton of normal load.
+// Linear load scaling gives every axle the same response per unit load.
+const CORNER_STIFFNESS_PER_LOAD: f32 = 12.0;
+
+/// Axle cornering stiffness (N/rad) from its current normal load (N).
+pub fn corner_stiffness(normal_load: f32) -> f32 {
+    CORNER_STIFFNESS_PER_LOAD * normal_load
+}
+
 fn capacity(contact: &Contact, wheel: &WheelVelocity) -> f32 {
+    // An unloaded axle has neither grip nor stiffness; avoid 0 / 0 below.
+    if contact.capacity == 0.0 {
+        return 0.0;
+    }
     let slip_speed = if contact.locked {
         wheel.longitudinal.hypot(wheel.lateral)
     } else {

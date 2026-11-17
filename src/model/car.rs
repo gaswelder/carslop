@@ -32,8 +32,6 @@ pub struct CarSpec {
 
     pub yaw_inertia: f32,
 
-    pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
-
     pub suspension_hz: f32,
 }
 
@@ -142,7 +140,6 @@ struct CarDefinition {
     yaw_inertia: f32,
     drive_bias: f32,
     brake_bias: f32,
-    corner_stiffness: [f32; 2],
     engine_max_torque_nm: f32,
     engine_torque_curve: Vec<TorquePoint>,
     redline_rpm: f32,
@@ -168,8 +165,6 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
         car_definition.engine_max_torque_nm,
         car_definition.redline_rpm,
         car_definition.suspension_hz,
-        car_definition.corner_stiffness[0],
-        car_definition.corner_stiffness[1],
         car_definition.gearbox.final_drive,
         car_definition.gearbox.reverse_ratio,
         car_definition.audio.gain,
@@ -322,7 +317,6 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
             drive_bias: definition.drive_bias,
             brake_bias: definition.brake_bias,
         },
-        corner_stiffness: definition.corner_stiffness,
         suspension_hz: definition.suspension_hz,
         drag_coefficient: definition.drag_coefficient,
         frontal_area_m2,

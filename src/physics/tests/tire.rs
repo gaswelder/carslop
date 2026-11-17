@@ -35,6 +35,24 @@ fn force(contact: Contact, motion: Motion) -> Impulse {
 }
 
 #[test]
+fn unloaded_axle_produces_no_force() {
+    let result = force(
+        Contact {
+            capacity: 0.0,
+            corner_stiffness: super::corner_stiffness(0.0),
+            ..CONTACT
+        },
+        Motion {
+            longitudinal: 20.0,
+            lateral: 2.0,
+            yaw_rate: 0.0,
+        },
+    );
+    assert_eq!(result.longitudinal, 0.0);
+    assert_eq!(result.lateral, 0.0);
+}
+
+#[test]
 fn developed_slides_share_the_same_grip_in_every_direction() {
     for direction in [-1.0, 1.0] {
         let cornering = force(

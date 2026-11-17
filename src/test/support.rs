@@ -145,7 +145,6 @@ pub fn car_spec() -> &'static model::car::CarSpec {
                 drive_bias: 0.0,
                 brake_bias: 0.65,
             },
-            corner_stiffness: [70000.0; 2],
             engine: model::car::Engine {
                 max_torque_nm: 180.0,
                 torque_curve: vec![
@@ -197,7 +196,7 @@ pub fn car_definition() -> serde_json::Value {
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / asset::car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.chassis.drive_bias, "brake_bias": s.chassis.brake_bias,
-        "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine.max_torque_nm,
+        "engine_max_torque_nm": s.engine.max_torque_nm,
         "engine_torque_curve": s.engine.torque_curve.iter().map(|point|
             serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
         "suspension_hz": s.suspension_hz,

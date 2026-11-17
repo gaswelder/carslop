@@ -153,8 +153,12 @@ pub fn tire_contacts(
                 } else {
                     0.0
                 },
-            corner_stiffness: spec.corner_stiffness[axle],
+            corner_stiffness: physics::tire::corner_stiffness(vehicle.axle_load[axle]),
             locked: axle == 1 && controls.handbrake,
         }
     })
 }
+
+#[cfg(test)]
+#[path = "tests/contact.rs"]
+mod tests;
