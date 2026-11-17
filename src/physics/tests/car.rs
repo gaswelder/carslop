@@ -901,7 +901,7 @@ fn selected_gears_hold_across_speeds_and_explicit_upshifts_drop_coupled_rpm() {
             car.gear = gear;
             set_longitudinal_speed(
                 &mut car,
-                speed_at_rpm(&model, model.redline_rpm * 0.8, gear),
+                speed_at_rpm(&model, model.engine.redline_rpm * 0.8, gear),
             );
             let before = physics::car::coupled_engine_rpm(&car);
             physics::car::shift(&mut car, true);
@@ -1327,14 +1327,14 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
 
     let mut overrev = level_route_car(world::locations::LocationId::Compact, model.clone());
 
-    let speed = speed_at_rpm(&model, model.redline_rpm + 500.0, 1);
+    let speed = speed_at_rpm(&model, model.engine.redline_rpm + 500.0, 1);
     overrev.velocity = XYZ {
         y: overrev.velocity.y,
         x: overrev.orientation.yaw.sin() * speed,
         z: overrev.orientation.yaw.cos() * speed,
     };
     treadmill_tick(&mut overrev, Controls::default());
-    assert!(overrev.engine.rpm > model.redline_rpm);
+    assert!(overrev.engine.rpm > model.engine.redline_rpm);
     assert!(
         overrev.engine.fuel_cut,
         "fuel cut cannot clamp wheel-driven engine speed"
@@ -1407,7 +1407,7 @@ fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
             cuts += usize::from(!was_cut && car.engine.fuel_cut);
             recoveries += usize::from(was_cut && !car.engine.fuel_cut);
             // A discrete combustion step can cross redline before fuel cuts.
-            assert!((IDLE_RPM..=car.spec.redline_rpm + 100.0).contains(&car.engine.rpm));
+            assert!((IDLE_RPM..=car.spec.engine.redline_rpm + 100.0).contains(&car.engine.rpm));
         }
         assert!(cuts > 2 && recoveries > 2, "{model:?}: limiter must cycle");
         physics::car::update(&mut car, dt, Controls::default());
@@ -1443,7 +1443,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
     };
     let custom_models = [5800.0, 7400.0].map(|redline_rpm| {
         let mut spec = test::support::car_spec().clone();
-        spec.redline_rpm = redline_rpm;
+        spec.engine.redline_rpm = redline_rpm;
         std::sync::Arc::new(spec)
     });
     for model in test::support::cars().into_iter().chain(custom_models) {
@@ -1455,10 +1455,10 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             );
             car.gear = gear;
             for (rpm, cut) in [
-                (car.spec.redline_rpm + 1.0, true),
-                (car.spec.redline_rpm - 100.0, true),
-                (car.spec.redline_rpm - 251.0, false),
-                (car.spec.redline_rpm - 100.0, false),
+                (car.spec.engine.redline_rpm + 1.0, true),
+                (car.spec.engine.redline_rpm - 100.0, true),
+                (car.spec.engine.redline_rpm - 251.0, false),
+                (car.spec.engine.redline_rpm - 100.0, false),
             ] {
                 car.engine.rpm = rpm;
                 set_longitudinal_speed(&mut car, speed_at_rpm(&model, rpm, gear));
@@ -1474,8 +1474,8 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             }
             car.engine.fuel_cut = true;
             car.engine.load = 1.0;
-            car.engine.rpm = car.spec.redline_rpm;
-            let speed = speed_at_rpm(&model, car.spec.redline_rpm + 1.0, gear);
+            car.engine.rpm = car.spec.engine.redline_rpm;
+            let speed = speed_at_rpm(&model, car.spec.engine.redline_rpm + 1.0, gear);
             set_longitudinal_speed(&mut car, speed);
             physics::car::update_engine_feedback(&mut car, pedal, 0.01);
             assert!(car.engine.load < 1.0, "fuel cut must reach engine audio");
@@ -1489,7 +1489,7 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
     for gear in [REVERSE_GEAR, 1] {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         car.gear = gear;
-        let speed = speed_at_rpm(&model, car.spec.redline_rpm + 20.0, gear)
+        let speed = speed_at_rpm(&model, car.spec.engine.redline_rpm + 20.0, gear)
             * if gear == REVERSE_GEAR { -1.0 } else { 1.0 };
         car.velocity = XYZ {
             y: car.velocity.y,
@@ -1515,7 +1515,7 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
             "gear {gear}: limiter must cycle"
         );
         car.engine.fuel_cut = true;
-        car.engine.rpm = car.spec.redline_rpm - 100.0;
+        car.engine.rpm = car.spec.engine.redline_rpm - 100.0;
         physics::car::shift(&mut car, gear == REVERSE_GEAR);
         assert_eq!(car.gear, NEUTRAL_GEAR);
         physics::car::update_engine_feedback(&mut car, Controls::default(), 0.0);
@@ -1547,7 +1547,7 @@ fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
             physics::car::update_free_engine(&mut car, pedal.throttle, 1.0 / 60.0);
         }
         let stationary = car.engine.rpm;
-        assert!(stationary > IDLE_RPM && stationary < model.redline_rpm);
+        assert!(stationary > IDLE_RPM && stationary < model.engine.redline_rpm);
         let mut rolling = new(
             physics::vehicle_location::vehicle_position(road, 0.0),
             model::world::heading(road),
@@ -1639,7 +1639,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
         previous_speed = longitudinal_speed(&car);
     }
     assert!(car.engine.rpm > IDLE_RPM);
-    assert!(car.engine.rpm < car.spec.redline_rpm);
+    assert!(car.engine.rpm < car.spec.engine.redline_rpm);
     for _ in 0..30 {
         car.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
@@ -1690,7 +1690,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     }
     assert_eq!(car.gear, REVERSE_GEAR);
     assert!(car.engine.rpm > IDLE_RPM);
-    assert!(car.engine.rpm <= car.spec.redline_rpm);
+    assert!(car.engine.rpm <= car.spec.engine.redline_rpm);
 }
 
 fn select_reverse(vehicle: &mut Vehicle) {

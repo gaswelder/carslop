@@ -145,36 +145,38 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             drive_bias: 0.0,
             brake_bias: 0.65,
             corner_stiffness: [70000.0; 2],
-            engine_max_torque_nm: 180.0,
-            engine_torque_curve: vec![
-                model::car::TorquePoint {
-                    rpm: 0.0,
-                    torque: 0.6,
-                },
-                model::car::TorquePoint {
-                    rpm: 3500.0,
-                    torque: 1.0,
-                },
-                model::car::TorquePoint {
-                    rpm: 6500.0,
-                    torque: 0.9,
-                },
-                model::car::TorquePoint {
-                    rpm: 33500.0,
-                    torque: 0.0,
-                },
-            ],
-            redline_rpm: 6500.0,
+            engine: model::car::Engine {
+                max_torque_nm: 180.0,
+                torque_curve: vec![
+                    model::car::TorquePoint {
+                        rpm: 0.0,
+                        torque: 0.6,
+                    },
+                    model::car::TorquePoint {
+                        rpm: 3500.0,
+                        torque: 1.0,
+                    },
+                    model::car::TorquePoint {
+                        rpm: 6500.0,
+                        torque: 0.9,
+                    },
+                    model::car::TorquePoint {
+                        rpm: 33500.0,
+                        torque: 0.0,
+                    },
+                ],
+                redline_rpm: 6500.0,
+                power_watts: 120.0 * model::car::WATTS_PER_HP,
+                turbo: None,
+            },
             suspension_hz: 1.7,
             gearbox: model::car::Gearbox {
                 ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
                 reverse_ratio: 3.0,
             },
-            engine_power_watts: 120.0 * model::car::WATTS_PER_HP,
             drag_coefficient: 0.3,
             frontal_area_m2,
-            turbo: None,
         }
     })
 }
@@ -190,12 +192,12 @@ pub fn car_definition() -> serde_json::Value {
     serde_json::json!({
         "name": s.name, "paint_color": s.paint_color,
         "weight_kg": s.weight_kg, "brake_force": s.brake_force,
-        "engine_power_hp": s.engine_power_watts / model::car::WATTS_PER_HP, "redline_rpm": s.redline_rpm,
+        "engine_power_hp": s.engine.power_watts / model::car::WATTS_PER_HP, "redline_rpm": s.engine.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / asset::car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
         "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
-        "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine_max_torque_nm,
-        "engine_torque_curve": s.engine_torque_curve.iter().map(|point|
+        "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine.max_torque_nm,
+        "engine_torque_curve": s.engine.torque_curve.iter().map(|point|
             serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
         "suspension_hz": s.suspension_hz,
         "gearbox": {"ratios": s.gearbox.ratios, "final_drive": s.gearbox.final_drive,
@@ -290,8 +292,8 @@ pub fn cars() -> Vec<std::sync::Arc<model::car::CarSpec>> {
             spec.drive_bias = drive_bias;
             spec.weight_kg *= 1.0 + drive_bias * 0.5;
             // Include a launch-capable AWD fixture as well as both driven axles.
-            spec.engine_max_torque_nm *= 3.0;
-            spec.engine_power_watts *= 3.0;
+            spec.engine.max_torque_nm *= 3.0;
+            spec.engine.power_watts *= 3.0;
             Arc::new(spec)
         })
         .collect()

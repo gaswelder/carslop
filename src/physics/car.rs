@@ -504,13 +504,13 @@ fn resolve_curbs(vehicle: &mut Vehicle, previous_position: XYZ, seconds: f32) {
 }
 
 fn engine_inertia(vehicle: &Vehicle) -> f32 {
-    0.12 + vehicle.spec.engine_max_torque_nm * 0.0006
+    0.12 + vehicle.spec.engine.max_torque_nm * 0.0006
 }
 
 fn engine_net_torque(vehicle: &Vehicle, throttle: f32) -> f32 {
     let spec = &vehicle.spec;
-    let revs = ((vehicle.engine.rpm - IDLE_RPM) / (spec.redline_rpm - IDLE_RPM)).max(0.0);
-    let drag = spec.engine_max_torque_nm * (0.10 + 0.16 * revs + 0.24 * revs * revs);
+    let revs = ((vehicle.engine.rpm - IDLE_RPM) / (spec.engine.redline_rpm - IDLE_RPM)).max(0.0);
+    let drag = spec.engine.max_torque_nm * (0.10 + 0.16 * revs + 0.24 * revs * revs);
     let throttle = if vehicle.shift_timer > 0.0 && vehicle.gear != NEUTRAL_GEAR {
         0.85 * vehicle.engine.rev_match_timer / REV_MATCH_SECONDS
     } else {
@@ -560,13 +560,13 @@ fn drivetrain_step(
         engine_net_torque(vehicle, throttle),
         engine_inertia(vehicle),
         ratio,
-        spec.engine_max_torque_nm * 2.0 * engagement,
+        spec.engine.max_torque_nm * 2.0 * engagement,
         dt,
     ))
 }
 
 fn update_turbo(vehicle: &mut Vehicle, dt: f32, throttle: f32) {
-    let Some(tune) = &vehicle.spec.turbo else {
+    let Some(tune) = &vehicle.spec.engine.turbo else {
         vehicle.engine.turbo_spool = 0.0;
         vehicle.engine.turbo_boost = 0.0;
         return;
@@ -600,9 +600,9 @@ fn update_turbo(vehicle: &mut Vehicle, dt: f32, throttle: f32) {
 fn update_fuel_cut(vehicle: &mut Vehicle, rpm: f32) {
     // The same hysteresis applies whether the engine is free or coupled to
     // the wheels. Cutting combustion cannot prevent a mechanical overrev.
-    if rpm >= vehicle.spec.redline_rpm {
+    if rpm >= vehicle.spec.engine.redline_rpm {
         vehicle.engine.fuel_cut = true;
-    } else if rpm <= vehicle.spec.redline_rpm - 250.0 {
+    } else if rpm <= vehicle.spec.engine.redline_rpm - 250.0 {
         vehicle.engine.fuel_cut = false;
     }
 }

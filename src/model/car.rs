@@ -9,23 +9,29 @@ pub const WATTS_PER_HP: f32 = 745.6999;
 #[derive(Clone, Debug)]
 pub struct CarSpec {
     pub name: String,
-    pub paint_color: [f32; 3],
-    pub weight_kg: f32,
-    pub engine_max_torque_nm: f32,
-    pub engine_torque_curve: Vec<TorquePoint>,
-    pub redline_rpm: f32,
-    pub gearbox: Gearbox,
     //
     pub design: std::sync::Arc<asset::car_glb::Design>,
+    pub paint_color: [f32; 3],
+    //
+    /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
+    pub drag_coefficient: f32,
+    pub frontal_area_m2: f32,
+    //
+    pub weight_kg: f32,
+    pub front_weight: f32,
+    /// Metres above ground, derived from the authored fraction and model height.
+    pub cg_height: f32,
+    //
+    pub engine: Engine,
+    pub gearbox: Gearbox,
+    //
     pub top_speed: f32,
     pub brake_force: f32,
     pub wheelbase: f32,
     /// Effective driven-wheel radius in metres, derived from the model.
     pub rolling_radius: f32,
     pub audio: EngineVoice,
-    pub front_weight: f32,
-    /// Metres above ground, derived from the authored fraction and model height.
-    pub cg_height: f32,
+
     pub track_width: f32,
     pub yaw_inertia: f32,
     /// Fraction of driving force sent to the front axle: 0 = RWD, 1 = FWD.
@@ -35,11 +41,14 @@ pub struct CarSpec {
     pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
 
     pub suspension_hz: f32,
+}
 
-    pub engine_power_watts: f32,
-    /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
-    pub drag_coefficient: f32,
-    pub frontal_area_m2: f32,
+#[derive(Clone, Debug)]
+pub struct Engine {
+    pub max_torque_nm: f32,
+    pub torque_curve: Vec<TorquePoint>,
+    pub redline_rpm: f32,
+    pub power_watts: f32,
     pub turbo: Option<Turbo>,
 }
 
@@ -286,9 +295,13 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         name: definition.name,
         paint_color: definition.paint_color,
         weight_kg: definition.weight_kg,
-        engine_max_torque_nm: definition.engine_max_torque_nm,
-        engine_torque_curve: definition.engine_torque_curve,
-        redline_rpm: definition.redline_rpm,
+        engine: Engine {
+            max_torque_nm: definition.engine_max_torque_nm,
+            torque_curve: definition.engine_torque_curve,
+            redline_rpm: definition.redline_rpm,
+            power_watts: definition.engine_power_hp * WATTS_PER_HP,
+            turbo: definition.turbo,
+        },
         gearbox: definition.gearbox,
         design,
         top_speed: 0.0,
@@ -304,10 +317,8 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         brake_bias: definition.brake_bias,
         corner_stiffness: definition.corner_stiffness,
         suspension_hz: definition.suspension_hz,
-        engine_power_watts: definition.engine_power_hp * WATTS_PER_HP,
         drag_coefficient: definition.drag_coefficient,
         frontal_area_m2,
-        turbo: definition.turbo,
     };
     spec.top_speed = physics::car::calculate_top_speed(&spec);
     Ok(spec)

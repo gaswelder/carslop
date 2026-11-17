@@ -24,8 +24,8 @@ const AIR_DENSITY_KG_M3: f32 = 1.225;
 pub const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 
 pub fn engine_torque(car_spec: &model::car::CarSpec, rpm: f32) -> f32 {
-    (car_spec.engine_max_torque_nm * model::car::torque_factor(&car_spec.engine_torque_curve, rpm))
-        .min(car_spec.engine_power_watts / (rpm.max(IDLE_RPM) * std::f32::consts::TAU / 60.0))
+    (car_spec.engine.max_torque_nm * model::car::torque_factor(&car_spec.engine.torque_curve, rpm))
+        .min(car_spec.engine.power_watts / (rpm.max(IDLE_RPM) * std::f32::consts::TAU / 60.0))
 }
 
 fn drive_force(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
@@ -56,7 +56,7 @@ pub fn calculate_top_speed(car_spec: &model::car::CarSpec) -> f32 {
     (1..=gears(&car_spec.gearbox))
         .map(|gear| {
             let mut low = 0.0;
-            let mut high = speed_at_rpm(car_spec, car_spec.redline_rpm, gear);
+            let mut high = speed_at_rpm(car_spec, car_spec.engine.redline_rpm, gear);
             for _ in 0..48 {
                 let speed = (low + high) * 0.5;
                 if drive_force(car_spec, speed, gear) > resistance_force(car_spec, speed) {

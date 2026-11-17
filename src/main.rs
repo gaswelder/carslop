@@ -811,7 +811,7 @@ fn render_scene(app: &mut App, frame_time: Duration) {
             car.orientation.yaw,
             ui::hud::Gauges {
                 rpm: car.engine.rpm,
-                redline_rpm: car.spec.redline_rpm,
+                redline_rpm: car.spec.engine.redline_rpm,
                 speed_kmh: physics::car::longitudinal_speed(car).abs() * 3.6,
                 gear: car.gear,
                 forces: physics::car::force_telemetry(car),
