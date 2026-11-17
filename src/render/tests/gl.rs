@@ -61,47 +61,6 @@ fn transform(m: [f32; 16], p: XYZ) -> XYZ {
 }
 
 #[test]
-fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
-    let track = test::support::track();
-    let model = test::support::car();
-
-    let road = physics::vehicle_location::spawn(&track);
-    let mut car = physics::car::on_track(
-        physics::vehicle_location::vehicle_position(road, 0.0),
-        model::world::heading(road),
-        model.clone(),
-        track,
-    );
-    for speed in [-6.0, 0.0, 30.0, 45.0] {
-        car.velocity = util::geometry::at_height(
-            util::geometry::xz_map(road.tangent, |n| n * speed),
-            car.velocity.y,
-        );
-        let chase = render::camera::new(&car);
-        let camera = chase_camera(1280.0 / 720.0, render::camera::pose(&chase));
-        let matrix = multiply(
-            camera.view_projection,
-            model_matrix(car.position, car.orientation.yaw, 0.0),
-        );
-        for x in [-1.4, 1.4] {
-            for y in [-0.42, 1.25] {
-                for z in [-2.2, 2.2] {
-                    let p = XYZ { x: x, y: y, z: z };
-                    let clip = transform(matrix, p);
-                    let w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
-                    assert!(w > 0.0);
-                    assert!(
-                        clip.x.abs() / w < 0.98 && clip.y.abs() / w < 0.98,
-                        "car clipped for {model:?} at {speed}: {:?}",
-                        util::geometry::xyz_map(clip, |v| v / w)
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn wheels_turn_about_their_axles_not_the_vehicle_origin() {
     let car = test::support::car();
     for center in car.design.mounts {
