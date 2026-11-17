@@ -71,16 +71,12 @@ fn on_world(
 ) -> Session {
     let start = physics::vehicle_location::spawn(&track);
     Session {
-        car: {
-            let mut vehicle = physics::car::on_track(
-                physics::vehicle_location::vehicle_position(start, 0.0),
-                model::world::heading(start),
-                model,
-                track,
-            );
-            vehicle.manual = true;
-            vehicle
-        },
+        car: physics::car::on_track(
+            physics::vehicle_location::vehicle_position(start, 0.0),
+            model::world::heading(start),
+            model,
+            track,
+        ),
         state: GameState::Driving,
         recoveries: 0,
         skids: render::skid_marks::SkidMarks::default(),

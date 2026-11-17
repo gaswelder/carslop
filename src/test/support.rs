@@ -170,8 +170,6 @@ pub fn car_spec() -> &'static model::car::CarSpec {
                 ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
                 reverse_ratio: 3.0,
-                upshift_rpm: 5500.0,
-                downshift_rpm: 2200.0,
             },
             engine_power_watts: 120.0 * model::car::WATTS_PER_HP,
             drag_coefficient: 0.3,
@@ -201,8 +199,7 @@ pub fn car_definition() -> serde_json::Value {
             serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
         "suspension_hz": s.suspension_hz,
         "gearbox": {"ratios": s.gearbox.ratios, "final_drive": s.gearbox.final_drive,
-            "reverse_ratio": s.gearbox.reverse_ratio, "upshift_rpm": s.gearbox.upshift_rpm,
-            "downshift_rpm": s.gearbox.downshift_rpm},
+            "reverse_ratio": s.gearbox.reverse_ratio},
         "audio": {"harmonics": s.audio.harmonics, "gain": s.audio.gain,
             "coast_gain": s.audio.coast_gain, "soft_limit": s.audio.soft_limit}
     })

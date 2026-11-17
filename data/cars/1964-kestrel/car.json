@@ -75,9 +75,7 @@
       0.821
     ],
     "final_drive": 4.4285712242126465,
-    "reverse_ratio": 3.094,
-    "upshift_rpm": 6200.0,
-    "downshift_rpm": 2600.0
+    "reverse_ratio": 3.094
   },
   "audio": {
     "harmonics": [

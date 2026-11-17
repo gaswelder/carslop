@@ -74,7 +74,7 @@ pub fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
     speed * 60.0 / (std::f32::consts::TAU * car_spec.rolling_radius) * ratio * gearbox.final_drive
 }
 
-pub fn speed_at_rpm(car_spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
+fn speed_at_rpm(car_spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
     let gearbox = &car_spec.gearbox;
     let ratio = if gear == 0 {
         gearbox.reverse_ratio

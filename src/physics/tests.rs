@@ -316,7 +316,6 @@ mod car {
             0.0,
             test::support::car(),
         );
-        car.manual = true;
         car.velocity = XZ { x: 0.0, z: 40.0 };
         assert_eq!(car.gear, 1);
         physics::car::shift(&mut car, true);
@@ -347,7 +346,6 @@ mod car {
             },
             0.0,
         );
-        assert!(car.manual);
         assert_eq!(car.gear, 1);
     }
     #[test]

@@ -77,8 +77,6 @@ pub struct Gearbox {
     pub ratios: Vec<f32>,
     pub final_drive: f32,
     pub reverse_ratio: f32,
-    pub upshift_rpm: f32,
-    pub downshift_rpm: f32,
 }
 /// Per-car engine timbre and mix, independent of model identity.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -159,8 +157,6 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
         car_definition.corner_stiffness[1],
         car_definition.gearbox.final_drive,
         car_definition.gearbox.reverse_ratio,
-        car_definition.gearbox.upshift_rpm,
-        car_definition.gearbox.downshift_rpm,
         car_definition.audio.gain,
     ] {
         positive(value)?;
@@ -188,14 +184,8 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
     {
         return Err("ratios must descend".into());
     }
-    if car_definition.gearbox.downshift_rpm >= car_definition.gearbox.upshift_rpm {
-        return Err("invalid shift thresholds".into());
-    }
     if car_definition.redline_rpm <= physics::car::IDLE_RPM + 250.0 {
         return Err("redline RPM must leave limiter recovery above idle".into());
-    }
-    if car_definition.gearbox.upshift_rpm >= car_definition.redline_rpm {
-        return Err("upshift RPM must be below redline RPM".into());
     }
     if car_definition.engine_torque_curve.len() < 2 {
         return Err("torque curve requires at least two points".into());

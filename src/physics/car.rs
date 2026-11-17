@@ -24,12 +24,6 @@ const STEERING_RATE: f32 = 9.0;
 // Forward speed (m/s) at which released steering reaches its full return rate.
 const STEERING_CENTERING_SPEED: f32 = 10.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Direction {
-    Drive,
-    Reverse,
-}
-
 #[derive(Clone, Copy, Default)]
 pub struct Controls {
     pub throttle: f32,
@@ -46,8 +40,6 @@ pub struct Vehicle {
     pub speed: f32,
     pub heading: f32,
     pub gear: u8,
-    pub manual: bool,
-    direction: Direction,
     slip: f32,
     pub body_pitch: f32,
     pub body_roll: f32,
@@ -110,8 +102,6 @@ pub fn on_track(
         speed: 0.0,
         heading,
         gear: 1,
-        manual: false,
-        direction: Direction::Drive,
         slip: 0.0,
         body_pitch: 0.0,
         body_roll: 0.0,
@@ -151,20 +141,14 @@ pub fn on_track(
 }
 
 pub fn reset(vehicle: &mut Vehicle, position: XYZ, heading: f32) {
-    let manual = vehicle.manual;
     *vehicle = on_track(
         position,
         heading,
         vehicle.spec.clone(),
         vehicle.track.clone(),
     );
-    vehicle.manual = manual;
 }
 
-fn upshift_speed(vehicle: &Vehicle, gear: u8) -> f32 {
-    let gearbox = &vehicle.spec.gearbox;
-    engine::speed_at_rpm(&vehicle.spec, gearbox.upshift_rpm, gear)
-}
 fn coupled_engine_rpm(vehicle: &Vehicle) -> f32 {
     if vehicle.gear == NEUTRAL_GEAR {
         return IDLE_RPM;
@@ -185,11 +169,6 @@ pub fn shift(vehicle: &mut Vehicle, up: bool) {
     if next != vehicle.gear {
         let previous = vehicle.gear;
         vehicle.gear = next;
-        vehicle.direction = if next == 0 {
-            Direction::Reverse
-        } else {
-            Direction::Drive
-        };
         let launching = previous == NEUTRAL_GEAR && matches!(next, 0 | 1);
         vehicle.shift_timer = if launching { 0.0 } else { 0.16 };
         vehicle.sound_shift_timer = SOUND_SHIFT_SECONDS;
@@ -237,11 +216,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
 
 fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f32 {
     let spec = vehicle.spec.clone();
-    let direction = if vehicle.direction == Direction::Reverse {
-        -1.0
-    } else {
-        1.0
-    };
+    let direction = if vehicle.gear == 0 { -1.0 } else { 1.0 };
     update_inputs(vehicle, controls, seconds);
     let forward = XZ {
         x: vehicle.heading.sin(),
@@ -379,12 +354,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
 }
 
 fn update_inputs(vehicle: &mut Vehicle, controls: Controls, seconds: f32) {
-    let previous_gear = vehicle.gear;
     refresh_speed(vehicle);
-    if previous_gear != vehicle.gear {
-        vehicle.shift_timer = 0.16;
-        vehicle.sound_shift_timer = SOUND_SHIFT_SECONDS;
-    }
     vehicle.shift_timer = (vehicle.shift_timer - seconds).max(0.0);
     vehicle.rev_match_timer = (vehicle.rev_match_timer - seconds).max(0.0);
     update_steering(vehicle, controls.steering, seconds);
@@ -410,11 +380,7 @@ fn finish_drivetrain(
 ) {
     let spec = vehicle.spec.clone();
     let drive_bias = spec.drive_bias;
-    let direction = if vehicle.direction == Direction::Reverse {
-        -1.0
-    } else {
-        1.0
-    };
+    let direction = if vehicle.gear == 0 { -1.0 } else { 1.0 };
     let contact::AxleGeometry {
         front_offset: a,
         sin,
@@ -740,32 +706,6 @@ fn refresh_speed(vehicle: &mut Vehicle) {
             z: -vehicle.heading.sin(),
         },
     );
-    if vehicle.manual {
-        return;
-    }
-    let previous = vehicle.gear;
-    let gearbox = &vehicle.spec.gearbox;
-    if vehicle.direction == Direction::Reverse {
-        vehicle.gear = 0;
-    } else {
-        vehicle.gear = vehicle.gear.clamp(1, engine::gears(gearbox));
-        // Separate up/down RPM thresholds prevent hunting around a shift.
-        while vehicle.gear < engine::gears(gearbox)
-            && vehicle.speed >= upshift_speed(vehicle, vehicle.gear)
-        {
-            vehicle.gear += 1;
-        }
-        while vehicle.gear > 1
-            && engine::rpm(&vehicle.spec, vehicle.speed, vehicle.gear) < gearbox.downshift_rpm
-            && engine::rpm(&vehicle.spec, vehicle.speed, vehicle.gear - 1)
-                < gearbox.upshift_rpm * 0.95
-        {
-            vehicle.gear -= 1;
-        }
-    }
-    if vehicle.gear != previous {
-        begin_rev_match(vehicle, previous);
-    }
 }
 
 fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {

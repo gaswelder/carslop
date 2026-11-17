@@ -10,17 +10,16 @@ fn new(position: XYZ, heading: f32, spec: std::sync::Arc<model::car::CarSpec>) -
     physics::car::on_track(position, heading, spec, test::support::compact_track())
 }
 
+// Set road speed for a target coupled RPM without exposing engine internals.
+fn speed_at_rpm(spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
+    rpm / engine::rpm(spec, 1.0, gear)
+}
+
 #[test]
 fn force_telemetry_balances_actual_acceleration_in_both_directions() {
     for gear in [0, 1, NEUTRAL_GEAR] {
         let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-        car.manual = true;
         car.gear = gear;
-        car.direction = if gear == 0 {
-            Direction::Reverse
-        } else {
-            Direction::Drive
-        };
         let direction = if gear == 0 { -1.0 } else { 1.0 };
         let forward = XZ {
             x: car.heading.sin(),
@@ -57,7 +56,6 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
 #[test]
 fn force_telemetry_reports_braking_and_engine_drag() {
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-    car.manual = true;
     car.gear = NEUTRAL_GEAR;
     car.velocity = XZ {
         x: car.heading.sin() * 10.0,
@@ -86,7 +84,6 @@ fn force_telemetry_reports_braking_and_engine_drag() {
 #[test]
 fn force_telemetry_has_no_tire_force_without_ground_contact_or_resistance_at_rest() {
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-    car.manual = true;
     car.gear = 1;
     car.position.y += 10.0;
     car.suspension_initialized = true;
@@ -126,7 +123,6 @@ fn mapped_speed_table_moves_the_suspension_and_settles() {
             test::support::car(),
             track,
         );
-        car.manual = true;
         car.gear = NEUTRAL_GEAR;
         car.velocity = XZ { x: 5., z: 0. };
         let mut peak_height: f32 = 0.;
@@ -215,7 +211,7 @@ fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
     for model in test::support::cars() {
         for initial_speed in [12.0, -4.0] {
             let mut car = level_route_car(test::support::authored_id(), model.clone());
-            car.manual = true;
+
             if initial_speed < 0.0 {
                 physics::car::shift(&mut car, false);
                 physics::car::shift(&mut car, false);
@@ -290,7 +286,7 @@ fn revving_in_neutral_then_engaging_a_gear_spins_the_driven_wheels() {
         .flat_map(|m| [(m.clone(), false), (m, true)])
     {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        car.manual = true;
+
         physics::car::shift(&mut car, false);
         assert_eq!(car.gear, NEUTRAL_GEAR);
         let throttle = Controls {
@@ -581,7 +577,6 @@ fn treadmill_tick(car: &mut Vehicle, controls: Controls) -> f32 {
 // and drag cannot hide a steering regression. Heading/yaw evolve normally.
 fn steering_run(car: &mut Vehicle, speed: f32, input: f32, seconds: f64, hz: f64) {
     // Externally imposed road speed supplies no drivetrain torque.
-    car.manual = true;
     car.gear = NEUTRAL_GEAR;
     let road = world::locations::at_distance(&car.track, 50.0);
     let mut remaining = seconds;
@@ -800,41 +795,32 @@ fn released_steering_centres_faster_with_forward_speed() {
 }
 
 #[test]
-fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
+fn selected_gears_hold_across_speeds_and_explicit_upshifts_drop_coupled_rpm() {
     for model in test::support::cars() {
-        let mut car = route_car(test::support::authored_id(), model.clone());
-        let road = world::locations::at_distance(&car.track, 50.0);
-        let g = &model.gearbox;
-        for gear in 1..engine::gears(g) {
+        let mut car = level_route_car(test::support::authored_id(), model.clone());
+        let forward = XZ {
+            x: car.heading.sin(),
+            z: car.heading.cos(),
+        };
+        for gear in 0..=engine::gears(&model.gearbox) {
             car.gear = gear;
-            let shift = physics::car::upshift_speed(&car, gear);
-            car.velocity = util::geometry::xz_map(road.tangent, |v| v * (shift - 0.01));
-            physics::car::refresh_speed(&mut car);
-            assert_eq!(car.gear, gear);
-            let before = physics::car::coupled_engine_rpm(&car);
-            car.velocity = util::geometry::xz_map(road.tangent, |v| v * (shift + 0.01));
-            physics::car::refresh_speed(&mut car);
-            assert_eq!(car.gear, gear + 1);
-            assert!(physics::car::coupled_engine_rpm(&(car)) < before);
-            for delta in [-0.1, 0.1, -0.05, 0.05] {
-                car.velocity = util::geometry::xz_map(road.tangent, |v| v * (shift + delta));
-                physics::car::refresh_speed(&mut car);
-                assert_eq!(
-                    car.gear,
-                    gear + 1,
-                    "must retain higher gear near an upshift"
-                );
+            for speed in [-10.0, 0.0, 10.0, 60.0] {
+                car.velocity = util::geometry::xz_map(forward, |v| v * speed);
+                physics::car::update(&mut car, Duration::from_micros(4000), Controls::default());
+                assert_eq!(car.gear, gear, "speed {speed} must preserve selected gear");
             }
-            let down = engine::speed_at_rpm(&model, g.downshift_rpm, gear + 1);
-            car.velocity = util::geometry::xz_map(road.tangent, |v| v * (down - 0.01));
-            physics::car::refresh_speed(&mut car);
-            assert!(car.gear <= gear);
-            assert!(physics::car::coupled_engine_rpm(&(car)) < car.spec.redline_rpm);
         }
-        car.velocity = XZ { x: 0.0, z: 0.0 };
-        physics::car::refresh_speed(&mut car);
-        assert_eq!(car.gear, 1);
-        assert_eq!(physics::car::coupled_engine_rpm(&(car)), IDLE_RPM);
+        car.gear = NEUTRAL_GEAR;
+        physics::car::update(&mut car, Duration::from_micros(4000), Controls::default());
+        assert_eq!(car.gear, NEUTRAL_GEAR);
+        for gear in 1..engine::gears(&model.gearbox) {
+            car.gear = gear;
+            car.speed = speed_at_rpm(&model, model.redline_rpm * 0.8, gear);
+            let before = physics::car::coupled_engine_rpm(&car);
+            physics::car::shift(&mut car, true);
+            assert_eq!(car.gear, gear + 1);
+            assert!(physics::car::coupled_engine_rpm(&car) < before);
+        }
     }
 }
 
@@ -929,7 +915,7 @@ fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         // cycles. Keep the tight comparison until the limiter first cuts,
         // then allow its 250 RPM band plus one substep of tire acceleration.
         let mut tolerance = 0.01;
-        let limiter_tolerance = engine::speed_at_rpm(&model, 250.0, 0) + 9.81 / 240.0;
+        let limiter_tolerance = speed_at_rpm(&model, 250.0, 0) + 9.81 / 240.0;
         for _ in 0..240 * 12 {
             for car in [&mut compact, &mut scenic] {
                 treadmill_tick(
@@ -992,7 +978,6 @@ fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
             test::support::car(),
             track.clone(),
         );
-        car.manual = true;
         car.gear = NEUTRAL_GEAR;
         car.velocity = util::geometry::xz_map(inward, |v| v * 10.0);
         assert_eq!(physics::car::resolve_road(&mut (car)), 0.0);
@@ -1041,7 +1026,6 @@ fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
     );
     assert_eq!(car.heading, model::world::heading(road));
     assert_eq!(car.velocity, XZ { x: 0.0, z: 0.0 });
-    assert_eq!(car.direction, Direction::Drive);
     assert_eq!(car.gear, 1);
     assert_eq!(car.speed, 0.0);
     assert_eq!(car.slip, 0.0);
@@ -1158,8 +1142,8 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
 fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
     for model in test::support::cars() {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        car.manual = true;
-        let speed = engine::speed_at_rpm(&model, 1800.0, 1);
+
+        let speed = speed_at_rpm(&model, 1800.0, 1);
         car.velocity = XZ {
             x: car.heading.sin() * speed,
             z: car.heading.cos() * speed,
@@ -1192,9 +1176,8 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
 fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine() {
     let model = test::support::car();
     let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-    car.manual = true;
     car.gear = 2;
-    let speed = engine::speed_at_rpm(&model, 4000.0, 2);
+    let speed = speed_at_rpm(&model, 4000.0, 2);
     car.velocity = XZ {
         x: car.heading.sin() * speed,
         z: car.heading.cos() * speed,
@@ -1228,8 +1211,8 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
     assert!((car.engine_rpm - physics::car::coupled_engine_rpm(&(car))).abs() < 10.0);
 
     let mut overrev = level_route_car(world::locations::LocationId::Compact, model.clone());
-    overrev.manual = true;
-    let speed = engine::speed_at_rpm(&model, model.redline_rpm + 500.0, 1);
+
+    let speed = speed_at_rpm(&model, model.redline_rpm + 500.0, 1);
     overrev.velocity = XZ {
         x: overrev.heading.sin() * speed,
         z: overrev.heading.cos() * speed,
@@ -1288,7 +1271,7 @@ fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
             model::world::heading(road),
             model.clone(),
         );
-        car.manual = true;
+
         physics::car::shift(&mut car, false);
         let dt = Duration::from_secs_f64(1.0 / 60.0);
         let pedal = Controls {
@@ -1351,13 +1334,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
                 model::world::heading(road),
                 model.clone(),
             );
-            car.manual = true;
             car.gear = gear;
-            car.direction = if gear == 0 {
-                Direction::Reverse
-            } else {
-                Direction::Drive
-            };
             for (rpm, cut) in [
                 (car.spec.redline_rpm + 1.0, true),
                 (car.spec.redline_rpm - 100.0, true),
@@ -1365,7 +1342,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
                 (car.spec.redline_rpm - 100.0, false),
             ] {
                 car.engine_rpm = rpm;
-                car.speed = engine::speed_at_rpm(&model, rpm, gear);
+                car.speed = speed_at_rpm(&model, rpm, gear);
                 let engine_rpm = car.engine_rpm;
                 physics::car::update_fuel_cut(&mut car, engine_rpm);
                 assert_eq!(car.fuel_cut, cut, "{model:?}, gear {gear}, RPM {rpm}");
@@ -1376,7 +1353,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             car.fuel_cut = true;
             car.engine_load = 1.0;
             car.engine_rpm = car.spec.redline_rpm;
-            car.speed = engine::speed_at_rpm(&model, car.spec.redline_rpm + 1.0, gear);
+            car.speed = speed_at_rpm(&model, car.spec.redline_rpm + 1.0, gear);
             physics::car::update_engine_feedback(&mut car, pedal, 0.01);
             assert!(car.engine_load < 1.0, "fuel cut must reach engine audio");
         }
@@ -1388,14 +1365,8 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
     let model = test::support::car();
     for gear in [0, 1] {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        car.manual = true;
         car.gear = gear;
-        car.direction = if gear == 0 {
-            Direction::Reverse
-        } else {
-            Direction::Drive
-        };
-        let speed = engine::speed_at_rpm(&model, car.spec.redline_rpm + 20.0, gear)
+        let speed = speed_at_rpm(&model, car.spec.redline_rpm + 20.0, gear)
             * if gear == 0 { -1.0 } else { 1.0 };
         car.velocity = XZ {
             x: car.heading.sin() * speed,
@@ -1440,7 +1411,6 @@ fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
             model::world::heading(road),
             model.clone(),
         );
-        car.manual = true;
         car.gear = NEUTRAL_GEAR;
         let pedal = Controls {
             throttle: 0.35,
@@ -1528,7 +1498,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     assert_eq!(car.engine_rpm, IDLE_RPM);
     assert_eq!(car.engine_load, 0.0);
     let mut previous_speed = 0.0;
-    for _ in 0..180 {
+    for _ in 0..60 {
         car.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
             &mut car,
@@ -1543,8 +1513,6 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     }
     assert!(car.engine_rpm > IDLE_RPM);
     assert!(car.engine_rpm < car.spec.redline_rpm);
-    // Let a longer audible shift finish before checking sustained engine load.
-    car.manual = true;
     for _ in 0..30 {
         car.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
@@ -1557,20 +1525,9 @@ fn engine_feedback_tracks_load_and_shift_unload() {
         );
     }
     assert!(car.engine_load > 0.45);
-    car.manual = false;
 
-    // Begin below the first shift in first gear. The previous acceleration
-    // may already have shifted; hysteresis correctly retains that gear.
-    car.gear = 1;
     let load_before_shift = car.engine_load;
-    car.velocity = util::geometry::xz_map(road.tangent, |v| {
-        v * (physics::car::upshift_speed(&car, 1) - 0.02)
-    });
-    physics::car::refresh_speed(&mut car);
-    assert_eq!(car.gear, 1);
-    car.velocity = util::geometry::xz_map(road.tangent, |v| {
-        v * (physics::car::upshift_speed(&car, 1) + 0.08)
-    });
+    physics::car::shift(&mut car, true);
     physics::car::update(
         &mut car,
         Duration::from_secs_f64(1.0 / 60.0),
