@@ -1,4 +1,4 @@
-//! Text street geometry and category IDs shared with the binary street codec.
+//! Builder-owned streets.txt intermediates, including their text format.
 
 use crate::model;
 use crate::model::world::Curb;
@@ -6,10 +6,14 @@ use crate::model::world::CurbStyle;
 use crate::model::world::Material;
 use crate::model::world::Triangle;
 use crate::model::world::TriangleUsage;
+use crate::util;
+use crate::util::error;
 use crate::util::geometry::XZ;
 use crate::world::street_surface::cross;
 
-pub fn parse(streets_txt_source: &str, count: usize) -> Result<model::location::Streets, String> {
+const FILE_NAME: &str = "streets.txt";
+
+fn parse(streets_txt_source: &str, count: usize) -> Result<model::location::Streets, String> {
     let mut lines123213 = streets_txt_source.lines();
     let header: Vec<_> = lines123213
         .next()
@@ -85,7 +89,7 @@ pub fn parse(streets_txt_source: &str, count: usize) -> Result<model::location::
                 }
             }
             Some("c") => {
-                let style = CurbStyle::try_from(n(1)?)?;
+                let style = curb_style(n(1)?)?;
                 if f.len() != 8 {
                     return Err("invalid curb".into());
                 }
@@ -105,20 +109,16 @@ pub fn parse(streets_txt_source: &str, count: usize) -> Result<model::location::
     result.paths = paths;
     Ok(result)
 }
-impl TryFrom<usize> for CurbStyle {
-    type Error = &'static str;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::MajorRoad),
-            1 => Ok(Self::Road),
-            2 => Ok(Self::ServiceRoad),
-            _ => Err("unknown curb style"),
-        }
+fn curb_style(value: usize) -> Result<CurbStyle, &'static str> {
+    match value {
+        0 => Ok(CurbStyle::MajorRoad),
+        1 => Ok(CurbStyle::Road),
+        2 => Ok(CurbStyle::ServiceRoad),
+        _ => Err("unknown curb style"),
     }
 }
 
-/// Decode the categories used by streets.txt and streets.bin.
+/// Decode intermediate triangle categories.
 fn triangle_usage_from_street_id(id: usize) -> Result<TriangleUsage, &'static str> {
     match id {
         0 => Ok(TriangleUsage::Road(CurbStyle::MajorRoad)),
@@ -129,7 +129,7 @@ fn triangle_usage_from_street_id(id: usize) -> Result<TriangleUsage, &'static st
         5 => Ok(TriangleUsage::Pavement(CurbStyle::MajorRoad)),
         6 => Ok(TriangleUsage::Pavement(CurbStyle::Road)),
         7 => Ok(TriangleUsage::Pavement(CurbStyle::ServiceRoad)),
-        8..=16 => Ok(TriangleUsage::Road(CurbStyle::try_from((id - 8) % 3)?)),
+        8..=16 => Ok(TriangleUsage::Road(curb_style((id - 8) % 3)?)),
         _ => Err("unknown street triangle category"),
     }
 }
@@ -162,7 +162,7 @@ fn street_material(triangle_usage: TriangleUsage) -> Result<Material, &'static s
     }
 }
 
-pub fn triangle_from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Triangle, &'static str> {
+fn triangle_from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Triangle, &'static str> {
     let usage = triangle_usage_from_street_id(id)?;
     Ok(Triangle {
         material: match id {
@@ -176,20 +176,148 @@ pub fn triangle_from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Triang
     })
 }
 
-pub fn triangle_street_id(triangle: &Triangle) -> Result<usize, &'static str> {
-    if let TriangleUsage::Road(style) = triangle.usage {
-        let base = match triangle.material {
-            Material::Concrete => Some(8),
-            Material::Paving => Some(11),
-            Material::BareGround => Some(14),
-            _ => None,
-        };
-        if let Some(base) = base {
-            return Ok(base + style as usize);
+#[derive(Clone, Copy)]
+pub enum Precision {
+    Imported,
+    Authored,
+}
+
+pub struct Writer {
+    output: std::io::BufWriter<std::fs::File>,
+    precision: Precision,
+}
+
+pub fn create(
+    directory: &std::path::Path,
+    road_count: usize,
+    precision: Precision,
+) -> std::io::Result<Writer> {
+    use std::io::Write;
+    let mut output = std::io::BufWriter::new(std::fs::File::create(directory.join(FILE_NAME))?);
+    writeln!(output, "STREETS 1 {road_count}")?;
+    Ok(Writer { output, precision })
+}
+
+pub fn junction(writer: &mut Writer, node: usize) -> std::io::Result<()> {
+    use std::io::Write;
+    writeln!(writer.output, "j {node}")
+}
+
+fn coordinates<T: std::fmt::Display + Copy>(
+    writer: &mut Writer,
+    points: &[XZ<T>],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    for point in points {
+        match writer.precision {
+            Precision::Imported => write!(writer.output, " {:.6} {:.6}", point.x, point.z)?,
+            Precision::Authored => write!(writer.output, " {} {}", point.x, point.z)?,
         }
     }
-    if triangle.material != street_material(triangle.usage)? {
-        return Err("street format cannot encode this material for the triangle category");
-    }
-    triangle_usage_street_id(triangle.usage)
+    writeln!(writer.output)
 }
+
+pub fn path<T: std::fmt::Display + Copy>(
+    writer: &mut Writer,
+    road: usize,
+    points: &[XZ<T>],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    write!(writer.output, "p {road} {}", points.len())?;
+    coordinates(writer, points)
+}
+
+pub fn triangle<T: std::fmt::Display + Copy>(
+    writer: &mut Writer,
+    category: usize,
+    points: [XZ<T>; 3],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    write!(writer.output, "t {category}")?;
+    coordinates(writer, &points)
+}
+
+pub fn curb<T: std::fmt::Display + Copy>(
+    writer: &mut Writer,
+    kind: usize,
+    ends: [XZ<T>; 2],
+    inward: XZ<T>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    write!(writer.output, "c {kind}")?;
+    coordinates(writer, &[ends[0], ends[1], inward])
+}
+
+pub fn flush(writer: &mut Writer) -> std::io::Result<()> {
+    use std::io::Write;
+    writer.output.flush()
+}
+
+pub fn read_tree_obstacles(
+    directory: &std::path::Path,
+    road_count: usize,
+) -> error::Result<Vec<Vec<XZ<f64>>>> {
+    use crate::util::error::invalid;
+    use std::io::{BufRead, BufReader};
+    let mut triangles = Vec::new();
+    let mut input = BufReader::new(std::fs::File::open(directory.join(FILE_NAME))?);
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let header: Vec<_> = line.split_whitespace().collect();
+    if header.len() < 3
+        || header[..2] != ["STREETS", "1"]
+        || header[2].parse::<usize>().ok() != Some(road_count)
+    {
+        return Err(invalid("invalid street surfaces header"));
+    }
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            break;
+        }
+        let mut f = line.split_whitespace();
+        if f.next() != Some("t") {
+            continue;
+        }
+        let style = f
+            .next()
+            .ok_or_else(|| invalid("missing surface style"))?
+            .parse::<usize>()?;
+        // 0..=3 are asphalt; 4..=7 are pavement/other pedestrian surfaces.
+        if style > 3 {
+            continue;
+        }
+        let mut points = vec![];
+        for _ in 0..3 {
+            let mut p = XZ::<f64>::default();
+            for v in util::geometry::xz_iter_mut(&mut p) {
+                *v = f
+                    .next()
+                    .ok_or_else(|| invalid("missing surface coordinate"))?
+                    .parse::<f64>()?;
+                if !v.is_finite() {
+                    return Err(invalid("invalid road coordinate"));
+                }
+            }
+            points.push(p);
+        }
+        if f.next().is_some() {
+            return Err(invalid("invalid road triangle"));
+        }
+        let [a, b, c] = [points[0], points[1], points[2]];
+        if (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x) <= 0.00001 {
+            continue;
+        }
+        triangles.push(points);
+    }
+    Ok(triangles)
+}
+
+pub fn read(directory: &std::path::Path, roads: usize) -> error::Result<model::location::Streets> {
+    let source = std::fs::read_to_string(directory.join(FILE_NAME))?;
+    parse(&source, roads).map_err(error::invalid)
+}
+
+#[cfg(test)]
+#[path = "tests/streets_support.rs"]
+pub mod streets_test_support;

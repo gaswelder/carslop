@@ -21,8 +21,6 @@ use crate::util::geometry::XZ;
 use geo::MultiPolygon;
 use geo::{Buffer, Point};
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 
 struct Feature {
@@ -80,13 +78,11 @@ pub fn build_furniture(
     source: &OSMMap,
     map: &SourceLocation<f64>,
     s: &Surfaces,
-    output_path: &Path,
+    directory: &Path,
 ) -> Result<()> {
     let placements = place_furniture(source, map, s);
-    let mut file = BufWriter::new(fs::File::create(output_path)?);
     let barriers = build::barriers::extract(source, map, s);
-    storage::codec_furniture::write(&mut file, &placements, &barriers)?;
-    file.flush()?;
+    storage::furniture::write_file(directory, &placements, &barriers)?;
     Ok(())
 }
 
@@ -95,7 +91,7 @@ fn place_furniture(
     source: &OSMMap,
     map: &SourceLocation<f64>,
     s: &Surfaces,
-) -> Vec<storage::codec_furniture::FurnitureRecord> {
+) -> Vec<storage::furniture::FurnitureRecord> {
     let tree = build::surfaces::index(&s.paths);
     let obstacles = build::surfaces::new(&s.obstacles);
     let conflicts = |probe: &MultiPolygon<f64>| build::surfaces::intersects(&obstacles, probe);
@@ -356,7 +352,7 @@ fn place_furniture(
     use crate::model::world::FurnitureKind;
     unique
         .into_iter()
-        .map(|f| storage::codec_furniture::FurnitureRecord {
+        .map(|f| storage::furniture::FurnitureRecord {
             source_id: f.id,
             kind: match f.kind {
                 0 => FurnitureKind::Signal,

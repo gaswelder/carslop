@@ -421,7 +421,8 @@ mod roads {
                     "p 0 3 -90 0 0 20 90 0\np 1 3 -90 70 0 50 90 70\n",
                     "t 1 -90 -4 90 -4 90 4\nc 1 -90 -4 90 -4 0 1\n"
                 );
-                let (surfaces, paths) = world::street_surface::load(text, 2).unwrap();
+                let test::support::PreparedStreets { surfaces, paths } =
+                    test::support::load_streets(text, 2).unwrap();
                 let field =
                     world::elevation::generate(world.bounding_box, |p| p.x * 0.01 + p.z * 0.02);
                 world.roads = with_compiled(world.roads, surfaces, paths, &field).unwrap();
@@ -476,6 +477,7 @@ mod transport {
     use crate::model::map_details::RoadSurface;
     use crate::physics;
     use crate::render;
+    use crate::storage;
     use crate::test;
     use crate::util::geometry::XYZ;
     use crate::util::geometry::XZ;
@@ -527,7 +529,7 @@ mod transport {
         use crate::model;
         let folder = tempfile::tempdir().unwrap();
         let assets = test::support::stored_location(folder.path(), false);
-        let mut stored = model::location::location_read(folder.path()).unwrap();
+        let mut stored = storage::location::location_read(folder.path()).unwrap();
         stored.roads.push(model::location::Road {
             ends: stored.roads[0].ends,
             way_id: Some(2),
@@ -542,7 +544,7 @@ mod transport {
             path: vec![[0., 12., 0.], [10., 12., 1.], [20., 12., 0.]],
             surface: RoadSurface::Asphalt,
         });
-        model::location::location_write(&stored, folder.path()).unwrap();
+        storage::location::location_write(&stored, folder.path()).unwrap();
         let city = world::preparation::world_location_load(&assets).unwrap();
         for height in [7., 12.] {
             let p = XYZ {
@@ -768,24 +770,40 @@ mod street_surface_index {
     fn mapped_road_materials_round_trip_through_the_binary_surface_cache() {
         let folder = tempfile::tempdir().unwrap();
         for id in 8..=16 {
-            let text = format!(
-                "STREETS 1 1\np 0 2 0 0 20 0\nt {id} 0 -4 20 -4 20 4\nc 1 0 -4 20 -4 0 1\n"
-            );
-            let (surface, paths) = world::street_surface::load(&text, 1).unwrap();
-            storage::street_surface_binary::write_binary_street_surface(
-                &folder.path().join("streets.bin"),
-                &surface,
-                &paths,
+            let test::support::PreparedStreets { surfaces, paths } = test::support::load_streets(
+                &format!(
+                    "STREETS 1 1\np 0 2 0 0 20 0\nt {id} 0 -4 20 -4 20 4\nc 1 0 -4 20 -4 0 1\n"
+                ),
+                1,
             )
             .unwrap();
-            let stored = storage::street_surface_binary::load_geometry(folder.path(), 1).unwrap();
+            let geometry = model::location::Streets {
+                triangles: surfaces.road_triangles,
+                curbs: surfaces.curbs,
+                paths: paths
+                    .into_iter()
+                    .map(|path| path.into_iter().map(util::geometry::xz).collect())
+                    .collect(),
+            };
+            storage::streets::write_compiled(folder.path(), &geometry).unwrap();
+            let stored = storage::streets::load_geometry(folder.path(), 1).unwrap();
+            assert_eq!(stored.triangles, geometry.triangles);
+            assert_eq!(stored.curbs, geometry.curbs);
+            assert_eq!(stored.paths, geometry.paths);
+            let expected_material = match id {
+                8..=10 => model::world::Material::Concrete,
+                11..=13 => model::world::Material::Paving,
+                _ => model::world::Material::BareGround,
+            };
+            assert_eq!(stored.triangles[0].material, expected_material);
+            let expected_style = [
+                model::world::CurbStyle::MajorRoad,
+                model::world::CurbStyle::Road,
+                model::world::CurbStyle::ServiceRoad,
+            ][(id - 8) % 3];
             assert_eq!(
-                stored.triangles,
-                world::street_surface::road_triangles(&(surface))
-            );
-            assert_eq!(
-                storage::codec_streets::triangle_street_id(&(stored.triangles[0])).unwrap(),
-                id
+                stored.triangles[0].usage,
+                model::world::TriangleUsage::Road(expected_style)
             );
         }
     }
@@ -797,7 +815,10 @@ mod street_surface_index {
             "t 6 -64 4 64 4 64 8\nt 6 -64 4 64 8 -64 8\n",
             "c 1 -64 4 64 4 0 -1\nc 1 -64 -4 64 -4 0 1\n"
         );
-        let (surface, _) = world::street_surface::load(text, 1).unwrap();
+        let test::support::PreparedStreets {
+            surfaces: surface,
+            paths: _,
+        } = test::support::load_streets(text, 1).unwrap();
         let mut world = test::support::empty_world();
         test::support::install_surfaces(&mut world, surface);
         let surface = world::roads::compiled_surfaces(&world).unwrap();

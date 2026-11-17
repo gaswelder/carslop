@@ -95,5 +95,5 @@ pub fn contains(source_location: &SourceLocation<f64>, p: XZ) -> bool {
 }
 
 pub fn parse(text: &str) -> Result<SourceLocation<f32>, String> {
-    storage::codec_city::parse(text)
+    storage::city::parse(text)
 }

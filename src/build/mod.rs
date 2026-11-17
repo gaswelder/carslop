@@ -2,7 +2,6 @@ pub mod add_location;
 pub mod authoring;
 mod barriers;
 mod buildings;
-mod collision;
 mod compile_location;
 pub mod create_track;
 mod crossings;
@@ -19,6 +18,7 @@ pub mod osm;
 mod osm_extract;
 pub mod osm_labels;
 mod scene;
+mod streets;
 pub mod surfaces;
 mod terrain;
 mod transport;
@@ -33,3 +33,6 @@ pub mod test_support;
 mod tests;
 
 mod map;
+
+#[cfg(test)]
+pub use streets::streets_test_support;

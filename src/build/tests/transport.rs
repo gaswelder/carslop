@@ -122,8 +122,8 @@ fn overlapping_ramps_do_not_reuse_clipped_fragments() {
         .sum();
     assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
     let mut bytes = vec![];
-    storage::codec_road_rises::write(&mut bytes, &result).unwrap();
-    storage::codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    storage::road_rises::write(&mut bytes, &result).unwrap();
+    storage::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
 }
 
 #[test]
@@ -161,8 +161,8 @@ fn indexed_partition_preserves_overlaps_slopes_and_source_precedence() {
             }
         }
         let mut bytes = vec![];
-        storage::codec_road_rises::write(&mut bytes, &actual).unwrap();
-        storage::codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        storage::road_rises::write(&mut bytes, &actual).unwrap();
+        storage::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
     }
 }
 
@@ -258,6 +258,6 @@ fn clipped_ramps_remain_readable_after_large_coordinate_quantization() {
     let mut rises = Vec::new();
     emit(&sliver, &plane, &mut rises).unwrap();
     let mut bytes = Vec::new();
-    storage::codec_road_rises::write(&mut bytes, &rises).unwrap();
-    assert!(storage::codec_road_rises::parse(std::str::from_utf8(&bytes).unwrap()).is_ok());
+    storage::road_rises::write(&mut bytes, &rises).unwrap();
+    assert!(storage::road_rises::parse(std::str::from_utf8(&bytes).unwrap()).is_ok());
 }

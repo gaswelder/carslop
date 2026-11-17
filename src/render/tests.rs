@@ -113,7 +113,7 @@ mod barriers {
                 height_meters: 2.,
                 width_meters: 0.12,
             }];
-            storage::codec_furniture::write(
+            storage::furniture::write(
                 &mut std::fs::File::create(folder.path().join("furniture.txt")).unwrap(),
                 &[],
                 &barriers,

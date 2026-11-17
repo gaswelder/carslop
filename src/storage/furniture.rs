@@ -1,11 +1,17 @@
 //! Road controls and terrain-following barriers, identified by record kind.
+use crate::model::location;
 use crate::model::world::Barrier;
 use crate::model::world::BarrierKind;
 use crate::model::world::Furniture;
 use crate::model::world::FurnitureKind;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
+use std::fs;
 use std::io;
+use std::io::{BufWriter, Write};
+use std::path::Path;
+
+const FILE_NAME: &str = "furniture.txt";
 
 /// Compiler placement before the file's deliberate position/direction quantization.
 #[derive(Debug)]
@@ -180,5 +186,41 @@ fn parse_barrier(fields: &[&str]) -> Result<Barrier, String> {
 }
 
 #[cfg(test)]
-#[path = "tests/codec_furniture.rs"]
+#[path = "tests/furniture.rs"]
 mod tests;
+
+pub fn write_file(
+    directory: &std::path::Path,
+    records: &[FurnitureRecord],
+    barriers: &[Barrier],
+) -> io::Result<()> {
+    use std::io::Write;
+    let mut writer = io::BufWriter::new(std::fs::File::create(directory.join(FILE_NAME))?);
+    write(&mut writer, records, barriers)?;
+    writer.flush()
+}
+
+pub fn read(directory: &Path) -> Result<FurnitureData, String> {
+    let text =
+        fs::read_to_string(directory.join(FILE_NAME)).map_err(|e| format!("{FILE_NAME}: {e}"))?;
+    parse(&text).map_err(|e| format!("{FILE_NAME}: {e}"))
+}
+
+pub fn write_location(directory: &Path, location: &location::Location) -> io::Result<()> {
+    let mut furniture = BufWriter::new(fs::File::create(directory.join(FILE_NAME))?);
+    for f in &location.furniture {
+        let kind = match f.kind {
+            FurnitureKind::Signal => "signal",
+            FurnitureKind::Stop => "stop",
+            FurnitureKind::Yield => "yield",
+            FurnitureKind::Speed => "speed_limit",
+        };
+        writeln!(
+            furniture,
+            "{} {kind} {} {} {} {} {} {}",
+            f.id, f.position.x, f.position.z, f.travel.x, f.travel.z, f.value, f.phase
+        )?;
+    }
+    write_barriers(&mut furniture, &location.barriers)?;
+    furniture.flush()
+}

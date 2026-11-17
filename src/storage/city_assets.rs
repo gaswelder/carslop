@@ -1,8 +1,6 @@
 use crate::model;
 use crate::model::source_location::SourceLocation;
-use crate::model::world::HeightField;
 use crate::storage;
-use crate::util::geometry::XZ;
 use crate::world;
 use std::path::{Path, PathBuf};
 
@@ -54,7 +52,7 @@ pub fn get_manifest(assets: &CityAsset) -> Result<storage::manifest::Manifest, S
 
 /// Load the road graph and building footprints; other getters supply its layers.
 pub fn get_city(assets: &CityAsset) -> Result<SourceLocation<f32>, String> {
-    let mut city = model::source_location::parse(&read_text(assets, "city.txt")?)?;
+    let mut city = storage::city::read(&assets.directory)?;
     let manifest = get_manifest(assets)?;
     city.origin = manifest.origin;
     city.bounding_box = manifest.bounds_metres;
@@ -62,59 +60,16 @@ pub fn get_city(assets: &CityAsset) -> Result<SourceLocation<f32>, String> {
 }
 
 // Returns the city's road controls and barriers.
-pub fn get_furniture(
-    assets: &CityAsset,
-) -> Result<storage::codec_furniture::FurnitureData, String> {
-    storage::codec_furniture::parse(&read_text(assets, "furniture.txt")?)
+pub fn get_furniture(assets: &CityAsset) -> Result<storage::furniture::FurnitureData, String> {
+    storage::furniture::read(&assets.directory)
 }
 
 pub fn get_heightfield(assets: &CityAsset) -> Result<world::elevation::HeightField, String> {
-    load(&read_text(assets, "elevation.txt")?)
+    storage::elevation::read(&assets.directory).map(|elevation| elevation.field)
 }
 
-pub fn get_landscape_data(
-    assets: &CityAsset,
-) -> Result<(Vec<model::world::Triangle>, Vec<model::world::Tree>), String> {
-    use crate::world::landscape::Triangle;
-    let mut ground_triangles = Vec::new();
-    let mut trees = Vec::new();
-    for (file, imagery) in [("landscape.txt", false), ("imagery-trees.txt", true)] {
-        let input = match std::fs::File::open(assets.directory.join(file)) {
-            Ok(input) => std::io::BufReader::new(input),
-            Err(e) if imagery && e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("cannot read city asset {file}: {e}")),
-        };
-        let mut file_ground = Vec::new();
-        let mut file_trees = Vec::new();
-        storage::codec_landscape::read::<f32>(input, |record| {
-            match record {
-                storage::codec_landscape::Record::Ground { material, points } => {
-                    file_ground.push(Triangle {
-                        material,
-                        usage: model::world::TriangleUsage::Ground,
-                        points,
-                    })
-                }
-                storage::codec_landscape::Record::Tree(tree) => file_trees.push(tree),
-            }
-            Ok(())
-        })?;
-        if imagery {
-            if !file_ground.is_empty() {
-                return Err("imagery supplement must contain only trees".into());
-            }
-            world::landscape::append_imagery_trees(&mut trees, file_trees)?;
-        } else {
-            ground_triangles = file_ground;
-            trees = file_trees;
-        }
-    }
-    Ok((ground_triangles, trees))
-}
-
-fn read_text(assets: &CityAsset, name: &str) -> Result<String, String> {
-    std::fs::read_to_string(assets.directory.join(name))
-        .map_err(|e| format!("cannot read city asset {name}: {e}"))
+pub fn get_landscape_data(assets: &CityAsset) -> Result<storage::landscape::Data, String> {
+    storage::landscape::read_file(&assets.directory)
 }
 
 #[derive(Clone, Debug)]
@@ -134,7 +89,7 @@ fn discover(root: &Path) -> std::io::Result<Vec<MenuLocation>> {
         .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
-        if !path.is_dir() || !path.join("city.txt").is_file() {
+        if !path.is_dir() || !storage::city::exists(&path) {
             continue;
         }
         let name = path.file_name();
@@ -156,69 +111,6 @@ pub fn menu_locations() -> Vec<MenuLocation> {
             Vec::new()
         }
     }
-}
-
-fn load(text: &str) -> Result<HeightField, String> {
-    let mut lines = text.lines();
-    let header: Vec<_> = lines
-        .next()
-        .ok_or("missing elevation header")?
-        .split_whitespace()
-        .collect();
-    if header.len() < 2 || header[0] != "ELEVATION" || header[1] != "1" {
-        return Err("unsupported elevation header".into());
-    }
-    let fields: Vec<_> = lines
-        .next()
-        .ok_or("missing grid")?
-        .split_whitespace()
-        .collect();
-    if fields.len() != 7 || fields[0] != "grid" {
-        return Err("invalid elevation grid".into());
-    }
-    let number = |i: usize| -> Result<f32, String> {
-        let v: f32 = fields[i].parse().map_err(|_| "invalid grid number")?;
-        if v.is_finite() {
-            Ok(v)
-        } else {
-            Err("nonfinite grid number".into())
-        }
-    };
-    let columns = fields[1].parse::<usize>().map_err(|_| "invalid columns")?;
-    let rows = fields[2].parse::<usize>().map_err(|_| "invalid rows")?;
-    let origin = XZ {
-        x: number(3)?,
-        z: number(4)?,
-    };
-    let step = number(5)?;
-    number(6)?;
-    if !(2..=4096).contains(&columns)
-        || !(2..=4096).contains(&rows)
-        || !(1.0..=100.0).contains(&step)
-    {
-        return Err("invalid grid dimensions".into());
-    }
-    let values = lines
-        .flat_map(str::split_whitespace)
-        .map(|s| {
-            let v: f32 = s.parse().map_err(|_| "invalid elevation value")?;
-            if v.is_finite() && v.abs() < 10000.0 {
-                Ok(v)
-            } else {
-                Err("invalid elevation range")
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if values.len() != columns * rows {
-        return Err("incomplete elevation grid".into());
-    }
-    Ok(HeightField {
-        columns,
-        rows,
-        origin: (origin),
-        step,
-        values,
-    })
 }
 
 pub fn from_assets(assets: CityAsset) -> std::io::Result<MenuLocation> {

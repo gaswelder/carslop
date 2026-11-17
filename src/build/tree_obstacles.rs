@@ -8,10 +8,7 @@ use crate::util::error::Result;
 use crate::util::geometry::XZ;
 use geo::{Coord, Intersects, LineString, Point, Polygon};
 use rstar::{RTree, RTreeObject, AABB};
-use std::{
-    io::{BufRead, BufReader},
-    path::Path,
-};
+use std::path::Path;
 struct Obstacle {
     polygon: Polygon<f64>,
     bounds: AABB<XZ>,
@@ -60,14 +57,7 @@ fn obstacle(points: Vec<XZ>, reason: &'static str, region: &AABB<XZ>) -> Option<
     })
 }
 
-pub fn read_paths(
-    city_path: &Path,
-    streets_path: &Path,
-    lonlat_bounds: [f64; 4],
-) -> Result<Obstacles> {
-    let directory = city_path
-        .parent()
-        .ok_or_else(|| invalid("city path has no directory"))?;
+pub fn read_paths(directory: &Path, lonlat_bounds: [f64; 4]) -> Result<Obstacles> {
     let city = storage::city_assets::get_city(&storage::city_assets::new(directory.to_path_buf()))
         .map_err(invalid)?;
     let origin = city
@@ -92,54 +82,7 @@ pub fn read_paths(
         }
     }
     println!("Checking road surfaces for tree exclusions...");
-    let mut input = BufReader::new(std::fs::File::open(streets_path)?);
-    let mut line = String::new();
-    input.read_line(&mut line)?;
-    let header: Vec<_> = line.split_whitespace().collect();
-    if header.len() < 3
-        || header[..2] != ["STREETS", "1"]
-        || header[2].parse::<usize>().ok() != Some(city.road_lines.len())
-    {
-        return Err(invalid("invalid street surfaces header"));
-    }
-    loop {
-        line.clear();
-        if input.read_line(&mut line)? == 0 {
-            break;
-        }
-        let mut f = line.split_whitespace();
-        if f.next() != Some("t") {
-            continue;
-        }
-        let style = f
-            .next()
-            .ok_or_else(|| invalid("missing surface style"))?
-            .parse::<usize>()?;
-        // 0..=3 are asphalt; 4..=7 are pavement/other pedestrian surfaces.
-        if style > 3 {
-            continue;
-        }
-        let mut points = vec![];
-        for _ in 0..3 {
-            let mut p = XZ::<f64>::default();
-            for v in util::geometry::xz_iter_mut(&mut p) {
-                *v = f
-                    .next()
-                    .ok_or_else(|| invalid("missing surface coordinate"))?
-                    .parse::<f64>()?;
-                if !v.is_finite() {
-                    return Err(invalid("invalid road coordinate"));
-                }
-            }
-            points.push(p);
-        }
-        if f.next().is_some() {
-            return Err(invalid("invalid road triangle"));
-        }
-        let [a, b, c] = [points[0], points[1], points[2]];
-        if (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x) <= 0.00001 {
-            continue;
-        }
+    for points in build::streets::read_tree_obstacles(directory, city.road_lines.len())? {
         if let Some(o) = obstacle(points, "road", &region) {
             objects.push(o);
         }

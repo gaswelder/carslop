@@ -10,13 +10,13 @@ mod aerial {
     }
 }
 
-mod codec_city {
+mod city {
     use crate::model;
     use crate::model::source_location::SourceLocation;
     use crate::model::source_location::SourceRoad;
     use crate::model::world::Building;
     use crate::model::world::Entrance;
-    use crate::storage::codec_city::*;
+    use crate::storage::city::*;
     use crate::util;
     use crate::util::geometry::BoundingBoxXZ;
     use crate::util::geometry::XZ;
@@ -153,11 +153,11 @@ mod codec_city {
     }
 }
 
-mod codec_landscape {
+mod landscape {
     use crate::model::world::Material;
     use crate::model::world::Tree;
     use crate::storage;
-    use crate::storage::codec_landscape::*;
+    use crate::storage::landscape::*;
     use crate::util::geometry::XZ;
     use std::io::Cursor;
 
@@ -185,10 +185,10 @@ mod codec_landscape {
             (Precision::Authored, "LANDSCAPE 1\na 1 0.123456789 0 10 0 0 10\nt 18446744073709551615 1.123456 -2.654321 4.123456 0.7\n"),
         ] {
             let mut bytes = vec![];
-            let mut writer = storage::codec_landscape::new(&mut bytes, precision).unwrap();
-            storage::codec_landscape::ground(&mut writer, Material::Park, points).unwrap();
-            storage::codec_landscape::tree(&mut writer, &tree).unwrap();
-            storage::codec_landscape::flush(&mut writer).unwrap();
+            let mut writer = storage::landscape::new(&mut bytes, precision).unwrap();
+            storage::landscape::ground(&mut writer, Material::Park, points).unwrap();
+            storage::landscape::tree(&mut writer, &tree).unwrap();
+            storage::landscape::flush(&mut writer).unwrap();
             assert_eq!(std::str::from_utf8(&bytes).unwrap(), expected);
             let mut runtime_tree = None;
             read::<f32>(Cursor::new(&bytes), |r| {
@@ -228,8 +228,8 @@ mod codec_landscape {
         })
         .unwrap_err();
         assert_eq!(error, "stop");
-        assert!(storage::codec_landscape::ground(
-            &mut (storage::codec_landscape::new(std::io::sink(), Precision::Imported).unwrap()),
+        assert!(storage::landscape::ground(
+            &mut (storage::landscape::new(std::io::sink(), Precision::Imported).unwrap()),
             Material::Paint,
             [XZ { x: 0., z: 0. }; 3]
         )
@@ -237,9 +237,9 @@ mod codec_landscape {
     }
 }
 
-mod codec_road_rises {
+mod road_rises {
 
-    use crate::storage::codec_road_rises::*;
+    use crate::storage::road_rises::*;
 
     #[test]
     fn road_rise_codec_preserves_offsets_and_rejects_invalid_triangles() {
@@ -260,7 +260,7 @@ mod codec_road_rises {
     }
 }
 
-mod street_surface_binary {
+mod streets {
     use crate::model;
     use crate::physics;
     use crate::render;
@@ -349,7 +349,10 @@ mod street_surface_binary {
         let root = temp.path();
         fixture(root);
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
-        let (expected, paths) = world::street_surface::load(&streets, 1).unwrap();
+        let test::support::PreparedStreets {
+            surfaces: expected,
+            paths,
+        } = test::support::load_streets(&streets, 1).unwrap();
         test::support::bake_collisions(
             &root.join("city.txt"),
             &root.join("streets.txt"),
@@ -429,8 +432,10 @@ mod street_surface_binary {
         let source = std::fs::read_to_string(root.join("city.txt")).unwrap();
         let streets = std::fs::read_to_string(root.join("streets.txt")).unwrap();
         let city = model::source_location::parse(&source).unwrap();
-        let (expected, expected_paths) =
-            world::street_surface::load(&streets, city.road_lines.len()).unwrap();
+        let test::support::PreparedStreets {
+            surfaces: expected,
+            paths: expected_paths,
+        } = test::support::load_streets(&streets, city.road_lines.len()).unwrap();
         let (actual, actual_paths) = load(root, city.road_lines.len()).unwrap();
         assert_eq!(expected_paths, actual_paths);
         eprintln!(
@@ -443,7 +448,7 @@ mod street_surface_binary {
 
     fn load(directory: &Path, roads: usize) -> io::Result<(StreetSurface, RoadPaths)> {
         world::street_surface::from_geometry(
-            storage::street_surface_binary::load_geometry(directory, roads)?,
+            storage::streets::load_geometry(directory, roads)?,
             world::street_surface::DEFAULT_PAVEMENT_HEIGHT,
         )
         .map_err(|message| io::Error::other(message))

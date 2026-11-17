@@ -1,15 +1,14 @@
 use crate::build;
-use crate::build::collision::build_collisions;
 use crate::build::furniture::build_furniture;
 use crate::build::landscape::build_landscape;
 use crate::build::scene::build_scene;
-use crate::build::surfaces::write_streets_txt;
+use crate::build::surfaces::build_streets;
 use crate::model;
 use crate::model::source_location::SourceLocation;
 use crate::render;
 use crate::storage;
-use crate::storage::source_files::read_landscape_file;
-use crate::storage::source_files::write_city_txt;
+use crate::storage::city;
+use crate::storage::landscape::read_tree_positions;
 use crate::util;
 use crate::util::error::invalid;
 use crate::util::error::Result;
@@ -27,17 +26,8 @@ struct ImportPaths {
     downloads: PathBuf,
     output: PathBuf,
     source_osm: PathBuf,
-    city: PathBuf,
-    streets: PathBuf,
-    landscape: PathBuf,
-    furniture: PathBuf,
-    collisions: PathBuf,
-    heightfield: PathBuf,
-    elevation: PathBuf,
     imagery: PathBuf,
     aerial: PathBuf,
-    trees: PathBuf,
-    catalog: PathBuf,
     scene: PathBuf,
     decorations: PathBuf,
 }
@@ -47,17 +37,8 @@ fn new(output: &Path, downloads: &Path) -> ImportPaths {
         downloads: downloads.into(),
         output: output.into(),
         source_osm: output.join("source.osm"),
-        city: output.join("city.txt"),
-        streets: output.join("streets.txt"),
-        landscape: output.join("landscape.txt"),
-        furniture: output.join("furniture.txt"),
-        collisions: output.join("streets.bin"),
-        heightfield: output.join("elevation.txt"),
-        elevation: output.join("elevation"),
         imagery: output.join("imagery"),
         aerial: output.join("aerial"),
-        trees: output.join("imagery-trees.txt"),
-        catalog: output.join("aerial.txt"),
         scene: output.join("scene.pack"),
         decorations: output.join("decorations.pack"),
     }
@@ -98,7 +79,7 @@ pub fn compile_location(download_dir: &Path) -> Result<model::location::Location
     drop(prepared);
     render::scene_archive::open(&paths.scene)?;
     println!("loading compiled location");
-    model::location::from_compilation(workspace).map_err(invalid)
+    storage::location::from_compilation(workspace).map_err(invalid)
 }
 
 struct ConvertedMap {
@@ -142,22 +123,21 @@ fn generate_assets(
     let height_tiles = &acquired.height_tiles;
     let source_osm_map = &converted.osm;
     let location_map = &converted.location;
-    fs::create_dir_all(&paths.elevation)?;
-    // Write the map to city.txt.
-    let city_result = write_city_txt(location_map, &paths.city)?;
+    fs::create_dir_all(&paths.output)?;
+    let city_result = city::write_imported(location_map, &paths.output)?;
 
     println!(
         "building streets ({} segments)",
         location_map.road_lines.len()
     );
-    let streets_result = write_streets_txt(location_map, &paths.streets, Some(source_osm_map))?;
+    let streets_result = build_streets(location_map, &paths.output, Some(source_osm_map))?;
 
     println!("building landscape");
     let tree_styles = build_landscape(
         source_osm_map,
         location_map,
         &streets_result.surfaces,
-        &paths.landscape,
+        &paths.output,
     )?;
 
     println!("building furniture");
@@ -165,7 +145,7 @@ fn generate_assets(
         source_osm_map,
         location_map,
         &streets_result.surfaces,
-        &paths.furniture,
+        &paths.output,
     )?;
 
     println!("building elevation");
@@ -175,30 +155,21 @@ fn generate_assets(
             .downloads
             .join(build::download_location::ELEVATION_DATA_DIR)
             .join(format!("{}.hgt.gz", height_tiles[0])),
-        &paths.heightfield,
-        &paths.elevation,
+        &paths.output,
     )?;
 
     println!("building mapped details");
     let mut details = build::details::build(source_osm_map, location_map, &streets_result.surfaces);
     details.trees.extend(tree_styles);
     println!("loading elevation grid");
-    let assets = storage::city_assets::new(paths.output.clone());
-    let field = storage::city_assets::get_heightfield(&assets).map_err(invalid)?;
-    let header = fs::read_to_string(&paths.heightfield)?;
-    let datum = header
-        .lines()
-        .nth(1)
-        .and_then(|line| line.split_whitespace().last())
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(0.);
+    let elevation = storage::elevation::read(&paths.output).map_err(invalid)?;
     println!("building bridges, tunnels and approach ramps");
     build::transport::build(
         source_osm_map,
         location_map,
         &streets_result.surfaces,
-        &field,
-        datum,
+        &elevation.field,
+        elevation.datum,
         &mut details,
         &paths.output.join("road-rises.txt"),
     )?;
@@ -242,9 +213,8 @@ fn generate_assets(
     build::osm_labels::write_labels(&paths.output)?;
 
     println!("building collision data");
-    let streets_txt_source = std::fs::read_to_string(&paths.streets)?;
-
-    build_collisions(&paths.collisions, &city_result.city, streets_txt_source)?;
+    let streets = build::streets::read(&paths.output, city_result.city.road_lines.len())?;
+    storage::streets::write_compiled(&paths.output, &streets)?;
 
     Ok(GeneratedAssets {
         city: city_result.city,
@@ -280,11 +250,7 @@ fn compile_imagery(
     let origin = [origin.lat, origin.lon];
     let local_boundary = build::osm::local(boundary, util::geometry::new(origin[0], origin[1]));
     let all = &data.imagery_blocks;
-    let mut catalog = format!(
-        "AERIAL 1\nsize {} {}\n",
-        build::imagery::TILE,
-        build::imagery::GUTTER
-    );
+    let mut catalog = Vec::new();
 
     let drafts: Vec<build::infer_trees::InferredTree> = serde_json::from_slice(&fs::read(
         &paths.downloads.join(build::infer_trees::TREES_FILE),
@@ -312,10 +278,10 @@ fn compile_imagery(
                 continue;
             }
 
-            catalog.push_str(&format!(
-                "tile {:.6} {:.6} {:.6} {:.6} {}\n",
-                x1, y1, x2, y2, t.name
-            ));
+            catalog.push(storage::aerial::TileRecord {
+                bounds: t.bounds,
+                name: t.name,
+            });
             tile_count += 1;
         }
     }
@@ -324,13 +290,12 @@ fn compile_imagery(
     }
 
     let obstacles = build::tree_obstacles::read_paths(
-        &paths.city,
-        &paths.streets,
+        &paths.output,
         [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat],
     )?;
 
     // Read landscape items into an r-tree.
-    let landscape_items = read_landscape_file(paths.landscape.clone())?;
+    let landscape_items = read_tree_positions(&paths.output)?;
     let mut index = rstar::RTree::new();
     for item in landscape_items {
         if item.id & (1_u64 << 62) != 0 {
@@ -340,11 +305,7 @@ fn compile_imagery(
     }
 
     // Start output
-    let tree_file = fs::File::create(&paths.trees)?;
-    let mut tree_output = storage::codec_landscape::new(
-        std::io::BufWriter::new(tree_file),
-        storage::codec_landscape::Precision::Imported,
-    )?;
+    let mut tree_output = storage::landscape::create_imagery_trees(&paths.output)?;
 
     let mut count = 0;
 
@@ -377,7 +338,7 @@ fn compile_imagery(
 
         let id = (1_u64 << 63) | count;
 
-        storage::codec_landscape::tree(
+        storage::landscape::tree(
             &mut tree_output,
             &model::world::Tree {
                 id,
@@ -400,9 +361,14 @@ fn compile_imagery(
         )?;
     }
 
-    storage::codec_landscape::flush(&mut tree_output)?;
+    storage::landscape::flush(&mut tree_output)?;
 
-    fs::write(&paths.catalog, catalog.as_bytes())?;
+    storage::aerial::write(
+        &paths.output,
+        build::imagery::TILE,
+        build::imagery::GUTTER,
+        &catalog,
+    )?;
 
     Ok(())
 }

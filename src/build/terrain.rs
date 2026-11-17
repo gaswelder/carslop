@@ -1,20 +1,14 @@
 use crate::build;
 use crate::build::hgt::covering;
 use crate::model::source_location::SourceLocation;
+use crate::storage;
 use crate::util;
 use crate::util::error::invalid;
 use crate::util::error::Result;
 use crate::util::geometry::XZ;
-use std::fs;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 
-pub fn build_terrain(
-    map: &SourceLocation<f64>,
-    source: &Path,
-    heightfield_path: &Path,
-    tiles_directory: &Path,
-) -> Result<()> {
+pub fn build_terrain(map: &SourceLocation<f64>, source: &Path, directory: &Path) -> Result<()> {
     let origin = map
         .origin
         .ok_or_else(|| invalid("terrain requires a geographic origin"))?;
@@ -35,39 +29,27 @@ pub fn build_terrain(
         ));
     }
     println!("  Sampling {} x {} elevation posts...", size[0], size[1]);
-    let mut file = BufWriter::new(fs::File::create(heightfield_path)?);
-    writeln!(
-        file,
-        "ELEVATION 1\ngrid {} {} {:.3} {:.3} {:.3} {:.3}",
-        size[0], size[1], min.x, min.z, step, datum
-    )?;
-    for row in 0..size[1] {
-        for col in 0..size[0] {
+    storage::elevation::write_sampled(
+        directory,
+        storage::elevation::Grid {
+            columns: size[0],
+            rows: size[1],
+            origin: min,
+            step,
+            datum,
+        },
+        |col, row| {
             let x = min.x + col as f64 * step;
             let z = min.z + row as f64 * step;
             let p = util::geometry::new(
                 origin.lat - z.to_degrees() / 6371000.0,
                 origin.lon + x.to_degrees() / 6371000.0 / origin.lat.to_radians().cos(),
             );
-            let value = build::hgt::sample(&dem, p)? - datum;
-            if !value.is_finite() || value.abs() >= 10000.0 {
-                return Err(invalid(
-                    "terrain exceeds the supported relative height range",
-                ));
-            }
-            if col > 0 {
-                write!(file, " ")?;
-            }
-            write!(file, "{value:.3}")?;
-        }
-        writeln!(file)?;
-    }
-    file.flush()?;
+            Ok(build::hgt::sample(&dem, p)? - datum)
+        },
+    )?;
     for path in &sources {
-        let tile_name = path
-            .file_name()
-            .ok_or_else(|| invalid("missing HGT filename"))?;
-        fs::copy(path, tiles_directory.join(tile_name))?;
+        storage::elevation::copy_source(directory, path)?;
     }
     Ok(())
 }

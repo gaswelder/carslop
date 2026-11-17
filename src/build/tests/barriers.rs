@@ -73,10 +73,9 @@ fn mapped_barriers_clip_to_crop_avoid_roads_and_leave_gate_openings() {
         ],
     });
     let folder = tempfile::tempdir().unwrap();
-    let surfaces =
-        build::surfaces::write_streets_txt(&map, &folder.path().join("streets.txt"), None)
-            .unwrap()
-            .surfaces;
+    let surfaces = build::surfaces::build_streets(&map, &folder.path(), None)
+        .unwrap()
+        .surfaces;
     let barriers = extract(&source, &map, &surfaces);
     assert_eq!(barriers.len(), 5);
     for barrier in &barriers {
@@ -103,9 +102,10 @@ fn mapped_barriers_clip_to_crop_avoid_roads_and_leave_gate_openings() {
         test::support::osm_element(20, &[("highway", "residential")]),
     );
     let furniture_path = folder.path().join("furniture.txt");
-    build::furniture::build_furniture(&source, &map, &surfaces, &furniture_path).unwrap();
+    build::furniture::build_furniture(&source, &map, &surfaces, &furniture_path.parent().unwrap())
+        .unwrap();
     let text = std::fs::read_to_string(furniture_path).unwrap();
-    let stored = storage::codec_furniture::parse(&text).unwrap();
+    let stored = storage::furniture::parse(&text).unwrap();
     assert_eq!(stored.barriers, barriers);
     assert!(!folder.path().join("barriers.txt").exists());
     source.ways.get_mut(&11).unwrap().nodes = vec![4, 999, 5];

@@ -15,7 +15,7 @@ fn mapped_speed_table_moves_the_suspension_and_settles() {
     let run = |hz: u32| {
         let folder = tempfile::tempdir().unwrap();
         let assets = test::support::stored_location(folder.path(), false);
-        storage::codec_road_rises::write(
+        storage::road_rises::write(
             &mut std::fs::File::create(folder.path().join("road-rises.txt")).unwrap(),
             &test::support::speed_table_rises(),
         )

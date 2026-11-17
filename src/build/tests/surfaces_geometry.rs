@@ -76,10 +76,10 @@ fn gravel_routes_do_not_replace_overlapping_paved_carriageways() {
             };
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("streets.txt");
-            write_streets_txt(&location, &path, Some(&source)).unwrap();
-            let loaded = world::street_surface::load(&std::fs::read_to_string(path).unwrap(), 2)
+            build_streets(&location, &path.parent().unwrap(), Some(&source)).unwrap();
+            let loaded = test::support::load_streets(&std::fs::read_to_string(path).unwrap(), 2)
                 .unwrap()
-                .0;
+                .surfaces;
             let material_at = |p: XZ| {
                 world::street_surface::road_triangles(&loaded)
                     .iter()
@@ -160,15 +160,14 @@ fn surfaces(
     world::street_surface::StreetSurface,
 ) {
     let temp = test::support::new();
-    storage::source_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
-    let s =
-        build::surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None).unwrap();
-    let loaded = world::street_surface::load(
+    storage::city::write_imported(map, &temp.directory).unwrap();
+    let s = build::surfaces::build_streets(map, &temp.directory, None).unwrap();
+    let loaded = test::support::load_streets(
         &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
         map.road_lines.len(),
     )
     .unwrap()
-    .0;
+    .surfaces;
     (temp, s.surfaces, loaded)
 }
 fn point(p: XZ) -> Point<f64> {
@@ -411,32 +410,14 @@ fn large_polygon_triangulation_preserves_area_and_holes_after_splitting() {
         )
     };
     let geometry = MultiPolygon(vec![Polygon::new(ring(5000, 100.), vec![ring(2000, 50.)])]);
-    let mut bytes = vec![];
-    build::surfaces::triangles(&mut bytes, "t 0", &geometry).unwrap();
     let mut area = 0.;
-    for row in std::str::from_utf8(&bytes).unwrap().lines() {
-        let values: Vec<f64> = row
-            .split_whitespace()
-            .skip(2)
-            .map(|s| s.parse().unwrap())
-            .collect();
-        let p = polygon(&[
-            XZ {
-                x: values[0],
-                z: values[1],
-            },
-            XZ {
-                x: values[2],
-                z: values[3],
-            },
-            XZ {
-                x: values[4],
-                z: values[5],
-            },
-        ]);
+    build::surfaces::triangulate(&geometry, |points| {
+        let p = polygon(&points);
         assert!(!p.contains(&point(XZ { x: 0., z: 0. })));
         area += p.unsigned_area();
-    }
+        Ok(())
+    })
+    .unwrap();
     assert!(
         (area - geometry.unsigned_area()).abs() < 0.01,
         "emitted {area}, expected {}",
@@ -465,28 +446,17 @@ fn disk_precision_does_not_emit_collapsed_triangles() {
         XZ { x: 100., z: 10. },
         XZ { x: 50., z: 11. },
     ]);
-    let mut bytes = vec![];
-    let count =
-        build::surfaces::triangles(&mut bytes, "t 0", &MultiPolygon(vec![tiny, normal])).unwrap();
+    let count = build::surfaces::triangulate(&MultiPolygon(vec![tiny, normal]), |points| {
+        assert!(
+            cross(
+                util::geometry::sub(points[1], points[0]),
+                util::geometry::sub(points[2], points[0]),
+            ) > 0.00001
+        );
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(count, 1);
-    let text = String::from_utf8(bytes).unwrap();
-    let f: Vec<f64> = text
-        .split_whitespace()
-        .skip(2)
-        .map(|s| s.parse().unwrap())
-        .collect();
-    assert!(
-        cross(
-            XZ {
-                x: f[2] - f[0],
-                z: f[3] - f[1]
-            },
-            XZ {
-                x: f[4] - f[0],
-                z: f[5] - f[1]
-            }
-        ) > 0.00001
-    );
 }
 #[test]
 fn bend_smoothing_shares_endpoints_and_stays_within_sixty_centimetres() {

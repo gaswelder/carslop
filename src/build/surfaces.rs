@@ -30,9 +30,7 @@ use geo::{
 };
 use geo::{MultiPolygon, Polygon};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
-use std::{fmt, io};
 
 /// Compiled road paths and exclusion geometry shared by landscape and furniture generation.
 pub struct Surfaces {
@@ -243,23 +241,6 @@ fn paths(map: &SourceLocation<f64>, adjacency: &[Vec<usize>]) -> Vec<Vec<XZ>> {
         })
         .collect()
 }
-fn triangles(
-    writer: &mut impl io::Write,
-    prefix: &str,
-    geometry: &MultiPolygon<f64>,
-) -> Result<usize> {
-    triangulate(geometry, |p| {
-        io::Write::write_fmt(
-            writer,
-            format_args!(
-                "{prefix} {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}\n",
-                p[0].x, p[0].z, p[1].x, p[1].z, p[2].x, p[2].z
-            ),
-        )?;
-        Ok(())
-    })
-}
-
 /// Emit triangles incrementally after the existing quantization and winding checks.
 pub fn triangulate(
     geometry: &MultiPolygon<f64>,
@@ -384,9 +365,9 @@ pub struct WriteStreetsResult {
     pub surfaces: Surfaces,
 }
 
-pub fn write_streets_txt(
+pub fn build_streets(
     map: &SourceLocation<f64>,
-    path_streets_txt: &Path,
+    directory: &Path,
     source: Option<&build::osm::OSMMap>,
 ) -> Result<WriteStreetsResult> {
     let elevated: Vec<_> = map
@@ -841,23 +822,19 @@ pub fn write_streets_txt(
         lane_marks
     };
     groups.push((4, paint));
-    let mut file = io::BufWriter::new(fs::File::create(&path_streets_txt)?);
-    io::Write::write_fmt(
-        &mut file,
-        format_args!("STREETS 1 {}\n", map.road_lines.len()),
+    let mut file = build::streets::create(
+        directory,
+        map.road_lines.len(),
+        build::streets::Precision::Imported,
     )?;
     if let Some(n) = patch_nodes.iter().min_by(|a, b| {
         length(util::geometry::xz(map.road_nodes[**a]))
             .total_cmp(&length(util::geometry::xz(map.road_nodes[**b])))
     }) {
-        io::Write::write_fmt(&mut file, format_args!("j {n}\n"))?;
+        build::streets::junction(&mut file, *n)?;
     }
     for (i, path) in paths.iter().enumerate() {
-        let mut row = format!("p {i} {}", path.len());
-        for p in path {
-            fmt::Write::write_fmt(&mut row, format_args!(" {:.6} {:.6}", p.x, p.z))?;
-        }
-        io::Write::write_fmt(&mut file, format_args!("{row}\n"))?;
+        build::streets::path(&mut file, i, path)?;
     }
 
     let mut counts = BTreeMap::new();
@@ -866,7 +843,10 @@ pub fn write_streets_txt(
             .boundary
             .as_ref()
             .map_or_else(|| geometry.clone(), |b| geometry.intersection(b));
-        let n = triangles(&mut file, &format!("t {style}"), &geometry)?;
+        let n = triangulate(&geometry, |points| {
+            build::streets::triangle(&mut file, style, points)?;
+            Ok(())
+        })?;
         *counts.entry(style).or_insert(0) += n;
     }
     let tree = index(&paths);
@@ -890,17 +870,19 @@ pub fn write_streets_txt(
                     .unwrap()
                     .road_index]
                     .kind;
-                io::Write::write_fmt(
+                build::streets::curb(
                     &mut file,
-                    format_args!(
-                        "c {kind} {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}\n",
-                        a.x, a.z, b.x, b.z, -tangent.z, tangent.x
-                    ),
+                    kind,
+                    [a, b],
+                    XZ {
+                        x: -tangent.z,
+                        z: tangent.x,
+                    },
                 )?;
             }
         }
     }
-    io::Write::flush(&mut file)?;
+    build::streets::flush(&mut file)?;
 
     // Index the small input pieces, rather than a city-wide connected polygon.
     // A probe intersects their union exactly when it intersects any one piece.

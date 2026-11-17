@@ -152,12 +152,8 @@ mod tree_obstacles {
         let header = format!("STREETS 1 1 {:08x}\n", 0);
         let mesh = "t 0 -20 -2 20 -2 20 2\nt 0 -20 -2 20 2 -20 2\nt 4 -20 3 20 3 20 6\n";
         fs::write(temp.path().join("streets.txt"), format!("{header}{mesh}")).unwrap();
-        let o = build::tree_obstacles::read_paths(
-            &temp.path().join("city.txt"),
-            &temp.path().join("streets.txt"),
-            [33.319, 35.161, 33.321, 35.163],
-        )
-        .unwrap();
+        let o = build::tree_obstacles::read_paths(&temp.path(), [33.319, 35.161, 33.321, 35.163])
+            .unwrap();
         let check = |x: f64, z: f64| build::tree_obstacles::rejection_at(&o, XZ { x, z });
         assert_eq!(check(0., 0.), Some("road"));
         assert_eq!(check(15., 15.), Some("building"));
@@ -168,12 +164,9 @@ mod tree_obstacles {
         );
         // Empty meshes are valid; the road count still has to match city.txt.
         fs::write(temp.path().join("streets.txt"), "STREETS 1 1\n").unwrap();
-        let empty = build::tree_obstacles::read_paths(
-            &temp.path().join("city.txt"),
-            &temp.path().join("streets.txt"),
-            [33.319, 35.161, 33.321, 35.163],
-        )
-        .unwrap();
+        let empty =
+            build::tree_obstacles::read_paths(&temp.path(), [33.319, 35.161, 33.321, 35.163])
+                .unwrap();
         assert_eq!(
             build::tree_obstacles::rejection_at(&(empty), XZ { x: 0., z: 0. }),
             None
@@ -183,12 +176,10 @@ mod tree_obstacles {
             Some("building")
         );
         fs::write(temp.path().join("streets.txt"), "STREETS 1 2\n").unwrap();
-        assert!(build::tree_obstacles::read_paths(
-            &temp.path().join("city.txt"),
-            &temp.path().join("streets.txt"),
-            [33.319, 35.161, 33.321, 35.163]
-        )
-        .is_err());
+        assert!(
+            build::tree_obstacles::read_paths(&temp.path(), [33.319, 35.161, 33.321, 35.163])
+                .is_err()
+        );
     }
 }
 
@@ -342,18 +333,11 @@ mod location_compilation {
         let map = create_location_map(&source, &boundary)?;
         let output = options.output;
         fs::create_dir_all(output.join("elevation"))?;
-        let city = storage::source_files::write_city_txt(&map, &output.join("city.txt"))?.city;
-        let surfaces =
-            build::surfaces::write_streets_txt(&map, &output.join("streets.txt"), Some(&source))?
-                .surfaces;
-        build_landscape(&source, &map, &surfaces, &output.join("landscape.txt"))?;
-        build_furniture(&source, &map, &surfaces, &output.join("furniture.txt"))?;
-        build::terrain::build_terrain(
-            &map,
-            options.elevation,
-            &output.join("elevation.txt"),
-            &output.join("elevation"),
-        )?;
+        let city = storage::city::write_imported(&map, &output)?.city;
+        let surfaces = build::surfaces::build_streets(&map, &output, Some(&source))?.surfaces;
+        build_landscape(&source, &map, &surfaces, &output)?;
+        build_furniture(&source, &map, &surfaces, &output)?;
+        build::terrain::build_terrain(&map, options.elevation, &output)?;
         fs::copy(options.source, output.join("source.osm"))?;
         fs::write(
             output.join("manifest.json"),
@@ -364,7 +348,7 @@ mod location_compilation {
                 "bounds_metres": util::geometry::bounding_box_xz_to_array(city.bounding_box),
             }))? + "\n",
         )?;
-        build::collision::build_collisions(
+        test::support::compile_collisions(
             &output.join("streets.bin"),
             &city,
             fs::read_to_string(output.join("streets.txt"))?,
@@ -595,15 +579,14 @@ mod location_compilation {
         world::street_surface::StreetSurface,
     ) {
         let temp = test::support::new();
-        storage::source_files::write_city_txt(map, &temp.directory.join("city.txt")).unwrap();
-        let s = build::surfaces::write_streets_txt(map, &temp.directory.join("streets.txt"), None)
-            .unwrap();
-        let loaded = world::street_surface::load(
+        storage::city::write_imported(map, &temp.directory).unwrap();
+        let s = build::surfaces::build_streets(map, &temp.directory, None).unwrap();
+        let loaded = test::support::load_streets(
             &std::fs::read_to_string(temp.directory.join("streets.txt")).unwrap(),
             map.road_lines.len(),
         )
         .unwrap()
-        .0;
+        .surfaces;
         (temp, s.surfaces, loaded)
     }
     fn point(p: XZ) -> Point<f64> {
@@ -705,9 +688,9 @@ mod location_compilation {
             ]],
         );
         let (temp, surfaces, _) = surfaces(&m);
-        build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
+        build_landscape(&s, &m, &surfaces, &temp.directory).unwrap();
         println!("  Placing road controls...");
-        build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
+        build_furniture(&s, &m, &surfaces, &temp.directory).unwrap();
         let l = test::support::landscape(
             &std::fs::read_to_string(temp.directory.join("landscape.txt")).unwrap(),
         )
@@ -767,9 +750,9 @@ mod location_compilation {
             &[],
         );
         let (temp, surfaces, _) = surfaces(&m);
-        build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
+        build_landscape(&s, &m, &surfaces, &temp.directory).unwrap();
         println!("  Placing road controls...");
-        build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
+        build_furniture(&s, &m, &surfaces, &temp.directory).unwrap();
         let areas = landscape_areas(&temp.directory.join("landscape.txt"));
         assert!((areas[1] - 150.).abs() < 0.01);
     }
@@ -982,10 +965,10 @@ mod location_compilation {
         way(&mut s, 101, &[1, 5, 2, 4, 3], &tags);
         let m = fixture_map(&s, None).unwrap();
         let (temp, surfaces, _) = surfaces(&m);
-        build_landscape(&s, &m, &surfaces, &temp.directory.join("landscape.txt")).unwrap();
+        build_landscape(&s, &m, &surfaces, &temp.directory).unwrap();
         println!("  Placing road controls...");
-        build_furniture(&s, &m, &surfaces, &temp.directory.join("furniture.txt")).unwrap();
-        storage::codec_furniture::parse(
+        build_furniture(&s, &m, &surfaces, &temp.directory).unwrap();
+        storage::furniture::parse(
             &std::fs::read_to_string(temp.directory.join("furniture.txt")).unwrap(),
         )
         .unwrap()
@@ -1159,7 +1142,7 @@ mod location_compilation {
         );
         let (temp, surfaces, _) = surfaces(&map);
         let path = temp.directory.join("landscape.txt");
-        build_landscape(&source, &map, &surfaces, &path).unwrap();
+        build_landscape(&source, &map, &surfaces, &path.parent().unwrap()).unwrap();
         let landscape = test::support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
         let material_at = |x, z| model::world::ground_material(&landscape, XZ { x, z });
         assert_eq!(material_at(20., 21.8), Some(model::world::Material::Paving));
@@ -1229,7 +1212,7 @@ mod location_compilation {
             );
             let (temp, surfaces, _) = surfaces(&map);
             let path = temp.directory.join("landscape.txt");
-            build_landscape(&source, &map, &surfaces, &path).unwrap();
+            build_landscape(&source, &map, &surfaces, &path.parent().unwrap()).unwrap();
             let landscape = test::support::landscape(&fs::read_to_string(path).unwrap()).unwrap();
             assert_eq!(
                 model::world::ground_material(&(landscape), XZ { x: 30., z: 30. }),
@@ -1331,13 +1314,13 @@ mod location_compilation {
             let map = fixture_map(&source, None).unwrap();
             let temp = test::support::new();
             let path = temp.directory.join("streets.txt");
-            build::surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-            let compiled = world::street_surface::load(
+            build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source)).unwrap();
+            let compiled = test::support::load_streets(
                 &fs::read_to_string(path).unwrap(),
                 map.road_lines.len(),
             )
             .unwrap()
-            .0;
+            .surfaces;
             let mut paint_area = 0.;
             let mut paint_polygons = Vec::new();
             for triangle in world::street_surface::road_triangles(&compiled)
@@ -1415,11 +1398,11 @@ mod location_compilation {
         let map = fixture_map(&source, None).unwrap();
         let temp = test::support::new();
         let path = temp.directory.join("streets.txt");
-        build::surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
+        build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source)).unwrap();
         let compiled =
-            world::street_surface::load(&fs::read_to_string(path).unwrap(), map.road_lines.len())
+            test::support::load_streets(&fs::read_to_string(path).unwrap(), map.road_lines.len())
                 .unwrap()
-                .0;
+                .surfaces;
         let mut paint = Vec::new();
         let mut road = Vec::new();
         for triangle in world::street_surface::road_triangles(&compiled) {
@@ -1479,13 +1462,13 @@ mod location_compilation {
             let map = fixture_map(&source, None).unwrap();
             let temp = test::support::new();
             let path = temp.directory.join("streets.txt");
-            build::surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-            let compiled = world::street_surface::load(
+            build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source)).unwrap();
+            let compiled = test::support::load_streets(
                 &fs::read_to_string(path).unwrap(),
                 map.road_lines.len(),
             )
             .unwrap()
-            .0;
+            .surfaces;
             assert!(world::street_surface::road_triangles(&(compiled))
                 .iter()
                 .all(|triangle| triangle.usage != model::world::TriangleUsage::Marking));
@@ -1588,7 +1571,7 @@ mod location_compilation {
         let reversed = fixture_map(&source, None).unwrap();
         assert_eq!(reversed.entrances, map.entrances);
         let temp = test::support::new();
-        let parsed = storage::source_files::write_city_txt(&map, &temp.directory.join("city.txt"))
+        let parsed = storage::city::write_imported(&map, &temp.directory)
             .unwrap()
             .city;
         assert_eq!(parsed.entrances.len(), 2);
@@ -1707,10 +1690,9 @@ mod location_compilation {
                     .all(|building| building.height_meters < 10.));
             }
             let temp = test::support::new();
-            let parsed =
-                storage::source_files::write_city_txt(&map, &temp.directory.join("city.txt"))
-                    .unwrap()
-                    .city;
+            let parsed = storage::city::write_imported(&map, &temp.directory)
+                .unwrap()
+                .city;
             assert_eq!(
                 parsed
                     .buildings
@@ -1748,13 +1730,9 @@ mod location_compilation {
             way(&mut source, 103, &[5, 6, 7], &[("highway", "residential")]);
             let map = fixture_map(&source, None).unwrap();
             let folder = tempfile::tempdir().unwrap();
-            let surfaces = build::surfaces::write_streets_txt(
-                &map,
-                &folder.path().join("streets.txt"),
-                Some(&source),
-            )
-            .unwrap()
-            .surfaces;
+            let surfaces = build::surfaces::build_streets(&map, &folder.path(), Some(&source))
+                .unwrap()
+                .surfaces;
             let path = folder.path().join("road-rises.txt");
             let field = world::elevation::generate(
                 BoundingBoxXZ {
@@ -1778,8 +1756,7 @@ mod location_compilation {
                     .abs()
                     < 0.001
             );
-            let rises =
-                storage::codec_road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+            let rises = storage::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
             let lift = |p| {
                 rises
                     .iter()
@@ -1934,15 +1911,11 @@ mod location_compilation {
         );
         let map = fixture_map(&source, None).unwrap();
         let folder = tempfile::tempdir().unwrap();
-        let surfaces = build::surfaces::write_streets_txt(
-            &map,
-            &folder.path().join("streets.txt"),
-            Some(&source),
-        )
-        .unwrap()
-        .surfaces;
+        let surfaces = build::surfaces::build_streets(&map, &folder.path(), Some(&source))
+            .unwrap()
+            .surfaces;
         let path = folder.path().join("landscape.txt");
-        let styles = build_landscape(&source, &map, &surfaces, &path).unwrap();
+        let styles = build_landscape(&source, &map, &surfaces, &path.parent().unwrap()).unwrap();
         let bytes = fs::read(&path).unwrap();
         let cover = test::support::landscape(std::str::from_utf8(&bytes).unwrap()).unwrap();
         assert!(model::world::trees(&(cover)).len() > 80);
@@ -1956,7 +1929,7 @@ mod location_compilation {
         assert!(model::world::ground_triangles(&(cover))
             .iter()
             .any(|triangle| triangle.material == model::world::Material::Water));
-        build_landscape(&source, &map, &surfaces, &path).unwrap();
+        build_landscape(&source, &map, &surfaces, &path.parent().unwrap()).unwrap();
         assert_eq!(fs::read(path).unwrap(), bytes);
     }
 
@@ -1982,13 +1955,13 @@ mod location_compilation {
         let map = fixture_map(&source, None).unwrap();
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("streets.txt");
-        let surfaces = build::surfaces::write_streets_txt(&map, &path, Some(&source))
+        let surfaces = build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source))
             .unwrap()
             .surfaces;
         let compiled =
-            world::street_surface::load(&fs::read_to_string(&path).unwrap(), map.road_lines.len())
+            test::support::load_streets(&fs::read_to_string(&path).unwrap(), map.road_lines.len())
                 .unwrap()
-                .0;
+                .surfaces;
         let asphalt = test::support::road_footprint(&compiled);
         let paint = build::lane_details::paint(&source, &map, &surfaces.paths, &asphalt);
         assert!(paint.unsigned_area() > 1.);
@@ -2001,9 +1974,11 @@ mod location_compilation {
             &[("highway", "residential"), ("surface", "gravel")],
         );
         let map = fixture_map(&source, None).unwrap();
-        build::surfaces::write_streets_txt(&map, &path, Some(&source)).unwrap();
-        let (surface, _) =
-            world::street_surface::load(&fs::read_to_string(path).unwrap(), 1).unwrap();
+        build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source)).unwrap();
+        let test::support::PreparedStreets {
+            surfaces: surface,
+            paths: _,
+        } = test::support::load_streets(&fs::read_to_string(path).unwrap(), 1).unwrap();
         assert!(world::street_surface::road_triangles(&(surface))
             .iter()
             .any(
@@ -2032,11 +2007,11 @@ mod location_compilation {
             &[("highway", "residential"), ("bridge", "yes")],
         );
         let map = fixture_map(&source, None).unwrap();
-        let city = storage::source_files::write_city_txt(&map, &folder.path().join("city.txt"))
+        let city = storage::city::write_imported(&map, &folder.path())
             .unwrap()
             .city;
         let path = folder.path().join("streets.txt");
-        let surfaces = build::surfaces::write_streets_txt(&map, &path, Some(&source))
+        let surfaces = build::surfaces::build_streets(&map, &path.parent().unwrap(), Some(&source))
             .unwrap()
             .surfaces;
         let rises = folder.path().join("road-rises.txt");
@@ -2045,7 +2020,7 @@ mod location_compilation {
         build::transport::build(&source, &map, &surfaces, &field, 0., &mut details, &rises)
             .unwrap();
         model::map_details::write(&details, folder.path()).unwrap();
-        build::collision::build_collisions(
+        test::support::compile_collisions(
             &folder.path().join("streets.bin"),
             &city,
             fs::read_to_string(path).unwrap(),
@@ -2055,8 +2030,8 @@ mod location_compilation {
         assert!(world::roads::road_triangles(&(prepared)).is_empty());
         assert!((physics::vehicle_location::spawn(&(prepared)).point.y - 12.).abs() < 0.001);
         let output = tempfile::tempdir().unwrap();
-        model::location::location_write(
-            &model::location::location_read(folder.path()).unwrap(),
+        storage::location::location_write(
+            &storage::location::location_read(folder.path()).unwrap(),
             output.path(),
         )
         .unwrap();
@@ -2108,7 +2083,7 @@ mod location_compilation {
             &path,
         )
         .unwrap();
-        let rises = storage::codec_road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
+        let rises = storage::road_rises::parse(&fs::read_to_string(path).unwrap()).unwrap();
         assert!(rises.is_empty());
     }
 }
@@ -2137,8 +2112,7 @@ mod osm_labels {
         std::fs::write(directory.path().join("source.osm"), r#"<osm><way id="7"><tag k="name" v="Town Hall"/><tag k="building" v="yes"/></way></osm>"#).unwrap();
         write_labels(directory.path()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(directory.path().join(storage::codec_labels::FILE_NAME))
-                .unwrap(),
+            std::fs::read_to_string(directory.path().join("labels.txt")).unwrap(),
             "street 7 Town Hall\nbuilding 7 Town Hall\n"
         );
     }
@@ -2170,11 +2144,8 @@ mod osm_labels {
             storefronts: labels.storefronts,
         };
         let directory = tempfile::tempdir().unwrap();
-        storage::codec_labels::write(directory.path(), &stored).unwrap();
-        assert_eq!(
-            storage::codec_labels::parse(directory.path()).unwrap(),
-            stored
-        );
+        storage::labels::write(directory.path(), &stored).unwrap();
+        assert_eq!(storage::labels::parse(directory.path()).unwrap(), stored);
     }
 
     #[test]
@@ -2213,7 +2184,7 @@ mod osm_labels {
         );
         let directory = std::env::temp_dir().join("carslop-engomi-labels");
         std::fs::create_dir_all(&directory).unwrap();
-        storage::codec_labels::write(&directory, &labels).unwrap();
+        storage::labels::write(&directory, &labels).unwrap();
     }
 
     #[test]

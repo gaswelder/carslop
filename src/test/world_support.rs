@@ -32,11 +32,11 @@ pub fn parse_world(text: &str) -> Result<WorldLocation, String> {
 pub fn landscape(text: &str) -> Result<WorldLocation, String> {
     let folder = tempfile::tempdir().map_err(|e| e.to_string())?;
     std::fs::write(folder.path().join("landscape.txt"), text).map_err(|e| e.to_string())?;
-    let (ground, trees) = storage::city_assets::get_landscape_data(&storage::city_assets::new(
+    let landscape = storage::city_assets::get_landscape_data(&storage::city_assets::new(
         folder.path().to_path_buf(),
     ))?;
     let mut world = empty_world();
-    world.ground = world::landscape::new(ground, trees);
+    world.ground = world::landscape::new(landscape.ground, landscape.trees);
     Ok(world)
 }
 

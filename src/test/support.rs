@@ -2,6 +2,7 @@
 
 use crate::asset;
 use crate::build;
+pub use crate::build::streets_test_support::{compile_collisions, load_streets, PreparedStreets};
 use crate::model;
 use crate::model::world::Building;
 use crate::physics;
@@ -321,7 +322,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
         format!("ELEVATION 1\ngrid 2 2 -10 -10 40 0\n{height} {height} {height} {height}\n"),
     )
     .unwrap();
-    build::collision::build_collisions(
+    compile_collisions(
         &directory.join("streets.bin"),
         &model::source_location::parse(city).unwrap(),
         "STREETS 1 1\np 0 2 0 0 20 0\nt 1 0 -4 20 -4 20 4\nt 1 0 -4 20 4 0 4\nc 1 0 -4 20 -4 0 1\n"
@@ -429,7 +430,7 @@ fn city_fixture() -> &'static CityFixture {
             elevation.push('\n');
         }
         std::fs::write(root.join("elevation.txt"), elevation).unwrap();
-        build::collision::build_collisions(&root.join("streets.bin"), &model::source_location::parse(&city).unwrap(), streets).unwrap();
+        compile_collisions(&root.join("streets.bin"), &model::source_location::parse(&city).unwrap(), streets).unwrap();
         CityFixture { id: world::locations::asset(root).unwrap(), _directory: directory }
     })
 }
@@ -562,7 +563,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
             ],
         });
     }
-    let parsed = storage::source_files::write_city_txt(&source, &directory.join("city.txt"))
+    let parsed = storage::city::write_imported(&source, &directory)
         .unwrap()
         .city;
     std::fs::write(
@@ -575,7 +576,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
     )
     .unwrap();
     // The bent compiled path differs from the CITY endpoints.
-    build::collision::build_collisions(
+    compile_collisions(
             &directory.join("streets.bin"), &parsed,
             "STREETS 1 1\np 0 3 0 0 10 1 20 0\nt 1 0 -4 20 -4 20 4\nt 1 0 -4 20 4 0 4\nc 1 0 -4 20 -4 0 1\n".into(),
         ).unwrap();
@@ -671,5 +672,5 @@ pub fn speed_table_rises() -> Vec<model::world::RoadRise> {
 
 pub fn bake_collisions(city: &Path, streets: &Path, output: &Path) -> util::error::Result<()> {
     let city = model::source_location::parse(&std::fs::read_to_string(city)?)?;
-    build::collision::build_collisions(output, &city, std::fs::read_to_string(streets)?)
+    compile_collisions(output, &city, std::fs::read_to_string(streets)?)
 }

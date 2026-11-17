@@ -315,7 +315,7 @@ pub fn build(
     // Partition overlapping approach ramps so joins have a single height plane.
     let result = partition_ramps(&ramps)?;
     println!("  Writing {} approach ramp triangles...", result.len());
-    storage::codec_road_rises::write(&mut fs::File::create(rises_path)?, &result)?;
+    storage::road_rises::write(&mut fs::File::create(rises_path)?, &result)?;
     Ok(())
 }
 

@@ -180,6 +180,6 @@ pub fn write_labels(directory: &std::path::Path) -> util::error::Result<()> {
         buildings,
         storefronts: extracted.storefronts,
     };
-    storage::codec_labels::write(directory, &labels)?;
+    storage::labels::write(directory, &labels)?;
     Ok(())
 }

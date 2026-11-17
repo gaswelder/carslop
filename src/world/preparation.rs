@@ -57,7 +57,7 @@ pub fn compiled_location_load(
 /// Only controlled preparation in this module can publish that draft.
 
 fn load_assets(assets: &storage::city_assets::CityAsset) -> Result<WorldLocation, String> {
-    let stored = model::location::location_read(storage::city_assets::directory(assets))?;
+    let stored = storage::location::location_read(storage::city_assets::directory(assets))?;
     let mut city = model::world::empty();
     city.display_name = stored.name;
     city.origin = stored.origin;

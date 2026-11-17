@@ -115,15 +115,9 @@ pub struct Aerial {
 pub fn open(assets: &storage::city_assets::CityAsset) -> Option<Aerial> {
     let location = storage::city_assets::directory(assets);
     let directory = location.join("aerial");
-    let path = location.join("aerial.txt");
-    if !path.is_file() {
-        return None;
-    }
-    let catalog = std::fs::read_to_string(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|s| storage::aerial::parse(&s));
-    let catalog = match catalog {
-        Ok(c) => c,
+    let catalog = match storage::aerial::read(location) {
+        Ok(Some(catalog)) => catalog,
+        Ok(None) => return None,
         Err(e) => {
             log::warn!("Aerial imagery disabled: {e}");
             return None;

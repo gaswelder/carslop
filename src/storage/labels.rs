@@ -6,7 +6,7 @@ use std::io::BufRead;
 use std::io::Write;
 use std::path::Path;
 
-pub const FILE_NAME: &str = "labels.txt";
+const FILE_NAME: &str = "labels.txt";
 
 pub fn write(directory: &Path, labels: &Labels) -> io::Result<()> {
     let mut writer = io::BufWriter::new(fs::File::create(directory.join(FILE_NAME))?);
@@ -77,5 +77,13 @@ fn parse_line(line: &str, labels: &mut Labels) -> Result<(), &'static str> {
 }
 
 #[cfg(test)]
-#[path = "tests/codec_labels.rs"]
+#[path = "tests/labels.rs"]
 mod tests;
+
+pub fn read_optional(directory: &Path) -> Result<Labels, String> {
+    match parse(directory) {
+        Ok(labels) => Ok(labels),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Labels::default()),
+        Err(e) => Err(format!("{FILE_NAME}: {e}")),
+    }
+}

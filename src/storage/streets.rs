@@ -1,13 +1,11 @@
 use crate::model;
-use crate::storage;
+use crate::model::world::{CurbStyle, Material, Triangle, TriangleUsage};
 use crate::util;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
 use crate::world;
 use crate::world::street_surface::cross;
 use crate::world::street_surface::Curb;
-use crate::world::street_surface::RoadPaths;
-use crate::world::street_surface::StreetSurface;
 use std::{collections::HashMap, fs::File, io, path::Path};
 
 const MAGIC: &[u8; 8] = b"NFSCOL01";
@@ -79,7 +77,7 @@ fn floats<const N: usize>(bytes: &[u8]) -> io::Result<[f32; N]> {
 }
 
 pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<model::location::Streets> {
-    let file = std::fs::File::open(&directory.join("streets.bin"))?;
+    let file = std::fs::File::open(&directory.join(FILE_NAME))?;
     let body_len = file
         .metadata()?
         .len()
@@ -130,8 +128,7 @@ pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<model::locati
         if cross(points[0], points[1], points[2]) <= 0.00001 {
             return Err(invalid("invalid cached surface triangle"));
         }
-        triangles
-            .push(storage::codec_streets::triangle_from_street_id(style, points).map_err(invalid)?);
+        triangles.push(triangle_from_street_id(style, points).map_err(invalid)?);
     }
     let n = count(&mut r, 28)?;
     let mut curbs = reserve(n)?;
@@ -139,8 +136,7 @@ pub fn load_geometry(directory: &Path, roads: usize) -> io::Result<model::locati
         let bytes = bytes::<_, 28>(&mut r)?;
         let style = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
         let p = floats::<6>(&bytes[4..])?;
-        let style =
-            model::world::CurbStyle::try_from(style).map_err(|_| invalid("invalid cached curb"))?;
+        let style = curb_style(style).map_err(|_| invalid("invalid cached curb"))?;
         curbs.push(Curb {
             style,
             ends: [XZ { x: p[0], z: p[1] }, XZ { x: p[2], z: p[3] }],
@@ -187,56 +183,9 @@ fn grid(out: &mut impl io::Write, cells: &Grid) -> io::Result<()> {
     Ok(())
 }
 
-pub fn write_binary_street_surface(
-    path: &Path,
-    surfaces: &StreetSurface,
-    paths: &RoadPaths,
-) -> io::Result<()> {
-    let mut out = io::BufWriter::with_capacity(256 * 1024, File::create(path)?);
-    io::Write::write_all(&mut out, MAGIC)?;
-    io::Write::write_all(&mut out, &[0; 72])?;
-    number(&mut out, paths.len())?;
-    // Reserved junction marker retained for compatibility with existing caches.
-    io::Write::write_all(&mut out, &u32::MAX.to_le_bytes())?;
-    for path in paths {
-        number(&mut out, path.len())?;
-        for p in path {
-            io::Write::write_all(&mut out, &p.x.to_le_bytes())?;
-            io::Write::write_all(&mut out, &p.z.to_le_bytes())?;
-        }
-    }
-    number(&mut out, surfaces.road_triangles.len())?;
-    for t in &surfaces.road_triangles {
-        number(
-            &mut out,
-            storage::codec_streets::triangle_street_id(t).map_err(invalid)?,
-        )?;
-        for p in t.points {
-            for x in [p.x, p.z] {
-                io::Write::write_all(&mut out, &x.to_le_bytes())?;
-            }
-        }
-    }
-    number(&mut out, surfaces.curbs.len())?;
-    for c in &surfaces.curbs {
-        number(&mut out, c.style as usize)?;
-        for p in c.ends.into_iter().chain([c.inward]) {
-            for x in p {
-                io::Write::write_all(&mut out, &x.to_le_bytes())?;
-            }
-        }
-    }
-    grid(&mut out, &surfaces.triangles_grid)?;
-    grid(&mut out, &surfaces.curbs_grid)?;
-    // Reserved footer preserves the existing binary layout.
-    io::Write::write_all(&mut out, &[0; 4])?;
-    io::Write::flush(&mut out)?;
-    out.get_ref().sync_all()
-}
-
 /// Encode plain stored geometry. The legacy file includes acceleration grids;
 /// derive them here rather than making them part of the persisted data model.
-pub fn write_geometry(path: &Path, data: &model::location::Streets) -> io::Result<()> {
+fn write_geometry(path: &Path, data: &model::location::Streets) -> io::Result<()> {
     let mut triangles_grid = Grid::new();
     let mut curbs_grid = Grid::new();
     for (i, t) in data.triangles.iter().enumerate() {
@@ -259,10 +208,7 @@ pub fn write_geometry(path: &Path, data: &model::location::Streets) -> io::Resul
     }
     number(&mut out, data.triangles.len())?;
     for t in &data.triangles {
-        number(
-            &mut out,
-            storage::codec_streets::triangle_street_id(t).map_err(invalid)?,
-        )?;
+        number(&mut out, triangle_street_id(t).map_err(invalid)?)?;
         for p in t.points {
             io::Write::write_all(&mut out, &p.x.to_le_bytes())?;
             io::Write::write_all(&mut out, &p.z.to_le_bytes())?;
@@ -280,4 +226,100 @@ pub fn write_geometry(path: &Path, data: &model::location::Streets) -> io::Resul
     grid(&mut out, &curbs_grid)?;
     io::Write::write_all(&mut out, &[0; 4])?;
     io::Write::flush(&mut out)
+}
+
+const FILE_NAME: &str = "streets.bin";
+
+fn curb_style(value: usize) -> Result<CurbStyle, &'static str> {
+    match value {
+        0 => Ok(CurbStyle::MajorRoad),
+        1 => Ok(CurbStyle::Road),
+        2 => Ok(CurbStyle::ServiceRoad),
+        _ => Err("unknown curb style"),
+    }
+}
+
+/// Decode persisted triangle categories.
+fn triangle_usage_from_street_id(id: usize) -> Result<TriangleUsage, &'static str> {
+    match id {
+        0 => Ok(TriangleUsage::Road(CurbStyle::MajorRoad)),
+        1 => Ok(TriangleUsage::Road(CurbStyle::Road)),
+        2 => Ok(TriangleUsage::Road(CurbStyle::ServiceRoad)),
+        3 => Ok(TriangleUsage::Gutter),
+        4 => Ok(TriangleUsage::Marking),
+        5 => Ok(TriangleUsage::Pavement(CurbStyle::MajorRoad)),
+        6 => Ok(TriangleUsage::Pavement(CurbStyle::Road)),
+        7 => Ok(TriangleUsage::Pavement(CurbStyle::ServiceRoad)),
+        8..=16 => Ok(TriangleUsage::Road(curb_style((id - 8) % 3)?)),
+        _ => Err("unknown street triangle category"),
+    }
+}
+
+fn triangle_usage_street_id(triangle_usage: TriangleUsage) -> Result<usize, &'static str> {
+    match triangle_usage {
+        TriangleUsage::Road(CurbStyle::MajorRoad) => Ok(0),
+        TriangleUsage::Road(CurbStyle::Road) => Ok(1),
+        TriangleUsage::Road(CurbStyle::ServiceRoad) => Ok(2),
+        TriangleUsage::Gutter => Ok(3),
+        TriangleUsage::Marking => Ok(4),
+        TriangleUsage::Pavement(CurbStyle::MajorRoad) => Ok(5),
+        TriangleUsage::Pavement(CurbStyle::Road) => Ok(6),
+        TriangleUsage::Pavement(CurbStyle::ServiceRoad) => Ok(7),
+        TriangleUsage::Ground => Err("street format does not support ground triangles"),
+    }
+}
+
+/// Existing street formats imply material from the geometry category.
+fn street_material(triangle_usage: TriangleUsage) -> Result<Material, &'static str> {
+    match triangle_usage {
+        TriangleUsage::Road(_) => Ok(Material::Asphalt),
+        TriangleUsage::Gutter | TriangleUsage::Pavement(CurbStyle::MajorRoad) => {
+            Ok(Material::Concrete)
+        }
+        TriangleUsage::Marking => Ok(Material::Paint),
+        TriangleUsage::Pavement(CurbStyle::Road) => Ok(Material::Paving),
+        TriangleUsage::Pavement(CurbStyle::ServiceRoad) => Ok(Material::BareGround),
+        TriangleUsage::Ground => Err("street format does not support ground triangles"),
+    }
+}
+
+fn triangle_from_street_id(id: usize, points: [XZ<f32>; 3]) -> Result<Triangle, &'static str> {
+    let usage = triangle_usage_from_street_id(id)?;
+    Ok(Triangle {
+        material: match id {
+            8..=10 => Material::Concrete,
+            11..=13 => Material::Paving,
+            14..=16 => Material::BareGround,
+            _ => street_material(usage)?,
+        },
+        usage,
+        points,
+    })
+}
+
+fn triangle_street_id(triangle: &Triangle) -> Result<usize, &'static str> {
+    if let TriangleUsage::Road(style) = triangle.usage {
+        let base = match triangle.material {
+            Material::Concrete => Some(8),
+            Material::Paving => Some(11),
+            Material::BareGround => Some(14),
+            _ => None,
+        };
+        if let Some(base) = base {
+            return Ok(base + style as usize);
+        }
+    }
+    if triangle.material != street_material(triangle.usage)? {
+        return Err("street format cannot encode this material for the triangle category");
+    }
+    triangle_usage_street_id(triangle.usage)
+}
+
+/// Publish compiler geometry atomically after its builder has decoded the intermediate.
+pub fn write_compiled(directory: &Path, data: &model::location::Streets) -> io::Result<()> {
+    let temporary = tempfile::NamedTempFile::new_in(directory)?;
+    write_geometry(temporary.path(), data)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(directory.join(FILE_NAME))?;
+    Ok(())
 }

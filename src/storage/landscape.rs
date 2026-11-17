@@ -1,11 +1,20 @@
 //! LANDSCAPE 1 records, shared by runtime loading and compiler exclusion checks.
 //! Legacy trailing header fields remain accepted. Unknown/malformed records fail.
 
+use crate::model;
 use crate::model::world::Material;
 use crate::model::world::Tree;
 use crate::storage;
+use crate::util::error;
+use crate::util::error::invalid;
 use crate::util::geometry::XZ;
+use crate::world;
+use std::fs;
+use std::path::Path;
 use std::{fmt::Display, io, str::FromStr};
+
+const FILE_NAME: &str = "landscape.txt";
+const IMAGERY_TREES_FILE: &str = "imagery-trees.txt";
 
 pub enum Record<T> {
     Ground {
@@ -131,8 +140,8 @@ pub fn ground<W: io::Write, T: Copy + Display>(
         write!(
             writer.output,
             " {} {}",
-            storage::codec_number::new(p.x, digits),
-            storage::codec_number::new(p.z, digits)
+            storage::number::new(p.x, digits),
+            storage::number::new(p.z, digits)
         )?;
     }
     writeln!(writer.output)
@@ -166,10 +175,10 @@ pub fn tree_fields<W: io::Write, T: Copy + Display>(
         writer.output,
         "t {} {} {} {} {}",
         id,
-        storage::codec_number::new(coords.x, digits),
-        storage::codec_number::new(coords.z, digits),
-        storage::codec_number::new(height, digits),
-        storage::codec_number::new(radius, digits)
+        storage::number::new(coords.x, digits),
+        storage::number::new(coords.z, digits),
+        storage::number::new(height, digits),
+        storage::number::new(radius, digits)
     )
 }
 pub fn flush<W: io::Write>(writer: &mut Writer<W>) -> io::Result<()> {
@@ -204,5 +213,114 @@ fn ground_id(material: Material) -> Result<usize, &'static str> {
         Material::Sports => Ok(7),
         Material::Water => Ok(8),
         Material::Paint => Err("landscape format does not support paint"),
+    }
+}
+
+pub fn create(
+    directory: &std::path::Path,
+    precision: Precision,
+) -> io::Result<Writer<io::BufWriter<std::fs::File>>> {
+    new(
+        io::BufWriter::new(std::fs::File::create(directory.join(FILE_NAME))?),
+        precision,
+    )
+}
+
+pub fn create_imagery_trees(
+    directory: &std::path::Path,
+) -> io::Result<Writer<io::BufWriter<std::fs::File>>> {
+    new(
+        io::BufWriter::new(std::fs::File::create(directory.join(IMAGERY_TREES_FILE))?),
+        Precision::Imported,
+    )
+}
+
+/// Tree centre read from a `t` record in landscape.txt for placement checks.
+pub struct TreePosition {
+    pub id: u64,
+    pub coords: XZ,
+}
+
+pub fn read_tree_positions(directory: &Path) -> error::Result<Vec<TreePosition>> {
+    let mut items = Vec::new();
+    read::<f64>(
+        std::io::BufReader::new(fs::File::open(directory.join(FILE_NAME))?),
+        |record| {
+            if let Record::Tree(tree) = record {
+                items.push(TreePosition {
+                    id: tree.id,
+                    coords: tree.coords,
+                });
+            }
+            Ok(())
+        },
+    )
+    .map_err(invalid)?;
+    Ok(items)
+}
+
+pub struct Data {
+    pub ground: Vec<model::world::Triangle>,
+    pub trees: Vec<model::world::Tree>,
+}
+
+struct LandscapeLayer {
+    filename: &'static str,
+    imagery: bool,
+}
+
+pub fn read_file(directory: &Path) -> Result<Data, String> {
+    let mut ground_triangles = Vec::new();
+    let mut trees = Vec::new();
+    for layer in [
+        LandscapeLayer {
+            filename: FILE_NAME,
+            imagery: false,
+        },
+        LandscapeLayer {
+            filename: IMAGERY_TREES_FILE,
+            imagery: true,
+        },
+    ] {
+        let file = layer.filename;
+        let input = match std::fs::File::open(directory.join(file)) {
+            Ok(input) => std::io::BufReader::new(input),
+            Err(e) if layer.imagery && e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("cannot read city asset {file}: {e}")),
+        };
+        let mut file_ground = Vec::new();
+        let mut file_trees = Vec::new();
+        read::<f32>(input, |record| {
+            match record {
+                Record::Ground { material, points } => file_ground.push(model::world::Triangle {
+                    material,
+                    usage: model::world::TriangleUsage::Ground,
+                    points,
+                }),
+                Record::Tree(tree) => file_trees.push(tree),
+            }
+            Ok(())
+        })?;
+        if layer.imagery {
+            if !file_ground.is_empty() {
+                return Err("imagery supplement must contain only trees".into());
+            }
+            world::landscape::append_imagery_trees(&mut trees, file_trees)?;
+        } else {
+            ground_triangles = file_ground;
+            trees = file_trees;
+        }
+    }
+    Ok(Data {
+        ground: ground_triangles,
+        trees,
+    })
+}
+
+pub fn remove_imagery_trees(directory: &Path) -> Result<(), String> {
+    match fs::remove_file(directory.join(IMAGERY_TREES_FILE)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{IMAGERY_TREES_FILE}: {e}")),
     }
 }

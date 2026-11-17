@@ -1,15 +1,15 @@
 pub mod aerial;
+pub mod city;
 pub mod city_assets;
-pub mod codec_city;
-pub mod codec_furniture;
-pub mod codec_labels;
-pub mod codec_landscape;
-mod codec_number;
-pub mod codec_road_rises;
-pub mod codec_streets;
+pub mod elevation;
+pub mod furniture;
+pub mod labels;
+pub mod landscape;
+pub mod location;
 pub mod manifest;
-pub mod source_files;
-pub mod street_surface_binary;
+mod number;
+pub mod road_rises;
+pub mod streets;
 
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,5 @@
 use crate::build;
-use crate::model;
+use crate::storage;
 use crate::util::error::invalid;
 use crate::util::error::Result;
 use std::{fs, path::PathBuf};
@@ -15,7 +15,7 @@ pub fn add_location(area: build::osm::ImportArea) -> Result<()> {
     let location_dir = PathBuf::from(format!("location-{timestamp}"));
     fs::create_dir(&location_dir)?;
     println!("Writing location to {}...", location_dir.display());
-    model::location::location_write(&location, &location_dir).map_err(invalid)?;
+    storage::location::location_write(&location, &location_dir).map_err(invalid)?;
     println!("Created {}", location_dir.display());
     Ok(())
 }

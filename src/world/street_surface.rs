@@ -5,7 +5,6 @@ pub use crate::model::world::Curb;
 use crate::model::world::Material;
 pub use crate::model::world::Triangle;
 use crate::model::world::WorldLocation;
-use crate::storage;
 use crate::util;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
@@ -225,11 +224,4 @@ fn street_surface_nearest_curb(
         }
     }
     nearest_curb_in(street_surface, p, 0..curbs(street_surface).len())
-}
-
-pub fn load(text: &str, roads: usize) -> Result<(StreetSurface, RoadPaths), String> {
-    from_geometry(
-        storage::codec_streets::parse(text, roads)?,
-        DEFAULT_PAVEMENT_HEIGHT,
-    )
 }

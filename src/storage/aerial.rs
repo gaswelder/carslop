@@ -1,25 +1,25 @@
-//! Aerial catalog validation, tile decoding, and source attribution.
-
 use crate::storage;
 use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XZ;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+const FILE_NAME: &str = "aerial.txt";
 
 #[derive(Clone, Debug)]
 pub struct Tile {
     pub bounds: BoundingBoxXZ<f32>,
     name: String,
 }
+
 #[derive(Clone, Debug)]
 pub struct Catalog {
     pub size: usize,
     pub gutter: usize,
     pub tiles: Vec<Tile>,
 }
-pub fn tile_filenames(text: &str) -> Result<Vec<String>, String> {
-    parse(text).map(|catalog| catalog.tiles.into_iter().map(|tile| tile.name).collect())
-}
-
 pub fn parse(text: &str) -> Result<Catalog, String> {
     let mut lines = text.lines();
     if lines.next() != Some("AERIAL 1") {
@@ -103,11 +103,79 @@ pub fn read_tile(directory: &Path, catalog: &Catalog, id: usize) -> Result<Vec<u
 }
 
 pub fn attribution_label(directory: &Path) -> Option<String> {
-    if !directory.join("aerial.txt").is_file() {
+    if !directory.join(FILE_NAME).is_file() {
         return None;
     }
     let attribution = storage::manifest::read(directory)
         .ok()
         .and_then(|manifest| manifest.aerial_attribution);
     Some(attribution.unwrap_or_else(|| "AERIAL: LOCAL IMAGERY".into()))
+}
+
+pub struct TileRecord {
+    pub bounds: [f64; 4],
+    pub name: String,
+}
+
+pub fn write(
+    directory: &Path,
+    size: u32,
+    gutter: u32,
+    tiles: &[TileRecord],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut output = std::io::BufWriter::new(std::fs::File::create(directory.join(FILE_NAME))?);
+    writeln!(output, "AERIAL 1\nsize {size} {gutter}")?;
+    for tile in tiles {
+        let [x1, y1, x2, y2] = tile.bounds;
+        writeln!(output, "tile {x1:.6} {y1:.6} {x2:.6} {y2:.6} {}", tile.name)?;
+    }
+    output.flush()
+}
+
+pub fn read(directory: &Path) -> Result<Option<Catalog>, String> {
+    match std::fs::read_to_string(directory.join(FILE_NAME)) {
+        Ok(text) => parse(&text).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn payload_files(catalog: Catalog) -> Vec<PathBuf> {
+    let mut files = vec![PathBuf::from(FILE_NAME)];
+    files.extend(
+        catalog
+            .tiles
+            .into_iter()
+            .map(|tile| PathBuf::from("aerial").join(tile.name)),
+    );
+    files.sort();
+    files.dedup();
+    files
+}
+
+pub fn read_payload_files(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    if !directory.join(FILE_NAME).is_file() {
+        return Ok(Vec::new());
+    }
+    read(directory).map(|catalog| catalog.map(payload_files).unwrap_or_default())
+}
+
+pub fn remove_stale_payloads(directory: &Path, retained: &[PathBuf]) -> Result<(), String> {
+    let previous = read(directory)
+        .ok()
+        .flatten()
+        .map(payload_files)
+        .unwrap_or_else(|| vec![FILE_NAME.into()]);
+    for relative in previous {
+        if retained.contains(&relative) {
+            continue;
+        }
+        match std::fs::remove_file(directory.join(&relative)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", relative.display())),
+        }
+    }
+    Ok(())
 }

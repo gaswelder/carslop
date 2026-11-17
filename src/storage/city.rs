@@ -1,16 +1,24 @@
 use crate::model;
+use crate::model::location;
 use crate::model::source_location::SourceLocation;
 use crate::model::source_location::SourceRoad;
 use crate::model::world::Building;
 use crate::model::world::Entrance;
 use crate::storage;
 use crate::util;
+use crate::util::error;
 use crate::util::error::invalid;
+use crate::util::geometry::BoundingBoxXZ;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
 use std::collections::BTreeSet;
 use std::fmt::Display;
+use std::fs;
+use std::io::BufWriter;
 use std::io::Write;
+use std::path::Path;
+
+const FILE_NAME: &str = "city.txt";
 
 #[derive(Clone, Copy)]
 pub enum Precision {
@@ -43,7 +51,7 @@ pub fn write_volume<T: Copy + Into<f64> + Display>(
         writer,
         "v {} {} {}",
         index,
-        storage::codec_number::new(min_height, sizes),
+        storage::number::new(min_height, sizes),
         holes.len()
     )?;
     for hole in holes {
@@ -52,8 +60,8 @@ pub fn write_volume<T: Copy + Into<f64> + Display>(
             write!(
                 writer,
                 " {} {}",
-                storage::codec_number::new(p.x, coords),
-                storage::codec_number::new(p.z, coords)
+                storage::number::new(p.x, coords),
+                storage::number::new(p.z, coords)
             )?;
         }
     }
@@ -75,8 +83,8 @@ pub fn write(
         writeln!(
             writer,
             "n {} {}",
-            storage::codec_number::new(p.x, coords),
-            storage::codec_number::new(p.z, coords)
+            storage::number::new(p.x, coords),
+            storage::number::new(p.z, coords)
         )?;
     }
     for r in &map.road_lines {
@@ -85,7 +93,7 @@ pub fn write(
             "r {} {} {} {} {} {} {}",
             r.ends[0],
             r.ends[1],
-            storage::codec_number::new(r.road_width_start_meters, sizes),
+            storage::number::new(r.road_width_start_meters, sizes),
             r.direction,
             r.osm_way_id
                 .ok_or_else(|| invalid("compiler road is missing a way ID"))?,
@@ -107,7 +115,7 @@ pub fn write(
             writer,
             "b {} {} {} {}",
             b.id,
-            storage::codec_number::new(b.height_meters, sizes),
+            storage::number::new(b.height_meters, sizes),
             u8::from(b.tagged),
             b.ground_outline.len()
         )?;
@@ -115,8 +123,8 @@ pub fn write(
             write!(
                 writer,
                 " {} {}",
-                storage::codec_number::new(p.x, coords),
-                storage::codec_number::new(p.z, coords)
+                storage::number::new(p.x, coords),
+                storage::number::new(p.z, coords)
             )?;
         }
         writeln!(writer)?;
@@ -127,8 +135,8 @@ pub fn write(
             writer,
             "e {} {} {}",
             entrance.building_id,
-            storage::codec_number::new(entrance.position.x, coords),
-            storage::codec_number::new(entrance.position.z, coords)
+            storage::number::new(entrance.position.x, coords),
+            storage::number::new(entrance.position.z, coords)
         )?;
     }
     Ok(())
@@ -303,4 +311,93 @@ pub fn parse(text: &str) -> std::result::Result<SourceLocation<f32>, String> {
         return Err("entrance references a missing building".into());
     }
     Ok(city)
+}
+
+pub fn write_file(
+    directory: &std::path::Path,
+    map: &SourceLocation<f64>,
+    precision: Precision,
+) -> error::Result<()> {
+    use std::io::Write;
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(directory.join(FILE_NAME))?);
+    write(&mut writer, map, precision)?;
+    writer.flush()?;
+    Ok(())
+}
+
+pub struct WriteCityResult {
+    pub city: SourceLocation<f32>,
+}
+
+pub fn write_imported(
+    location_map: &SourceLocation<f64>,
+    directory: &Path,
+) -> error::Result<WriteCityResult> {
+    let path_city_txt = directory.join(FILE_NAME);
+    use std::io::{BufWriter, Write};
+    let mut file = BufWriter::new(fs::File::create(&path_city_txt)?);
+    write(&mut file, location_map, Precision::Imported)?;
+    file.flush()?;
+    let mut city =
+        model::source_location::parse(&fs::read_to_string(&path_city_txt)?).map_err(invalid)?;
+    city.origin = location_map.origin;
+    city.bounding_box = BoundingBoxXZ {
+        min: util::geometry::xz_map(location_map.bounding_box.min, |v| v as f32),
+        max: util::geometry::xz_map(location_map.bounding_box.max, |v| v as f32),
+    };
+    Ok(WriteCityResult { city })
+}
+
+pub fn exists(directory: &Path) -> bool {
+    directory.join(FILE_NAME).is_file()
+}
+
+pub fn read(directory: &Path) -> Result<SourceLocation<f32>, String> {
+    let text =
+        fs::read_to_string(directory.join(FILE_NAME)).map_err(|e| format!("{FILE_NAME}: {e}"))?;
+    parse(&text).map_err(|e| format!("{FILE_NAME}: {e}"))
+}
+
+pub fn write_location(directory: &Path, location: &location::Location) -> error::Result<()> {
+    let mut city = BufWriter::new(fs::File::create(directory.join(FILE_NAME))?);
+    writeln!(city, "CITY 2")?;
+    for p in &location.road_nodes {
+        writeln!(city, "n {} {}", p.x, p.z)?;
+    }
+    for r in &location.roads {
+        writeln!(
+            city,
+            "r {} {} {} {} {}",
+            r.ends[0],
+            r.ends[1],
+            r.width_meters,
+            r.direction,
+            r.way_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-".into())
+        )?;
+    }
+    for (index, b) in location.buildings.iter().enumerate() {
+        write!(city, "b {} {} 0 {}", b.id, b.height_meters, b.outline.len())?;
+        for p in &b.outline {
+            write!(city, " {} {}", p.x, p.z)?;
+        }
+        writeln!(city)?;
+        write_volume(
+            &mut city,
+            index,
+            b.min_height_meters,
+            &b.holes,
+            Precision::Authored,
+        )?;
+    }
+    for entrance in &location.entrances {
+        writeln!(
+            city,
+            "e {} {} {}",
+            entrance.building_id, entrance.position.x, entrance.position.z,
+        )?;
+    }
+    city.flush()?;
+    Ok(())
 }

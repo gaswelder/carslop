@@ -1,5 +1,3 @@
-//! Compile mapped ground cover and trees into landscape assets.
-
 use crate::build;
 use crate::build::osm::OSMElement;
 use crate::build::osm::OSMMap;
@@ -21,8 +19,6 @@ use geo::MultiPolygon;
 use geo::{
     algorithm::orient::Direction, BooleanOps, BoundingRect, Buffer, Contains, Orient, Point,
 };
-use std::fs;
-use std::io::BufWriter;
 use std::path::Path;
 
 fn style(e: &OSMElement) -> Option<usize> {
@@ -137,7 +133,7 @@ pub fn build_landscape(
     source: &OSMMap,
     map: &SourceLocation<f64>,
     s: &Surfaces,
-    landscape_path: &Path,
+    directory: &Path,
 ) -> Result<Vec<TreeStyle>> {
     let coord = |id: &i64| {
         source
@@ -299,17 +295,14 @@ pub fn build_landscape(
             groups[kind].push(geometry);
         }
     }
-    let mut file = storage::codec_landscape::new(
-        BufWriter::new(fs::File::create(landscape_path)?),
-        storage::codec_landscape::Precision::Imported,
-    )?;
+    let mut file = storage::landscape::create(directory, storage::landscape::Precision::Imported)?;
     let mut covered = empty();
     let mut emit = |kind: usize, regions: &[MultiPolygon<f64>]| -> Result<()> {
         let geometry = union(regions).difference(&covered);
         covered = covered.union(&geometry);
-        let material = storage::codec_landscape::from_ground_id(kind).map_err(invalid)?;
+        let material = storage::landscape::from_ground_id(kind).map_err(invalid)?;
         build::surfaces::triangulate(&geometry, |points| {
-            storage::codec_landscape::ground(&mut file, material, points)?;
+            storage::landscape::ground(&mut file, material, points)?;
             Ok(())
         })?;
         Ok(())
@@ -357,7 +350,7 @@ pub fn build_landscape(
             .map(|n| n / 2.0)
             .unwrap_or(height * 0.32)
             .clamp(0.7, 4.5);
-        storage::codec_landscape::tree_fields(&mut file, node.id, p, height, radius)?;
+        storage::landscape::tree_fields(&mut file, node.id, p, height, radius)?;
         tree_styles.push(build::details::tree_style(node.id as u64, node));
     }
     let mapped = rstar::RTree::bulk_load(
@@ -400,7 +393,7 @@ pub fn build_landscape(
             .map(|v| v / 2.)
             .unwrap_or(height * 0.29)
             .clamp(0.7, 4.5);
-        storage::codec_landscape::tree_fields(&mut file, id as i64, p, height, radius)?;
+        storage::landscape::tree_fields(&mut file, id as i64, p, height, radius)?;
         tree_styles.push(build::details::tree_style(id, element));
         accepted.insert(p);
         count += 1;
@@ -464,7 +457,7 @@ pub fn build_landscape(
             z += spacing;
         }
     }
-    storage::codec_landscape::flush(&mut file)?;
+    storage::landscape::flush(&mut file)?;
     Ok(tree_styles)
 }
 

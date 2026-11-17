@@ -69,10 +69,9 @@ fn junction() -> (OSMMap, SourceLocation<f64>, Surfaces) {
         },
     ];
     let output = tempfile::tempdir().unwrap();
-    let mut surfaces =
-        build::surfaces::write_streets_txt(&map, &output.path().join("streets.txt"), None)
-            .unwrap()
-            .surfaces;
+    let mut surfaces = build::surfaces::build_streets(&map, &output.path(), None)
+        .unwrap()
+        .surfaces;
     surfaces.paths = vec![vec![points[0], points[1]], vec![points[2], points[1]]];
     surfaces.adjacency = vec![vec![0], vec![0, 1], vec![1]];
     surfaces.obstacles = MultiPolygon(vec![]);
