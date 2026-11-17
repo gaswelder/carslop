@@ -149,7 +149,7 @@ fn mapped_speed_table_moves_the_suspension_and_settles() {
             "heave {peak_height}"
         );
         assert!(peak_pitch > 0.01 && peak_pitch < 0.2, "pitch {peak_pitch}");
-        assert!((car.position.y - physics::car::ride_height(&(car))).abs() < 0.01);
+        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.01);
         peak_height
     };
     assert!((run(60) - run(240)).abs() < 0.02);
@@ -162,26 +162,22 @@ fn aerodynamic_drag_uses_coefficient_area_and_mass() {
     spec.frontal_area_m2 = 2.0;
     spec.weight_kg = 1000.0;
     // At 20 m/s this gives 147 N of aerodynamic drag, plus rolling resistance.
-    let drag =
-        physics::car::resistance_force(&spec, 20.0) - physics::car::resistance_force(&spec, 0.0);
+    let drag = engine::resistance_force(&spec, 20.0) - engine::resistance_force(&spec, 0.0);
     assert!((drag - 147.0).abs() < 0.0001);
-    assert_eq!(physics::car::resistance_force(&spec, 0.0), 250.0);
+    assert_eq!(engine::resistance_force(&spec, 0.0), 250.0);
     assert_eq!(
-        physics::car::resistance_force(&(spec), -20.0),
-        physics::car::resistance_force(&(spec), 20.0)
+        engine::resistance_force(&(spec), -20.0),
+        engine::resistance_force(&(spec), 20.0)
     );
     spec.weight_kg *= 2.0;
-    let heavier =
-        physics::car::resistance_force(&spec, 20.0) - physics::car::resistance_force(&spec, 0.0);
+    let heavier = engine::resistance_force(&spec, 20.0) - engine::resistance_force(&spec, 0.0);
     assert!((heavier - drag).abs() < 0.0001);
-    assert_eq!(physics::car::resistance_force(&spec, 0.0), 500.0);
+    assert_eq!(engine::resistance_force(&spec, 0.0), 500.0);
     spec.drag_coefficient *= 2.0;
-    let more_drag =
-        physics::car::resistance_force(&spec, 20.0) - physics::car::resistance_force(&spec, 0.0);
+    let more_drag = engine::resistance_force(&spec, 20.0) - engine::resistance_force(&spec, 0.0);
     assert!((more_drag - 2.0 * drag).abs() < 0.0001);
     spec.frontal_area_m2 *= 2.0;
-    let larger_area =
-        physics::car::resistance_force(&spec, 20.0) - physics::car::resistance_force(&spec, 0.0);
+    let larger_area = engine::resistance_force(&spec, 20.0) - engine::resistance_force(&spec, 0.0);
     assert!((larger_area - 4.0 * drag).abs() < 0.0001);
 }
 
@@ -417,7 +413,7 @@ fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
         );
         assert!(peak_pitch > 0.01 && peak_pitch < 0.15);
         assert!(peak_heave > 0.025 && peak_heave < 0.25);
-        assert!((car.position.y - physics::car::ride_height(&(car))).abs() < 0.003);
+        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.003);
         assert!(car.suspension_pitch.abs() < 0.002);
         assert!(car.suspension_roll.abs() < 0.002);
         (peak_pitch, peak_heave)
@@ -433,7 +429,7 @@ fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
 #[test]
 fn chassis_can_unload_land_and_settle() {
     let mut car = level_route_car(test::support::authored_id(), test::support::car());
-    let ground = physics::car::ride_height(&car);
+    let ground = suspension::ride_height(&car);
     car.suspension_initialized = true;
     car.position.y = ground + 0.5;
     physics::car::update(&mut car, Duration::from_millis(20), Controls::default());
@@ -809,7 +805,7 @@ fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
         let mut car = route_car(test::support::authored_id(), model.clone());
         let road = world::locations::at_distance(&car.track, 50.0);
         let g = &model.gearbox;
-        for gear in 1..physics::car::gears(g) {
+        for gear in 1..engine::gears(g) {
             car.gear = gear;
             let shift = physics::car::upshift_speed(&car, gear);
             car.velocity = util::geometry::xz_map(road.tangent, |v| v * (shift - 0.01));
@@ -829,7 +825,7 @@ fn ratio_shifts_drop_rpm_and_do_not_hunt_around_the_upshift_speed() {
                     "must retain higher gear near an upshift"
                 );
             }
-            let down = physics::car::speed_at_rpm(&model, g.downshift_rpm, gear + 1);
+            let down = engine::speed_at_rpm(&model, g.downshift_rpm, gear + 1);
             car.velocity = util::geometry::xz_map(road.tangent, |v| v * (down - 0.01));
             physics::car::refresh_speed(&mut car);
             assert!(car.gear <= gear);
@@ -933,7 +929,7 @@ fn reverse_acceleration_terminal_speed_and_braking_are_route_independent() {
         // cycles. Keep the tight comparison until the limiter first cuts,
         // then allow its 250 RPM band plus one substep of tire acceleration.
         let mut tolerance = 0.01;
-        let limiter_tolerance = physics::car::speed_at_rpm(&model, 250.0, 0) + 9.81 / 240.0;
+        let limiter_tolerance = engine::speed_at_rpm(&model, 250.0, 0) + 9.81 / 240.0;
         for _ in 0..240 * 12 {
             for car in [&mut compact, &mut scenic] {
                 treadmill_tick(
@@ -1012,7 +1008,7 @@ fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
             assert!(util::geometry::iter(&(car.position)).all(|v| v.is_finite()));
         }
         assert!(world::roads::project(&track, car.position).offset.abs() < road.width * 0.5);
-        assert!((car.position.y - physics::car::ride_height(&(car))).abs() < 0.15);
+        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.15);
     }
 }
 
@@ -1131,14 +1127,14 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
     forward.acceleration[0] = 3.0;
     reverse.acceleration[0] = -3.0;
     for _ in 0..240 {
-        physics::car::update_body_motion(&mut forward, 1.0 / 240.0);
-        physics::car::update_body_motion(&mut reverse, 1.0 / 240.0);
+        suspension::update_body_motion(&mut forward, 1.0 / 240.0);
+        suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
     assert!(forward.body_pitch > 0.005);
     assert!((forward.body_pitch + reverse.body_pitch).abs() < 0.00001);
     reverse.acceleration[0] = 4.0;
     for _ in 0..240 {
-        physics::car::update_body_motion(&mut reverse, 1.0 / 240.0);
+        suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
     assert!(
         reverse.body_pitch > 0.01,
@@ -1149,10 +1145,10 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
     forward.body_pitch = 0.05;
     reverse.body_pitch = 0.05;
     for _ in 0..30 {
-        physics::car::update_body_motion(&mut forward, 1.0 / 30.0);
+        suspension::update_body_motion(&mut forward, 1.0 / 30.0);
     }
     for _ in 0..144 {
-        physics::car::update_body_motion(&mut reverse, 1.0 / 144.0);
+        suspension::update_body_motion(&mut reverse, 1.0 / 144.0);
     }
     assert!((forward.body_pitch - reverse.body_pitch).abs() < 0.0002);
     assert!(forward.body_pitch.abs() < 0.0005);
@@ -1163,7 +1159,7 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
     for model in test::support::cars() {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         car.manual = true;
-        let speed = physics::car::speed_at_rpm(&model, 1800.0, 1);
+        let speed = engine::speed_at_rpm(&model, 1800.0, 1);
         car.velocity = XZ {
             x: car.heading.sin() * speed,
             z: car.heading.cos() * speed,
@@ -1183,7 +1179,7 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
                 );
             }
             let shaft_rpm =
-                car.driven_wheel_omega * physics::car::rpm(&model, 1.0, 1) * model.rolling_radius;
+                car.driven_wheel_omega * engine::rpm(&model, 1.0, 1) * model.rolling_radius;
             assert!(
                 (car.engine_rpm - shaft_rpm).abs() < 1.0,
                 "{model:?}: clutch lock must determine crankshaft RPM"
@@ -1198,7 +1194,7 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
     let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
     car.manual = true;
     car.gear = 2;
-    let speed = physics::car::speed_at_rpm(&model, 4000.0, 2);
+    let speed = engine::speed_at_rpm(&model, 4000.0, 2);
     car.velocity = XZ {
         x: car.heading.sin() * speed,
         z: car.heading.cos() * speed,
@@ -1233,7 +1229,7 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
 
     let mut overrev = level_route_car(world::locations::LocationId::Compact, model.clone());
     overrev.manual = true;
-    let speed = physics::car::speed_at_rpm(&model, model.redline_rpm + 500.0, 1);
+    let speed = engine::speed_at_rpm(&model, model.redline_rpm + 500.0, 1);
     overrev.velocity = XZ {
         x: overrev.heading.sin() * speed,
         z: overrev.heading.cos() * speed,
@@ -1369,7 +1365,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
                 (car.spec.redline_rpm - 100.0, false),
             ] {
                 car.engine_rpm = rpm;
-                car.speed = physics::car::speed_at_rpm(&model, rpm, gear);
+                car.speed = engine::speed_at_rpm(&model, rpm, gear);
                 let engine_rpm = car.engine_rpm;
                 physics::car::update_fuel_cut(&mut car, engine_rpm);
                 assert_eq!(car.fuel_cut, cut, "{model:?}, gear {gear}, RPM {rpm}");
@@ -1380,7 +1376,7 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             car.fuel_cut = true;
             car.engine_load = 1.0;
             car.engine_rpm = car.spec.redline_rpm;
-            car.speed = physics::car::speed_at_rpm(&model, car.spec.redline_rpm + 1.0, gear);
+            car.speed = engine::speed_at_rpm(&model, car.spec.redline_rpm + 1.0, gear);
             physics::car::update_engine_feedback(&mut car, pedal, 0.01);
             assert!(car.engine_load < 1.0, "fuel cut must reach engine audio");
         }
@@ -1399,7 +1395,7 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
         } else {
             Direction::Drive
         };
-        let speed = physics::car::speed_at_rpm(&model, car.spec.redline_rpm + 20.0, gear)
+        let speed = engine::speed_at_rpm(&model, car.spec.redline_rpm + 20.0, gear)
             * if gear == 0 { -1.0 } else { 1.0 };
         car.velocity = XZ {
             x: car.heading.sin() * speed,
