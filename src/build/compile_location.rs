@@ -52,7 +52,7 @@ fn new(output: &Path, downloads: &Path) -> ImportPaths {
         landscape: output.join("landscape.txt"),
         furniture: output.join("furniture.txt"),
         collisions: output.join("streets.bin"),
-        heightfield: output.join("elevation/heightfield.txt"),
+        heightfield: output.join("elevation.txt"),
         elevation: output.join("elevation"),
         imagery: output.join("imagery"),
         aerial: output.join("aerial"),

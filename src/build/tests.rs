@@ -351,7 +351,7 @@ mod location_compilation {
         build::terrain::build_terrain(
             &map,
             options.elevation,
-            &output.join("elevation/heightfield.txt"),
+            &output.join("elevation.txt"),
             &output.join("elevation"),
         )?;
         fs::copy(options.source, output.join("source.osm"))?;

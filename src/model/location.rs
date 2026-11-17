@@ -196,7 +196,7 @@ fn read_inner(directory: &Path) -> Result<Location, String> {
         streets,
         pavement_height_meters,
         elevation: storage::city_assets::get_heightfield(&assets)
-            .map_err(|e| format!("elevation/heightfield.txt: {e}"))?,
+            .map_err(|e| format!("elevation.txt: {e}"))?,
         ground,
         trees,
         furniture: furniture
@@ -288,9 +288,7 @@ fn write_inner(location: &Location, directory: &Path) -> Result<(), String> {
         )?;
         storage::codec_labels::write(directory, &location.labels)?;
         // Serialize at full f32 precision; compiler writers deliberately quantize.
-        let mut elevation = BufWriter::new(fs::File::create(
-            directory.join("elevation/heightfield.txt"),
-        )?);
+        let mut elevation = BufWriter::new(fs::File::create(directory.join("elevation.txt"))?);
         let f = &location.elevation;
         writeln!(
             elevation,

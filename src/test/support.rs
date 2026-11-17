@@ -317,7 +317,7 @@ pub fn generated_location(directory: &std::path::Path, height: f32, provider: &s
     fs::write(directory.join("landscape.txt"), "LANDSCAPE 1\n").unwrap();
     fs::write(directory.join("furniture.txt"), "").unwrap();
     fs::write(
-        directory.join("elevation/heightfield.txt"),
+        directory.join("elevation.txt"),
         format!("ELEVATION 1\ngrid 2 2 -10 -10 40 0\n{height} {height} {height} {height}\n"),
     )
     .unwrap();
@@ -428,7 +428,7 @@ fn city_fixture() -> &'static CityFixture {
             }
             elevation.push('\n');
         }
-        std::fs::write(root.join("elevation/heightfield.txt"), elevation).unwrap();
+        std::fs::write(root.join("elevation.txt"), elevation).unwrap();
         build::collision::build_collisions(&root.join("streets.bin"), &model::source_location::parse(&city).unwrap(), streets).unwrap();
         CityFixture { id: world::locations::asset(root).unwrap(), _directory: directory }
     })
@@ -581,7 +581,7 @@ pub fn stored_location(directory: &Path, populated: bool) -> CityAsset {
         ).unwrap();
     std::fs::create_dir(directory.join("elevation")).unwrap();
     std::fs::write(
-        directory.join("elevation/heightfield.txt"),
+        directory.join("elevation.txt"),
         "ELEVATION 1\ngrid 2 2 -10 -10 40 0\n7 7\n7 7\n",
     )
     .unwrap();

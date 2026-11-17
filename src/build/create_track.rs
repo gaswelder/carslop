@@ -295,7 +295,7 @@ fn write_elevation(track: &world::locations::WorldLocation, output: &Path) -> Re
     fs::create_dir_all(output.join("elevation"))?;
     let field =
         model::world::elevation(track).ok_or_else(|| invalid("authored track has no terrain"))?;
-    let mut file = BufWriter::new(fs::File::create(output.join("elevation/heightfield.txt"))?);
+    let mut file = BufWriter::new(fs::File::create(output.join("elevation.txt"))?);
     writeln!(
         file,
         "ELEVATION 1\ngrid {} {} {} {} {} 0",

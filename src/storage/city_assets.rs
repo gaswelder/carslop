@@ -69,7 +69,7 @@ pub fn get_furniture(
 }
 
 pub fn get_heightfield(assets: &CityAsset) -> Result<world::elevation::HeightField, String> {
-    load(&read_text(assets, "elevation/heightfield.txt")?)
+    load(&read_text(assets, "elevation.txt")?)
 }
 
 pub fn get_landscape_data(
