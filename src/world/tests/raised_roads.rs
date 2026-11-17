@@ -2,6 +2,125 @@ use super::*;
 use crate::util;
 use crate::util::geometry::BoundingBoxXZ;
 use crate::world;
+use geo::Area;
+
+#[test]
+fn warsaw_tunnel_ramp_slivers_preserve_road_coverage() {
+    use crate::storage;
+    // Reduced from the 4 km Warsaw import. Repeated overlay differences left
+    // near-collinear slivers and panicked during OGC hole extraction here.
+    let mut triangles = storage::road_rises::parse(
+        r#"ROAD_RISES 2
+t 1977.0885 -3.2000103 -1768.2445 1976.6497 -3.398543 -1768.881 1976.996 -2.8844166 -1769.033
+t 1973.8123 -3.150655 -1767.6356 1976.6497 -3.398543 -1768.881 1979.0363 -3.3985376 -1763.4432
+t 1977.0885 -3.2001202 -1768.2445 1977.1969 -2.9301171 -1768.4915 1978.8369 -2.9572952 -1769.0352
+t 1977.0531 -3.3366477 -1768.0751 1979.0388 -3.392375 -1763.4489 1979.0363 -3.398634 -1763.4432
+t 1979.0363 -3.3985376 -1763.4432 1978.8252 -3.380404 -1763.3601 1977.5726 -3.2927752 -1763.4884"#,
+    )
+    .unwrap();
+    let field = world::elevation::generate(
+        BoundingBoxXZ {
+            min: XZ {
+                x: 1950.,
+                z: -1810.,
+            },
+            max: XZ {
+                x: 1990.,
+                z: -1750.,
+            },
+        },
+        |_| 0.,
+    );
+    let points = [
+        XZ {
+            x: 1960.7941,
+            z: -1793.5007,
+        },
+        XZ {
+            x: 1974.5582,
+            z: -1778.7391,
+        },
+        XZ {
+            x: 1981.1296,
+            z: -1759.2704,
+        },
+    ];
+    let flat = points.map(|p| util::geometry::xz_map(p, f64::from));
+    let expected = util::geometry::polygon(&flat).unsigned_area();
+    for reverse in [false, true] {
+        if reverse {
+            for rise in &mut triangles {
+                rise.points.reverse();
+            }
+        }
+        for _ in 0..triangles.len() {
+            triangles.rotate_left(1);
+            let rises = new(triangles.clone());
+            let mut area = 0.0;
+            drape(&rises, &field, points, |face| {
+                assert!(face.iter().all(|p| p.y.is_finite()));
+                let flat = face.map(|p| util::geometry::xz_map(util::geometry::xz(p), f64::from));
+                area += util::geometry::polygon(&flat).unsigned_area();
+            });
+            assert!(
+                (area - expected).abs() < 0.002,
+                "area {area} differs from {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local compiled city assets"]
+fn compiled_city_road_drape() {
+    use crate::storage;
+    let path = std::env::var_os("NFS_ROAD_DRAPE_CITY").expect("set NFS_ROAD_DRAPE_CITY");
+    let city =
+        world::preparation::world_location_load(&storage::city_assets::new(path.into())).unwrap();
+    let mut count = 0;
+    let mut total_area = 0.0;
+    let mut total_expected = 0.0;
+    for triangle in world::roads::road_triangles(&city) {
+        let points = triangle.points.map(Into::into);
+        let mut area = 0.0;
+        drape_road_triangle(&city, points, |face| {
+            assert!(face
+                .iter()
+                .all(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite()));
+            let flat = face.map(|p| util::geometry::xz_map(util::geometry::xz(p), f64::from));
+            area += util::geometry::polygon(&flat).unsigned_area();
+            count += 1;
+        });
+        let flat = points.map(|p| util::geometry::xz_map(p, f64::from));
+        let expected = util::geometry::polygon(&flat).unsigned_area();
+        // Clipped vertices return to f32 for rendering. Bound the resulting area
+        // error by the perimeter and coordinate precision, including long slivers.
+        let coordinate_scale = flat
+            .iter()
+            .map(|p| p.x.abs().max(p.z.abs()))
+            .fold(1.0, f64::max);
+        let perimeter: f64 = (0..3)
+            .map(|i| {
+                let a = flat[i];
+                let b = flat[(i + 1) % 3];
+                (b.x - a.x).hypot(b.z - a.z)
+            })
+            .sum();
+        let rounding_allowance = perimeter * coordinate_scale * f32::EPSILON as f64;
+        total_area += area;
+        total_expected += expected;
+        assert!(
+            (area - expected).abs() < rounding_allowance + expected * 0.001,
+            "area {area} differs from {expected} for {points:?}"
+        );
+    }
+    assert!(count > 0);
+    assert!((total_area - total_expected).abs() < total_expected * 0.0001);
+    eprintln!(
+        "Draped {} road triangles into {count} terrain faces",
+        world::roads::road_triangles(&city).len()
+    );
+}
 
 #[test]
 fn clipped_ramp_fragments_match_contact_even_when_thin() {

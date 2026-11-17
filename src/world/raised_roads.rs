@@ -8,7 +8,6 @@ use crate::util;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
 use crate::world;
-use geo::{BooleanOps, MultiPolygon, TriangulateEarcut};
 use rstar::{RTree, RTreeObject, AABB};
 
 #[derive(Debug)]
@@ -79,10 +78,65 @@ fn bounds(points: impl Iterator<Item = XZ<f64>>) -> AABB<XZ<f64>> {
     }
     AABB::from_corners(min, max)
 }
-fn polygon(points: [XZ<f32>; 3]) -> MultiPolygon<f64> {
-    MultiPolygon(vec![util::geometry::polygon(
-        &points.map(|p| util::geometry::xz_map(p, f64::from)),
-    )])
+fn side(a: XZ<f64>, b: XZ<f64>, p: XZ<f64>) -> f64 {
+    (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
+}
+
+struct Split {
+    inside: Vec<XZ<f64>>,
+    outside: Vec<XZ<f64>>,
+}
+
+// Split a convex polygon along a ramp edge. Both halves share the exact same
+// intersection coordinates, without quantizing thin fragments onto an overlay grid.
+fn split(points: &[XZ<f64>], a: XZ<f64>, b: XZ<f64>, winding: f64) -> Split {
+    let mut result = Split {
+        inside: Vec::new(),
+        outside: Vec::new(),
+    };
+    let Some(&last) = points.last() else {
+        return result;
+    };
+    let mut previous = last;
+    let mut before = side(a, b, previous) * winding;
+    for &current in points {
+        let after = side(a, b, current) * winding;
+        if (before < 0.0 && after > 0.0) || (before > 0.0 && after < 0.0) {
+            let t = before / (before - after);
+            let point = XZ {
+                x: previous.x + (current.x - previous.x) * t,
+                z: previous.z + (current.z - previous.z) * t,
+            };
+            result.inside.push(point);
+            result.outside.push(point);
+        }
+        if after >= 0.0 {
+            result.inside.push(current);
+        }
+        if after <= 0.0 {
+            result.outside.push(current);
+        }
+        previous = current;
+        before = after;
+    }
+    result
+}
+
+fn has_area(points: &[XZ<f64>]) -> bool {
+    (1..points.len().saturating_sub(1)).any(|i| side(points[0], points[i], points[i + 1]) != 0.0)
+}
+
+fn drape_convex(field: &HeightField, points: &[XZ<f64>], mut emit: impl FnMut([XYZ; 3])) {
+    for i in 1..points.len().saturating_sub(1) {
+        let triangle = [points[0], points[i], points[i + 1]];
+        if side(triangle[0], triangle[1], triangle[2]) != 0.0 {
+            world::elevation::drape(
+                field,
+                triangle.map(|p| util::geometry::xz_map(p, |v| v as f32)),
+                &mut emit,
+            );
+        }
+    }
 }
 
 pub fn lowered_footprints(
@@ -150,7 +204,7 @@ fn drape(
         world::elevation::drape(field, points, emit);
         return;
     }
-    // Boolean clipping can leave thin fragments on either side of a ramp edge.
+    // Clipping can leave thin fragments on either side of a ramp edge.
     // Select each fragment's height plane through the contact query, including
     // pieces classified as remaining ground, so rounding cannot lower slivers.
     let mut emit = |mut triangle: [XYZ; 3]| {
@@ -170,41 +224,43 @@ fn drape(
         }
         emit(triangle);
     };
-    let mut remaining = polygon(points);
+    let original = points
+        .map(|p| util::geometry::xz_map(p, f64::from))
+        .to_vec();
+    let mut remaining = vec![original.clone()];
     for item in candidates {
         let rise = &raised_roads.triangles[item.index];
-        let footprint = polygon(rise.points.map(|p| util::geometry::xz(p)));
-        let raised = remaining.intersection(&footprint);
-        for triangle in raised
-            .0
-            .iter()
-            .flat_map(|polygon| polygon.earcut_triangles())
-        {
-            let points = triangle.to_array().map(|p| XZ {
-                x: p.x as f32,
-                z: p.y as f32,
-            });
-            world::elevation::drape(field, points, &mut emit);
+        let footprint = rise
+            .points
+            .map(|p| util::geometry::xz_map(util::geometry::xz(p), f64::from));
+        let winding = side(footprint[0], footprint[1], footprint[2]).signum();
+        let mut next = Vec::new();
+        for polygon in remaining {
+            let mut inside = polygon.clone();
+            let mut outside = Vec::new();
+            for edge in 0..3 {
+                let parts = split(&inside, footprint[edge], footprint[(edge + 1) % 3], winding);
+                if has_area(&parts.outside) {
+                    outside.push(parts.outside);
+                }
+                inside = parts.inside;
+            }
+            if has_area(&inside) {
+                drape_convex(field, &inside, &mut emit);
+                next.extend(outside);
+            } else {
+                // A bounding-box candidate need not intersect the polygon.
+                next.push(polygon);
+            }
         }
-        remaining = remaining.difference(&footprint);
+        remaining = next;
     }
-    // Preserve the original fast drape when this triangle has no nearby rises.
-    if remaining == polygon(points) {
+    // Preserve the original fast drape when no candidate intersects this triangle.
+    if remaining.len() == 1 && remaining[0] == original {
         world::elevation::drape(field, points, emit);
     } else {
-        for triangle in remaining
-            .0
-            .iter()
-            .flat_map(|polygon| polygon.earcut_triangles())
-        {
-            world::elevation::drape(
-                field,
-                triangle.to_array().map(|p| XZ {
-                    x: p.x as f32,
-                    z: p.y as f32,
-                }),
-                &mut emit,
-            );
+        for polygon in remaining {
+            drape_convex(field, &polygon, &mut emit);
         }
     }
 }
