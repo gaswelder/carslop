@@ -818,6 +818,7 @@ fn render_scene(app: &mut App, frame_time: Duration) {
                 redline_rpm: car.spec.redline_rpm,
                 speed_kmh: car.speed.abs() * 3.6,
                 gear: car.gear,
+                forces: physics::car::force_telemetry(car),
             },
             (s.state == GameState::Paused).then_some(ui::hud::PauseMenu {
                 city: world::street_surface::has_compiled_roads(session_track(s)),

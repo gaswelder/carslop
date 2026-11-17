@@ -1,6 +1,5 @@
 use crate::asset;
 use crate::model;
-use crate::model::map_details::RoadSurface;
 use crate::model::world::Material;
 use crate::physics;
 use crate::util;
@@ -17,61 +16,49 @@ const SOUND_SHIFT_SECONDS: f32 = 0.36;
 
 const AIR_DENSITY_KG_M3: f32 = 1.225;
 
-fn friction_coefficient_road(s: RoadSurface) -> f32 {
-    match s {
-        RoadSurface::Unpaved => 0.65,
-        RoadSurface::Paving => 0.90,
-        _ => 1.0,
-    }
-}
-
-fn friction_coefficient_other(m: Material) -> f32 {
-    match m {
-        Material::BareGround => 0.65,
-        Material::Paving => 0.90,
-        _ => 1.,
-    }
-}
-
-fn torque_factor(curve: &[model::car::TorquePoint], rpm: f32) -> f32 {
-    let upper = curve.partition_point(|point| point.rpm < rpm);
-    if upper == 0 {
-        return curve[0].torque;
-    }
-    if upper == curve.len() {
-        return curve[upper - 1].torque;
-    }
-    let lower = &curve[upper - 1];
-    let upper = &curve[upper];
-    let fraction = (rpm - lower.rpm) / (upper.rpm - lower.rpm);
-    lower.torque + (upper.torque - lower.torque) * fraction
-}
-
-// The physics assumes
 // 90% drivetrain efficiency to calculate power at the wheels.
 const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 
-fn drive_force(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
-    let g = &car_spec.gearbox;
-    let ratio = g.ratios[(gear - 1) as usize];
-    let rpm = rpm(g, speed, gear).max(IDLE_RPM);
-    engine_torque(car_spec, rpm) * ratio * g.final_drive * DRIVETRAIN_EFFICIENCY / g.rolling_radius
+fn friction_coefficient(material: Material) -> f32 {
+    match material {
+        Material::BareGround => 0.65,
+        Material::Paving => 0.90,
+        Material::Grass => 0.55,
+        Material::Park => 0.55,
+        Material::Scrub => 0.45,
+        Material::Asphalt => 1.0,
+        Material::Concrete => 1.0,
+        Material::Sports => 0.65,
+        Material::Water => 0.10,
+        Material::Paint => 0.85,
+    }
 }
 
-/// Full-load crankshaft torque, bounded by the authored engine power.
 fn engine_torque(car_spec: &model::car::CarSpec, rpm: f32) -> f32 {
-    (car_spec.engine_max_torque_nm * torque_factor(&car_spec.engine_torque_curve, rpm))
+    (car_spec.engine_max_torque_nm * model::car::torque_factor(&car_spec.engine_torque_curve, rpm))
         .min(car_spec.engine_power_watts / (rpm.max(IDLE_RPM) * std::f32::consts::TAU / 60.0))
 }
 
-fn resistance_accel(car_spec: &model::car::CarSpec, speed: f32) -> f32 {
+fn drive_force(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
+    let g = &car_spec.gearbox;
+    let ratio = if gear == 0 {
+        g.reverse_ratio
+    } else {
+        g.ratios[(gear - 1) as usize]
+    };
+    let rpm = rpm(car_spec, speed, gear).max(IDLE_RPM);
+    engine_torque(car_spec, rpm) * ratio * g.final_drive * DRIVETRAIN_EFFICIENCY
+        / car_spec.rolling_radius
+}
+
+fn resistance_force(car_spec: &model::car::CarSpec, speed: f32) -> f32 {
     let drag_force = 0.5
         * AIR_DENSITY_KG_M3
         * car_spec.drag_coefficient
         * car_spec.frontal_area_m2
         * speed
         * speed;
-    0.25 + drag_force / car_spec.weight_kg
+    0.25 * car_spec.weight_kg + drag_force
 }
 
 /// Full-throttle equilibrium on level ground in the best forward gear.
@@ -80,12 +67,10 @@ pub fn calculate_top_speed(car_spec: &model::car::CarSpec) -> f32 {
     (1..=gears(&car_spec.gearbox))
         .map(|gear| {
             let mut low = 0.0;
-            let mut high = speed_at_rpm(&car_spec.gearbox, car_spec.redline_rpm, gear);
+            let mut high = speed_at_rpm(car_spec, car_spec.redline_rpm, gear);
             for _ in 0..48 {
                 let speed = (low + high) * 0.5;
-                if drive_force(car_spec, speed, gear)
-                    > car_spec.weight_kg * resistance_accel(car_spec, speed)
-                {
+                if drive_force(car_spec, speed, gear) > resistance_force(car_spec, speed) {
                     low = speed;
                 } else {
                     high = speed;
@@ -99,7 +84,8 @@ pub fn calculate_top_speed(car_spec: &model::car::CarSpec) -> f32 {
 fn gears(gearbox: &model::car::Gearbox) -> u8 {
     gearbox.ratios.len() as u8
 }
-fn rpm(gearbox: &model::car::Gearbox, speed: f32, gear: u8) -> f32 {
+fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
+    let gearbox = &car_spec.gearbox;
     let ratio = if gear == 0 {
         gearbox.reverse_ratio
     } else {
@@ -110,15 +96,16 @@ fn rpm(gearbox: &model::car::Gearbox, speed: f32, gear: u8) -> f32 {
     } else {
         speed.max(0.0)
     };
-    speed * 60.0 / (std::f32::consts::TAU * gearbox.rolling_radius) * ratio * gearbox.final_drive
+    speed * 60.0 / (std::f32::consts::TAU * car_spec.rolling_radius) * ratio * gearbox.final_drive
 }
-fn speed_at_rpm(gearbox: &model::car::Gearbox, rpm: f32, gear: u8) -> f32 {
+fn speed_at_rpm(car_spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
+    let gearbox = &car_spec.gearbox;
     let ratio = if gear == 0 {
         gearbox.reverse_ratio
     } else {
         gearbox.ratios[gear.saturating_sub(1).min(gears(gearbox) - 1) as usize]
     };
-    rpm * std::f32::consts::TAU * gearbox.rolling_radius / (60.0 * ratio * gearbox.final_drive)
+    rpm * std::f32::consts::TAU * car_spec.rolling_radius / (60.0 * ratio * gearbox.final_drive)
 }
 
 // Base rate of normalized steering input change per second.
@@ -186,6 +173,22 @@ pub struct Vehicle {
     driven_wheel_omega: f32, // signed wheel angular speed, radians/second
     drivetrain_initialized: bool,
     axle_load: [f32; 2],
+    force_telemetry: ForceTelemetry,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ForceTelemetry {
+    /// Net longitudinal tire force, including braking; positive is forward.
+    pub drive_force_n: f32,
+    /// Applied rolling resistance and aerodynamic drag magnitude.
+    pub resistance_force_n: f32,
+    /// Net engine torque used by the simulation, including engine drag and fuel cut.
+    pub torque_nm: f32,
+}
+
+/// Forces applied during the last completed physics substep.
+pub fn force_telemetry(vehicle: &Vehicle) -> ForceTelemetry {
+    vehicle.force_telemetry
 }
 
 pub fn on_track(
@@ -234,6 +237,7 @@ pub fn on_track(
         driven_wheel_omega: 0.0,
         drivetrain_initialized: false,
         axle_load: [0.0; 2],
+        force_telemetry: ForceTelemetry::default(),
     };
     let (pitch, roll) = ground_angles(&car);
     car.suspension_pitch = pitch;
@@ -254,13 +258,13 @@ pub fn reset(vehicle: &mut Vehicle, position: XYZ, heading: f32) {
 
 fn upshift_speed(vehicle: &Vehicle, gear: u8) -> f32 {
     let gearbox = &vehicle.spec.gearbox;
-    speed_at_rpm(gearbox, gearbox.upshift_rpm, gear)
+    speed_at_rpm(&vehicle.spec, gearbox.upshift_rpm, gear)
 }
 fn coupled_engine_rpm(vehicle: &Vehicle) -> f32 {
     if vehicle.gear == NEUTRAL_GEAR {
         return IDLE_RPM;
     }
-    rpm(&vehicle.spec.gearbox, vehicle.speed, vehicle.gear).max(IDLE_RPM)
+    rpm(&vehicle.spec, vehicle.speed, vehicle.gear).max(IDLE_RPM)
 }
 fn brake_accel(vehicle: &Vehicle) -> f32 {
     vehicle.spec.brake_force / vehicle.spec.weight_kg
@@ -402,16 +406,17 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
                         .is_some_and(|h| (h - reference).abs() < 1.5)
                 });
 
-            let grip = if let Some(deck) = deck {
-                friction_coefficient_road(deck.surface)
+            let material = if let Some(deck) = deck {
+                model::map_details::road_material(deck.surface)
             } else {
                 world::street_surface::world_location_triangle_at(
                     loc,
                     util::geometry::xz(position),
                     true,
                 )
-                .map_or(1., |triangle| friction_coefficient_other(triangle.material))
+                .map_or(Material::Asphalt, |triangle| triangle.material)
             };
+            let grip = friction_coefficient(material);
 
             let _hack = 1.5;
 
@@ -428,22 +433,22 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
         let front_speed = longitudinal * cos + (lateral + vehicle.yaw_rate * a) * sin;
         let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
         if !vehicle.drivetrain_initialized {
-            vehicle.driven_wheel_omega = driven_speed / spec.gearbox.rolling_radius;
+            vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
             if vehicle.gear != NEUTRAL_GEAR {
-                vehicle.engine_rpm =
-                    vehicle
-                        .engine_rpm
-                        .max(rpm(&spec.gearbox, driven_speed, vehicle.gear));
+                vehicle.engine_rpm = vehicle
+                    .engine_rpm
+                    .max(rpm(&spec, driven_speed, vehicle.gear));
             }
             vehicle.drivetrain_initialized = true;
         }
+        let torque_nm = engine_net_torque(vehicle, throttle);
         let drivetrain = drivetrain_step(vehicle, throttle, seconds, driven_speed);
         let drive = drivetrain.as_ref().map_or(0.0, |step| {
             physics::powertrain::road_force(
                 step,
                 driven_speed * direction,
                 spec.weight_kg,
-                spec.gearbox.rolling_radius,
+                spec.rolling_radius,
             ) * direction
         });
         let brake = vehicle.brake_pressure * brake_accel * spec.weight_kg;
@@ -456,7 +461,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             };
             let wheel_speed = if axle == 0 { front_speed } else { longitudinal };
             let longitudinal_slip = if drive_share > 0.0 && drivetrain.is_some() {
-                vehicle.driven_wheel_omega * spec.gearbox.rolling_radius - wheel_speed
+                vehicle.driven_wheel_omega * spec.rolling_radius - wheel_speed
             } else {
                 0.0
             };
@@ -511,6 +516,9 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             spec.yaw_inertia,
             seconds,
         );
+        let tire_force = (solved.impulses[0].longitudinal * cos - solved.impulses[0].lateral * sin
+            + solved.impulses[1].longitudinal)
+            / seconds;
         if let Some(step) = drivetrain {
             // Tire force acts on the chassis and reacts on the wheels.
             // Brake torque acts on the wheels separately; inferring drive
@@ -534,7 +542,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             let rotation = physics::powertrain::finish(
                 &step,
                 reaction,
-                spec.gearbox.rolling_radius,
+                spec.rolling_radius,
                 driven_brake_force,
                 rolling_speed * direction,
             );
@@ -542,15 +550,22 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
             vehicle.driven_wheel_omega = rotation.wheel_omega * direction;
         } else {
             update_free_engine(vehicle, throttle, seconds);
-            vehicle.driven_wheel_omega = driven_speed / spec.gearbox.rolling_radius;
+            vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
         }
         update_fuel_cut(vehicle, vehicle.engine_rpm);
-        let slip_speed = vehicle.driven_wheel_omega * spec.gearbox.rolling_radius - driven_speed;
+        let slip_speed = vehicle.driven_wheel_omega * spec.rolling_radius - driven_speed;
         vehicle.wheel_spin = (slip_speed.abs() / 8.0).clamp(0.0, 1.0);
         vehicle.yaw_rate = solved.motion.yaw_rate;
-        let resistance = resistance_accel(&spec, longitudinal) * seconds;
+        let resistance = resistance_force(&spec, longitudinal) / spec.weight_kg * seconds;
         let new_longitudinal = solved.motion.longitudinal.signum()
             * (solved.motion.longitudinal.abs() - resistance).max(0.0);
+        vehicle.force_telemetry = ForceTelemetry {
+            drive_force_n: tire_force,
+            resistance_force_n: (solved.motion.longitudinal - new_longitudinal).abs()
+                * spec.weight_kg
+                / seconds,
+            torque_nm,
+        };
         let new_lateral = solved.motion.lateral;
         vehicle.velocity = XZ {
             x: forward.x * new_longitudinal + right.x * new_lateral,
@@ -569,9 +584,8 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
         let previous_position = vehicle.position;
         vehicle.position.x += vehicle.velocity.x * seconds;
         vehicle.position.z += vehicle.velocity.z * seconds;
-        let spin = longitudinal * seconds / spec.gearbox.rolling_radius;
-        let spin_slip =
-            (vehicle.driven_wheel_omega - longitudinal / spec.gearbox.rolling_radius) * seconds;
+        let spin = longitudinal * seconds / spec.rolling_radius;
+        let spin_slip = (vehicle.driven_wheel_omega - longitudinal / spec.rolling_radius) * seconds;
         vehicle.wheel_phase[1] = (vehicle.wheel_phase[1]
             + spin
             + if spec.drive_bias > 0.0 {
@@ -688,7 +702,7 @@ fn drivetrain_step(
     } * gearbox.final_drive;
     // Automatic clutch opens near idle to avoid stalling. Its torque capacity
     // increases with engine speed; there is no launch RPM target.
-    let engagement = if rpm(gearbox, speed, vehicle.gear) > IDLE_RPM + 100.0 {
+    let engagement = if rpm(spec, speed, vehicle.gear) > IDLE_RPM + 100.0 {
         1.0
     } else {
         ((vehicle.engine_rpm - IDLE_RPM) / 600.0).clamp(0.0, 1.0)
@@ -942,8 +956,8 @@ fn refresh_speed(vehicle: &mut Vehicle) {
             vehicle.gear += 1;
         }
         while vehicle.gear > 1
-            && rpm(gearbox, vehicle.speed, vehicle.gear) < gearbox.downshift_rpm
-            && rpm(gearbox, vehicle.speed, vehicle.gear - 1) < gearbox.upshift_rpm * 0.95
+            && rpm(&vehicle.spec, vehicle.speed, vehicle.gear) < gearbox.downshift_rpm
+            && rpm(&vehicle.spec, vehicle.speed, vehicle.gear - 1) < gearbox.upshift_rpm * 0.95
         {
             vehicle.gear -= 1;
         }

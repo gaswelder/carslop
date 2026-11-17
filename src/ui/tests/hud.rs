@@ -6,6 +6,28 @@ use crate::ui::map::FULL_MAP_CONTENT;
 use crate::world;
 
 #[test]
+fn force_panel_stays_in_the_bottom_left_across_viewport_sizes() {
+    for viewport in [[800.0, 600.0], [1280.0, 720.0], [2560.0, 1080.0]] {
+        let mut vertices = Vec::new();
+        append_forces(
+            &mut vertices,
+            physics::car::ForceTelemetry {
+                drive_force_n: 12000.0,
+                resistance_force_n: 500.0,
+                torque_nm: 400.0,
+            },
+            viewport,
+        );
+        assert!(vertices.iter().any(|vertex| vertex.uv[0] >= 0.0));
+        for vertex in vertices {
+            let [x, y, _] = vertex.position;
+            assert!((-1.0..0.0).contains(&x));
+            assert!((-1.0..-0.5).contains(&y));
+        }
+    }
+}
+
+#[test]
 #[ignore = "reports HUD generation time and geometry size"]
 fn hud_geometry_profile() {
     let mut vertices = Vec::new();
@@ -28,6 +50,11 @@ fn hud_geometry_profile() {
                 redline_rpm: 6500.0,
                 speed_kmh: 90.0,
                 gear: 3,
+                forces: physics::car::ForceTelemetry {
+                    drive_force_n: 3000.0,
+                    resistance_force_n: 500.0,
+                    torque_nm: 180.0,
+                },
             },
             [1280.0, 720.0],
         );

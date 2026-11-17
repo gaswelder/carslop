@@ -1,6 +1,7 @@
 use super::*;
 use crate::model;
 use crate::model::map_details;
+use crate::model::map_details::RoadSurface;
 use crate::test;
 use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;

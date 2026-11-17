@@ -136,6 +136,7 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             top_speed: 50.0,
             brake_force: 22000.0,
             wheelbase: 2.5,
+            rolling_radius: 0.32,
             audio: audio_voice().clone(),
             front_weight: 0.5,
             cg_height: 0.5,
@@ -168,7 +169,6 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             gearbox: model::car::Gearbox {
                 ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
-                rolling_radius: 0.32,
                 reverse_ratio: 3.0,
                 upshift_rpm: 5500.0,
                 downshift_rpm: 2200.0,

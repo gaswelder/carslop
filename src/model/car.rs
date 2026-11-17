@@ -20,6 +20,8 @@ pub struct CarSpec {
     pub top_speed: f32,
     pub brake_force: f32,
     pub wheelbase: f32,
+    /// Effective driven-wheel radius in metres, derived from the model.
+    pub rolling_radius: f32,
     pub audio: EngineVoice,
     pub front_weight: f32,
     /// Metres above ground, derived from the authored fraction and model height.
@@ -48,6 +50,20 @@ pub struct TorquePoint {
     pub torque: f32,
 }
 
+pub fn torque_factor(curve: &[TorquePoint], rpm: f32) -> f32 {
+    let upper = curve.partition_point(|point| point.rpm < rpm);
+    if upper == 0 {
+        return curve[0].torque;
+    }
+    if upper == curve.len() {
+        return curve[upper - 1].torque;
+    }
+    let lower = &curve[upper - 1];
+    let upper = &curve[upper];
+    let fraction = (rpm - lower.rpm) / (upper.rpm - lower.rpm);
+    lower.torque + (upper.torque - lower.torque) * fraction
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct Turbo {
     pub spool_start_rpm: f32,
@@ -60,8 +76,6 @@ pub struct Turbo {
 pub struct Gearbox {
     pub ratios: Vec<f32>,
     pub final_drive: f32,
-    #[serde(skip)]
-    pub rolling_radius: f32,
     pub reverse_ratio: f32,
     pub upshift_rpm: f32,
     pub downshift_rpm: f32,
@@ -274,8 +288,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     let cg_height = definition.cg_height_fraction * height;
     let wheelbase = model_wheelbase(&design.mounts)?;
     let track_width = model_track_width(&design.mounts)?;
-    definition.gearbox.rolling_radius =
-        model_rolling_radius(design.wheel_radii, definition.drive_bias)?;
+    let rolling_radius = model_rolling_radius(design.wheel_radii, definition.drive_bias)?;
     let audio_directory = path.parent().unwrap().join("audio");
     definition.audio.sample_directory = audio_directory.is_dir().then_some(audio_directory);
 
@@ -291,6 +304,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         top_speed: 0.0,
         brake_force: definition.brake_force,
         wheelbase,
+        rolling_radius,
         audio: definition.audio,
         front_weight: definition.front_weight,
         cg_height,

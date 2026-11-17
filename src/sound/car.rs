@@ -1,4 +1,4 @@
-use crate::model::map_details::RoadSurface;
+use crate::model::map_details;
 use crate::model::world::Material;
 use crate::physics;
 use crate::render;
@@ -119,12 +119,7 @@ fn tire_material(car: &physics::car::Vehicle) -> Material {
         world::map_details::height_on(deck, position)
             .is_some_and(|height| (height - reference).abs() < 1.5)
     }) {
-        return match deck.surface {
-            RoadSurface::Asphalt => Material::Asphalt,
-            RoadSurface::Concrete => Material::Concrete,
-            RoadSurface::Paving => Material::Paving,
-            RoadSurface::Unpaved => Material::BareGround,
-        };
+        return map_details::road_material(deck.surface);
     }
     world::street_surface::world_location_triangle_at(location, position, false)
         .map(|triangle| triangle.material)

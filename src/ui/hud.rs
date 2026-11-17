@@ -90,6 +90,7 @@ pub struct Gauges {
     pub redline_rpm: f32,
     pub speed_kmh: f32,
     pub gear: u8,
+    pub forces: physics::car::ForceTelemetry,
 }
 
 const PAUSE_BOXES: [[f32; 4]; 5] = [
@@ -278,6 +279,11 @@ pub fn draw(
     append_instruments(
         &mut v,
         gauges,
+        [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
+    );
+    append_forces(
+        &mut v,
+        gauges.forces,
         [viewport[2].max(1) as f32, viewport[3].max(1) as f32],
     );
     quad(&mut v, [0.59, 0.47], [0.97, 0.90], [0.025, 0.05, 0.075]);
@@ -748,6 +754,49 @@ fn instrument_canvas_point(instrument_canvas: &InstrumentCanvas<'_>, p: [f32; 2]
             / instrument_canvas.viewport[1],
     ]
 }
+struct ForceRow {
+    name: &'static str,
+    value: String,
+}
+
+fn append_forces(
+    vertices: &mut Vec<Vertex>,
+    forces: physics::car::ForceTelemetry,
+    viewport: [f32; 2],
+) {
+    let mut canvas = InstrumentCanvas {
+        vertices,
+        viewport,
+        origin: [16.0, viewport[1] - 92.0],
+        scale: 1.0,
+    };
+    rect(
+        &mut canvas,
+        [0.0, 0.0],
+        [260.0, 76.0],
+        [0.025, 0.035, 0.045],
+    );
+    let rows = [
+        ForceRow {
+            name: "DRIVE / BRAKE",
+            value: format!("{:.0} N", forces.drive_force_n),
+        },
+        ForceRow {
+            name: "RESISTANCE",
+            value: format!("{:.0} N", forces.resistance_force_n),
+        },
+        ForceRow {
+            name: "ENGINE TORQUE",
+            value: format!("{:.0} Nm", forces.torque_nm),
+        },
+    ];
+    for (index, row) in rows.iter().enumerate() {
+        let y = 16.0 + index as f32 * 22.0;
+        label(&mut canvas, row.name, [70.0, y], 1.6, [0.65, 0.72, 0.75]);
+        label(&mut canvas, &row.value, [204.0, y], 1.6, [0.89, 0.90, 0.85]);
+    }
+}
+
 fn triangle(instrument_canvas: &mut InstrumentCanvas<'_>, p: [[f32; 2]; 3], color: [f32; 3]) {
     for p in p {
         let p = instrument_canvas_point(instrument_canvas, p);

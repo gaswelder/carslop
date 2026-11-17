@@ -1,5 +1,6 @@
 //! Optional mapped appearance, scenery and transport geometry, retained by saved locations.
 
+use crate::model::world::Material;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -85,6 +86,16 @@ pub enum RoadSurface {
     Paving,
     Unpaved,
 }
+
+pub fn road_material(surface: RoadSurface) -> Material {
+    match surface {
+        RoadSurface::Asphalt => Material::Asphalt,
+        RoadSurface::Concrete => Material::Concrete,
+        RoadSurface::Paving => Material::Paving,
+        RoadSurface::Unpaved => Material::BareGround,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Deck {
     pub road: usize,
