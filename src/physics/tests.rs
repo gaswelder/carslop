@@ -368,26 +368,6 @@ mod car {
         assert_eq!(car.gear, 1);
     }
     #[test]
-    fn calculated_top_speed_balances_power_and_road_load() {
-        let mut spec = test::support::car_spec().clone();
-        spec.engine.turbo = None;
-        spec.engine.max_torque_nm = 10_000.0;
-        spec.gearbox.final_drive = 1.0;
-        let speed = physics::car::calculate_top_speed(&spec);
-        let road_power = (0.25 * spec.weight_kg
-            + 0.5 * 1.225 * spec.drag_coefficient * spec.frontal_area_m2 * speed.powi(2))
-            * speed;
-        assert!((road_power - spec.engine.power_watts * 0.90).abs() < 1.0);
-        spec.engine.power_watts *= 2.0;
-        let more_power = physics::car::calculate_top_speed(&spec);
-        assert!(more_power > speed);
-        spec.drag_coefficient *= 2.0;
-        assert!(physics::car::calculate_top_speed(&(spec)) < more_power);
-        let before_weight_change = physics::car::calculate_top_speed(&spec);
-        spec.weight_kg *= 2.0;
-        assert!(physics::car::calculate_top_speed(&(spec)) < before_weight_change);
-    }
-    #[test]
     fn every_car_can_reverse_brake_and_drive_forward_again() {
         let road = world::locations::at_distance(
             &world::locations::try_track(&world::locations::LocationId::Compact).unwrap(),

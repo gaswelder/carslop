@@ -133,7 +133,6 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             name: "TEST VEHICLE".into(),
             paint_color: [1.0, 0.18, 0.08],
             weight_kg: 1200.0,
-            top_speed: 50.0,
             brake_force: 22000.0,
             wheelbase: 2.5,
             rolling_radius: 0.32,

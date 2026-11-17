@@ -28,18 +28,6 @@ pub fn engine_torque(car_spec: &model::car::CarSpec, rpm: f32) -> f32 {
         .min(car_spec.engine.power_watts / (rpm.max(IDLE_RPM) * std::f32::consts::TAU / 60.0))
 }
 
-fn drive_force(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
-    let g = &car_spec.gearbox;
-    let ratio = if gear == REVERSE_GEAR {
-        g.reverse_ratio
-    } else {
-        g.ratios[(gear - 1) as usize]
-    };
-    let rpm = rpm(car_spec, speed, gear).max(IDLE_RPM);
-    engine_torque(car_spec, rpm) * ratio * g.final_drive * DRIVETRAIN_EFFICIENCY
-        / car_spec.rolling_radius
-}
-
 pub fn resistance_force(car_spec: &model::car::CarSpec, speed: f32) -> f32 {
     let drag_force = 0.5
         * AIR_DENSITY_KG_M3
@@ -48,26 +36,6 @@ pub fn resistance_force(car_spec: &model::car::CarSpec, speed: f32) -> f32 {
         * speed
         * speed;
     0.25 * car_spec.weight_kg + drag_force
-}
-
-/// Full-throttle equilibrium on level ground in the best forward gear.
-/// Uses the same spec torque, redline and road load as driving.
-pub fn calculate_top_speed(car_spec: &model::car::CarSpec) -> f32 {
-    (1..=gears(&car_spec.gearbox))
-        .map(|gear| {
-            let mut low = 0.0;
-            let mut high = speed_at_rpm(car_spec, car_spec.engine.redline_rpm, gear);
-            for _ in 0..48 {
-                let speed = (low + high) * 0.5;
-                if drive_force(car_spec, speed, gear) > resistance_force(car_spec, speed) {
-                    low = speed;
-                } else {
-                    high = speed;
-                }
-            }
-            low
-        })
-        .fold(0.0, f32::max)
 }
 
 pub fn gears(gearbox: &model::car::Gearbox) -> u8 {
@@ -87,14 +55,4 @@ pub fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
         speed.max(0.0)
     };
     speed * 60.0 / (std::f32::consts::TAU * car_spec.rolling_radius) * ratio * gearbox.final_drive
-}
-
-fn speed_at_rpm(car_spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
-    let gearbox = &car_spec.gearbox;
-    let ratio = if gear == REVERSE_GEAR {
-        gearbox.reverse_ratio
-    } else {
-        gearbox.ratios[gear.saturating_sub(1).min(gears(gearbox) - 1) as usize]
-    };
-    rpm * std::f32::consts::TAU * car_spec.rolling_radius / (60.0 * ratio * gearbox.final_drive)
 }

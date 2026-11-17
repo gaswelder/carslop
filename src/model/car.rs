@@ -25,7 +25,6 @@ pub struct CarSpec {
     pub engine: Engine,
     pub gearbox: Gearbox,
     //
-    pub top_speed: f32,
     pub brake_force: f32,
     pub wheelbase: f32,
     /// Effective driven-wheel radius in metres, derived from the model.
@@ -291,7 +290,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     let audio_directory = path.parent().unwrap().join("audio");
     definition.audio.sample_directory = audio_directory.is_dir().then_some(audio_directory);
 
-    let mut spec = CarSpec {
+    let spec = CarSpec {
         name: definition.name,
         paint_color: definition.paint_color,
         weight_kg: definition.weight_kg,
@@ -304,7 +303,6 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         },
         gearbox: definition.gearbox,
         design,
-        top_speed: 0.0,
         brake_force: definition.brake_force,
         wheelbase,
         rolling_radius,
@@ -320,7 +318,6 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         drag_coefficient: definition.drag_coefficient,
         frontal_area_m2,
     };
-    spec.top_speed = physics::car::calculate_top_speed(&spec);
     Ok(spec)
 }
 
