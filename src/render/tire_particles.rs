@@ -97,7 +97,7 @@ pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, d
         return;
     }
     let centers = car.spec.design.mounts;
-    let (s, c) = car.heading.sin_cos();
+    let (s, c) = car.orientation.yaw.sin_cos();
     for (wheel, center) in centers[..2].iter().enumerate() {
         let x = car.position.x + center.x * c + center.z * s;
         let z = car.position.z - center.x * s + center.z * c;

@@ -1,7 +1,22 @@
-//! Spec-based engine output, gearing, and road load.
+//! Engine runtime state, spec-based output, gearing, and road load.
 
 use super::car::IDLE_RPM;
+use super::car::REVERSE_GEAR;
 use crate::model;
+
+/// Runtime engine simulation and feedback state.
+pub struct EngineState {
+    pub rpm: f32,
+    /// Smoothed engine load used for sound, from zero to one.
+    pub load: f32,
+    /// Normalized turbine speed and available boost.
+    pub turbo_spool: f32,
+    // Normalized manifold boost.
+    pub turbo_boost: f32,
+    pub fuel_cut: bool,
+    pub rev_match_timer: f32,
+    pub sound_shift_timer: f32,
+}
 
 const AIR_DENSITY_KG_M3: f32 = 1.225;
 
@@ -15,7 +30,7 @@ pub fn engine_torque(car_spec: &model::car::CarSpec, rpm: f32) -> f32 {
 
 fn drive_force(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
     let g = &car_spec.gearbox;
-    let ratio = if gear == 0 {
+    let ratio = if gear == REVERSE_GEAR {
         g.reverse_ratio
     } else {
         g.ratios[(gear - 1) as usize]
@@ -61,12 +76,12 @@ pub fn gears(gearbox: &model::car::Gearbox) -> u8 {
 
 pub fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
     let gearbox = &car_spec.gearbox;
-    let ratio = if gear == 0 {
+    let ratio = if gear == REVERSE_GEAR {
         gearbox.reverse_ratio
     } else {
         gearbox.ratios[gear.saturating_sub(1).min(gears(gearbox) - 1) as usize]
     };
-    let speed = if gear == 0 {
+    let speed = if gear == REVERSE_GEAR {
         speed.abs()
     } else {
         speed.max(0.0)
@@ -76,7 +91,7 @@ pub fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
 
 fn speed_at_rpm(car_spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
     let gearbox = &car_spec.gearbox;
-    let ratio = if gear == 0 {
+    let ratio = if gear == REVERSE_GEAR {
         gearbox.reverse_ratio
     } else {
         gearbox.ratios[gear.saturating_sub(1).min(gears(gearbox) - 1) as usize]

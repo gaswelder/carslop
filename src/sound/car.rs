@@ -68,13 +68,13 @@ pub fn update(
         sound::synth::suppress_impacts(&mut engine_audio.synth);
     }
     let voice = sound::synth::Voice {
-        turbo_target: car.turbo_spool,
+        turbo_target: car.engine.turbo_spool,
         road_speed: car.velocity.x.hypot(car.velocity.z),
-        frequency: engine_frequency(car.engine_rpm),
+        frequency: engine_frequency(car.engine.rpm),
         load: if throttle {
-            car.engine_load.max(0.15)
+            car.engine.load.max(0.15)
         } else {
-            car.engine_load
+            car.engine.load
         },
         scrub: car.tire_scrub,
         surface: tire_material(car),

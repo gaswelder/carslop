@@ -13,7 +13,8 @@ use crate::util::geometry::XZ;
 use crate::world;
 use std::time::Duration;
 
-// Keep zero for reverse and 1..=N for forward ratios.
+// Forward ratios use 1..=N.
+pub const REVERSE_GEAR: u8 = 0;
 pub const NEUTRAL_GEAR: u8 = u8::MAX;
 pub const IDLE_RPM: f32 = 900.0;
 const REV_MATCH_SECONDS: f32 = 0.22;
@@ -32,39 +33,43 @@ pub struct Controls {
     pub handbrake: bool,
 }
 
+/// Pitch, roll, and yaw components of orientation or its rate of change.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Orientation {
+    pub pitch: f32,
+    pub roll: f32,
+    pub yaw: f32,
+}
+
 pub struct Vehicle {
     pub spec: std::sync::Arc<model::car::CarSpec>,
     pub track: std::sync::Arc<world::locations::WorldLocation>,
+    //
     pub position: XYZ,
-    pub velocity: XZ<f32>,
-    pub speed: f32,
-    pub heading: f32,
+    /// World-space velocity in metres per second.
+    pub velocity: XYZ,
+    /// World-space velocity change over the last physics substep, in m/s².
+    pub acceleration: XYZ,
+    /// Angles in radians. Pitch and roll are lean relative to the terrain-following
+    /// suspension; yaw is the heading in world space.
+    pub orientation: Orientation,
+    /// Time derivatives of the orientation components, in radians per second.
+    pub orientation_rate: Orientation,
+    //
+    pub engine: engine::EngineState,
     pub gear: u8,
     slip: f32,
-    pub body_pitch: f32,
-    pub body_roll: f32,
     pub suspension_pitch: f32,
     pub suspension_roll: f32,
     pub curb_bump: f32,
-    pub engine_rpm: f32,
-    pub engine_load: f32,
-    pub turbo_spool: f32,      // normalized turbine speed / available boost
-    turbo_boost: f32,          // normalized manifold boost
     pub wheel_phase: [f32; 2], // rear/front axles; cosmetic, never affects physics
     pub tire_scrub: f32,
     pub brake_lights: bool,
     pub brake_pressure: f32,
     steering: f32,
-    pub yaw_rate: f32,
     shift_timer: f32,
-    sound_shift_timer: f32,
-    rev_match_timer: f32,
-    fuel_cut: bool,
-    pub acceleration: [f32; 2], // longitudinal/lateral, filtered for load transfer
-    pub pitch_rate: f32,
-    pub roll_rate: f32,
+    pub filtered_acceleration: suspension::LocalAcceleration,
     pub suspension_rates: [f32; 2],
-    pub vertical_speed: f32,
     pub suspension_initialized: bool,
     pub wheel_spin: f32,
     pub driven_wheel_omega: f32, // signed wheel angular speed, radians/second
@@ -98,35 +103,35 @@ pub fn on_track(
         spec,
         track,
         position,
-        velocity: XZ { x: 0.0, z: 0.0 },
-        speed: 0.0,
-        heading,
+        velocity: XYZ::default(),
+        acceleration: XYZ::default(),
+        orientation: Orientation {
+            yaw: heading,
+            ..Orientation::default()
+        },
+        orientation_rate: Orientation::default(),
+        engine: engine::EngineState {
+            rpm: IDLE_RPM,
+            load: 0.0,
+            turbo_spool: 0.0,
+            turbo_boost: 0.0,
+            fuel_cut: false,
+            rev_match_timer: 0.0,
+            sound_shift_timer: 0.0,
+        },
         gear: 1,
         slip: 0.0,
-        body_pitch: 0.0,
-        body_roll: 0.0,
         suspension_pitch: 0.0,
         suspension_roll: 0.0,
         curb_bump: 0.0,
-        engine_rpm: IDLE_RPM,
-        engine_load: 0.0,
-        turbo_spool: 0.0,
-        turbo_boost: 0.0,
         brake_pressure: 0.0,
         steering: 0.0,
-        yaw_rate: 0.0,
         wheel_phase: [0.0; 2],
         tire_scrub: 0.0,
         brake_lights: false,
         shift_timer: 0.0,
-        sound_shift_timer: 0.0,
-        rev_match_timer: 0.0,
-        fuel_cut: false,
-        acceleration: [0.0; 2],
-        pitch_rate: 0.0,
-        roll_rate: 0.0,
+        filtered_acceleration: suspension::LocalAcceleration::default(),
         suspension_rates: [0.0; 2],
-        vertical_speed: 0.0,
         suspension_initialized: false,
         wheel_spin: 0.0,
         driven_wheel_omega: 0.0,
@@ -153,25 +158,25 @@ fn coupled_engine_rpm(vehicle: &Vehicle) -> f32 {
     if vehicle.gear == NEUTRAL_GEAR {
         return IDLE_RPM;
     }
-    engine::rpm(&vehicle.spec, vehicle.speed, vehicle.gear).max(IDLE_RPM)
+    engine::rpm(&vehicle.spec, longitudinal_speed(vehicle), vehicle.gear).max(IDLE_RPM)
 }
 
 pub fn shift(vehicle: &mut Vehicle, up: bool) {
     let next = match (vehicle.gear, up) {
-        (0, true) => NEUTRAL_GEAR,
+        (REVERSE_GEAR, true) => NEUTRAL_GEAR,
         (NEUTRAL_GEAR, true) => 1,
-        (NEUTRAL_GEAR, false) => 0,
+        (NEUTRAL_GEAR, false) => REVERSE_GEAR,
         (1, false) => NEUTRAL_GEAR,
-        (0, false) => 0,
+        (REVERSE_GEAR, false) => REVERSE_GEAR,
         (gear, true) => (gear + 1).min(engine::gears(&vehicle.spec.gearbox)),
         (gear, false) => gear - 1,
     };
     if next != vehicle.gear {
         let previous = vehicle.gear;
         vehicle.gear = next;
-        let launching = previous == NEUTRAL_GEAR && matches!(next, 0 | 1);
+        let launching = previous == NEUTRAL_GEAR && matches!(next, REVERSE_GEAR | 1);
         vehicle.shift_timer = if launching { 0.0 } else { 0.16 };
-        vehicle.sound_shift_timer = SOUND_SHIFT_SECONDS;
+        vehicle.engine.sound_shift_timer = SOUND_SHIFT_SECONDS;
         begin_rev_match(vehicle, previous);
     }
 }
@@ -179,10 +184,10 @@ pub fn shift(vehicle: &mut Vehicle, up: bool) {
 fn begin_rev_match(vehicle: &mut Vehicle, previous: u8) {
     // Only a moving forward downshift needs a throttle blip. Neutral,
     // reverse and shifts below idle should not rev the engine.
-    vehicle.rev_match_timer = if vehicle.gear > 0
+    vehicle.engine.rev_match_timer = if vehicle.gear != REVERSE_GEAR
         && vehicle.gear < previous
         && previous <= engine::gears(&vehicle.spec.gearbox)
-        && coupled_engine_rpm(vehicle) > vehicle.engine_rpm + 100.0
+        && coupled_engine_rpm(vehicle) > vehicle.engine.rpm + 100.0
     {
         REV_MATCH_SECONDS
     } else {
@@ -204,7 +209,7 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
         impact = impact.max(update_substep(vehicle, controls, seconds));
     }
 
-    refresh_speed(vehicle);
+    refresh_slip(vehicle);
     update_engine_feedback(vehicle, controls, dt.as_secs_f32());
     let motion = vehicle.velocity.x.hypot(vehicle.velocity.z);
     let sliding = ((vehicle.slip.abs() - 0.8) / 3.0).clamp(0.0, 1.0);
@@ -215,23 +220,28 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
 }
 
 fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f32 {
+    let previous_velocity = vehicle.velocity;
     let spec = vehicle.spec.clone();
-    let direction = if vehicle.gear == 0 { -1.0 } else { 1.0 };
+    let direction = if vehicle.gear == REVERSE_GEAR {
+        -1.0
+    } else {
+        1.0
+    };
     update_inputs(vehicle, controls, seconds);
     let forward = XZ {
-        x: vehicle.heading.sin(),
-        z: vehicle.heading.cos(),
+        x: vehicle.orientation.yaw.sin(),
+        z: vehicle.orientation.yaw.cos(),
     };
     let right = XZ {
-        x: vehicle.heading.cos(),
-        z: -vehicle.heading.sin(),
+        x: vehicle.orientation.yaw.cos(),
+        z: -vehicle.orientation.yaw.sin(),
     };
     let gradient = physics::vehicle_location::ground_gradient(&vehicle.track, vehicle.position);
     // Horizontal component of gravity projected onto y = h(x, z).
-    // Velocity is stored in XZ, so divide by 1 + |gradient|².
+    // The planar gravity projection divides by 1 + |gradient|².
     let gravity = util::geometry::xz_map(gradient, |g| -9.81 * g / (1.0 + dot(gradient, gradient)));
-    let longitudinal = dot(vehicle.velocity, forward);
-    let lateral = dot(vehicle.velocity, right);
+    let longitudinal = dot(util::geometry::xz(vehicle.velocity), forward);
+    let lateral = dot(util::geometry::xz(vehicle.velocity), right);
     let geometry = contact::axle_geometry(vehicle);
     let contact::AxleGeometry {
         front_offset: a,
@@ -243,18 +253,16 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     suspension::update_suspension(vehicle, seconds);
     let capacities = contact::tire_capacities(vehicle);
     let throttle = controls.throttle.clamp(0.0, 1.0);
-    update_fuel_cut(vehicle, vehicle.engine_rpm);
+    update_fuel_cut(vehicle, vehicle.engine.rpm);
     update_turbo(vehicle, seconds, throttle);
     let drive_bias = spec.drive_bias;
-    let front_speed = longitudinal * cos + (lateral + vehicle.yaw_rate * a) * sin;
+    let front_speed = longitudinal * cos + (lateral + vehicle.orientation_rate.yaw * a) * sin;
     let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
     if !vehicle.drivetrain_initialized {
         vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
         if vehicle.gear != NEUTRAL_GEAR {
-            vehicle.engine_rpm =
-                vehicle
-                    .engine_rpm
-                    .max(engine::rpm(&spec, driven_speed, vehicle.gear));
+            let coupled_rpm = engine::rpm(&spec, driven_speed, vehicle.gear);
+            vehicle.engine.rpm = vehicle.engine.rpm.max(coupled_rpm);
         }
         vehicle.drivetrain_initialized = true;
     }
@@ -271,7 +279,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     let motion = physics::tire::Motion {
         longitudinal,
         lateral,
-        yaw_rate: vehicle.yaw_rate,
+        yaw_rate: vehicle.orientation_rate.yaw,
     };
     let contacts = contact::tire_contacts(
         vehicle,
@@ -317,7 +325,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
         driven_brake_force,
         seconds,
     );
-    vehicle.yaw_rate = solved.motion.yaw_rate;
+    vehicle.orientation_rate.yaw = solved.motion.yaw_rate;
     let resistance = engine::resistance_force(&spec, longitudinal) / spec.weight_kg * seconds;
     let new_longitudinal = solved.motion.longitudinal.signum()
         * (solved.motion.longitudinal.abs() - resistance).max(0.0);
@@ -328,7 +336,8 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
         torque_nm,
     };
     let new_lateral = solved.motion.lateral;
-    vehicle.velocity = XZ {
+    vehicle.velocity = XYZ {
+        y: vehicle.velocity.y,
         x: forward.x * new_longitudinal + right.x * new_lateral,
         z: forward.z * new_longitudinal + right.z * new_lateral,
     };
@@ -337,11 +346,12 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     // static contact balancing gravity must not produce brake dive.
     let ax = (new_longitudinal - longitudinal) / seconds;
     let ay = (new_lateral - lateral) / seconds;
-    vehicle.acceleration[0] += (ax - vehicle.acceleration[0]) * blend;
-    vehicle.acceleration[1] += (ay - vehicle.acceleration[1]) * blend;
+    vehicle.filtered_acceleration.longitudinal +=
+        (ax - vehicle.filtered_acceleration.longitudinal) * blend;
+    vehicle.filtered_acceleration.lateral += (ay - vehicle.filtered_acceleration.lateral) * blend;
     suspension::update_body_motion(vehicle, seconds);
-    vehicle.heading =
-        (vehicle.heading + vehicle.yaw_rate * seconds).rem_euclid(std::f32::consts::TAU);
+    vehicle.orientation.yaw = (vehicle.orientation.yaw + vehicle.orientation_rate.yaw * seconds)
+        .rem_euclid(std::f32::consts::TAU);
     let previous_position = vehicle.position;
     vehicle.position.x += vehicle.velocity.x * seconds;
     vehicle.position.z += vehicle.velocity.z * seconds;
@@ -350,13 +360,17 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     let impact = resolve_road(vehicle);
     vehicle.position.y = chassis_height;
     resolve_curbs(vehicle, previous_position, seconds);
+    vehicle.acceleration = XYZ {
+        x: (vehicle.velocity.x - previous_velocity.x) / seconds,
+        y: (vehicle.velocity.y - previous_velocity.y) / seconds,
+        z: (vehicle.velocity.z - previous_velocity.z) / seconds,
+    };
     impact
 }
 
 fn update_inputs(vehicle: &mut Vehicle, controls: Controls, seconds: f32) {
-    refresh_speed(vehicle);
     vehicle.shift_timer = (vehicle.shift_timer - seconds).max(0.0);
-    vehicle.rev_match_timer = (vehicle.rev_match_timer - seconds).max(0.0);
+    vehicle.engine.rev_match_timer = (vehicle.engine.rev_match_timer - seconds).max(0.0);
     update_steering(vehicle, controls.steering, seconds);
     // Digital pedals build pressure in 0.2 s and release in 0.08 s.
     let requested_brake = controls.brake.clamp(0.0, 1.0);
@@ -380,7 +394,11 @@ fn finish_drivetrain(
 ) {
     let spec = vehicle.spec.clone();
     let drive_bias = spec.drive_bias;
-    let direction = if vehicle.gear == 0 { -1.0 } else { 1.0 };
+    let direction = if vehicle.gear == REVERSE_GEAR {
+        -1.0
+    } else {
+        1.0
+    };
     let contact::AxleGeometry {
         front_offset: a,
         sin,
@@ -415,13 +433,13 @@ fn finish_drivetrain(
             driven_brake_force,
             rolling_speed * direction,
         );
-        vehicle.engine_rpm = rotation.engine_rpm.max(IDLE_RPM);
+        vehicle.engine.rpm = rotation.engine_rpm.max(IDLE_RPM);
         vehicle.driven_wheel_omega = rotation.wheel_omega * direction;
     } else {
         update_free_engine(vehicle, throttle, seconds);
         vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
     }
-    update_fuel_cut(vehicle, vehicle.engine_rpm);
+    update_fuel_cut(vehicle, vehicle.engine.rpm);
     let slip_speed = vehicle.driven_wheel_omega * spec.rolling_radius - driven_speed;
     vehicle.wheel_spin = (slip_speed.abs() / 8.0).clamp(0.0, 1.0);
 }
@@ -474,12 +492,10 @@ fn resolve_curbs(vehicle: &mut Vehicle, previous_position: XYZ, seconds: f32) {
                 z: vehicle.position.z,
             },
         ) {
-            let across = dot(vehicle.velocity, normal);
+            let across = dot(util::geometry::xz(vehicle.velocity), normal);
             let loss = (across.abs() * 0.08).min(1.2) * (rise / 0.09);
-            for (velocity, normal) in util::geometry::xz_iter_mut(&mut vehicle.velocity).zip(normal)
-            {
-                *velocity -= normal * across.signum() * loss;
-            }
+            vehicle.velocity.x -= normal.x * across.signum() * loss;
+            vehicle.velocity.z -= normal.z * across.signum() * loss;
             vehicle.curb_bump = vehicle
                 .curb_bump
                 .max(0.03 * (rise / 0.09) * (across.abs() / 6.0).min(1.0));
@@ -493,18 +509,18 @@ fn engine_inertia(vehicle: &Vehicle) -> f32 {
 
 fn engine_net_torque(vehicle: &Vehicle, throttle: f32) -> f32 {
     let spec = &vehicle.spec;
-    let revs = ((vehicle.engine_rpm - IDLE_RPM) / (spec.redline_rpm - IDLE_RPM)).max(0.0);
+    let revs = ((vehicle.engine.rpm - IDLE_RPM) / (spec.redline_rpm - IDLE_RPM)).max(0.0);
     let drag = spec.engine_max_torque_nm * (0.10 + 0.16 * revs + 0.24 * revs * revs);
     let throttle = if vehicle.shift_timer > 0.0 && vehicle.gear != NEUTRAL_GEAR {
-        0.85 * vehicle.rev_match_timer / REV_MATCH_SECONDS
+        0.85 * vehicle.engine.rev_match_timer / REV_MATCH_SECONDS
     } else {
         throttle
     };
-    let combustion = if vehicle.fuel_cut {
+    let combustion = if vehicle.engine.fuel_cut {
         0.0
     } else {
         throttle
-            * (engine::engine_torque(spec, vehicle.engine_rpm) * engine::DRIVETRAIN_EFFICIENCY
+            * (engine::engine_torque(spec, vehicle.engine.rpm) * engine::DRIVETRAIN_EFFICIENCY
                 + drag)
     };
     combustion - drag
@@ -521,7 +537,7 @@ fn drivetrain_step(
     }
     let spec = &vehicle.spec;
     let gearbox = &spec.gearbox;
-    let ratio = if vehicle.gear == 0 {
+    let ratio = if vehicle.gear == REVERSE_GEAR {
         gearbox.reverse_ratio
     } else {
         gearbox.ratios[(vehicle.gear - 1) as usize]
@@ -531,11 +547,15 @@ fn drivetrain_step(
     let engagement = if engine::rpm(spec, speed, vehicle.gear) > IDLE_RPM + 100.0 {
         1.0
     } else {
-        ((vehicle.engine_rpm - IDLE_RPM) / 600.0).clamp(0.0, 1.0)
+        ((vehicle.engine.rpm - IDLE_RPM) / 600.0).clamp(0.0, 1.0)
     };
-    let direction = if vehicle.gear == 0 { -1.0 } else { 1.0 };
+    let direction = if vehicle.gear == REVERSE_GEAR {
+        -1.0
+    } else {
+        1.0
+    };
     Some(physics::powertrain::new(
-        vehicle.engine_rpm,
+        vehicle.engine.rpm,
         vehicle.driven_wheel_omega * direction,
         engine_net_torque(vehicle, throttle),
         engine_inertia(vehicle),
@@ -547,12 +567,12 @@ fn drivetrain_step(
 
 fn update_turbo(vehicle: &mut Vehicle, dt: f32, throttle: f32) {
     let Some(tune) = &vehicle.spec.turbo else {
-        vehicle.turbo_spool = 0.0;
-        vehicle.turbo_boost = 0.0;
+        vehicle.engine.turbo_spool = 0.0;
+        vehicle.engine.turbo_boost = 0.0;
         return;
     };
     let loaded = vehicle.gear != NEUTRAL_GEAR && vehicle.shift_timer <= 0.0;
-    let rpm = vehicle.engine_rpm;
+    let rpm = vehicle.engine.rpm;
     let exhaust = ((rpm - tune.spool_start_rpm) / (tune.full_boost_rpm - tune.spool_start_rpm))
         .clamp(0.0, 1.0);
     let target = if loaded {
@@ -560,63 +580,69 @@ fn update_turbo(vehicle: &mut Vehicle, dt: f32, throttle: f32) {
     } else {
         0.0
     };
-    let time = if target > vehicle.turbo_spool {
+    let time = if target > vehicle.engine.turbo_spool {
         tune.spool_seconds
     } else {
         tune.decay_seconds
     };
-    vehicle.turbo_spool += (target - vehicle.turbo_spool) * (1.0 - (-dt / time).exp());
+    vehicle.engine.turbo_spool +=
+        (target - vehicle.engine.turbo_spool) * (1.0 - (-dt / time).exp());
     // Closing the throttle vents manifold pressure while the turbine coasts.
     let boost_target = if loaded {
-        vehicle.turbo_spool * throttle
+        vehicle.engine.turbo_spool * throttle
     } else {
         0.0
     };
-    vehicle.turbo_boost += (boost_target - vehicle.turbo_boost) * (1.0 - (-dt / 0.06).exp());
+    vehicle.engine.turbo_boost +=
+        (boost_target - vehicle.engine.turbo_boost) * (1.0 - (-dt / 0.06).exp());
 }
 
 fn update_fuel_cut(vehicle: &mut Vehicle, rpm: f32) {
     // The same hysteresis applies whether the engine is free or coupled to
     // the wheels. Cutting combustion cannot prevent a mechanical overrev.
     if rpm >= vehicle.spec.redline_rpm {
-        vehicle.fuel_cut = true;
+        vehicle.engine.fuel_cut = true;
     } else if rpm <= vehicle.spec.redline_rpm - 250.0 {
-        vehicle.fuel_cut = false;
+        vehicle.engine.fuel_cut = false;
     }
 }
 
 fn update_free_engine(vehicle: &mut Vehicle, throttle: f32, dt: f32) {
-    update_fuel_cut(vehicle, vehicle.engine_rpm);
+    update_fuel_cut(vehicle, vehicle.engine.rpm);
     let rpm_rate = engine_net_torque(vehicle, throttle) / engine_inertia(vehicle) * 60.0
         / std::f32::consts::TAU;
-    vehicle.engine_rpm = (vehicle.engine_rpm + rpm_rate * dt).max(IDLE_RPM);
-    update_fuel_cut(vehicle, vehicle.engine_rpm);
+    vehicle.engine.rpm = (vehicle.engine.rpm + rpm_rate * dt).max(IDLE_RPM);
+    update_fuel_cut(vehicle, vehicle.engine.rpm);
 }
 
 fn update_engine_feedback(vehicle: &mut Vehicle, controls: Controls, dt: f32) {
     let throttle = controls.throttle.clamp(0.0, 1.0);
 
-    vehicle.sound_shift_timer = (vehicle.sound_shift_timer - dt).max(0.0);
+    vehicle.engine.sound_shift_timer = (vehicle.engine.sound_shift_timer - dt).max(0.0);
 
-    let blip = vehicle.rev_match_timer / REV_MATCH_SECONDS;
+    let blip = vehicle.engine.rev_match_timer / REV_MATCH_SECONDS;
 
     // An unloaded engine uses less sustained load; fuel cuts also reach
     // the audio layers so the limiter is audible as well as visible.
-    let requested = if vehicle.fuel_cut {
+    let requested = if vehicle.engine.fuel_cut {
         0.0
     } else if vehicle.gear == NEUTRAL_GEAR {
         throttle * 0.55
     } else {
         throttle
     };
-    let shift_progress = 1.0 - vehicle.sound_shift_timer / SOUND_SHIFT_SECONDS;
+    let shift_progress = 1.0 - vehicle.engine.sound_shift_timer / SOUND_SHIFT_SECONDS;
     let shift_unload = 0.15 + 0.85 * shift_progress * shift_progress;
     // Feed the blip into both recorded load/coast layers and procedural
     // engine voices, without applying extra driving force at the wheels.
     let target_load = (requested * shift_unload + 0.12 * (1.0 - requested))
-        .max(if vehicle.fuel_cut { 0.0 } else { 0.85 * blip })
+        .max(if vehicle.engine.fuel_cut {
+            0.0
+        } else {
+            0.85 * blip
+        })
         .clamp(0.0, 1.0);
-    vehicle.engine_load += (target_load - vehicle.engine_load) * (dt * 10.0).clamp(0.0, 1.0);
+    vehicle.engine.load += (target_load - vehicle.engine.load) * (dt * 10.0).clamp(0.0, 1.0);
 }
 
 fn update_steering(vehicle: &mut Vehicle, requested: f32, dt: f32) {
@@ -624,7 +650,7 @@ fn update_steering(vehicle: &mut Vehicle, requested: f32, dt: f32) {
     if requested == 0.0 {
         // Stationary wheels hold their angle. Forward motion progressively
         // restores self-centering, independently of deliberate countersteering.
-        let motion = (vehicle.speed / STEERING_CENTERING_SPEED).clamp(0.0, 1.0);
+        let motion = (longitudinal_speed(vehicle) / STEERING_CENTERING_SPEED).clamp(0.0, 1.0);
         let step = STEERING_RATE * 0.45 * motion * dt;
         vehicle.steering -= vehicle.steering.clamp(-step, step);
         return;
@@ -639,7 +665,7 @@ fn update_steering(vehicle: &mut Vehicle, requested: f32, dt: f32) {
         vehicle.steering -= vehicle.steering.clamp(-rate * elapsed, rate * elapsed);
         remaining -= elapsed;
     }
-    let rate = STEERING_RATE * 0.45 / (1.0 + vehicle.speed.abs() * 0.008);
+    let rate = STEERING_RATE * 0.45 / (1.0 + longitudinal_speed(vehicle).abs() * 0.008);
     vehicle.steering += (requested - vehicle.steering).clamp(-rate * remaining, rate * remaining);
 }
 
@@ -652,12 +678,20 @@ pub fn front_wheel_angle(vehicle: &Vehicle) -> f32 {
 }
 
 fn resolve_road(vehicle: &mut Vehicle) -> f32 {
+    let mut velocity = util::geometry::xz(vehicle.velocity);
+    let impact = constrain_road(vehicle, &mut velocity);
+    vehicle.velocity.x = velocity.x;
+    vehicle.velocity.z = velocity.z;
+    impact
+}
+
+fn constrain_road(vehicle: &mut Vehicle, velocity: &mut XZ<f32>) -> f32 {
     if world::street_surface::has_compiled_roads(&vehicle.track) {
         let city = &vehicle.track;
         return physics::vehicle_location::constrain(
             city,
             &mut vehicle.position,
-            &mut vehicle.velocity,
+            velocity,
             asset::car_glb::height(&vehicle.spec.design),
         );
     }
@@ -681,29 +715,25 @@ fn resolve_road(vehicle: &mut Vehicle) -> f32 {
             *util::geometry::xyz_component_mut(&mut vehicle.position, coordinate) = clamped;
             let mut normal = XZ { x: 0.0, z: 0.0 };
             *util::geometry::xz_component_mut(&mut normal, axis) = excess.signum();
-            impact = impact.max(physics::vehicle_location::deflect(
-                &mut vehicle.velocity,
-                normal,
-            ));
+            impact = impact.max(physics::vehicle_location::deflect(velocity, normal));
         }
     }
     vehicle.position.y = suspension::ride_height(vehicle);
     impact
 }
 
-fn refresh_speed(vehicle: &mut Vehicle) {
-    vehicle.speed = dot(
-        vehicle.velocity,
-        XZ {
-            x: vehicle.heading.sin(),
-            z: vehicle.heading.cos(),
-        },
-    );
+/// Signed velocity along the vehicle's forward axis, in metres per second.
+pub fn longitudinal_speed(vehicle: &Vehicle) -> f32 {
+    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+    dot(util::geometry::xz(vehicle.velocity), XZ { x: sin, z: cos })
+}
+
+fn refresh_slip(vehicle: &mut Vehicle) {
     vehicle.slip = dot(
-        vehicle.velocity,
+        util::geometry::xz(vehicle.velocity),
         XZ {
-            x: vehicle.heading.cos(),
-            z: -vehicle.heading.sin(),
+            x: vehicle.orientation.yaw.cos(),
+            z: -vehicle.orientation.yaw.sin(),
         },
     );
 }

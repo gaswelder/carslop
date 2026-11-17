@@ -19,8 +19,8 @@ pub fn new(car: &Vehicle) -> ContactShadow {
     ContactShadow {
         origin: car.position,
         axes: [
-            car.heading.sin(),
-            car.heading.cos(),
+            car.orientation.yaw.sin(),
+            car.orientation.yaw.cos(),
             wheel.x.abs() + 0.45,
             car.spec.wheelbase * 0.5 + 1.05,
         ],

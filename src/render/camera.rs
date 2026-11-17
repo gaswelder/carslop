@@ -1,6 +1,6 @@
 //! Render-only chase-camera tuning. Never writes vehicle state.
 
-use crate::physics::car::Vehicle;
+use crate::physics::car;
 use crate::render;
 use crate::util;
 use crate::util::geometry::XYZ;
@@ -86,12 +86,12 @@ pub struct ChaseCamera {
     bonnet: Pose,
 }
 
-pub fn new(car: &Vehicle) -> ChaseCamera {
+pub fn new(car: &car::Vehicle) -> ChaseCamera {
     let mut camera = ChaseCamera {
         track: car.track.clone(),
         view: FollowView::Close,
         anchor: car.position,
-        heading: car.heading,
+        heading: car.orientation.yaw,
         look_ahead: XYZ {
             x: 0.0,
             y: 0.0,
@@ -121,11 +121,11 @@ pub fn toggle_view(chase_camera: &mut ChaseCamera) {
     };
 }
 
-pub fn snap(chase_camera: &mut ChaseCamera, car: &Vehicle) {
+pub fn snap(chase_camera: &mut ChaseCamera, car: &car::Vehicle) {
     chase_camera.bonnet = bonnet_pose(car);
     chase_camera.track = car.track.clone();
     chase_camera.anchor = car.position;
-    chase_camera.heading = car.heading.rem_euclid(TAU);
+    chase_camera.heading = car.orientation.yaw.rem_euclid(TAU);
     chase_camera.look_ahead = desired_look(car);
     if let Some(dimensions) = chase_dimensions(chase_camera.view) {
         chase_camera.distance = dimensions.distance;
@@ -133,7 +133,7 @@ pub fn snap(chase_camera: &mut ChaseCamera, car: &Vehicle) {
     }
 }
 
-pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duration) {
+pub fn update(chase_camera: &mut ChaseCamera, car: &car::Vehicle, frame_time: Duration) {
     if !std::sync::Arc::ptr_eq(&chase_camera.track, &car.track) {
         snap(chase_camera, car);
         return;
@@ -148,13 +148,13 @@ pub fn update(chase_camera: &mut ChaseCamera, car: &Vehicle, frame_time: Duratio
     // from the nose or forcing the camera to follow the route instead.
     let motion = car.velocity.x.hypot(car.velocity.z);
     let drift = if motion > 1.0 {
-        angle(car.velocity.x.atan2(car.velocity.z) - car.heading).clamp(-0.35, 0.35)
-            * (car.speed.max(0.0) / 12.0).clamp(0.0, 1.0)
+        angle(car.velocity.x.atan2(car.velocity.z) - car.orientation.yaw).clamp(-0.35, 0.35)
+            * (car::longitudinal_speed(car).max(0.0) / 12.0).clamp(0.0, 1.0)
             * 0.25
     } else {
         0.0
     };
-    let heading = car.heading + drift;
+    let heading = car.orientation.yaw + drift;
     chase_camera.heading = (chase_camera.heading
         + angle(heading - chase_camera.heading) * damp(7.0, dt))
     .rem_euclid(TAU);
@@ -209,7 +209,7 @@ pub fn pose(chase_camera: &ChaseCamera) -> Pose {
     }
 }
 
-fn bonnet_pose(car: &Vehicle) -> Pose {
+fn bonnet_pose(car: &car::Vehicle) -> Pose {
     let body = render::gl::vehicle_body_matrix(car);
     let eye = util::geometry::xyz_from_fn(|i| {
         body[12 + i] + body[4 + i] * BONNET.height + body[8 + i] * BONNET.forward
@@ -223,8 +223,9 @@ fn bonnet_pose(car: &Vehicle) -> Pose {
     }
 }
 
-fn desired_look(car: &Vehicle) -> XYZ {
-    let distance = (car.speed.abs() * 0.22).min(5.5);
+fn desired_look(car: &car::Vehicle) -> XYZ {
+    let speed = car::longitudinal_speed(car);
+    let distance = (speed.abs() * 0.22).min(5.5);
     if distance < 0.001 {
         return XYZ {
             x: 0.0,
@@ -233,10 +234,10 @@ fn desired_look(car: &Vehicle) -> XYZ {
         };
     }
     // Look a little along actual reverse travel without flipping the chase rig.
-    let direction = if car.speed < 0.0 { -1.0 } else { 1.0 };
+    let direction = if speed < 0.0 { -1.0 } else { 1.0 };
     let forward = XZ {
-        x: car.heading.sin() * direction,
-        z: car.heading.cos() * direction,
+        x: car.orientation.yaw.sin() * direction,
+        z: car.orientation.yaw.cos() * direction,
     };
     XYZ {
         x: forward.x * distance,

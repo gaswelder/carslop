@@ -289,15 +289,15 @@ mod tire {
 }
 
 mod car {
-    use crate::physics::car::{Controls, Vehicle, NEUTRAL_GEAR};
-    use crate::util::geometry::{XYZ, XZ};
+    use crate::physics::car::{Controls, Vehicle, NEUTRAL_GEAR, REVERSE_GEAR};
+    use crate::util::geometry::XYZ;
     use crate::{model, physics, test, world};
     use std::time::Duration;
 
     fn select_reverse(vehicle: &mut Vehicle) {
         physics::car::shift(vehicle, false);
         physics::car::shift(vehicle, false);
-        assert_eq!(vehicle.gear, 0);
+        assert_eq!(vehicle.gear, REVERSE_GEAR);
     }
     fn select_drive(vehicle: &mut Vehicle) {
         physics::car::shift(vehicle, true);
@@ -316,19 +316,38 @@ mod car {
             0.0,
             test::support::car(),
         );
-        car.velocity = XZ { x: 0.0, z: 40.0 };
+        car.velocity = XYZ {
+            y: car.velocity.y,
+            x: 0.0,
+            z: 40.0,
+        };
         assert_eq!(car.gear, 1);
         physics::car::shift(&mut car, true);
         assert_eq!(car.gear, 2);
-        car.velocity = XZ { x: 0.0, z: 0.0 };
+        car.velocity = XYZ {
+            y: car.velocity.y,
+            x: 0.0,
+            z: 0.0,
+        };
         assert_eq!(car.gear, 2);
         physics::car::shift(&mut car, false);
         physics::car::shift(&mut car, false);
         assert_eq!(car.gear, NEUTRAL_GEAR);
-        car.velocity = XZ { x: 2.0, z: 0.0 };
+        car.velocity = XYZ {
+            y: car.velocity.y,
+            x: 2.0,
+            z: 0.0,
+        };
         physics::car::shift(&mut car, false);
-        assert_eq!(car.gear, 0);
-        assert_eq!(car.velocity, XZ { x: 2.0, z: 0.0 });
+        assert_eq!(car.gear, REVERSE_GEAR);
+        assert_eq!(
+            car.velocity,
+            XYZ {
+                y: 0.0,
+                x: 2.0,
+                z: 0.0
+            }
+        );
         physics::car::shift(&mut car, true);
         assert_eq!(car.gear, NEUTRAL_GEAR);
         physics::car::shift(&mut car, true);
@@ -381,7 +400,7 @@ mod car {
                 model.clone(),
             );
             select_reverse(&mut v);
-            assert_eq!(v.gear, 0);
+            assert_eq!(v.gear, REVERSE_GEAR);
             for _ in 0..720 {
                 v.position = physics::vehicle_location::vehicle_position(road, 0.0); // straight-line test treadmill
                 physics::car::update(
@@ -394,11 +413,12 @@ mod car {
                 );
             }
             assert!(
-                v.speed < -6.0 && v.speed.is_finite(),
+                physics::car::longitudinal_speed(&v) < -6.0
+                    && physics::car::longitudinal_speed(&v).is_finite(),
                 "reverse speed for {model:?}: {}",
-                v.speed
+                physics::car::longitudinal_speed(&v)
             );
-            assert_eq!(v.gear, 0);
+            assert_eq!(v.gear, REVERSE_GEAR);
 
             physics::car::update(
                 &mut v,
@@ -408,8 +428,8 @@ mod car {
                     ..Controls::default()
                 },
             );
-            assert!(v.speed.abs() < 0.001);
-            assert_eq!(v.gear, 0);
+            assert!(physics::car::longitudinal_speed(&v).abs() < 0.001);
+            assert_eq!(v.gear, REVERSE_GEAR);
             select_drive(&mut v);
             assert_eq!(v.gear, 1);
             physics::car::update(
@@ -421,10 +441,10 @@ mod car {
                 },
             );
             assert!(
-                v.speed > 0.5,
+                physics::car::longitudinal_speed(&v) > 0.5,
                 "{model:?} failed to pull away: {}, engine {}, wheel {}",
-                v.speed,
-                v.engine_rpm,
+                physics::car::longitudinal_speed(&v),
+                v.engine.rpm,
                 v.wheel_spin
             );
         }

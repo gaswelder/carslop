@@ -126,7 +126,7 @@ fn recover(session: &mut Session) -> bool {
         return false;
     }
     let road = physics::vehicle_location::recovery(session_track(session), session.car.position);
-    let backwards = (session.car.heading - model::world::heading(road)).cos() < 0.0;
+    let backwards = (session.car.orientation.yaw - model::world::heading(road)).cos() < 0.0;
     let heading = model::world::heading(road) + if backwards { std::f32::consts::PI } else { 0.0 };
     physics::car::reset(
         &mut session.car,
@@ -603,7 +603,7 @@ fn copy_map_location(app: &mut App) {
             track: session_track(&app.session),
             player: app.session.car.position,
         },
-        app.session.car.heading,
+        app.session.car.orientation.yaw,
         [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
         status,
     );
@@ -619,7 +619,7 @@ fn zoom_map(app: &mut App, steps: f32) {
             track: session_track(&app.session),
             player: app.session.car.position,
         },
-        app.session.car.heading,
+        app.session.car.orientation.yaw,
         [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
         steps,
     ) {
@@ -645,7 +645,7 @@ fn handle_key(app: &mut App, key: Keycode) {
                     track: session_track(&app.session),
                     player: app.session.car.position,
                 },
-                app.session.car.heading,
+                app.session.car.orientation.yaw,
                 [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
                 app::settings::map_zoom(&app.settings),
             );
@@ -746,7 +746,7 @@ fn render_scene(app: &mut App, frame_time: Duration) {
         render::gl::garage_camera(
             aspect,
             car.position,
-            car.heading + app.preview_angle,
+            car.orientation.yaw + app.preview_angle,
             world::street_surface::has_compiled_roads(session_track(&app.session))
                 .then_some(session_track(&app.session)),
         )
@@ -808,11 +808,11 @@ fn render_scene(app: &mut App, frame_time: Duration) {
                 track: session_track(s),
                 player: car.position,
             },
-            car.heading,
+            car.orientation.yaw,
             ui::hud::Gauges {
-                rpm: car.engine_rpm,
+                rpm: car.engine.rpm,
                 redline_rpm: car.spec.redline_rpm,
-                speed_kmh: car.speed.abs() * 3.6,
+                speed_kmh: physics::car::longitudinal_speed(car).abs() * 3.6,
                 gear: car.gear,
                 forces: physics::car::force_telemetry(car),
             },

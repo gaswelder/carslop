@@ -64,9 +64,10 @@ pub fn tire_capacities(vehicle: &car::Vehicle) -> [f32; 2] {
         } else {
             1.0 - spec.front_weight
         };
-        let transfer = spec.weight_kg * vehicle.acceleration[1].abs() * spec.cg_height
-            / spec.track_width
-            * share;
+        let transfer =
+            spec.weight_kg * vehicle.filtered_acceleration.lateral.abs() * spec.cg_height
+                / spec.track_width
+                * share;
         let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
 
         let loc = &vehicle.track;
@@ -119,7 +120,7 @@ pub fn tire_contacts(
     } = axle_geometry(vehicle);
     let longitudinal = motion.longitudinal;
     let lateral = motion.lateral;
-    let front_speed = longitudinal * cos + (lateral + vehicle.yaw_rate * a) * sin;
+    let front_speed = longitudinal * cos + (lateral + vehicle.orientation_rate.yaw * a) * sin;
     let brake = vehicle.brake_pressure * brake_accel(vehicle) * spec.weight_kg;
     [0, 1].map(|axle| {
         let capacity = capacities[axle];

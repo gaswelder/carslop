@@ -567,8 +567,10 @@ mod tire_particles {
             model::world::heading(road),
             test::support::car(),
         );
-        car.velocity = util::geometry::xz_map(road.tangent, |v| v * 10.0);
-        car.speed = 10.0;
+        car.velocity = util::geometry::at_height(
+            util::geometry::xz_map(road.tangent, |v| v * 10.0),
+            car.velocity.y,
+        );
         car.tire_scrub = 0.9;
         car
     }
@@ -703,7 +705,10 @@ mod camera {
             test::support::car(),
             track.clone(),
         );
-        scenic.speed = 30.0;
+        scenic.velocity = util::geometry::at_height(
+            util::geometry::xz_map(road.tangent, |v| v * 30.0),
+            scenic.velocity.y,
+        );
         render::camera::update(&mut camera, &scenic, Duration::ZERO);
 
         assert_eq!(render::camera::view(&(camera)), FollowView::Wide);
@@ -726,11 +731,11 @@ mod camera {
         let v = car();
         let mut moved = car();
         moved.position.x += 4.0;
-        moved.heading += 0.3;
-        moved.speed = 18.0;
-        moved.velocity = XZ {
-            x: moved.heading.sin() * 18.0,
-            z: moved.heading.cos() * 18.0,
+        moved.orientation.yaw += 0.3;
+        moved.velocity = XYZ {
+            y: moved.velocity.y,
+            x: moved.orientation.yaw.sin() * 18.0,
+            z: moved.orientation.yaw.cos() * 18.0,
         };
         let run = |fps: u32| {
             let mut c = render::camera::new(&v);
@@ -751,9 +756,9 @@ mod camera {
     #[test]
     fn heading_wrap_uses_short_path_and_zero_dt_is_frozen() {
         let mut v = car();
-        v.heading = TAU - 0.02;
+        v.orientation.yaw = TAU - 0.02;
         let mut c = render::camera::new(&v);
-        v.heading = 0.02;
+        v.orientation.yaw = 0.02;
         let previous = render::camera::pose(&c);
         render::camera::update(&mut c, &v, Duration::from_millis(16));
         let current = render::camera::pose(&c);
@@ -783,9 +788,11 @@ mod camera {
                         / 600.0,
                 );
                 v.position = physics::vehicle_location::vehicle_position(road, 1.4);
-                v.heading = model::world::heading(road);
-                v.speed = 20.0;
-                v.velocity = util::geometry::xz_map(road.tangent, |x| x * 20.0);
+                v.orientation.yaw = model::world::heading(road);
+                v.velocity = util::geometry::at_height(
+                    util::geometry::xz_map(road.tangent, |x| x * 20.0),
+                    v.velocity.y,
+                );
                 render::camera::update(&mut c, &v, Duration::from_secs_f64(1.0 / 60.0));
                 let pose = render::camera::pose(&c);
                 assert!(util::geometry::iter(&(pose.eye))

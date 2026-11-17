@@ -6,6 +6,13 @@ use crate::util;
 use crate::util::geometry::XYZ;
 use crate::world;
 
+/// Smoothed local acceleration for load transfer and body lean, in m/s².
+#[derive(Default)]
+pub struct LocalAcceleration {
+    pub longitudinal: f32,
+    pub lateral: f32,
+}
+
 pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     let spec = &vehicle.spec;
     // Suspension supports the chassis rather than pinning it to terrain.
@@ -18,11 +25,13 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     }
     let omega = std::f32::consts::TAU * spec.suspension_hz;
     let support = (9.81 + omega * omega * (ground - vehicle.position.y)
-        - 1.3 * omega * vehicle.vertical_speed)
+        - 1.3 * omega * vehicle.velocity.y)
         .clamp(0.0, 49.05);
-    vehicle.vertical_speed += (support - 9.81) * seconds;
-    vehicle.position.y += vehicle.vertical_speed * seconds;
-    let transfer = spec.weight_kg * vehicle.acceleration[0] * spec.cg_height / spec.wheelbase;
+    vehicle.acceleration.y = support - 9.81;
+    vehicle.velocity.y += vehicle.acceleration.y * seconds;
+    vehicle.position.y += vehicle.velocity.y * seconds;
+    let transfer = spec.weight_kg * vehicle.filtered_acceleration.longitudinal * spec.cg_height
+        / spec.wheelbase;
     let total_load = spec.weight_kg * support;
     let front_load = (total_load * spec.front_weight - transfer).clamp(0.0, total_load);
     vehicle.axle_load = [front_load, total_load - front_load];
@@ -42,7 +51,7 @@ pub struct GroundAngles {
 }
 
 pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
-    let (sin, cos) = vehicle.heading.sin_cos();
+    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
     let h = |dx: f32, dz: f32| {
         let p = XYZ {
             x: vehicle.position.x + dx,
@@ -73,16 +82,19 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
 
 pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     let spec = &vehicle.spec;
-    let target_pitch = (vehicle.acceleration[0] * spec.cg_height / 80.0).clamp(-0.10, 0.10);
-    let target_roll = (vehicle.acceleration[1] * spec.cg_height / 65.0).clamp(-0.12, 0.12);
+    let target_pitch =
+        (vehicle.filtered_acceleration.longitudinal * spec.cg_height / 80.0).clamp(-0.10, 0.10);
+    let target_roll =
+        (vehicle.filtered_acceleration.lateral * spec.cg_height / 65.0).clamp(-0.12, 0.12);
     let omega = std::f32::consts::TAU * spec.suspension_hz;
-    vehicle.pitch_rate += (omega * omega * (target_pitch - vehicle.body_pitch)
-        - 1.4 * omega * vehicle.pitch_rate)
+    vehicle.orientation_rate.pitch += (omega * omega * (target_pitch - vehicle.orientation.pitch)
+        - 1.4 * omega * vehicle.orientation_rate.pitch)
         * dt;
-    vehicle.roll_rate +=
-        (omega * omega * (target_roll - vehicle.body_roll) - 1.4 * omega * vehicle.roll_rate) * dt;
-    vehicle.body_pitch += vehicle.pitch_rate * dt;
-    vehicle.body_roll += vehicle.roll_rate * dt;
+    vehicle.orientation_rate.roll += (omega * omega * (target_roll - vehicle.orientation.roll)
+        - 1.4 * omega * vehicle.orientation_rate.roll)
+        * dt;
+    vehicle.orientation.pitch += vehicle.orientation_rate.pitch * dt;
+    vehicle.orientation.roll += vehicle.orientation_rate.roll * dt;
     // The sprung body follows terrain through damped angular springs.
     // Wheels follow the contact surface independently in the renderer.
     let angles = if vehicle.axle_load.iter().sum::<f32>() > 0.0 {

@@ -46,7 +46,7 @@ pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
     }
     let centers = car.spec.design.mounts;
     let contacts: [(XYZ, bool); 2] = [centers[0], centers[1]].map(|p| {
-        let (s, c) = car.heading.sin_cos();
+        let (s, c) = car.orientation.yaw.sin_cos();
         let x = car.position.x + p.x * c + p.z * s;
         let z = car.position.z - p.x * s + p.z * c;
         let road = world::roads::project(&car.track, XYZ { x, y: 0.0, z });

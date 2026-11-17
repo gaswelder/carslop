@@ -748,7 +748,14 @@ pub fn mesh_draw(
         gl::Uniform1f(brake_light, if car.brake_lights { 1.0 } else { 0.0 });
         let reverse_light = CString::new("u_reverse_light").unwrap();
         let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
-        gl::Uniform1f(reverse_light, if car.gear == 0 { 1.0 } else { 0.0 });
+        gl::Uniform1f(
+            reverse_light,
+            if car.gear == physics::car::REVERSE_GEAR {
+                1.0
+            } else {
+                0.0
+            },
+        );
         let range = &mesh.car_ranges[car_index];
         gl::DrawArrays(GL_TRIANGLES, range.start, range.end - range.start);
         gl::Uniform1f(brake_light, 0.0);
@@ -1372,9 +1379,9 @@ pub fn vehicle_body_matrix(vehicle: &physics::car::Vehicle) -> [f32; 16] {
     body_position.y += vehicle.curb_bump;
     body_model_matrix(
         body_position,
-        vehicle.heading,
-        vehicle.suspension_pitch + vehicle.body_pitch,
-        vehicle.suspension_roll + vehicle.body_roll,
+        vehicle.orientation.yaw,
+        vehicle.suspension_pitch + vehicle.orientation.pitch,
+        vehicle.suspension_roll + vehicle.orientation.roll,
     )
 }
 

@@ -73,13 +73,15 @@ fn closer_default_camera_keeps_the_car_in_frame_at_speed_and_in_reverse() {
         track,
     );
     for speed in [-6.0, 0.0, 30.0, 45.0] {
-        car.speed = speed;
-        car.velocity = util::geometry::xz_map(road.tangent, |n| n * speed);
+        car.velocity = util::geometry::at_height(
+            util::geometry::xz_map(road.tangent, |n| n * speed),
+            car.velocity.y,
+        );
         let chase = render::camera::new(&car);
         let camera = chase_camera(1280.0 / 720.0, render::camera::pose(&chase));
         let matrix = multiply(
             camera.view_projection,
-            model_matrix(car.position, car.heading, 0.0),
+            model_matrix(car.position, car.orientation.yaw, 0.0),
         );
         for x in [-1.4, 1.4] {
             for y in [-0.42, 1.25] {
@@ -175,10 +177,10 @@ fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
     )
     .unwrap();
     for i in 1..5 {
-        car.heading += 0.7;
+        car.orientation.yaw += 0.7;
         car.position.y += 0.2;
-        car.body_pitch = i as f32 * 0.03;
-        car.body_roll = i as f32 * 0.025;
+        car.orientation.pitch = i as f32 * 0.03;
+        car.orientation.roll = i as f32 * 0.025;
         car.curb_bump = 0.08;
         render::camera::update(&mut chase, &car, std::time::Duration::from_millis(16));
         let actual = render::gl::project(

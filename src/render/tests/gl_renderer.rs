@@ -376,7 +376,7 @@ fn reverse_lights_renderer() {
         );
         let matrix = render::gl::model_matrix(p, 0.0, 0.0);
         let mut frames = Vec::new();
-        for gear in [1, 0, physics::car::NEUTRAL_GEAR] {
+        for gear in [1, physics::car::REVERSE_GEAR, physics::car::NEUTRAL_GEAR] {
             car.gear = gear;
             render::gl::set_viewport(WINDOW_WIDTH, WINDOW_HEIGHT);
             render::gl::clear_screen();
@@ -547,9 +547,10 @@ fn feedback_renderer_smoke() {
         }
         assert!(!render::skid_marks::vertices(&(app.session.skids)).is_empty());
         let v = &mut app.session.car;
-        v.velocity = util::geometry::XZ {
-            x: v.heading.sin() * 8.0,
-            z: v.heading.cos() * 8.0,
+        v.velocity = util::geometry::XYZ {
+            y: v.velocity.y,
+            x: v.orientation.yaw.sin() * 8.0,
+            z: v.orientation.yaw.cos() * 8.0,
         };
         physics::car::update(
             v,

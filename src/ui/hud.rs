@@ -1032,7 +1032,7 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
         &ui::hud_atlas::get().digits,
         &if gauges.gear == physics::car::NEUTRAL_GEAR {
             "N".into()
-        } else if gauges.gear == 0 {
+        } else if gauges.gear == physics::car::REVERSE_GEAR {
             "R".into()
         } else {
             gauges.gear.to_string()
