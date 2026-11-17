@@ -153,11 +153,6 @@ fn load(directory: &Path) -> io::Result<EngineSamples> {
     }
     let manifest: serde_json::Value =
         serde_json::from_slice(&manifest).map_err(|e| invalid(e.to_string()))?;
-    if manifest["version"].as_u64() != Some(1)
-        || manifest["sample_rate"].as_u64() != Some(SAMPLE_RATE as u64)
-    {
-        return Err(invalid("unsupported engine bank version or sample rate"));
-    }
     let values = manifest["bands"]
         .as_array()
         .filter(|v| (2..=16).contains(&v.len()))

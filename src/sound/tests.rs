@@ -318,8 +318,6 @@ mod recorded_engine {
             serde_json::from_slice(&std::fs::read(audio_dir().join("engine.json")).unwrap())
                 .unwrap();
         for (pointer, value) in [
-            ("/version", serde_json::json!(2)),
-            ("/sample_rate", serde_json::json!(44100)),
             ("/bands/1/rpm", serde_json::json!(500)),
             ("/bands/1/rpm", original["bands"][0]["rpm"].clone()),
             ("/bands/0/load/pulse_hz", serde_json::json!(0)),

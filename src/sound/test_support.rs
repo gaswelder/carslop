@@ -29,8 +29,7 @@ pub fn audio_dir() -> &'static Path {
                 serde_json::json!({"rpm":rpm, "load":clip, "coast":clip})
             })
             .collect();
-        let manifest =
-            serde_json::json!({"version":1, "sample_rate":SAMPLE_RATE as u32, "bands":bands});
+        let manifest = serde_json::json!({"bands":bands});
         std::fs::write(directory.path().join("engine.json"), manifest.to_string()).unwrap();
         directory
     })
