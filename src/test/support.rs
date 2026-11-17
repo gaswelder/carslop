@@ -58,7 +58,6 @@ pub fn audio_voice() -> &'static model::car::EngineVoice {
         gain: 2.0,
         coast_gain: 0.4,
         soft_limit: None,
-        pulses_per_revolution: 2.0,
         sample_directory: None,
     })
 }
@@ -205,8 +204,7 @@ pub fn car_definition() -> serde_json::Value {
             "reverse_ratio": s.gearbox.reverse_ratio, "upshift_rpm": s.gearbox.upshift_rpm,
             "downshift_rpm": s.gearbox.downshift_rpm},
         "audio": {"harmonics": s.audio.harmonics, "gain": s.audio.gain,
-            "coast_gain": s.audio.coast_gain, "soft_limit": s.audio.soft_limit,
-            "pulses_per_revolution": s.audio.pulses_per_revolution}
+            "coast_gain": s.audio.coast_gain, "soft_limit": s.audio.soft_limit}
     })
 }
 

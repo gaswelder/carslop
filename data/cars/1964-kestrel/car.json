@@ -99,7 +99,6 @@
     "soft_limit": [
       0.22,
       0.06
-    ],
-    "pulses_per_revolution": 3
+    ]
   }
 }

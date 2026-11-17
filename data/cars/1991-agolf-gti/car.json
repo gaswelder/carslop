@@ -96,7 +96,6 @@
     ],
     "gain": 2,
     "coast_gain": 0.35,
-    "soft_limit": null,
-    "pulses_per_revolution": 2
+    "soft_limit": null
   }
 }

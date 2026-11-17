@@ -10,7 +10,7 @@ fn wav_metadata_chunks_do_not_change_decoded_samples() {
         let entry = entry.unwrap();
         std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
     }
-    let path = directory.path().join("band-0.wav");
+    let path = directory.path().join("1200-load.wav");
     let mut wav = std::fs::read(&path).unwrap();
     let expected_pcm = wav[44..].to_vec();
     // Editors may insert ancillary chunks, including odd-length payloads
@@ -20,7 +20,7 @@ fn wav_metadata_chunks_do_not_change_decoded_samples() {
     wav[4..8].copy_from_slice(&size);
     std::fs::write(path, wav).unwrap();
     let samples = sound::engine_sample::load(directory.path()).unwrap();
-    assert_eq!(samples.bands[0].load.pcm, expected_pcm);
+    assert_eq!(samples.load[0].pcm, expected_pcm);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn unsupported_wav_formats_and_invalid_lengths_are_rejected() {
         let entry = entry.unwrap();
         std::fs::copy(entry.path(), directory.path().join(entry.file_name())).unwrap();
     }
-    let path = directory.path().join("band-0.wav");
+    let path = directory.path().join("1200-load.wav");
     for format in [
         Format {
             channels: 2,
@@ -103,24 +103,65 @@ fn unsupported_wav_formats_and_invalid_lengths_are_rejected() {
         std::fs::write(&path, wav).unwrap();
         assert!(sound::engine_sample::load(directory.path()).is_err());
     }
-    for length in [0, 100, 1920, 960_002, 1_025_538] {
+    for length in [0, 1, 2, 3, 960_002, 1_025_538] {
         std::fs::write(&path, test::support::engine_wav(&vec![0; length])).unwrap();
         assert!(sound::engine_sample::load(directory.path()).is_err());
     }
 }
 
 #[test]
-fn interpolation_handles_tail_offset_rounding_to_length() {
+fn interpolation_wraps_from_the_last_sample_to_the_first() {
     let samples = sound::engine_sample::load(audio_dir()).unwrap();
-    for clip in samples
-        .bands
-        .iter()
-        .flat_map(|band| [&band.load, &band.coast])
-    {
+    for clip in samples.load.iter().chain(&samples.coast) {
         let pcm = &clip.pcm;
-        assert_eq!(
-            interpolated(pcm, (pcm.len() / 2) as f32),
-            point(pcm, pcm.len() / 2 - 1)
+        assert_eq!(interpolated(pcm, (pcm.len() / 2) as f32), point(pcm, 0));
+        let last = pcm.len() / 2 - 1;
+        assert!(
+            (interpolated(pcm, last as f32 + 0.5) - (point(pcm, last) + point(pcm, 0)) * 0.5).abs()
+                < 1e-6
         );
+        let mut position = last as f32;
+        assert_eq!(loop_sample(pcm, &mut position, 1.0), point(pcm, last));
+        assert_eq!(position, 0.0);
+        assert_eq!(loop_sample(pcm, &mut position, 1.0), point(pcm, 0));
     }
+}
+
+#[test]
+fn load_and_coast_blend_independent_recording_lists() {
+    let directory = tempfile::tempdir().unwrap();
+    sound::test_support::copy_bank(directory.path());
+    // Load spans 1200–6000 RPM, while coast has just one 3000 RPM recording.
+    for name in ["3000-load.wav", "1200-coast.wav", "6000-coast.wav"] {
+        std::fs::remove_file(directory.path().join(name)).unwrap();
+    }
+    let mut samples = load(directory.path()).unwrap();
+    assert_eq!(samples.load.len(), 2);
+    assert_eq!(samples.coast.len(), 1);
+    samples.load[0].pcm = 8192_i16.to_le_bytes().repeat(4800);
+    samples.load[1].pcm = 16384_i16.to_le_bytes().repeat(4800);
+    samples.coast[0].pcm = 4096_i16.to_le_bytes().repeat(4800);
+
+    // At 3600 RPM, only load crossfades. Coast uses its single recording.
+    let loaded = axis_sample(&samples.load, &mut [0.0; 2], 3600.0, 1.0);
+    let coasting = axis_sample(&samples.coast, &mut [0.0], 3600.0, 1.0);
+    assert!((loaded - 0.75 / 2.0_f32.sqrt()).abs() < 1e-6);
+    assert!((coasting - 0.125).abs() < 1e-6);
+    assert_eq!(axis_sample(&samples.load, &mut [0.0; 2], 600.0, 1.0), 0.25);
+    assert_eq!(axis_sample(&samples.load, &mut [0.0; 2], 7000.0, 1.0), 0.5);
+}
+
+#[test]
+fn recording_speed_follows_rpm_even_while_inaudible() {
+    let samples = load(audio_dir()).unwrap();
+    let clips = &samples.load[..1];
+    let mut positions = [1000.0];
+    // The 1200 RPM recording plays at twice its original speed at 2400 RPM.
+    let first = axis_sample(clips, &mut positions, 2400.0, 1.0);
+    let second = axis_sample(clips, &mut positions, 2400.0, 1.0);
+    assert_eq!(first, point(&clips[0].pcm, 1000));
+    assert_eq!(second, point(&clips[0].pcm, 1002));
+    assert_eq!(positions[0], 1004.0);
+    assert_eq!(axis_sample(clips, &mut positions, 2400.0, 0.0), 0.0);
+    assert_eq!(positions[0], 1006.0);
 }

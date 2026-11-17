@@ -8,32 +8,29 @@ pub fn audio_dir() -> &'static Path {
     static BANK: OnceLock<tempfile::TempDir> = OnceLock::new();
     BANK.get_or_init(|| {
         let directory = tempfile::tempdir().unwrap();
-        let bands: Vec<_> = [1200.0, 3000.0, 6000.0]
-            .into_iter()
-            .enumerate()
-            .map(|(i, rpm)| {
-                let pulse_hz = rpm / 20.0;
-                let filename = format!("band-{i}.wav");
-                let pcm: Vec<u8> = (0..4800)
-                    .flat_map(|frame| {
-                        let phase = std::f32::consts::TAU * pulse_hz * frame as f32 / SAMPLE_RATE;
-                        ((phase.sin() * 0.30 * i16::MAX as f32) as i16).to_le_bytes()
-                    })
-                    .collect();
-                std::fs::write(
-                    directory.path().join(&filename),
-                    test::support::engine_wav(&pcm),
-                )
-                .unwrap();
-                let clip = serde_json::json!({"file":filename, "pulse_hz":pulse_hz, "overlap":480});
-                serde_json::json!({"rpm":rpm, "load":clip, "coast":clip})
-            })
-            .collect();
-        let manifest = serde_json::json!({"bands":bands});
-        std::fs::write(directory.path().join("engine.json"), manifest.to_string()).unwrap();
+        write_bank(directory.path(), 0.30);
         directory
     })
     .path()
+}
+
+pub fn write_bank(directory: &Path, amplitude: f32) {
+    for rpm in [1200, 3000, 6000] {
+        let pulse_hz = rpm as f32 / 20.0;
+        let pcm: Vec<u8> = (0..4800)
+            .flat_map(|frame| {
+                let phase = std::f32::consts::TAU * pulse_hz * frame as f32 / SAMPLE_RATE;
+                ((phase.sin() * amplitude * i16::MAX as f32) as i16).to_le_bytes()
+            })
+            .collect();
+        for state in ["load", "coast"] {
+            std::fs::write(
+                directory.join(format!("{rpm}-{state}.wav")),
+                test::support::engine_wav(&pcm),
+            )
+            .unwrap();
+        }
+    }
 }
 
 pub fn copy_bank(directory: &Path) {

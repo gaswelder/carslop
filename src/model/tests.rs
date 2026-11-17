@@ -9,7 +9,7 @@ mod car {
     use std::{fs, sync::Arc};
 
     #[test]
-    fn engine_bank_is_discovered_without_a_json_path() {
+    fn engine_bank_is_discovered_from_the_audio_directory() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("car");
         test::support::write_car(&directory);
@@ -21,15 +21,6 @@ mod car {
             .is_none());
         let audio_directory = directory.join("audio");
         fs::create_dir(&audio_directory).unwrap();
-        // An unrelated WAV does not opt the car into a recording bank.
-        fs::write(audio_directory.join("unused.wav"), []).unwrap();
-        assert!(model::car::load(root.path())
-            .unwrap()
-            .remove(0)
-            .audio
-            .sample_directory
-            .is_none());
-        fs::write(audio_directory.join("engine.json"), b"{}").unwrap();
         assert_eq!(
             model::car::load(root.path())
                 .unwrap()

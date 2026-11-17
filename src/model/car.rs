@@ -73,7 +73,6 @@ pub struct EngineVoice {
     pub gain: f32,
     pub coast_gain: f32,
     pub soft_limit: Option<[f32; 2]>, // knee, headroom
-    pub pulses_per_revolution: f32,
     #[serde(skip)]
     pub sample_directory: Option<PathBuf>,
 }
@@ -149,7 +148,6 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
         car_definition.gearbox.upshift_rpm,
         car_definition.gearbox.downshift_rpm,
         car_definition.audio.gain,
-        car_definition.audio.pulses_per_revolution,
     ] {
         positive(value)?;
     }
@@ -279,10 +277,7 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     definition.gearbox.rolling_radius =
         model_rolling_radius(design.wheel_radii, definition.drive_bias)?;
     let audio_directory = path.parent().unwrap().join("audio");
-    definition.audio.sample_directory = audio_directory
-        .join("engine.json")
-        .is_file()
-        .then_some(audio_directory);
+    definition.audio.sample_directory = audio_directory.is_dir().then_some(audio_directory);
 
     let mut spec = CarSpec {
         name: definition.name,

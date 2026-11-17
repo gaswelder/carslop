@@ -7,7 +7,6 @@ Run: python3 tools/build_engine_audio.py path/to/original.wav
 Pitsunda: python3 tools/build_engine_audio.py --pitsunda path/to/original.opus
 """
 import argparse
-import json
 from pathlib import Path
 import subprocess
 import wave
@@ -26,6 +25,15 @@ def write_wav(path, pcm):
         output.setsampwidth(2)
         output.setframerate(RATE)
         output.writeframes(pcm)
+
+
+def smooth_loop(clip, overlap):
+    """Bake the tail/head crossfade into a WAV that loops end-to-start."""
+    loop = clip[:-overlap].copy()
+    t = numpy.arange(overlap) / overlap
+    blend = t * t * (3 - 2 * t)
+    loop[:overlap] = clip[-overlap:] * (1 - blend) + clip[:overlap] * blend
+    return loop
 
 
 # Nominal blend RPM, then (source start seconds, approximate firing Hz) for
@@ -72,12 +80,12 @@ def extract(samples, start, approximate):
     energy = numpy.convolve(tails * tails, numpy.ones(overlap), mode='valid')
     error = energy + numpy.dot(head, head) - 2 * dot
     end = lo + int(numpy.argmin(error))
-    clip = clip[:end + overlap]
+    clip = smooth_loop(clip[:end + overlap], overlap)
     # Consistent source level lets crossfades preserve loudness. Keep peak
     # headroom instead of clipping transients to reach an RMS target.
     gain = min(.20 / numpy.sqrt(numpy.mean(clip * clip)), .85 / max(abs(clip)))
     pcm = numpy.rint(clip * gain * 32767).astype('<i2').tobytes()
-    return pcm, pulse, overlap, end / RATE, gain
+    return pcm, pulse, end / RATE, gain
 
 
 def level_engine_bands(clip, pulse):
@@ -113,7 +121,7 @@ def stationary_rev(samples, start, duration, pitch_guide, rpm):
     The dominant second crank order is tracked, then complex demodulation
     corrects its phase. Unlike a polynomial pitch fit alone, this keeps adjacent
     RPM banks in tune throughout the loop. Endpoints span complete four-pulse
-    engine cycles, so the runtime overlap cannot cancel a fractional cycle.
+    engine cycles, so the baked seam cannot cancel a fractional cycle.
     """
     clip = samples[round(start * RATE):round((start + duration) * RATE)].astype(numpy.float64)
     clip = signal.sosfiltfilt(signal.butter(2, 30, 'highpass', fs=RATE, output='sos'), clip)
@@ -161,10 +169,11 @@ def stationary_rev(samples, start, duration, pitch_guide, rpm):
     envelope = numpy.sqrt(ndimage.gaussian_filter1d(steady * steady, .035 * RATE))
     steady *= numpy.median(envelope) / numpy.maximum(envelope, 1e-6)
     steady = level_engine_bands(steady, pulse)
+    steady = smooth_loop(steady, overlap)
     gain = min(.20 / numpy.sqrt(numpy.mean(steady * steady)), .80 / max(abs(steady)))
     pcm = numpy.rint(steady * gain * 32767).astype('<i2').tobytes()
     return {
-        'pcm': pcm, 'pulse_hz': pulse, 'overlap': overlap,
+        'pcm': pcm, 'pulse_hz': pulse,
         'repeat_seconds': end / RATE, 'source_gain': float(gain),
         'source_start_seconds': start, 'source_duration_seconds': duration,
         'pitch_stabilized': True, 'firing_cycles': cycles, 'spectral_leveling': True,
@@ -174,7 +183,6 @@ def stationary_rev(samples, start, duration, pitch_guide, rpm):
 
 def pitsunda(samples, output):
     output.mkdir(parents=True, exist_ok=True)
-    manifest = {'version': 1, 'sample_rate': RATE, 'bands': []}
     # Recover the tail of the original idle loop, before the later near-silent
     # section. Preserve its texture without imposing a guessed harmonic phase.
     start, duration = 34.55, .3
@@ -186,11 +194,11 @@ def pitsunda(samples, output):
     errors = signal.convolve(idle[lo:] ** 2, numpy.ones(overlap), mode='valid', method='fft')
     errors -= 2 * signal.correlate(idle[lo:], head, mode='valid', method='fft')
     end = lo + int(numpy.argmin(errors))
-    idle = idle[:end + overlap]
+    idle = smooth_loop(idle[:end + overlap], overlap)
     gain = min(.20 / numpy.sqrt(numpy.mean(idle * idle)), .80 / max(abs(idle)))
     clips = [{'rpm': 900, 'clip': {
         'pcm': numpy.rint(idle * gain * 32767).astype('<i2').tobytes(),
-        'pulse_hz': 30, 'overlap': overlap, 'repeat_seconds': end / RATE,
+        'pulse_hz': 30, 'repeat_seconds': end / RATE,
         'source_gain': float(gain), 'source_start_seconds': start,
         'source_duration_seconds': duration, 'pitch_stabilized': False,
     }}]
@@ -207,16 +215,16 @@ def pitsunda(samples, output):
         ]},
     ]:
         clips.append({'rpm': excerpt['rpm'], 'clip': stationary_rev(samples, **excerpt)})
+    names = set()
     for band in clips:
         clip = band['clip']
-        name = f"inline4-{band['rpm']}.wav"
-        write_wav(output / name, clip.pop('pcm'))
-        clip['file'] = name
-        manifest['bands'].append({'rpm': band['rpm'], 'load': clip, 'coast': clip})
-        print(f"{name}: {clip['repeat_seconds']:.3f}s repeat, {clip['pulse_hz']:.4f} Hz")
-    (output / 'engine.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    names = {band['load']['file'] for band in manifest['bands']}
-    for path in output.glob('inline4-*.wav'):
+        rpm = round(clip['pulse_hz'] * 30)
+        for state in ('load', 'coast'):
+            name = f"{rpm}-{state}.wav"
+            write_wav(output / name, clip['pcm'])
+            names.add(name)
+            print(f"{name}: {clip['repeat_seconds']:.3f}s repeat, {clip['pulse_hz']:.4f} Hz")
+    for path in output.glob('*.wav'):
         if path.name not in names:
             path.unlink()
 
@@ -239,22 +247,18 @@ def main():
         pitsunda(samples, args.output)
         return
     args.output.mkdir(parents=True, exist_ok=True)
-    manifest = {'version': 1, 'sample_rate': RATE, 'bands': []}
-    for rpm, loaded, coast in EXCERPTS:
-        band = {'rpm': rpm}
+    names = set()
+    for nominal_rpm, loaded, coast in EXCERPTS:
         for state, (start, approximate) in [('load', loaded), ('coast', coast)]:
-            pcm, pulse, overlap, duration, gain = extract(samples, start, approximate)
-            filename = f'flat6-{rpm}-{state}.wav'
+            pcm, pulse, duration, gain = extract(samples, start, approximate)
+            filename = f'{round(pulse * 20)}-{state}.wav'
             write_wav(args.output / filename, pcm)
-            band[state] = {
-                'file': filename, 'pulse_hz': round(pulse, 5), 'overlap': overlap,
-                'source_start_seconds': start, 'repeat_seconds': round(duration, 6),
-                'source_gain': round(gain, 6),
-            }
+            names.add(filename)
             print(f'{filename}: measured {pulse:.3f} Hz ({pulse * 20:.0f} RPM), '
                   f'{duration:.3f}s repeat, {len(pcm)} bytes')
-        manifest['bands'].append(band)
-    (args.output / 'engine.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    for path in args.output.glob('*.wav'):
+        if path.name not in names:
+            path.unlink()
 
 
 if __name__ == '__main__':

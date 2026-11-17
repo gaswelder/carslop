@@ -85,12 +85,7 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
         + synth.filtered_noise * synth.load * 0.025;
     sound::engine_sample::select(&mut synth.recorded, tuning.sample_directory.as_deref());
     let engine = if sound::engine_sample::available(&synth.recorded) {
-        sound::engine_sample::sample(
-            &mut synth.recorded,
-            synth.frequency * 30.0,
-            tuning.pulses_per_revolution,
-            synth.load,
-        )
+        sound::engine_sample::sample(&mut synth.recorded, synth.frequency * 30.0, synth.load)
     } else {
         procedural
     };
