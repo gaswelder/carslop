@@ -31,7 +31,7 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     vehicle.velocity.y += vehicle.acceleration.y * seconds;
     vehicle.position.y += vehicle.velocity.y * seconds;
     let transfer = spec.weight_kg * vehicle.filtered_acceleration.longitudinal * spec.cg_height
-        / spec.wheelbase;
+        / spec.chassis.wheelbase;
     let total_load = spec.weight_kg * support;
     let front_load = (total_load * spec.front_weight - transfer).clamp(0.0, total_load);
     vehicle.axle_load = [front_load, total_load - front_load];
@@ -64,8 +64,8 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
             vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
         )
     };
-    let length = vehicle.spec.wheelbase;
-    let width = vehicle.spec.track_width;
+    let length = vehicle.spec.chassis.wheelbase;
+    let width = vehicle.spec.chassis.track_width;
     GroundAngles {
         pitch: ((h(sin * length * 0.5, cos * length * 0.5)
             - h(-sin * length * 0.5, -cos * length * 0.5))

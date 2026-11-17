@@ -73,9 +73,9 @@ mod car {
                 z: 1.3,
             },
         ];
-        assert!((cars_with_mounts(mounts).remove(0).wheelbase - 2.5).abs() < 0.00001);
+        assert!((cars_with_mounts(mounts).remove(0).chassis.wheelbase - 2.5).abs() < 0.00001);
         let translated = mounts.map(|p| XYZ { z: p.z + 10.0, ..p });
-        assert!((cars_with_mounts(translated).remove(0).wheelbase - 2.5).abs() < 0.00001);
+        assert!((cars_with_mounts(translated).remove(0).chassis.wheelbase - 2.5).abs() < 0.00001);
         for z in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             let invalid = [
                 XYZ {
@@ -127,9 +127,9 @@ mod car {
                 z: 1.0,
             },
         ];
-        assert!((cars_with_mounts(mounts).remove(0).track_width - 1.6).abs() < 0.00001);
+        assert!((cars_with_mounts(mounts).remove(0).chassis.track_width - 1.6).abs() < 0.00001);
         let translated = mounts.map(|p| XYZ { x: p.x + 10.0, ..p });
-        assert!((cars_with_mounts(translated).remove(0).track_width - 1.6).abs() < 0.00001);
+        assert!((cars_with_mounts(translated).remove(0).chassis.track_width - 1.6).abs() < 0.00001);
         for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             for wheel in [1, 3] {
                 let mut invalid_mounts = mounts;

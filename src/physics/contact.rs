@@ -26,8 +26,8 @@ pub fn axle_geometry(vehicle: &car::Vehicle) -> AxleGeometry {
     let delta = car::front_wheel_angle(vehicle);
     let (sin, cos) = delta.sin_cos();
     AxleGeometry {
-        front_offset: spec.wheelbase * (1.0 - spec.front_weight),
-        rear_offset: spec.wheelbase * spec.front_weight,
+        front_offset: spec.chassis.wheelbase * (1.0 - spec.front_weight),
+        rear_offset: spec.chassis.wheelbase * spec.front_weight,
         sin,
         cos,
     }
@@ -66,7 +66,7 @@ pub fn tire_capacities(vehicle: &car::Vehicle) -> [f32; 2] {
         };
         let transfer =
             spec.weight_kg * vehicle.filtered_acceleration.lateral.abs() * spec.cg_height
-                / spec.track_width
+                / spec.chassis.track_width
                 * share;
         let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
 
@@ -111,7 +111,7 @@ pub fn tire_contacts(
     drivetrain_engaged: bool,
 ) -> [physics::tire::Contact; 2] {
     let spec = &vehicle.spec;
-    let drive_bias = spec.drive_bias;
+    let drive_bias = spec.chassis.drive_bias;
     let AxleGeometry {
         front_offset: a,
         rear_offset: b,
@@ -131,7 +131,7 @@ pub fn tire_contacts(
         };
         let wheel_speed = if axle == 0 { front_speed } else { longitudinal };
         let longitudinal_slip = if drive_share > 0.0 && drivetrain_engaged {
-            vehicle.driven_wheel_omega * spec.rolling_radius - wheel_speed
+            vehicle.driven_wheel_omega * spec.chassis.rolling_radius - wheel_speed
         } else {
             0.0
         };
@@ -144,9 +144,9 @@ pub fn tire_contacts(
             longitudinal_slip,
             brake_force: brake
                 * if axle == 0 {
-                    spec.brake_bias
+                    spec.chassis.brake_bias
                 } else {
-                    1.0 - spec.brake_bias
+                    1.0 - spec.chassis.brake_bias
                 }
                 + if axle == 1 && controls.handbrake {
                     spec.weight_kg * 5.5

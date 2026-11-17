@@ -54,5 +54,7 @@ pub fn rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 {
     } else {
         speed.max(0.0)
     };
-    speed * 60.0 / (std::f32::consts::TAU * car_spec.rolling_radius) * ratio * gearbox.final_drive
+    speed * 60.0 / (std::f32::consts::TAU * car_spec.chassis.rolling_radius)
+        * ratio
+        * gearbox.final_drive
 }

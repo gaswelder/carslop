@@ -22,7 +22,7 @@ pub fn new(car: &Vehicle) -> ContactShadow {
             car.orientation.yaw.sin(),
             car.orientation.yaw.cos(),
             wheel.x.abs() + 0.45,
-            car.spec.wheelbase * 0.5 + 1.05,
+            car.spec.chassis.wheelbase * 0.5 + 1.05,
         ],
     }
 }

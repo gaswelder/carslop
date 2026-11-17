@@ -23,23 +23,30 @@ pub struct CarSpec {
     pub cg_height: f32,
     //
     pub engine: Engine,
+    pub audio: EngineVoice,
     pub gearbox: Gearbox,
     //
     pub brake_force: f32,
-    pub wheelbase: f32,
+
+    pub chassis: Chassis,
+
+    pub yaw_inertia: f32,
+
+    pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
+
+    pub suspension_hz: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Chassis {
     /// Effective driven-wheel radius in metres, derived from the model.
     pub rolling_radius: f32,
-    pub audio: EngineVoice,
-
+    pub wheelbase: f32,
     pub track_width: f32,
-    pub yaw_inertia: f32,
     /// Fraction of driving force sent to the front axle: 0 = RWD, 1 = FWD.
     pub drive_bias: f32,
     /// Fraction of foot-braking force applied to the front axle.
     pub brake_bias: f32,
-    pub corner_stiffness: [f32; 2], // force per radian, front/rear axle
-
-    pub suspension_hz: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -304,15 +311,17 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
         gearbox: definition.gearbox,
         design,
         brake_force: definition.brake_force,
-        wheelbase,
-        rolling_radius,
         audio: definition.audio,
         front_weight: definition.front_weight,
         cg_height,
-        track_width,
         yaw_inertia: definition.yaw_inertia,
-        drive_bias: definition.drive_bias,
-        brake_bias: definition.brake_bias,
+        chassis: Chassis {
+            rolling_radius,
+            wheelbase,
+            track_width,
+            drive_bias: definition.drive_bias,
+            brake_bias: definition.brake_bias,
+        },
         corner_stiffness: definition.corner_stiffness,
         suspension_hz: definition.suspension_hz,
         drag_coefficient: definition.drag_coefficient,

@@ -252,11 +252,11 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     let throttle = controls.throttle.clamp(0.0, 1.0);
     update_fuel_cut(vehicle, vehicle.engine.rpm);
     update_turbo(vehicle, seconds, throttle);
-    let drive_bias = spec.drive_bias;
+    let drive_bias = spec.chassis.drive_bias;
     let front_speed = longitudinal * cos + (lateral + vehicle.orientation_rate.yaw * a) * sin;
     let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
     if !vehicle.drivetrain_initialized {
-        vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
+        vehicle.driven_wheel_omega = driven_speed / spec.chassis.rolling_radius;
         if vehicle.gear != NEUTRAL_GEAR {
             let coupled_rpm = engine::rpm(&spec, driven_speed, vehicle.gear);
             vehicle.engine.rpm = vehicle.engine.rpm.max(coupled_rpm);
@@ -270,7 +270,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
             step,
             driven_speed * direction,
             spec.weight_kg,
-            spec.rolling_radius,
+            spec.chassis.rolling_radius,
         ) * direction
     });
     let motion = physics::tire::Motion {
@@ -390,7 +390,7 @@ fn finish_drivetrain(
     seconds: f32,
 ) {
     let spec = vehicle.spec.clone();
-    let drive_bias = spec.drive_bias;
+    let drive_bias = spec.chassis.drive_bias;
     let direction = if vehicle.gear == REVERSE_GEAR {
         -1.0
     } else {
@@ -426,7 +426,7 @@ fn finish_drivetrain(
         let rotation = physics::powertrain::finish(
             &step,
             reaction,
-            spec.rolling_radius,
+            spec.chassis.rolling_radius,
             driven_brake_force,
             rolling_speed * direction,
         );
@@ -434,20 +434,21 @@ fn finish_drivetrain(
         vehicle.driven_wheel_omega = rotation.wheel_omega * direction;
     } else {
         update_free_engine(vehicle, throttle, seconds);
-        vehicle.driven_wheel_omega = driven_speed / spec.rolling_radius;
+        vehicle.driven_wheel_omega = driven_speed / spec.chassis.rolling_radius;
     }
     update_fuel_cut(vehicle, vehicle.engine.rpm);
-    let slip_speed = vehicle.driven_wheel_omega * spec.rolling_radius - driven_speed;
+    let slip_speed = vehicle.driven_wheel_omega * spec.chassis.rolling_radius - driven_speed;
     vehicle.wheel_spin = (slip_speed.abs() / 8.0).clamp(0.0, 1.0);
 }
 
 fn update_wheel_rotation(vehicle: &mut Vehicle, longitudinal: f32, handbrake: bool, seconds: f32) {
     let spec = &vehicle.spec;
-    let spin = longitudinal * seconds / spec.rolling_radius;
-    let spin_slip = (vehicle.driven_wheel_omega - longitudinal / spec.rolling_radius) * seconds;
+    let spin = longitudinal * seconds / spec.chassis.rolling_radius;
+    let spin_slip =
+        (vehicle.driven_wheel_omega - longitudinal / spec.chassis.rolling_radius) * seconds;
     vehicle.wheel_phase[1] = (vehicle.wheel_phase[1]
         + spin
-        + if spec.drive_bias > 0.0 {
+        + if spec.chassis.drive_bias > 0.0 {
             spin_slip
         } else {
             0.0
@@ -456,7 +457,7 @@ fn update_wheel_rotation(vehicle: &mut Vehicle, longitudinal: f32, handbrake: bo
     if !handbrake {
         vehicle.wheel_phase[0] = (vehicle.wheel_phase[0]
             + spin
-            + if spec.drive_bias < 1.0 {
+            + if spec.chassis.drive_bias < 1.0 {
                 spin_slip
             } else {
                 0.0

@@ -331,7 +331,8 @@ fn tires_regain_direction_after_lifting_out_of_a_slide() {
         for _ in 0..480 {
             treadmill_tick(&mut car, Controls::default());
         }
-        let rear_side = car.slip - car.orientation_rate.yaw * model.wheelbase * model.front_weight;
+        let rear_side =
+            car.slip - car.orientation_rate.yaw * model.chassis.wheelbase * model.front_weight;
         let angle = rear_side
             .abs()
             .atan2(longitudinal_speed(&car).abs().max(2.5))
@@ -696,7 +697,7 @@ fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
             for steering in [-1.0, 1.0] {
                 steering_run(&mut car, speed, steering, 5.0, 240.0);
                 let angle = physics::car::steering_angle(&car).abs();
-                let expected_yaw = speed.abs() * angle.tan() / model.wheelbase;
+                let expected_yaw = speed.abs() * angle.tan() / model.chassis.wheelbase;
                 println!(
                     "{model:?} at {speed}: lock {angle}, yaw {} expected {expected_yaw}",
                     car.orientation_rate.yaw.abs()
@@ -1275,7 +1276,7 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
                 );
             }
             let shaft_rpm =
-                car.driven_wheel_omega * engine::rpm(&model, 1.0, 1) * model.rolling_radius;
+                car.driven_wheel_omega * engine::rpm(&model, 1.0, 1) * model.chassis.rolling_radius;
             assert!(
                 (car.engine.rpm - shaft_rpm).abs() < 1.0,
                 "{model:?}: clutch lock must determine crankshaft RPM"

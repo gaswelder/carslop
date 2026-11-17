@@ -134,15 +134,17 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             paint_color: [1.0, 0.18, 0.08],
             weight_kg: 1200.0,
             brake_force: 22000.0,
-            wheelbase: 2.5,
-            rolling_radius: 0.32,
             audio: audio_voice().clone(),
             front_weight: 0.5,
             cg_height: 0.5,
-            track_width: 1.5,
             yaw_inertia: 1500.0,
-            drive_bias: 0.0,
-            brake_bias: 0.65,
+            chassis: model::car::Chassis {
+                rolling_radius: 0.32,
+                wheelbase: 2.5,
+                track_width: 1.5,
+                drive_bias: 0.0,
+                brake_bias: 0.65,
+            },
             corner_stiffness: [70000.0; 2],
             engine: model::car::Engine {
                 max_torque_nm: 180.0,
@@ -194,7 +196,7 @@ pub fn car_definition() -> serde_json::Value {
         "engine_power_hp": s.engine.power_watts / model::car::WATTS_PER_HP, "redline_rpm": s.engine.redline_rpm,
         "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
         "cg_height_fraction": s.cg_height / asset::car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
-        "drive_bias": s.drive_bias, "brake_bias": s.brake_bias,
+        "drive_bias": s.chassis.drive_bias, "brake_bias": s.chassis.brake_bias,
         "corner_stiffness": s.corner_stiffness, "engine_max_torque_nm": s.engine.max_torque_nm,
         "engine_torque_curve": s.engine.torque_curve.iter().map(|point|
             serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
@@ -288,7 +290,7 @@ pub fn cars() -> Vec<std::sync::Arc<model::car::CarSpec>> {
         .into_iter()
         .map(|drive_bias| {
             let mut spec = car_spec().clone();
-            spec.drive_bias = drive_bias;
+            spec.chassis.drive_bias = drive_bias;
             spec.weight_kg *= 1.0 + drive_bias * 0.5;
             // Include a launch-capable AWD fixture as well as both driven axles.
             spec.engine.max_torque_nm *= 3.0;
