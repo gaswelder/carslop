@@ -527,7 +527,8 @@ fn chassis_can_unload_land_and_settle() {
     car.suspension_initialized = true;
     car.position.y = ground + 0.5;
     physics::car::update(&mut car, Duration::from_millis(20), Controls::default());
-    assert_eq!(car.axle_load, [0.0; 2]);
+    assert_eq!(car.axle_load.front, 0.0);
+    assert_eq!(car.axle_load.rear, 0.0);
     assert!(car.position.y > ground + 0.49);
     assert!(car.velocity.y < 0.0);
     for _ in 0..240 * 3 {
@@ -539,7 +540,7 @@ fn chassis_can_unload_land_and_settle() {
     }
     assert!((car.position.y - ground).abs() < 0.002);
     assert!(car.velocity.y.abs() < 0.002);
-    assert!((car.axle_load.iter().sum::<f32>() / car.spec.weight_kg - 9.81).abs() < 0.02);
+    assert!(((car.axle_load.front + car.axle_load.rear) / car.spec.weight_kg - 9.81).abs() < 0.02);
 }
 
 #[test]

@@ -39,7 +39,10 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     let total_load = spec.weight_kg * support;
     let front_load =
         (total_load * spec.center_of_mass.longitudinal_fraction - transfer).clamp(0.0, total_load);
-    vehicle.axle_load = [front_load, total_load - front_load];
+    vehicle.axle_load = car::AxleLoad {
+        front: front_load,
+        rear: total_load - front_load,
+    };
 }
 
 pub fn ride_height(vehicle: &car::Vehicle) -> f32 {
@@ -106,7 +109,7 @@ pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     vehicle.orientation.roll += vehicle.orientation_rate.roll * dt;
     // The sprung body follows terrain through damped angular springs.
     // Wheels follow the contact surface independently in the renderer.
-    let angles = if vehicle.axle_load.iter().sum::<f32>() > 0.0 {
+    let angles = if vehicle.axle_load.front + vehicle.axle_load.rear > 0.0 {
         ground_angles(vehicle)
     } else {
         GroundAngles {

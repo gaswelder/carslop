@@ -38,6 +38,19 @@ pub struct Orientation {
     pub yaw: f32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Axle {
+    Front,
+    Rear,
+}
+
+/// Normal force supported by each axle, in newtons.
+#[derive(Default)]
+pub struct AxleLoad {
+    pub front: f32,
+    pub rear: f32,
+}
+
 pub struct Vehicle {
     pub spec: std::sync::Arc<model::car::CarSpec>,
     pub track: std::sync::Arc<world::locations::WorldLocation>,
@@ -71,7 +84,7 @@ pub struct Vehicle {
     pub wheel_spin: f32,
     pub driven_wheel_omega: f32, // signed wheel angular speed, radians/second
     drivetrain_initialized: bool,
-    pub axle_load: [f32; 2],
+    pub axle_load: AxleLoad,
     force_telemetry: ForceTelemetry,
 }
 
@@ -133,7 +146,7 @@ pub fn on_track(
         wheel_spin: 0.0,
         driven_wheel_omega: 0.0,
         drivetrain_initialized: false,
-        axle_load: [0.0; 2],
+        axle_load: AxleLoad::default(),
         force_telemetry: ForceTelemetry::default(),
     };
     let angles = suspension::ground_angles(&car);
@@ -248,7 +261,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     } = geometry;
 
     suspension::update_suspension(vehicle, seconds);
-    let capacities = contact::tire_capacities(vehicle);
+    let capacities = [Axle::Front, Axle::Rear].map(|axle| contact::tire_capacity(vehicle, axle));
     let throttle = controls.throttle.clamp(0.0, 1.0);
     update_fuel_cut(vehicle, vehicle.engine.rpm);
     update_turbo(vehicle, seconds, throttle);

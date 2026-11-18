@@ -1,6 +1,7 @@
 //! Build axle contacts from vehicle state and the road surface.
 
 use super::car;
+use super::car::Axle;
 use crate::model;
 use crate::model::world::Material;
 use crate::physics;
@@ -33,10 +34,6 @@ pub fn axle_geometry(vehicle: &car::Vehicle) -> AxleGeometry {
     }
 }
 
-fn brake_accel(vehicle: &car::Vehicle) -> f32 {
-    vehicle.spec.chassis.brake_force_n / vehicle.spec.weight_kg
-}
-
 fn friction_coefficient(material: Material) -> f32 {
     match material {
         Material::BareGround => 0.65,
@@ -52,55 +49,60 @@ fn friction_coefficient(material: Material) -> f32 {
     }
 }
 
-pub fn tire_capacities(vehicle: &car::Vehicle) -> [f32; 2] {
+pub fn tire_capacity(vehicle: &car::Vehicle, axle: Axle) -> f32 {
     let spec = &vehicle.spec;
-    [0, 1].map(|axle| {
-        // Outside tires gain less grip than inside tires lose. This
-        // introduces lateral weight-transfer sensitivity without a full
-        // four-wheel rigid-body solver.
-        let load = vehicle.axle_load[axle];
-        let share = if axle == 0 {
-            spec.center_of_mass.longitudinal_fraction
-        } else {
-            1.0 - spec.center_of_mass.longitudinal_fraction
-        };
-        let transfer = spec.weight_kg
-            * vehicle.filtered_acceleration.lateral.abs()
-            * model::car::center_of_mass_height_m(spec)
-            / spec.chassis.track_width
-            * share;
-        let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
+    // Outside tires gain less grip than inside tires lose. This
+    // introduces lateral weight-transfer sensitivity without a full
+    // four-wheel rigid-body solver.
 
-        let loc = &vehicle.track;
-        let position = vehicle.position;
+    // At rest, axle load is simply `mass * g`.
+    // Acceleration/braking adds/removes some load.
+    let load = if axle == Axle::Front {
+        vehicle.axle_load.front
+    } else {
+        vehicle.axle_load.rear
+    };
 
-        let reference = position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-        let deck = world::map_details::nearby_decks(&loc.details, util::geometry::xz(position))
-            .find(|deck| {
-                world::map_details::height_on(deck, util::geometry::xz(position))
-                    .is_some_and(|h| (h - reference).abs() < 1.5)
-            });
+    let share = if axle == Axle::Front {
+        spec.center_of_mass.longitudinal_fraction
+    } else {
+        1.0 - spec.center_of_mass.longitudinal_fraction
+    };
+    let transfer = spec.weight_kg
+        * vehicle.filtered_acceleration.lateral.abs()
+        * model::car::center_of_mass_height_m(spec)
+        / spec.chassis.track_width
+        * share;
+    let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
 
-        let material = if let Some(deck) = deck {
-            model::map_details::road_material(deck.surface)
-        } else {
-            world::street_surface::world_location_triangle_at(
-                loc,
-                util::geometry::xz(position),
-                true,
-            )
+    let loc = &vehicle.track;
+    let position = vehicle.position;
+
+    let reference = position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+    let deck =
+        world::map_details::nearby_decks(&loc.details, util::geometry::xz(position)).find(|deck| {
+            world::map_details::height_on(deck, util::geometry::xz(position))
+                .is_some_and(|h| (h - reference).abs() < 1.5)
+        });
+
+    let material = if let Some(deck) = deck {
+        model::map_details::road_material(deck.surface)
+    } else {
+        world::street_surface::world_location_triangle_at(loc, util::geometry::xz(position), true)
             .map_or(Material::Asphalt, |triangle| triangle.material)
-        };
-        let grip = friction_coefficient(material);
+    };
 
-        let _hack = 1.5;
+    let _hack = 1.5;
 
-        _hack
-            * grip
-            * load
-            * (1.0 - 0.18 * imbalance * imbalance)
-            * if axle == 0 { FRONT_LIMIT_GRIP } else { 1.0 }
-    })
+    _hack
+        * friction_coefficient(material)
+        * load
+        * (1.0 - 0.18 * imbalance * imbalance)
+        * if axle == Axle::Front {
+            FRONT_LIMIT_GRIP
+        } else {
+            1.0
+        }
 }
 
 pub fn tire_contacts(
@@ -111,6 +113,31 @@ pub fn tire_contacts(
     drive: f32,
     drivetrain_engaged: bool,
 ) -> [physics::tire::Contact; 2] {
+    [Axle::Front, Axle::Rear].map(|axle| {
+        tire_contact(
+            vehicle,
+            controls,
+            motion,
+            match axle {
+                Axle::Front => capacities[0],
+                Axle::Rear => capacities[1],
+            },
+            drive,
+            drivetrain_engaged,
+            axle,
+        )
+    })
+}
+
+fn tire_contact(
+    vehicle: &car::Vehicle,
+    controls: car::Controls,
+    motion: physics::tire::Motion,
+    capacity: f32,
+    drive: f32,
+    drivetrain_engaged: bool,
+    axle: Axle,
+) -> physics::tire::Contact {
     let spec = &vehicle.spec;
     let drive_bias = spec.chassis.drive_bias;
     let AxleGeometry {
@@ -122,42 +149,47 @@ pub fn tire_contacts(
     let longitudinal = motion.longitudinal;
     let lateral = motion.lateral;
     let front_speed = longitudinal * cos + (lateral + vehicle.orientation_rate.yaw * a) * sin;
-    let brake = vehicle.brake_pressure * brake_accel(vehicle) * spec.weight_kg;
-    [0, 1].map(|axle| {
-        let capacity = capacities[axle];
-        let drive_share = if axle == 0 {
-            drive_bias
+    let brake = vehicle.brake_pressure * spec.chassis.brake_force_n;
+    let drive_share = if axle == Axle::Front {
+        drive_bias
+    } else {
+        1.0 - drive_bias
+    };
+    let wheel_speed = if axle == Axle::Front {
+        front_speed
+    } else {
+        longitudinal
+    };
+    let longitudinal_slip = if drive_share > 0.0 && drivetrain_engaged {
+        vehicle.driven_wheel_omega * spec.chassis.rolling_radius - wheel_speed
+    } else {
+        0.0
+    };
+    physics::tire::Contact {
+        offset: if axle == Axle::Front { a } else { -b },
+        sin: if axle == Axle::Front { sin } else { 0.0 },
+        cos: if axle == Axle::Front { cos } else { 1.0 },
+        capacity,
+        drive_force: drive * drive_share,
+        longitudinal_slip,
+        brake_force: brake
+            * if axle == Axle::Front {
+                spec.chassis.brake_bias
+            } else {
+                1.0 - spec.chassis.brake_bias
+            }
+            + if axle == Axle::Rear && controls.handbrake {
+                spec.weight_kg * 5.5
+            } else {
+                0.0
+            },
+        corner_stiffness: physics::tire::corner_stiffness(if axle == Axle::Front {
+            vehicle.axle_load.front
         } else {
-            1.0 - drive_bias
-        };
-        let wheel_speed = if axle == 0 { front_speed } else { longitudinal };
-        let longitudinal_slip = if drive_share > 0.0 && drivetrain_engaged {
-            vehicle.driven_wheel_omega * spec.chassis.rolling_radius - wheel_speed
-        } else {
-            0.0
-        };
-        physics::tire::Contact {
-            offset: if axle == 0 { a } else { -b },
-            sin: if axle == 0 { sin } else { 0.0 },
-            cos: if axle == 0 { cos } else { 1.0 },
-            capacity,
-            drive_force: drive * drive_share,
-            longitudinal_slip,
-            brake_force: brake
-                * if axle == 0 {
-                    spec.chassis.brake_bias
-                } else {
-                    1.0 - spec.chassis.brake_bias
-                }
-                + if axle == 1 && controls.handbrake {
-                    spec.weight_kg * 5.5
-                } else {
-                    0.0
-                },
-            corner_stiffness: physics::tire::corner_stiffness(vehicle.axle_load[axle]),
-            locked: axle == 1 && controls.handbrake,
-        }
-    })
+            vehicle.axle_load.rear
+        }),
+        locked: axle == Axle::Rear && controls.handbrake,
+    }
 }
 
 #[cfg(test)]

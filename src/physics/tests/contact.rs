@@ -26,12 +26,18 @@ fn cornering_stiffness_follows_current_axle_load_independently_of_surface_grip()
             false,
         )
     };
-    vehicle.axle_load = [4000.0, 4000.0];
+    vehicle.axle_load = car::AxleLoad {
+        front: 4000.0,
+        rear: 4000.0,
+    };
     let balanced = contacts(&vehicle, [6000.0, 6000.0]);
     assert!(balanced[0].corner_stiffness > 0.0);
     assert_eq!(balanced[0].corner_stiffness, balanced[1].corner_stiffness);
 
-    vehicle.axle_load = [8000.0, 2000.0];
+    vehicle.axle_load = car::AxleLoad {
+        front: 8000.0,
+        rear: 2000.0,
+    };
     let transferred = contacts(&vehicle, [6000.0, 6000.0]);
     assert_eq!(
         transferred[0].corner_stiffness,
