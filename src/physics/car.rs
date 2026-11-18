@@ -71,7 +71,6 @@ pub struct Vehicle {
     slip: f32,
     pub suspension_pitch: f32,
     pub suspension_roll: f32,
-    pub curb_bump: f32,
     pub wheel_phase: [f32; 2], // rear/front axles; cosmetic, never affects physics
     pub tire_scrub: f32,
     pub brake_lights: bool,
@@ -136,7 +135,6 @@ pub fn on_track(
         slip: 0.0,
         suspension_pitch: 0.0,
         suspension_roll: 0.0,
-        curb_bump: 0.0,
         brake_pressure: 0.0,
         steering: 0.0,
         wheel_phase: [0.0; 2],
@@ -362,6 +360,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
         lateral: (new_lateral - lateral) / seconds,
     };
     suspension::update_body_motion(vehicle, seconds);
+    let previous_yaw = vehicle.orientation.yaw;
     vehicle.orientation.yaw = (vehicle.orientation.yaw + vehicle.orientation_rate.yaw * seconds)
         .rem_euclid(std::f32::consts::TAU);
     let previous_position = vehicle.position;
@@ -371,11 +370,16 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
     let chassis_height = vehicle.position.y;
     let impact = resolve_road(vehicle);
     vehicle.position.y = chassis_height;
-    resolve_curbs(vehicle, previous_position, seconds);
+    let impact = impact.max(resolve_curbs(vehicle, previous_position, previous_yaw));
     vehicle.acceleration = XYZ {
         x: (vehicle.velocity.x - previous_velocity.x) / seconds,
         y: (vehicle.velocity.y - previous_velocity.y) / seconds,
         z: (vehicle.velocity.z - previous_velocity.z) / seconds,
+    };
+    // Include contact impulses in the next substep's suspension load transfer.
+    vehicle.local_acceleration = suspension::LocalAcceleration {
+        longitudinal: dot(util::geometry::xz(vehicle.acceleration), forward),
+        lateral: dot(util::geometry::xz(vehicle.acceleration), right),
     };
     impact
 }
@@ -481,39 +485,55 @@ fn update_wheel_rotation(vehicle: &mut Vehicle, longitudinal: f32, handbrake: bo
     }
 }
 
-fn resolve_curbs(vehicle: &mut Vehicle, previous_position: XYZ, seconds: f32) {
-    vehicle.curb_bump *= (-seconds * 12.0).exp();
-    if world::street_surface::has_compiled_roads(&vehicle.track)
-        && world::transport::deck_height(
-            &vehicle.track,
-            util::geometry::xz(vehicle.position),
-            vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
-        )
-        .is_none_or(|h| {
-            (h - (vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT)).abs() > 1.
-        })
+/// Approximate an inelastic tyre/corner collision for each wheel crossing.
+/// Removing velocity into the corner normal dissipates energy; the remaining
+/// tangent velocity lifts the chassis. Wheel load shares distribute the impulse
+/// without applying a whole-car collision four times.
+fn resolve_curbs(vehicle: &mut Vehicle, previous_position: XYZ, previous_yaw: f32) -> f32 {
+    if !world::street_surface::has_compiled_roads(&vehicle.track)
+        || vehicle.position.y - suspension::ride_height(vehicle) > 0.16
     {
-        let city = &vehicle.track;
-        if let Some((normal, rise)) = physics::vehicle_location::crossed_curb(
-            city,
-            XZ {
-                x: previous_position.x,
-                z: previous_position.z,
-            },
-            XZ {
-                x: vehicle.position.x,
-                z: vehicle.position.z,
-            },
-        ) {
-            let across = dot(util::geometry::xz(vehicle.velocity), normal);
-            let loss = (across.abs() * 0.08).min(1.2) * (rise / 0.09);
-            vehicle.velocity.x -= normal.x * across.signum() * loss;
-            vehicle.velocity.z -= normal.z * across.signum() * loss;
-            vehicle.curb_bump = vehicle
-                .curb_bump
-                .max(0.03 * (rise / 0.09) * (across.abs() / 6.0).min(1.0));
-        }
+        return 0.0;
     }
+    let velocity = vehicle.velocity;
+    let mut change: XYZ = XYZ::default();
+    for index in 0..4 {
+        let a = suspension::wheel_position(vehicle, previous_position, previous_yaw, index);
+        let b =
+            suspension::wheel_position(vehicle, vehicle.position, vehicle.orientation.yaw, index);
+        let reference = vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+        if world::transport::deck_height(&vehicle.track, b, reference)
+            .is_some_and(|height| (height - reference).abs() < 1.0)
+        {
+            continue;
+        }
+        let Some(crossing) = physics::vehicle_location::crossed_curb(&vehicle.track, a, b) else {
+            continue;
+        };
+        let radius = vehicle.spec.design.wheel_radii[index];
+        // At first contact with a step, the tyre centre is r-h above its
+        // corner. Steps at or above the axle give a horizontal contact normal.
+        let up = (1.0 - crossing.rise / radius).clamp(0.0, 1.0);
+        let horizontal = (1.0 - up * up).sqrt();
+        let across = dot(util::geometry::xz(velocity), crossing.normal);
+        let direction = dot(
+            XZ {
+                x: b.x - a.x,
+                z: b.z - a.z,
+            },
+            crossing.normal,
+        )
+        .signum();
+        let closing = (across * direction * horizontal - velocity.y * up).max(0.0);
+        let impulse = closing * suspension::wheel_share(vehicle, index);
+        change.x -= crossing.normal.x * direction * horizontal * impulse;
+        change.z -= crossing.normal.z * direction * horizontal * impulse;
+        change.y += up * impulse;
+    }
+    vehicle.velocity.x += change.x;
+    vehicle.velocity.y += change.y;
+    vehicle.velocity.z += change.z;
+    change.x.hypot(change.z)
 }
 
 fn engine_inertia(vehicle: &Vehicle) -> f32 {

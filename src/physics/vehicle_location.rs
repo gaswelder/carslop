@@ -236,7 +236,14 @@ pub fn constrain(
 
 /// A crossing is an event, not a continuous wall force. Parallel travel or
 /// resting alongside a curb must not repeatedly slow the car.
-pub fn crossed_curb(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Option<(XZ<f32>, f32)> {
+#[derive(Debug, PartialEq)]
+pub struct CurbCrossing {
+    pub normal: XZ<f32>,
+    /// Upward change in support height, in metres.
+    pub rise: f32,
+}
+
+pub fn crossed_curb(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Option<CurbCrossing> {
     if world::street_surface::contains_road(world, a)
         == world::street_surface::contains_road(world, b)
     {
@@ -250,14 +257,9 @@ pub fn crossed_curb(world: &WorldLocation, a: XZ<f32>, b: XZ<f32>) -> Option<(XZ
     if distance > (b.x - a.x).hypot(b.z - a.z) * 0.5 + 0.01 {
         return None;
     }
-    // Physical rise is small for service verges, standard for pavements.
-    // The rendered support height determines the exact ride height.
-    let rise = (world::street_surface::paving_height(world, a).unwrap_or(0.005)
-        - world::street_surface::paving_height(world, b).unwrap_or(0.005))
-    .abs()
-    .max(0.03);
-    // Cap the bump and speed penalty so taller pavements stay climbable.
-    Some((normal, rise.min(0.09)))
+    let rise = world::street_surface::paving_height(world, b).unwrap_or(0.005)
+        - world::street_surface::paving_height(world, a).unwrap_or(0.005);
+    (rise > 0.001).then_some(CurbCrossing { normal, rise })
 }
 
 /// Place the vehicle origin at a lateral offset from the road centreline.

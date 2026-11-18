@@ -1375,10 +1375,8 @@ fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_ax
 
 /// Body transform shared by rendering and the bonnet camera mount.
 pub fn vehicle_body_matrix(vehicle: &physics::car::Vehicle) -> [f32; 16] {
-    let mut body_position = vehicle.position;
-    body_position.y += vehicle.curb_bump;
     body_model_matrix(
-        body_position,
+        vehicle.position,
         vehicle.orientation.yaw,
         vehicle.suspension_pitch + vehicle.orientation.pitch,
         vehicle.suspension_roll + vehicle.orientation.roll,

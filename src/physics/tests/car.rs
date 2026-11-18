@@ -1116,85 +1116,215 @@ fn selected_gears_hold_across_speeds_and_explicit_upshifts_drop_coupled_rpm() {
     }
 }
 
-#[test]
-fn city_curb_is_crossable_with_a_single_small_speed_loss_and_settling_bump() {
-    let track = test::support::city_world();
-    let city = &track;
-    let (q, normal) = world::roads::curbs(city)
-        .iter()
-        .find_map(|curb| {
-            let q = XZ {
-                x: (curb.ends[0].x + curb.ends[1].x) * 0.5,
-                z: (curb.ends[0].z + curb.ends[1].z) * 0.5,
-            };
-            let inside = XZ {
-                x: q.x + curb.inward.x * 0.08,
-                z: q.z + curb.inward.z * 0.08,
-            };
-            let outside = XZ {
-                x: q.x - curb.inward.x * 0.2,
-                z: q.z - curb.inward.z * 0.2,
-            };
-            if !world::street_surface::contains_road(city, inside)
-                || world::street_surface::contains_road(city, outside)
-                || world::street_surface::paving_height(city, outside)
-                    != Some(world::roads::pavement_height_meters(city))
-            {
-                return None;
-            }
-            for distance in [0.08, -0.2, -1.0, -2.0, -3.0] {
-                let mut p = XYZ {
-                    x: q.x + curb.inward.x * distance,
-                    y: 0.0,
-                    z: q.z + curb.inward.z * distance,
-                };
-                let before = p;
-                physics::vehicle_location::constrain(city, &mut p, &mut XZ::default(), 1.7);
-                if (p.x - before.x).hypot(p.z - before.z) > 0.001 {
-                    return None;
-                }
-            }
-            Some((q, curb.inward))
-        })
-        .expect("missing clear curb crossing fixture");
-    let position = XYZ {
-        x: q.x + normal.x * 0.08,
-        y: 0.0,
-        z: q.z + normal.z * 0.08,
+// A flat road ending at z=0, with pavement beyond it. This keeps kerb
+// regressions independent of installed city data and nearby building collisions.
+fn curb_car(height: f32) -> Vehicle {
+    let mut track = model::world::empty();
+    track.bounding_box = util::geometry::BoundingBoxXZ {
+        min: XZ { x: -50.0, z: -50.0 },
+        max: XZ { x: 50.0, z: 50.0 },
     };
-    let heading = (-normal.x).atan2(-normal.z);
-    let mut car = physics::car::on_track(position, heading, test::support::car(), track.clone());
-    car.velocity =
-        util::geometry::at_height(util::geometry::xz_map(normal, |n| -n * 8.0), car.velocity.y);
-    physics::car::update(&mut car, Duration::from_millis(24), Controls::default());
-    assert!(!world::street_surface::contains_road(
-        city,
-        XZ {
-            x: car.position.x,
-            z: car.position.z
+    let mut triangles = Vec::new();
+    struct Surface {
+        near: f32,
+        far: f32,
+        usage: model::world::TriangleUsage,
+    }
+    for Surface { near, far, usage } in [
+        Surface {
+            near: -50.0,
+            far: 0.0,
+            usage: model::world::TriangleUsage::Road(model::world::CurbStyle::Road),
+        },
+        Surface {
+            near: 0.0,
+            far: 50.0,
+            usage: model::world::TriangleUsage::Pavement(model::world::CurbStyle::Road),
+        },
+    ] {
+        let points = [
+            XZ { x: -50.0, z: near },
+            XZ { x: 50.0, z: near },
+            XZ { x: 50.0, z: far },
+            XZ { x: -50.0, z: far },
+        ];
+        for indices in [[0, 1, 2], [0, 2, 3]] {
+            triangles.push(model::world::Triangle {
+                material: model::world::Material::Asphalt,
+                usage,
+                points: indices.map(|i| points[i]),
+            });
         }
-    ));
-    assert!(
-        longitudinal_speed(&car) > 7.0 && longitudinal_speed(&car) < 7.8,
-        "small curb penalty: {}",
-        longitudinal_speed(&car)
+    }
+    let (surfaces, paths) = world::street_surface::from_geometry(
+        model::location::Streets {
+            paths: Vec::new(),
+            triangles,
+            curbs: vec![model::world::Curb {
+                style: model::world::CurbStyle::Road,
+                ends: [XZ { x: -50.0, z: 0.0 }, XZ { x: 50.0, z: 0.0 }],
+                inward: XZ { x: 0.0, z: -1.0 },
+            }],
+        },
+        height,
+    )
+    .unwrap();
+    let field = model::world::HeightField {
+        columns: 2,
+        rows: 2,
+        origin: XZ { x: -50.0, z: -50.0 },
+        step: 100.0,
+        values: vec![0.0; 4],
+    };
+    track.roads = world::roads::with_compiled(track.roads, surfaces, paths, &field).unwrap();
+    let mut car = on_track(
+        XYZ {
+            x: 0.0,
+            y: 0.48,
+            z: -1.3,
+        },
+        0.0,
+        test::support::car(),
+        std::sync::Arc::new(track),
     );
-    assert!(car.curb_bump > 0.0 && car.curb_bump <= 0.03);
-    let speed = longitudinal_speed(&car);
-    let bump = car.curb_bump;
-    physics::car::update(&mut car, Duration::ZERO, Controls::default());
-    assert_eq!(car.curb_bump, bump);
-    car.gear = NEUTRAL_GEAR; // isolate curb drag from intentional engine braking
-    physics::car::update(&mut car, Duration::from_millis(250), Controls::default());
-    assert!(car.curb_bump < bump * 0.1);
+    car.gear = NEUTRAL_GEAR;
+    car.suspension_initialized = true;
+    car.velocity.z = 8.0;
+    car
+}
+
+#[test]
+fn taller_curbs_and_smaller_tyres_produce_stronger_physical_impacts() {
+    let mut previous_loss = 0.0;
+    let mut tall_loss = 0.0;
+    for height in [0.08, 0.14, 0.25] {
+        let mut car = curb_car(height);
+        let before = car.position;
+        car.position.z += 0.1;
+        let energy_before = car.velocity.z.powi(2);
+        let loss = resolve_curbs(&mut car, before, 0.0);
+        assert!(
+            loss > previous_loss,
+            "height {height}: {loss} <= {previous_loss}"
+        );
+        assert!(
+            car.velocity.y > 0.0,
+            "impact must reach chassis vertical velocity"
+        );
+        assert!(car.velocity.z.powi(2) + car.velocity.y.powi(2) <= energy_before);
+        previous_loss = loss;
+        tall_loss = loss;
+    }
     assert!(
-        longitudinal_speed(&car) > speed - 0.3,
-        "do not repeatedly apply curb drag off the asphalt"
+        tall_loss > 1.2,
+        "tall kerbs must exceed the old speed-loss cap"
     );
-    let position = car.position;
-    let heading = car.orientation.yaw;
-    physics::car::reset(&mut car, position, heading);
-    assert_eq!(car.curb_bump, 0.0);
+    let mut small = curb_car(0.25);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut small.spec).design).wheel_radii =
+        [0.25; 4];
+    let before = small.position;
+    small.position.z += 0.1;
+    assert!(resolve_curbs(&mut small, before, 0.0) > tall_loss);
+}
+
+#[test]
+fn kerb_impact_scales_with_speed_and_the_number_of_crossing_wheels() {
+    let mut slow = curb_car(0.25);
+    slow.velocity.z = 4.0;
+    let before = slow.position;
+    slow.position.z += 0.1;
+    let slow_loss = resolve_curbs(&mut slow, before, 0.0);
+    let mut fast = curb_car(0.25);
+    fast.velocity.z = 16.0;
+    let before = fast.position;
+    fast.position.z += 0.1;
+    let fast_loss = resolve_curbs(&mut fast, before, 0.0);
+    assert!(fast_loss > slow_loss * 3.0);
+    assert!(fast.velocity.y > slow.velocity.y * 3.0);
+
+    // Turn slightly so only the left front wheel crosses this substep.
+    let mut diagonal = curb_car(0.25);
+    diagonal.velocity.z = 16.0;
+    diagonal.orientation.yaw = 0.4;
+    diagonal.position.z = -1.49;
+    let before = diagonal.position;
+    diagonal.position.z += 0.1;
+    let one_wheel_loss = resolve_curbs(&mut diagonal, before, 0.4);
+    assert!(one_wheel_loss > 0.0 && one_wheel_loss < fast_loss * 0.75);
+
+    // The front axle raises its share of support before the car centre
+    // crosses; the rear axle is still on the asphalt.
+    let mut straddling = curb_car(0.25);
+    straddling.position.z = -0.5;
+    let height = suspension::ride_height(&straddling);
+    assert!(height > 0.48 && height < 0.68);
+}
+
+#[test]
+fn kerb_impacts_respect_crossing_direction_and_ground_contact() {
+    for mode in [0, 1, 2, 3] {
+        let mut car = curb_car(0.25);
+        if mode == 0 {
+            // Moving along the kerb.
+            car.velocity.x = 8.0;
+            car.velocity.z = 0.0;
+        } else if mode == 1 {
+            // Leaving the pavement: fall under gravity.
+            car.position.z = 1.3;
+            car.position.y += 0.2;
+            car.velocity.z = -8.0;
+        } else if mode == 2 {
+            // Flying over it.
+            car.position.y += 2.0;
+        } else {
+            // Scraping diagonally preserves velocity along the kerb.
+            car.velocity.x = 5.0;
+        }
+        let before = car.position;
+        car.position.x += car.velocity.x * 0.02;
+        car.position.z += car.velocity.z * 0.02;
+        let velocity = car.velocity;
+        let loss = resolve_curbs(&mut car, before, 0.0);
+        if mode < 3 {
+            assert_eq!(loss, 0.0);
+            assert_eq!(car.velocity, velocity);
+        } else {
+            assert!(loss > 0.0);
+            assert_eq!(car.velocity.x, velocity.x);
+        }
+    }
+}
+
+#[test]
+fn kerb_crossings_are_stable_across_frame_rates_and_do_not_repeat() {
+    let mut reference: Option<f32> = None;
+    for hz in [30, 60, 120, 240] {
+        let mut car = curb_car(0.25);
+        let dt = Duration::from_secs_f64(1.0 / f64::from(hz));
+        let mut peak_vertical: f32 = 0.0;
+        for _ in 0..hz {
+            update(&mut car, dt, Controls::default());
+            peak_vertical = peak_vertical.max(car.velocity.y);
+        }
+        assert!(car.position.z > 1.5, "both axles should clear the kerb");
+        assert!(peak_vertical > 0.5, "the step must generate physical heave");
+        if let Some(speed) = reference {
+            assert!(
+                (car.velocity.z - speed).abs() < 0.12,
+                "{hz} Hz: {} vs {speed}",
+                car.velocity.z
+            );
+        } else {
+            reference = Some(car.velocity.z);
+        }
+        let speed = car.velocity.z;
+        update(&mut car, Duration::from_millis(250), Controls::default());
+        assert!(
+            (car.velocity.z - speed).abs() < 0.3,
+            "no repeated kerb drag"
+        );
+        assert!((car.position.y - suspension::ride_height(&car)).abs() < 0.15);
+    }
 }
 
 #[test]

@@ -140,7 +140,6 @@ fn bonnet_points_stay_at_the_same_screen_position_as_the_body_moves() {
         car.position.y += 0.2;
         car.orientation.pitch = i as f32 * 0.03;
         car.orientation.roll = i as f32 * 0.025;
-        car.curb_bump = 0.08;
         render::camera::update(&mut chase, &car, std::time::Duration::from_millis(16));
         let actual = render::gl::project(
             &bonnet_camera(16.0 / 9.0, render::camera::pose(&chase), &car),

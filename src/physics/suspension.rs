@@ -5,6 +5,7 @@ use crate::model;
 use crate::physics;
 use crate::util;
 use crate::util::geometry::XYZ;
+use crate::util::geometry::XZ;
 use crate::world;
 
 /// Acceleration along the car’s longitudinal and lateral axes, in m/s².
@@ -46,11 +47,44 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
 }
 
 pub fn ride_height(vehicle: &car::Vehicle) -> f32 {
-    world::transport::drive_height_near(
-        &vehicle.track,
-        util::geometry::xz(vehicle.position),
-        vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
-    ) + physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT
+    let height = |p| {
+        world::transport::drive_height_near(
+            &vehicle.track,
+            p,
+            vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+        ) + physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT
+    };
+    if !world::street_surface::has_compiled_roads(&vehicle.track) {
+        return height(util::geometry::xz(vehicle.position));
+    }
+    (0..4)
+        .map(|index| {
+            height(wheel_position(
+                vehicle,
+                vehicle.position,
+                vehicle.orientation.yaw,
+                index,
+            )) * wheel_share(vehicle, index)
+        })
+        .sum()
+}
+
+pub fn wheel_position(vehicle: &car::Vehicle, position: XYZ, yaw: f32, index: usize) -> XZ<f32> {
+    let mount = vehicle.spec.design.mounts[index];
+    let (sin, cos) = yaw.sin_cos();
+    XZ {
+        x: position.x + mount.x * cos + mount.z * sin,
+        z: position.z - mount.x * sin + mount.z * cos,
+    }
+}
+
+pub fn wheel_share(vehicle: &car::Vehicle, index: usize) -> f32 {
+    let front = vehicle.spec.center_of_mass.longitudinal_fraction;
+    if index >= 2 {
+        front * 0.5
+    } else {
+        (1.0 - front) * 0.5
+    }
 }
 
 pub struct GroundAngles {
