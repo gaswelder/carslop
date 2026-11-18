@@ -95,6 +95,11 @@ device-independent production interfaces used by both callers and tests.
   pilot imagery from [Cyprus DLS Orthoimagery 2019](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
   Redistribution permission is unconfirmed; do not redistribute imagery or
   derived assets without authorization.
+- **Collision audio:** dslrguide's [Metal Hit 2](https://freesound.org/people/dslrguide/sounds/321482/)
+  and squareal's [Car Crash](https://freesound.org/people/squareal/sounds/237375/),
+  under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+  Filtered and trimmed into impact samples from the public MP3 previews;
+  [source and rebuild details](data/audio/impacts/README.md).
 - **Tyre squeal:** audible-edge's [Chrysler LHS tyre squeal 04](https://freesound.org/people/audible-edge/sounds/71739/),
   under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
   Filtered, level-adjusted and crossfaded into a loop from the supplied MP3 preview;

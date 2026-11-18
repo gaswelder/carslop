@@ -252,7 +252,7 @@ mod synthesis {
         let mut energy = 0.0;
         let mut stronger_energy = 0.0;
         let mut tail = 0.0;
-        for i in 0..48000 {
+        for i in 0..192000 {
             let sample = sound::synth::sample(&mut impact, voice);
             assert_eq!(sample, sound::synth::sample(&mut chatter, voice));
             let reference = sound::synth::sample(&mut baseline, voice);
@@ -262,7 +262,7 @@ mod synthesis {
                 energy += transient * transient;
                 stronger_energy += stronger_transient * stronger_transient;
             }
-            if i > 36000 {
+            if i > 180000 {
                 tail += transient * transient;
             }
         }

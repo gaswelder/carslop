@@ -33,23 +33,15 @@ pub struct Synth {
     master: f32,
     noise: u32,
     filtered_noise: f32,
-    impact: f32,
-    impact_phase: f32,
-    impact_cooldown: f32,
+    impacts: sound::impacts::Impacts,
 }
 
 pub fn hit(synth: &mut Synth, speed: f32) {
-    if speed < 1.5 || synth.impact_cooldown > 0.0 {
-        return;
-    }
-    synth.impact = ((speed - 1.5) / 9.0).clamp(0.0, 1.0);
-    synth.impact_phase = 0.0;
-    synth.impact_cooldown = 0.09;
+    sound::impacts::hit(&mut synth.impacts, speed);
 }
 
 pub fn suppress_impacts(synth: &mut Synth) {
-    synth.impact = 0.0;
-    synth.impact_cooldown = 0.0;
+    sound::impacts::suppress(&mut synth.impacts);
 }
 
 pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
@@ -70,7 +62,7 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     let p = synth.phase * TAU;
     // Shared placeholder timbre when no recorded engine samples are available.
     let harmonics = p.sin() * 0.6 + (p * 2.0).sin() * 0.25 + (p * 3.0).sin() * 0.15;
-    // Deterministic filtered noise: independent tire scrub, intake hiss and impact grit.
+    // Deterministic filtered noise: intake hiss and road texture.
     synth.noise = synth
         .noise
         .wrapping_mul(1_664_525)
@@ -106,9 +98,6 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     synth.road_noise += (noise - synth.road_noise) * 0.025;
     let rolling = (synth.road_noise * 0.18 + synth.filtered_noise * 0.035) * synth.road_gain;
     let tires = sound::tires::sample(&mut synth.tires, tire, voice.road_speed, voice.surface);
-    synth.impact_phase = (synth.impact_phase + (48.0 + synth.impact * 42.0) / SAMPLE_RATE).fract();
-    let impact = ((synth.impact_phase * TAU).sin() * 0.7 + noise * 0.3) * synth.impact * 0.22;
-    synth.impact *= 0.99981;
-    synth.impact_cooldown = (synth.impact_cooldown - 1.0 / SAMPLE_RATE).max(0.0);
+    let impact = sound::impacts::sample(&mut synth.impacts);
     ((engine + whoosh + tires + rolling + impact) * synth.master).clamp(-0.3, 0.3)
 }
