@@ -814,6 +814,12 @@ fn render_scene(app: &mut App, frame_time: Duration) {
                 redline_rpm: car.spec.engine.redline_rpm,
                 speed_kmh: physics::car::longitudinal_speed(car).abs() * 3.6,
                 gear: car.gear,
+                turbo_boost: car
+                    .spec
+                    .engine
+                    .turbo
+                    .as_ref()
+                    .map(|_| car.engine.turbo_boost),
                 forces: physics::car::force_telemetry(car),
             },
             (s.state == GameState::Paused).then_some(ui::hud::PauseMenu {

@@ -90,6 +90,8 @@ pub struct Gauges {
     pub redline_rpm: f32,
     pub speed_kmh: f32,
     pub gear: u8,
+    /// Fraction of full manifold boost; absent for naturally aspirated cars.
+    pub turbo_boost: Option<f32>,
     pub forces: physics::car::ForceTelemetry,
 }
 
@@ -1004,6 +1006,18 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
         Some(gauges.redline_rpm),
     );
     let muted = [0.56, 0.65, 0.68];
+    if let Some(boost) = gauges.turbo_boost {
+        let center = [-52.0, 104.0];
+        dial_face(&mut c, center, 48.0, 100, 5, 25, None);
+        label(&mut c, "BOOST %", [-52.0, 128.0], 0.95, muted);
+        dial_needle(
+            &mut c,
+            center,
+            48.0,
+            dial_value(boost, 1.0),
+            [1.0, 0.28, 0.18],
+        );
+    }
     label(&mut c, "KM/H", [82.0, 116.0], 1.1, muted);
     label(&mut c, "RPM X1000", [246.0, 118.0], 0.85, muted);
     let needle = [1.0, 0.28, 0.18];

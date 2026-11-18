@@ -199,6 +199,7 @@ fn hud_renderer_profile() {
                 redline_rpm: 6500.0,
                 speed_kmh: 90.0,
                 gear: 3,
+                turbo_boost: Some(0.7),
                 forces: physics::car::force_telemetry(&app.session.car),
             },
             None,
