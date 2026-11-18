@@ -64,3 +64,38 @@ fn every_surface_fades_and_transitions_without_clicks() {
         assert_eq!(sample(&mut stopped, 1., 0., Material::BareGround), 0.);
     }
 }
+
+#[test]
+fn embedded_recording_has_expected_format_and_sustains_across_loop_boundaries() {
+    // Playback reads a canonical PCM WAV directly; catch accidental replacement
+    // with an editor export containing extra metadata or a different encoding.
+    assert_eq!(&SQUEAL[..4], b"RIFF");
+    assert_eq!(&SQUEAL[8..16], b"WAVEfmt ");
+    assert_eq!(u32::from_le_bytes(SQUEAL[16..20].try_into().unwrap()), 16);
+    assert_eq!(&SQUEAL[20..24], &[1, 0, 1, 0]); // PCM, mono
+    assert_eq!(
+        u32::from_le_bytes(SQUEAL[24..28].try_into().unwrap()),
+        48_000
+    );
+    assert_eq!(&SQUEAL[32..36], &[2, 0, 16, 0]); // block size, bit depth
+    assert_eq!(&SQUEAL[36..40], b"data");
+    assert_eq!(
+        u32::from_le_bytes(SQUEAL[40..44].try_into().unwrap()) as usize,
+        SQUEAL.len() - WAV_HEADER
+    );
+    for speed in [10., 30., 60.] {
+        let mut tires = TireSound::default();
+        let mut previous = 0.;
+        // Several complete wraps, including interpolation across the seam.
+        for _ in 0..SAMPLE_RATE as usize * 5 {
+            let before = tires.position;
+            let output = sample(&mut tires, 1., speed, Material::Asphalt);
+            assert!(output.is_finite() && output.abs() < 0.2);
+            if tires.position < before {
+                assert!((output - previous).abs() < 0.05, "loop seam clicks");
+            }
+            previous = output;
+        }
+        assert!(tires.gain > 0.99);
+    }
+}

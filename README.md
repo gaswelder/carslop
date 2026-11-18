@@ -95,6 +95,10 @@ device-independent production interfaces used by both callers and tests.
   pilot imagery from [Cyprus DLS Orthoimagery 2019](https://eservices.dls.moi.gov.cy/arcgis/rest/services/BASEMAPS/Orthoimagery_2019_WebMercator/MapServer).
   Redistribution permission is unconfirmed; do not redistribute imagery or
   derived assets without authorization.
+- **Tyre squeal:** audible-edge's [Chrysler LHS tyre squeal 04](https://freesound.org/people/audible-edge/sounds/71739/),
+  under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+  Filtered, level-adjusted and crossfaded into a loop from the supplied MP3 preview;
+  [source and rebuild details](data/audio/tires/README.md).
 - **Engine audio:** Pole Position Production's [1981 Porsche 911 SC recording](https://pole.se/the-iconic-sound-of-a-porsche-911-sc-from-1981/),
   `Porsche_911_SC_-81_t5_onboard_driving_constant_rpms_exhausts.wav`,
   from [Sonniss GDC 2016](https://sonniss.com/gameaudiogdc/), under the
