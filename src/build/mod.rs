@@ -18,6 +18,7 @@ pub mod osm;
 mod osm_extract;
 pub mod osm_labels;
 mod scene;
+mod stage;
 mod streets;
 pub mod surfaces;
 mod terrain;

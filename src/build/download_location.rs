@@ -38,10 +38,11 @@ pub fn read_manifest(directory: &Path) -> Result<DownloadedSources> {
 }
 
 fn write_manifest(directory: &Path, manifest: &DownloadedSources) -> Result<()> {
-    fs::write(
-        directory.join(MANIFEST_FILE),
-        serde_json::to_vec_pretty(manifest)?,
-    )?;
+    let path = directory.join(MANIFEST_FILE);
+    let bytes = serde_json::to_vec_pretty(manifest)?;
+    if fs::read(&path).ok().as_ref() != Some(&bytes) {
+        fs::write(path, bytes)?;
+    }
     Ok(())
 }
 
@@ -76,10 +77,21 @@ pub fn download_map_data(area: build::osm::ImportArea) -> Result<PathBuf> {
         "extracting requested area ({}x{} km)",
         area.width_km, area.height_km
     );
-    build::osm_extract::extract_osm_boundary(
-        &download_dir.join(REGIONAL_OSM),
-        &download_dir.join(LOCATION_OSM_FILE),
-        build::osm::bbox(&boundary),
+    build::stage::run(
+        &download_dir.join("tmp/extract.json"),
+        &[download_dir.join(REGIONAL_OSM)],
+        &[
+            download_dir.join(LOCATION_OSM_FILE),
+            download_dir.join("source.json"),
+        ],
+        &serde_json::to_string(&area)?,
+        || {
+            build::osm_extract::extract_osm_boundary(
+                &download_dir.join(REGIONAL_OSM),
+                &download_dir.join(LOCATION_OSM_FILE),
+                build::osm::bbox(&boundary),
+            )
+        },
     )?;
 
     // Download relevant Mapzen/Skadi HGT tiles.

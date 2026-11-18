@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Private compiler workspace; none of these intermediates enter the download directory.
+/// Persistent compiler workspace under the downloaded location's tmp directory.
 struct ImportPaths {
     downloads: PathBuf,
     output: PathBuf,
@@ -46,10 +46,9 @@ fn new(output: &Path, downloads: &Path) -> ImportPaths {
 
 /// Compile entirely from local sources, retaining large render payloads on disk.
 pub fn compile_location(download_dir: &Path) -> Result<model::location::Location> {
-    let workspace = tempfile::Builder::new()
-        .prefix("carslop-compile-")
-        .tempdir()?;
-    let paths = new(workspace.path(), download_dir);
+    let workspace = download_dir.join("tmp/compiled");
+    fs::create_dir_all(&workspace)?;
+    let paths = new(&workspace, download_dir);
     let data = build::download_location::read_manifest(&paths.downloads)?;
     if data.height_tiles.is_empty() || data.imagery_blocks.is_empty() {
         return Err(invalid("downloaded location data is incomplete"));
@@ -67,19 +66,81 @@ pub fn compile_location(download_dir: &Path) -> Result<model::location::Location
         boundary: build::osm::geometry(&data.area)?,
         height_tiles: data.height_tiles.clone(),
     };
-    println!("converting OSM map");
-    let converted = convert_map(&paths, &acquired.boundary)?;
-    let generated = generate_assets(&paths, &acquired, &converted)?;
-    drop(converted);
-    compile_imagery(&data, &paths, &generated, &acquired.boundary)?;
-    println!("preparing scene assets");
-    let prepared = prepare(&paths)?;
-    println!("baking scene");
-    bake(&paths, &prepared, Some(&acquired.boundary))?;
-    drop(prepared);
-    render::scene_archive::open(&paths.scene)?;
+    let asset_inputs = vec![
+        download_dir.join(build::download_location::MANIFEST_FILE),
+        download_dir.join(build::download_location::LOCATION_OSM_FILE),
+        download_dir.join(build::download_location::ELEVATION_DATA_DIR),
+    ];
+    let asset_outputs: Vec<PathBuf> = [
+        "source.osm",
+        "city.txt",
+        "streets.txt",
+        "streets.bin",
+        "landscape.txt",
+        "furniture.txt",
+        "elevation.txt",
+        "elevation",
+        "road-rises.txt",
+        "details.txt",
+        "manifest.json",
+        "labels.txt",
+        "geographic-bounds.json",
+    ]
+    .iter()
+    .map(|name| workspace.join(name))
+    .collect();
+    build::stage::run(
+        &download_dir.join("tmp/assets.json"),
+        &asset_inputs,
+        &asset_outputs,
+        "",
+        || {
+            println!("converting OSM map");
+            let converted = convert_map(&paths, &acquired.boundary)?;
+            generate_assets(&paths, &acquired, &converted)?;
+            Ok(())
+        },
+    )?;
+    let mut imagery_inputs = asset_outputs.clone();
+    imagery_inputs.push(download_dir.join(build::infer_trees::TREES_FILE));
+    imagery_inputs.push(download_dir.join(build::download_location::SATELLITE_IMAGES_DIR));
+    let imagery_outputs = vec![
+        paths.imagery.clone(),
+        paths.aerial.clone(),
+        workspace.join("aerial.txt"),
+        workspace.join("imagery-trees.txt"),
+    ];
+    build::stage::run(
+        &download_dir.join("tmp/imagery.json"),
+        &imagery_inputs,
+        &imagery_outputs,
+        &std::env::var("DISABLE_TILE_PROCESSING").unwrap_or_default(),
+        || {
+            let generated = generated_assets(&workspace)?;
+            compile_imagery(&data, &paths, &generated, &acquired.boundary)
+        },
+    )?;
+    let mut scene_inputs = asset_outputs;
+    scene_inputs.extend(imagery_outputs);
+    if paths.decorations.exists() {
+        scene_inputs.push(paths.decorations.clone());
+    }
+    build::stage::run(
+        &download_dir.join("tmp/scene.json"),
+        &scene_inputs,
+        &[paths.scene.clone()],
+        "",
+        || {
+            println!("preparing scene assets");
+            let prepared = prepare(&paths)?;
+            println!("baking scene");
+            bake(&paths, &prepared, Some(&acquired.boundary))?;
+            render::scene_archive::open(&paths.scene)?;
+            Ok(())
+        },
+    )?;
     println!("loading compiled location");
-    storage::location::from_compilation(workspace).map_err(invalid)
+    storage::location::location_read(&workspace).map_err(invalid)
 }
 
 struct ConvertedMap {
@@ -119,7 +180,7 @@ fn generate_assets(
     paths: &ImportPaths,
     acquired: &CompileSources,
     converted: &ConvertedMap,
-) -> Result<GeneratedAssets> {
+) -> Result<()> {
     let height_tiles = &acquired.height_tiles;
     let source_osm_map = &converted.osm;
     let location_map = &converted.location;
@@ -185,20 +246,6 @@ fn generate_assets(
     let origin = location_map
         .origin
         .ok_or_else(|| invalid("imported location requires a geographic origin"))?;
-    let south_west = [
-        origin.lat - location_map.bounding_box.max.z.to_degrees() / 6371000.0,
-        origin.lon
-            + location_map.bounding_box.min.x.to_degrees()
-                / 6371000.0
-                / origin.lat.to_radians().cos(),
-    ];
-    let north_east = [
-        origin.lat - location_map.bounding_box.min.z.to_degrees() / 6371000.0,
-        origin.lon
-            + location_map.bounding_box.max.x.to_degrees()
-                / 6371000.0
-                / origin.lat.to_radians().cos(),
-    ];
     storage::manifest::write(
         &paths.output,
         &storage::manifest::Manifest {
@@ -216,13 +263,42 @@ fn generate_assets(
     let streets = build::streets::read(&paths.output, city_result.city.road_lines.len())?;
     storage::streets::write_compiled(&paths.output, &streets)?;
 
+    // Retain geographic bounds at source precision across resumed builds.
+    let south_west = [
+        origin.lat - location_map.bounding_box.max.z.to_degrees() / 6371000.0,
+        origin.lon
+            + location_map.bounding_box.min.x.to_degrees()
+                / 6371000.0
+                / origin.lat.to_radians().cos(),
+    ];
+    let north_east = [
+        origin.lat - location_map.bounding_box.min.z.to_degrees() / 6371000.0,
+        origin.lon
+            + location_map.bounding_box.max.x.to_degrees()
+                / 6371000.0
+                / origin.lat.to_radians().cos(),
+    ];
+    fs::write(
+        paths.output.join("geographic-bounds.json"),
+        serde_json::to_vec(&[south_west[0], south_west[1], north_east[0], north_east[1]])?,
+    )?;
+    Ok(())
+}
+
+fn generated_assets(directory: &Path) -> Result<GeneratedAssets> {
+    let mut city = city::read(directory).map_err(invalid)?;
+    let manifest = storage::manifest::read(directory).map_err(invalid)?;
+    city.origin = manifest.origin;
+    city.bounding_box = manifest.bounds_metres;
+    let [min_lat, min_lon, max_lat, max_lon]: [f64; 4] =
+        serde_json::from_slice(&fs::read(directory.join("geographic-bounds.json"))?)?;
     Ok(GeneratedAssets {
-        city: city_result.city,
+        city,
         bbox: BoundingBox {
-            min_lat: south_west[0],
-            min_lon: south_west[1],
-            max_lat: north_east[0],
-            max_lon: north_east[1],
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
         },
     })
 }
@@ -392,3 +468,7 @@ fn bake(
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/compile_location.rs"]
+mod tests;

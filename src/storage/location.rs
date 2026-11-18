@@ -14,8 +14,6 @@ use std::{
 pub struct Media {
     scene: Option<Payload>,
     aerial: Vec<Payload>,
-    // Own temporary compiled payloads until the location is dropped.
-    workspace: Option<tempfile::TempDir>,
 }
 #[derive(Debug)]
 struct Payload {
@@ -40,12 +38,6 @@ fn payload_write(payload: &Payload, root: &Path) -> Result<(), String> {
     }
     fs::copy(&payload.source, target).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-pub fn from_compilation(workspace: tempfile::TempDir) -> Result<location::Location, String> {
-    let mut location = location_read(workspace.path())?;
-    location.media.workspace = Some(workspace);
-    Ok(location)
 }
 
 pub fn location_read(dirpath: impl AsRef<Path>) -> Result<location::Location, String> {

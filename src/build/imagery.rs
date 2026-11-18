@@ -142,6 +142,12 @@ pub struct BlockMetadata {
     trees: Vec<CrownProposal>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct BlockReceipt {
+    inputs: String,
+    outputs: String,
+}
+
 /// Compile renderer tiles without running tree inference.
 pub fn process_tiles(
     downloads: &Path,
@@ -152,10 +158,24 @@ pub fn process_tiles(
 ) -> Result<BlockMetadata> {
     fs::create_dir_all(work)?;
     let meta_path = work.join(format!("block-{}.json", block_name(b)));
+    let receipt_path = work.join(format!("block-{}.receipt.json", block_name(b)));
+    let previous = fs::read(&receipt_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BlockReceipt>(&bytes).ok());
     let image_file = image_path(downloads, b);
-    if meta_path.exists() {
-        let value: BlockMetadata = serde_json::from_slice(&fs::read(&meta_path)?)?;
-        if value.extent == b.extent
+    let settings = format!("{:?} {origin:?}", b.extent);
+    let inputs = build::stage::fingerprint(&[image_file.clone()], &settings)?;
+    if let Some(value) = fs::read(&meta_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BlockMetadata>(&bytes).ok())
+    {
+        let mut tiles: Vec<PathBuf> = value.tiles.iter().map(|t| aerial.join(&t.name)).collect();
+        tiles.push(meta_path.clone());
+        if previous.as_ref().is_some_and(|receipt| {
+            receipt.inputs == inputs
+                && build::stage::fingerprint(&tiles, "")
+                    .is_ok_and(|outputs| outputs == receipt.outputs)
+        }) && value.extent == b.extent
             && value.jpeg_quality == 80
             && value
                 .tiles
@@ -208,6 +228,8 @@ pub fn process_tiles(
             });
         }
     }
+    let mut tile_paths: Vec<PathBuf> = tiles.iter().map(|t| aerial.join(&t.name)).collect();
+    tile_paths.push(meta_path.clone());
     let value = BlockMetadata {
         jpeg_quality: 80,
         extent: b.extent,
@@ -216,6 +238,13 @@ pub fn process_tiles(
         trees: vec![],
     };
     fs::write(&meta_path, serde_json::to_vec(&value)?)?;
+    fs::write(
+        receipt_path,
+        serde_json::to_vec(&BlockReceipt {
+            inputs,
+            outputs: build::stage::fingerprint(&tile_paths, "")?,
+        })?,
+    )?;
     Ok(value)
 }
 

@@ -31,3 +31,35 @@ fn overlapping_crops_share_block_names_and_extents() {
         assert_eq!(block_name(&restored), block_name(&block));
     }
 }
+
+#[test]
+fn tile_cache_tracks_source_image_and_geographic_origin() {
+    let root = tempfile::tempdir().unwrap();
+    let work = root.path().join("work");
+    let aerial = root.path().join("aerial");
+    fs::create_dir(&aerial).unwrap();
+    let block = blocks([35.16, 33.31, 35.161, 33.311]).remove(0);
+    let source = image_path(root.path(), &block);
+    let side = CORE + 2 * PAD;
+    image::RgbImage::from_pixel(side, side, image::Rgb([110, 90, 70]))
+        .save(&source)
+        .unwrap();
+    let first = process_tiles(root.path(), &work, &aerial, &block, [35.162, 33.32]).unwrap();
+    let metadata = work.join(format!("block-{}.json", block_name(&block)));
+    let timestamp = fs::metadata(&metadata).unwrap().modified().unwrap();
+    assert_eq!(
+        first,
+        process_tiles(root.path(), &work, &aerial, &block, [35.162, 33.32]).unwrap()
+    );
+    assert_eq!(
+        fs::metadata(&metadata).unwrap().modified().unwrap(),
+        timestamp
+    );
+    let moved = process_tiles(root.path(), &work, &aerial, &block, [35.163, 33.32]).unwrap();
+    assert_ne!(moved.tiles[0].bounds, first.tiles[0].bounds);
+    image::RgbImage::from_pixel(side, side, image::Rgb([255, 255, 255]))
+        .save(&source)
+        .unwrap();
+    let blank = process_tiles(root.path(), &work, &aerial, &block, [35.163, 33.32]).unwrap();
+    assert!(blank.tiles.is_empty());
+}

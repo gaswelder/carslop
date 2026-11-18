@@ -29,8 +29,35 @@ pub fn copy_download(downloader: &Downloader, url: &str, path: &Path) -> Result<
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(cached, path)?;
+    if !same_contents(&cached, path)? {
+        fs::copy(cached, path)?;
+    }
     Ok(())
+}
+
+// Preserve destination timestamps so cached downloads do not invalidate build stages.
+fn same_contents(source: &Path, target: &Path) -> Result<bool> {
+    let mut target = match fs::File::open(target) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let mut source = fs::File::open(source)?;
+    if source.metadata()?.len() != target.metadata()?.len() {
+        return Ok(false);
+    }
+    let mut source_bytes = [0; 65536];
+    let mut target_bytes = [0; 65536];
+    loop {
+        let length = io::Read::read(&mut source, &mut source_bytes)?;
+        if length == 0 {
+            return Ok(true);
+        }
+        io::Read::read_exact(&mut target, &mut target_bytes[..length])?;
+        if source_bytes[..length] != target_bytes[..length] {
+            return Ok(false);
+        }
+    }
 }
 
 pub fn invalidate(downloader: &Downloader, url: &str) -> Result<()> {
@@ -79,3 +106,7 @@ fn download(downloader: &Downloader, url: &str) -> Result<PathBuf> {
     }
     Ok(path)
 }
+
+#[cfg(test)]
+#[path = "tests/download.rs"]
+mod tests;

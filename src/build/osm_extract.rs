@@ -239,7 +239,9 @@ pub fn extract_osm_boundary(source: &Path, output: &Path, bounds: BoundingBox) -
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
-    let spool_file = tempfile::NamedTempFile::new()?;
+    let temporary = output.parent().unwrap_or(Path::new(".")).join("tmp");
+    fs::create_dir_all(&temporary)?;
+    let spool_file = tempfile::NamedTempFile::new_in(temporary)?;
     let spool = spool_file.path();
     let result = (|| -> Result<()> {
         let mut nodes = BufWriter::new(spool_file.reopen()?);
