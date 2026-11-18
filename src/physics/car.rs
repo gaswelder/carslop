@@ -78,7 +78,10 @@ pub struct Vehicle {
     pub brake_pressure: f32,
     steering: f32,
     shift_timer: f32,
-    pub filtered_acceleration: suspension::LocalAcceleration,
+    /// Unsmoothed planar acceleration from the previous tire/drag solve, in m/s².
+    pub local_acceleration: suspension::LocalAcceleration,
+    /// Smoothed acceleration for cosmetic body lean only, in m/s².
+    pub visual_acceleration: suspension::LocalAcceleration,
     pub suspension_rates: [f32; 2],
     pub suspension_initialized: bool,
     pub wheel_spin: f32,
@@ -140,7 +143,8 @@ pub fn on_track(
         tire_scrub: 0.0,
         brake_lights: false,
         shift_timer: 0.0,
-        filtered_acceleration: suspension::LocalAcceleration::default(),
+        local_acceleration: suspension::LocalAcceleration::default(),
+        visual_acceleration: suspension::LocalAcceleration::default(),
         suspension_rates: [0.0; 2],
         suspension_initialized: false,
         wheel_spin: 0.0,
@@ -351,14 +355,12 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
         x: forward.x * new_longitudinal + right.x * new_lateral,
         z: forward.z * new_longitudinal + right.z * new_lateral,
     };
-    let blend = 1.0 - (-seconds * 12.0).exp();
-    // Body motion follows actual chassis acceleration. In particular,
+    // Load transfer and body motion follow actual chassis acceleration. In particular,
     // static contact balancing gravity must not produce brake dive.
-    let ax = (new_longitudinal - longitudinal) / seconds;
-    let ay = (new_lateral - lateral) / seconds;
-    vehicle.filtered_acceleration.longitudinal +=
-        (ax - vehicle.filtered_acceleration.longitudinal) * blend;
-    vehicle.filtered_acceleration.lateral += (ay - vehicle.filtered_acceleration.lateral) * blend;
+    vehicle.local_acceleration = suspension::LocalAcceleration {
+        longitudinal: (new_longitudinal - longitudinal) / seconds,
+        lateral: (new_lateral - lateral) / seconds,
+    };
     suspension::update_body_motion(vehicle, seconds);
     vehicle.orientation.yaw = (vehicle.orientation.yaw + vehicle.orientation_rate.yaw * seconds)
         .rem_euclid(std::f32::consts::TAU);

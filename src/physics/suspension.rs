@@ -7,7 +7,7 @@ use crate::util;
 use crate::util::geometry::XYZ;
 use crate::world;
 
-/// Smoothed local acceleration for load transfer and body lean, in m/s².
+/// Acceleration along the car’s longitudinal and lateral axes, in m/s².
 #[derive(Default)]
 pub struct LocalAcceleration {
     pub longitudinal: f32,
@@ -33,7 +33,7 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     vehicle.velocity.y += vehicle.acceleration.y * seconds;
     vehicle.position.y += vehicle.velocity.y * seconds;
     let transfer = spec.weight_kg
-        * vehicle.filtered_acceleration.longitudinal
+        * vehicle.local_acceleration.longitudinal
         * model::car::center_of_mass_height_m(spec)
         / spec.chassis.wheelbase;
     let total_load = spec.weight_kg * support;
@@ -89,13 +89,20 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
 }
 
 pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
+    // This filter only steadies rendered pitch and roll; tire loads use raw acceleration.
+    let blend = 1.0 - (-dt * 12.0).exp();
+    vehicle.visual_acceleration.longitudinal += (vehicle.local_acceleration.longitudinal
+        - vehicle.visual_acceleration.longitudinal)
+        * blend;
+    vehicle.visual_acceleration.lateral +=
+        (vehicle.local_acceleration.lateral - vehicle.visual_acceleration.lateral) * blend;
     let spec = &vehicle.spec;
-    let target_pitch = (vehicle.filtered_acceleration.longitudinal
+    let target_pitch = (vehicle.visual_acceleration.longitudinal
         * model::car::center_of_mass_height_m(spec)
         / 80.0)
         .clamp(-0.10, 0.10);
     let target_roll =
-        (vehicle.filtered_acceleration.lateral * model::car::center_of_mass_height_m(spec) / 65.0)
+        (vehicle.visual_acceleration.lateral * model::car::center_of_mass_height_m(spec) / 65.0)
             .clamp(-0.12, 0.12);
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();

@@ -68,8 +68,9 @@ pub fn tire_capacity(vehicle: &car::Vehicle, axle: Axle) -> f32 {
     } else {
         1.0 - spec.center_of_mass.longitudinal_fraction
     };
+
     let transfer = spec.weight_kg
-        * vehicle.filtered_acceleration.lateral.abs()
+        * vehicle.local_acceleration.lateral.abs()
         * model::car::center_of_mass_height_m(spec)
         / spec.chassis.track_width
         * share;

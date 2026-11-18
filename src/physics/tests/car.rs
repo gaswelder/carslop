@@ -5,6 +5,7 @@ use crate::storage;
 use crate::test;
 use crate::util;
 use crate::world;
+use std::path::Path;
 
 fn new(position: XYZ, heading: f32, spec: std::sync::Arc<model::car::CarSpec>) -> Vehicle {
     physics::car::on_track(position, heading, spec, test::support::compact_track())
@@ -96,6 +97,10 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
         let telemetry = force_telemetry(&car);
         let actual = (dot(util::geometry::xz(car.velocity), forward) - before) * car.spec.weight_kg
             / dt.as_secs_f32();
+        assert!((car.local_acceleration.longitudinal - actual / car.spec.weight_kg).abs() < 0.001);
+        assert!(
+            car.visual_acceleration.longitudinal.abs() < car.local_acceleration.longitudinal.abs()
+        );
         let reported = telemetry.drive_force_n - direction * telemetry.resistance_force_n;
         assert!(
             // Velocity differences amplify f32 rounding when converted to newtons.
@@ -107,6 +112,59 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
         if gear == NEUTRAL_GEAR {
             assert!(telemetry.drive_force_n.abs() < 0.01);
         }
+    }
+}
+
+#[test]
+fn visual_acceleration_does_not_affect_handling_or_tire_loads() {
+    let mut baseline = level_route_car(world::locations::LocationId::Compact, test::support::car());
+    let mut leaning = level_route_car(world::locations::LocationId::Compact, test::support::car());
+    for vehicle in [&mut baseline, &mut leaning] {
+        vehicle.gear = NEUTRAL_GEAR;
+        set_longitudinal_speed(vehicle, 15.0);
+        vehicle.local_acceleration = suspension::LocalAcceleration {
+            longitudinal: -4.0,
+            lateral: 5.0,
+        };
+    }
+    leaning.visual_acceleration = suspension::LocalAcceleration {
+        longitudinal: 20.0,
+        lateral: -20.0,
+    };
+    let controls = Controls {
+        brake: 0.3,
+        steering: 0.4,
+        ..Controls::default()
+    };
+    for _ in 0..20 {
+        update_substep(&mut baseline, controls, 1.0 / 240.0);
+        update_substep(&mut leaning, controls, 1.0 / 240.0);
+        assert_eq!(baseline.velocity, leaning.velocity);
+        assert_eq!(baseline.position, leaning.position);
+        assert_eq!(baseline.orientation.yaw, leaning.orientation.yaw);
+        assert_eq!(baseline.axle_load.front, leaning.axle_load.front);
+        assert_eq!(baseline.axle_load.rear, leaning.axle_load.rear);
+    }
+    assert!((baseline.orientation.pitch - leaning.orientation.pitch).abs() > 0.001);
+    assert!((baseline.orientation.roll - leaning.orientation.roll).abs() > 0.001);
+}
+
+#[test]
+fn load_transfer_responds_to_raw_acceleration_without_waiting_for_body_lean() {
+    let mut vehicle = level_route_car(world::locations::LocationId::Compact, test::support::car());
+    vehicle.suspension_initialized = true;
+    vehicle.position.y = suspension::ride_height(&vehicle);
+    for acceleration in [4.0, -4.0, 0.0] {
+        vehicle.local_acceleration.longitudinal = acceleration;
+        suspension::update_suspension(&mut vehicle, 1.0 / 240.0);
+        let total = vehicle.axle_load.front + vehicle.axle_load.rear;
+        let static_front = total * vehicle.spec.center_of_mass.longitudinal_fraction;
+        let transfer = vehicle.spec.weight_kg
+            * acceleration
+            * model::car::center_of_mass_height_m(&vehicle.spec)
+            / vehicle.spec.chassis.wheelbase;
+        assert!((vehicle.axle_load.front - (static_front - transfer)).abs() < 0.01);
+        assert_eq!(vehicle.visual_acceleration.longitudinal, 0.0);
     }
 }
 
@@ -317,38 +375,100 @@ fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
     }
 }
 
-#[test]
-fn tires_regain_direction_after_lifting_out_of_a_slide() {
-    for model in test::support::cars() {
-        let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        let h = car.orientation.yaw;
-        car.velocity = XYZ {
-            y: car.velocity.y,
-            x: h.sin() * 15.0 + h.cos() * 6.0,
-            z: h.cos() * 15.0 - h.sin() * 6.0,
-        };
-        car.orientation_rate.yaw = 0.5;
-        for _ in 0..480 {
-            treadmill_tick(&mut car, Controls::default());
-        }
-        let rear_side = car.slip
-            - car.orientation_rate.yaw
-                * model.chassis.wheelbase
-                * model.center_of_mass.longitudinal_fraction;
-        let angle = rear_side
-            .abs()
-            .atan2(longitudinal_speed(&car).abs().max(2.5))
-            .to_degrees();
-        assert!(angle < 3.0, "{model:?}: slide persists after lift: {angle}");
-        assert!(
-            car.orientation_rate.yaw.abs() < 0.15,
-            "{model:?}: rotation persists after lift"
-        );
-        assert!(
-            longitudinal_speed(&car) > 8.0,
-            "recovering grip must not simply stop the car"
-        );
+fn sliding_car(model: std::sync::Arc<model::car::CarSpec>, gear: u8) -> Vehicle {
+    let mut car = level_route_car(world::locations::LocationId::Compact, model);
+    car.gear = gear;
+    let h = car.orientation.yaw;
+    car.velocity = XYZ {
+        y: car.velocity.y,
+        x: h.sin() * 15.0 + h.cos() * 6.0,
+        z: h.cos() * 15.0 - h.sin() * 6.0,
+    };
+    car.orientation_rate.yaw = 0.5;
+    car
+}
+
+fn assert_slide_recovers(model: std::sync::Arc<model::car::CarSpec>, gear: u8) {
+    let mut car = sliding_car(model.clone(), gear);
+    for _ in 0..480 {
+        treadmill_tick(&mut car, Controls::default());
     }
+    let rear_side = car.slip
+        - car.orientation_rate.yaw
+            * model.chassis.wheelbase
+            * model.center_of_mass.longitudinal_fraction;
+    let angle = rear_side
+        .abs()
+        .atan2(longitudinal_speed(&car).abs().max(2.5))
+        .to_degrees();
+    assert!(
+        angle < 3.0,
+        "{} gear {gear}: slide persists after lift: {angle}",
+        model.name
+    );
+    assert!(
+        car.orientation_rate.yaw.abs() < 0.15,
+        "{} gear {gear}: rotation persists after lift",
+        model.name
+    );
+    assert!(
+        longitudinal_speed(&car) > 8.0,
+        "{} gear {gear}: recovering grip must not simply stop the car",
+        model.name
+    );
+}
+
+#[test]
+fn normal_power_cars_regain_direction_after_lifting_out_of_a_slide() {
+    // The launch fixtures triple engine torque. Use ordinary torque here so this
+    // measures recovery across drive layouts without requiring recovery from
+    // the launch fixture's unusually strong first-gear engine braking.
+    for drive_bias in [0.0, 0.5, 1.0] {
+        let mut model = (*test::support::car()).clone();
+        model.chassis.drive_bias = drive_bias;
+        let model = std::sync::Arc::new(model);
+        for gear in [1, 2, NEUTRAL_GEAR] {
+            assert_slide_recovers(model.clone(), gear);
+        }
+    }
+}
+
+#[test]
+fn authored_cars_regain_direction_after_lifting_out_of_a_slide() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/cars");
+    let models = model::car::load(&directory).unwrap();
+    assert!(!models.is_empty(), "expected game car definitions");
+    for model in models {
+        for gear in [1, 2, NEUTRAL_GEAR] {
+            assert_slide_recovers(model.clone(), gear);
+        }
+    }
+}
+
+#[test]
+fn strong_engine_braking_dissipates_energy_during_a_rear_drive_slide() {
+    let model = test::support::cars()
+        .into_iter()
+        .find(|model| model.chassis.drive_bias == 0.0)
+        .unwrap();
+    let mut coasting = sliding_car(model.clone(), 1);
+    let mut free_rolling = sliding_car(model.clone(), NEUTRAL_GEAR);
+    let initial_energy =
+        0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
+            + 0.5 * model.yaw_inertia_kg_m2 * coasting.orientation_rate.yaw.powi(2);
+    for _ in 0..480 {
+        treadmill_tick(&mut coasting, Controls::default());
+        treadmill_tick(&mut free_rolling, Controls::default());
+        let energy =
+            0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
+                + 0.5 * model.yaw_inertia_kg_m2 * coasting.orientation_rate.yaw.powi(2);
+        assert!(energy.is_finite() && energy <= initial_energy * 1.001);
+        assert!(coasting.axle_load.front >= 0.0 && coasting.axle_load.rear >= 0.0);
+    }
+    assert!(
+        longitudinal_speed(&coasting) < longitudinal_speed(&free_rolling),
+        "engaged drivetrain should decelerate more than neutral"
+    );
 }
 
 #[test]
@@ -835,27 +955,88 @@ fn tire_torque_turns_and_countersteering_reverses_rotation() {
     }
 }
 
-#[test]
-fn steering_response_is_consistent_across_frame_rates() {
-    let model = test::support::car();
-    let mut reference = level_route_car(world::locations::LocationId::Compact, model.clone());
-    let start = reference.orientation.yaw;
-    for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
-        steering_run(&mut reference, 25.0, input, seconds, 240.0);
-    }
-    for hz in [30.0, 60.0, 144.0] {
-        let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        for (input, seconds) in [(1.0, 0.1), (0.0, 0.25), (-1.0, 0.7), (1.0, 0.4), (0.0, 0.3)] {
-            steering_run(&mut car, 25.0, input, seconds, hz);
+struct SteeringPhase {
+    steering: f32,
+    duration: Duration,
+}
+
+fn steering_sequence(frame_duration: Duration) -> Vehicle {
+    let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
+    car.gear = NEUTRAL_GEAR;
+    set_longitudinal_speed(&mut car, 25.0);
+    // Phase boundaries are multiples of 32 ms, so all tested frame groupings
+    // see the same input changes. Speed and position evolve freely.
+    for phase in [
+        SteeringPhase {
+            steering: 1.0,
+            duration: Duration::from_millis(96),
+        },
+        SteeringPhase {
+            steering: 0.0,
+            duration: Duration::from_millis(256),
+        },
+        SteeringPhase {
+            steering: -1.0,
+            duration: Duration::from_millis(672),
+        },
+        SteeringPhase {
+            steering: 1.0,
+            duration: Duration::from_millis(384),
+        },
+        SteeringPhase {
+            steering: 0.0,
+            duration: Duration::from_millis(288),
+        },
+    ] {
+        let mut remaining = phase.duration;
+        while !remaining.is_zero() {
+            let dt = remaining.min(frame_duration);
+            update(
+                &mut car,
+                dt,
+                Controls {
+                    steering: phase.steering,
+                    ..Controls::default()
+                },
+            );
+            remaining -= dt;
         }
+    }
+    car
+}
+
+#[test]
+fn steering_response_is_independent_of_frame_grouping_with_identical_physics_steps() {
+    let reference = steering_sequence(Duration::from_millis(4));
+    for milliseconds in [8, 16, 32] {
+        // update subdivides these frames into identical 4 ms physics steps.
+        let car = steering_sequence(Duration::from_millis(milliseconds));
+        assert_eq!(car.position, reference.position, "{milliseconds} ms frames");
+        assert_eq!(car.velocity, reference.velocity, "{milliseconds} ms frames");
+        assert_eq!(car.orientation.yaw, reference.orientation.yaw);
+        assert_eq!(car.orientation_rate.yaw, reference.orientation_rate.yaw);
+    }
+}
+
+#[test]
+fn steering_response_converges_as_physics_steps_shrink() {
+    let reference = steering_sequence(Duration::from_micros(125));
+    let mut previous_error = f32::INFINITY;
+    for microseconds in [4000, 2000, 1000, 500, 250] {
+        let car = steering_sequence(Duration::from_micros(microseconds));
         let error = test::support::angle(car.orientation.yaw - reference.orientation.yaw)
             .abs()
             .to_degrees();
         assert!(
-            error < 0.25,
-            "{model:?} {hz} Hz differs by {error} degrees from 240 Hz; start {start}"
+            error < previous_error,
+            "{microseconds} us steps: heading error {error} degrees did not improve from {previous_error}"
         );
+        previous_error = error;
     }
+    assert!(
+        previous_error < 0.15,
+        "finest-step heading error: {previous_error} degrees"
+    );
 }
 
 #[test]
@@ -1243,15 +1424,15 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
     let mut reverse = car();
     set_longitudinal_speed(&mut forward, 6.0);
     set_longitudinal_speed(&mut reverse, -6.0);
-    forward.filtered_acceleration.longitudinal = 3.0;
-    reverse.filtered_acceleration.longitudinal = -3.0;
+    forward.local_acceleration.longitudinal = 3.0;
+    reverse.local_acceleration.longitudinal = -3.0;
     for _ in 0..240 {
         suspension::update_body_motion(&mut forward, 1.0 / 240.0);
         suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
     assert!(forward.orientation.pitch > 0.005);
     assert!((forward.orientation.pitch + reverse.orientation.pitch).abs() < 0.00001);
-    reverse.filtered_acceleration.longitudinal = 4.0;
+    reverse.local_acceleration.longitudinal = 4.0;
     for _ in 0..240 {
         suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
@@ -1259,8 +1440,8 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
         reverse.orientation.pitch > 0.01,
         "reverse braking should lift the nose"
     );
-    forward.filtered_acceleration = suspension::LocalAcceleration::default();
-    reverse.filtered_acceleration = suspension::LocalAcceleration::default();
+    forward.local_acceleration = suspension::LocalAcceleration::default();
+    reverse.local_acceleration = suspension::LocalAcceleration::default();
     forward.orientation.pitch = 0.05;
     reverse.orientation.pitch = 0.05;
     for _ in 0..30 {
