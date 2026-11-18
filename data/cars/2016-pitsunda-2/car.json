@@ -1,36 +1,33 @@
 {
-  "name": "2016 Pitsunda 2",
-  "paint_color": [0.36, 0.355, 0.35],
-  "weight_kg": 1040,
-  "brake_force": 18720,
-  "engine_power_hp": 92.4,
-  "drag_coefficient": 0.26827704,
-  "front_weight": 0.6,
-  "cg_height_fraction": 0.32189189,
-  "yaw_inertia": 1250,
-  "drive_bias": 1,
-  "brake_bias": 0.68,
-  "engine_max_torque_nm": 125,
-  "engine_torque_curve": [
-    {
-      "rpm": 0,
-      "torque": 0.6
-    },
-    {
-      "rpm": 3500,
-      "torque": 1
-    },
-    {
-      "rpm": 6500,
-      "torque": 0.9
-    },
-    {
-      "rpm": 33500,
-      "torque": 0
-    }
-  ],
-  "redline_rpm": 6500,
-  "suspension_hz": 1.55,
+  "chassis": {
+    "brake_force_n": 18720,
+    "drive_bias": 1,
+    "brake_bias": 0.68,
+    "suspension_stiffness_n_m": 98640.774
+  },
+  "engine": {
+    "power_kw": 68.90267076,
+    "max_torque_nm": 125,
+    "torque_curve": [
+      {
+        "rpm": 0,
+        "torque": 0.6
+      },
+      {
+        "rpm": 3500,
+        "torque": 1
+      },
+      {
+        "rpm": 6500,
+        "torque": 0.9
+      },
+      {
+        "rpm": 33500,
+        "torque": 0
+      }
+    ],
+    "redline_rpm": 6500
+  },
   "gearbox": {
     "ratios": [
       3.552,
@@ -43,23 +40,16 @@
     "final_drive": 4.105,
     "reverse_ratio": 3.893
   },
-  "audio": {
-    "harmonics": [
-      [
-        1,
-        0.52
-      ],
-      [
-        3,
-        0.3
-      ],
-      [
-        6,
-        0.18
-      ]
-    ],
-    "gain": 2,
-    "coast_gain": 0.35,
-    "soft_limit": null
-  }
+  "paint_color": [
+    0.36,
+    0.355,
+    0.35
+  ],
+  "weight_kg": 1040,
+  "drag_coefficient": 0.26827704,
+  "center_of_mass": {
+    "longitudinal_fraction": 0.6,
+    "height_fraction": 0.32189189
+  },
+  "yaw_inertia_kg_m2": 1250
 }

@@ -7,7 +7,6 @@ mod synthesis {
     use crate::sound::spatial::SpatialAudio;
     use crate::sound::synth::{Synth, Voice};
     use crate::sound::tires::TireSound;
-    use crate::test;
     use crate::util::geometry::XYZ;
 
     #[test]
@@ -26,7 +25,7 @@ mod synthesis {
                         load,
                         scrub: 0.0,
                         surface: Material::Asphalt,
-                        tuning: test::support::audio_voice(),
+                        sample_directory: None,
                         enabled: true,
                     },
                 );
@@ -168,7 +167,7 @@ mod synthesis {
             load: 1.0,
             scrub: 1.0,
             surface: Material::Asphalt,
-            tuning: test::support::audio_voice(),
+            sample_directory: None,
             enabled: true,
         };
         let mut driving_energy = 0.0;
@@ -228,7 +227,7 @@ mod synthesis {
             load: 0.0,
             scrub: 0.0,
             surface: Material::Asphalt,
-            tuning: test::support::audio_voice(),
+            sample_directory: None,
             enabled: true,
             turbo_target: 0.0,
             road_speed: 0.0,

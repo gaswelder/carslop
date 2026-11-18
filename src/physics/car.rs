@@ -307,7 +307,7 @@ fn update_substep(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> f3
         },
         contacts,
         spec.weight_kg,
-        spec.yaw_inertia,
+        spec.yaw_inertia_kg_m2,
         seconds,
     );
     let tire_force = (solved.impulses[0].longitudinal * cos - solved.impulses[0].lateral * sin

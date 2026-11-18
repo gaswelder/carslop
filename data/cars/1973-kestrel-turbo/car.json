@@ -1,67 +1,71 @@
 {
-  "name": "1973 Kestrel Turbo",
-  "weight_kg": 1140,
-  "brake_force": 23940,
-  "engine_power_hp": 256.1,
-  "drag_coefficient": 0.3130198,
-  "front_weight": 0.39,
-  "cg_height_fraction": 0.34194021,
-  "yaw_inertia": 1750,
-  "drive_bias": 0.0,
-  "brake_bias": 0.61,
-  "engine_max_torque_nm": 412,
-  "engine_torque_curve": [
-    {
-      "rpm": 1500,
-      "torque": 0.4422
-    },
-    {
-      "rpm": 2000,
-      "torque": 0.4631
-    },
-    {
-      "rpm": 2500,
-      "torque": 0.4948
-    },
-    {
-      "rpm": 3000,
-      "torque": 0.7077
-    },
-    {
-      "rpm": 3500,
-      "torque": 1
-    },
-    {
-      "rpm": 4000,
-      "torque": 1
-    },
-    {
-      "rpm": 4500,
-      "torque": 1
-    },
-    {
-      "rpm": 5000,
-      "torque": 1
-    },
-    {
-      "rpm": 5500,
-      "torque": 0.895
-    },
-    {
-      "rpm": 6000,
-      "torque": 0.72
-    },
-    {
-      "rpm": 6500,
-      "torque": 0.545
-    },
-    {
-      "rpm": 7000,
-      "torque": 0.37
+  "chassis": {
+    "brake_force_n": 23940,
+    "drive_bias": 0.0,
+    "brake_bias": 0.61,
+    "suspension_stiffness_n_m": 154030.968
+  },
+  "engine": {
+    "power_kw": 190.97374439,
+    "max_torque_nm": 412,
+    "torque_curve": [
+      {
+        "rpm": 1500,
+        "torque": 0.4422
+      },
+      {
+        "rpm": 2000,
+        "torque": 0.4631
+      },
+      {
+        "rpm": 2500,
+        "torque": 0.4948
+      },
+      {
+        "rpm": 3000,
+        "torque": 0.7077
+      },
+      {
+        "rpm": 3500,
+        "torque": 1
+      },
+      {
+        "rpm": 4000,
+        "torque": 1
+      },
+      {
+        "rpm": 4500,
+        "torque": 1
+      },
+      {
+        "rpm": 5000,
+        "torque": 1
+      },
+      {
+        "rpm": 5500,
+        "torque": 0.895
+      },
+      {
+        "rpm": 6000,
+        "torque": 0.72
+      },
+      {
+        "rpm": 6500,
+        "torque": 0.545
+      },
+      {
+        "rpm": 7000,
+        "torque": 0.37
+      }
+    ],
+    "redline_rpm": 6500,
+    "turbo": {
+      "spool_start_rpm": 2000,
+      "full_boost_rpm": 3800,
+      "spool_seconds": 0.65,
+      "decay_seconds": 0.3
     }
-  ],
-  "redline_rpm": 6500,
-  "suspension_hz": 1.85,
+  },
   "gearbox": {
     "ratios": [
       2.25,
@@ -72,32 +76,11 @@
     "final_drive": 4.222222,
     "reverse_ratio": 2.25
   },
-  "audio": {
-    "harmonics": [
-      [
-        1,
-        0.65
-      ],
-      [
-        2,
-        0.23
-      ],
-      [
-        4,
-        0.12
-      ]
-    ],
-    "gain": 3.2,
-    "coast_gain": 0.45,
-    "soft_limit": [
-      0.22,
-      0.06
-    ]
+  "weight_kg": 1140,
+  "drag_coefficient": 0.3130198,
+  "center_of_mass": {
+    "longitudinal_fraction": 0.39,
+    "height_fraction": 0.34194021
   },
-  "turbo": {
-    "spool_start_rpm": 2000,
-    "full_boost_rpm": 3800,
-    "spool_seconds": 0.65,
-    "decay_seconds": 0.3
-  }
+  "yaw_inertia_kg_m2": 1750
 }

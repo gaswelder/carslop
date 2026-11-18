@@ -51,17 +51,6 @@ pub fn road_footprint(surface: &world::street_surface::StreetSurface) -> MultiPo
     )
 }
 
-pub fn audio_voice() -> &'static model::car::EngineVoice {
-    static VOICE: OnceLock<model::car::EngineVoice> = OnceLock::new();
-    VOICE.get_or_init(|| model::car::EngineVoice {
-        harmonics: vec![[1.0, 0.6], [2.0, 0.25], [3.0, 0.15]],
-        gain: 2.0,
-        coast_gain: 0.4,
-        soft_limit: None,
-        sample_directory: None,
-    })
-}
-
 /// Mono 48 kHz signed 16-bit PCM in a minimal RIFF/WAVE container.
 pub fn engine_wav(pcm: &[u8]) -> Vec<u8> {
     let mut wav = Vec::new();
@@ -128,22 +117,28 @@ pub fn car_spec() -> &'static model::car::CarSpec {
             wheel_radii: [0.32; 4],
         });
         let frontal_area_m2 = asset::car_glb::frontal_area_m2(&design);
+        let model_height_m = asset::car_glb::height(&design);
+        let height_fraction = 0.5 / model_height_m;
         model::car::CarSpec {
             design,
             name: "TEST VEHICLE".into(),
             paint_color: [1.0, 0.18, 0.08],
             weight_kg: 1200.0,
-            brake_force: 22000.0,
-            audio: audio_voice().clone(),
-            front_weight: 0.5,
-            cg_height: 0.5,
-            yaw_inertia: 1500.0,
+            engine_sample_directory: None,
+            center_of_mass: model::car::CenterOfMass {
+                longitudinal_fraction: 0.5,
+                height_fraction,
+            },
+            model_height_m,
+            yaw_inertia_kg_m2: 1500.0,
             chassis: model::car::Chassis {
+                brake_force_n: 22000.0,
                 rolling_radius: 0.32,
                 wheelbase: 2.5,
                 track_width: 1.5,
                 drive_bias: 0.0,
                 brake_bias: 0.65,
+                suspension_stiffness_n_m: 136911.152,
             },
             engine: model::car::Engine {
                 max_torque_nm: 180.0,
@@ -166,10 +161,9 @@ pub fn car_spec() -> &'static model::car::CarSpec {
                     },
                 ],
                 redline_rpm: 6500.0,
-                power_watts: 120.0 * model::car::WATTS_PER_HP,
+                power_watts: 89_483.99,
                 turbo: None,
             },
-            suspension_hz: 1.7,
             gearbox: model::car::Gearbox {
                 ratios: vec![3.0, 2.0, 1.4, 1.0, 0.8],
                 final_drive: 4.0,
@@ -190,20 +184,35 @@ pub fn track() -> Arc<world::locations::WorldLocation> {
 pub fn car_definition() -> serde_json::Value {
     let s = car_spec();
     serde_json::json!({
-        "name": s.name, "paint_color": s.paint_color,
-        "weight_kg": s.weight_kg, "brake_force": s.brake_force,
-        "engine_power_hp": s.engine.power_watts / model::car::WATTS_PER_HP, "redline_rpm": s.engine.redline_rpm,
-        "drag_coefficient": s.drag_coefficient, "front_weight": s.front_weight,
-        "cg_height_fraction": s.cg_height / asset::car_glb::height(&s.design), "yaw_inertia": s.yaw_inertia,
-        "drive_bias": s.chassis.drive_bias, "brake_bias": s.chassis.brake_bias,
-        "engine_max_torque_nm": s.engine.max_torque_nm,
-        "engine_torque_curve": s.engine.torque_curve.iter().map(|point|
-            serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
-        "suspension_hz": s.suspension_hz,
+        "paint_color": s.paint_color,
+        "weight_kg": s.weight_kg,
+        "engine": {
+            "power_kw": s.engine.power_watts / 1000.0,
+            "max_torque_nm": s.engine.max_torque_nm,
+            "torque_curve": s.engine.torque_curve.iter().map(|point|
+                serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
+            "redline_rpm": s.engine.redline_rpm,
+            "turbo": s.engine.turbo.as_ref().map(|turbo| serde_json::json!({
+                "spool_start_rpm": turbo.spool_start_rpm,
+                "full_boost_rpm": turbo.full_boost_rpm,
+                "spool_seconds": turbo.spool_seconds,
+                "decay_seconds": turbo.decay_seconds
+            }))
+        },
+        "drag_coefficient": s.drag_coefficient,
+        "center_of_mass": {
+            "longitudinal_fraction": s.center_of_mass.longitudinal_fraction,
+            "height_fraction": s.center_of_mass.height_fraction
+        },
+        "yaw_inertia_kg_m2": s.yaw_inertia_kg_m2,
+        "chassis": {
+            "brake_force_n": s.chassis.brake_force_n,
+            "drive_bias": s.chassis.drive_bias,
+            "brake_bias": s.chassis.brake_bias,
+            "suspension_stiffness_n_m": s.chassis.suspension_stiffness_n_m
+        },
         "gearbox": {"ratios": s.gearbox.ratios, "final_drive": s.gearbox.final_drive,
-            "reverse_ratio": s.gearbox.reverse_ratio},
-        "audio": {"harmonics": s.audio.harmonics, "gain": s.audio.gain,
-            "coast_gain": s.audio.coast_gain, "soft_limit": s.audio.soft_limit}
+            "reverse_ratio": s.gearbox.reverse_ratio}
     })
 }
 

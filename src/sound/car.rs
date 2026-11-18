@@ -78,7 +78,7 @@ pub fn update(
         },
         scrub: car.tire_scrub,
         surface: tire_material(car),
-        tuning: &car.spec.audio,
+        sample_directory: car.spec.engine_sample_directory.as_deref(),
         enabled,
     };
     let placement = sound::spatial::placement(car.position, listener);

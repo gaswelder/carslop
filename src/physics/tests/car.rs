@@ -331,8 +331,10 @@ fn tires_regain_direction_after_lifting_out_of_a_slide() {
         for _ in 0..480 {
             treadmill_tick(&mut car, Controls::default());
         }
-        let rear_side =
-            car.slip - car.orientation_rate.yaw * model.chassis.wheelbase * model.front_weight;
+        let rear_side = car.slip
+            - car.orientation_rate.yaw
+                * model.chassis.wheelbase
+                * model.center_of_mass.longitudinal_fraction;
         let angle = rear_side
             .abs()
             .atan2(longitudinal_speed(&car).abs().max(2.5))
@@ -495,6 +497,26 @@ fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
         let sample = run(hz);
         assert!((sample.0 - reference.0).abs() < 0.005);
         assert!((sample.1 - reference.1).abs() < 0.01);
+    }
+}
+
+#[test]
+fn fixed_suspension_stiffness_gives_less_acceleration_with_more_mass() {
+    let mut spec = test::support::car_spec().clone();
+    spec.chassis.suspension_stiffness_n_m = 100_000.0;
+    for mass in [1000.0, 2000.0] {
+        spec.weight_kg = mass;
+        let mut car = level_route_car(
+            test::support::authored_id(),
+            std::sync::Arc::new(spec.clone()),
+        );
+        let ground = suspension::ride_height(&car);
+        car.suspension_initialized = true;
+        car.position.y = ground - 0.05;
+        car.velocity.y = 0.0;
+        suspension::update_suspension(&mut car, 1.0 / 240.0);
+        // The same compression produces 5000 N of restoring force in both cars.
+        assert!((car.acceleration.y * mass - 5000.0).abs() < 1.0);
     }
 }
 

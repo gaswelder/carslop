@@ -1,10 +1,10 @@
 use crate::asset;
+use crate::model::car_loading;
 use crate::physics;
 use crate::util::geometry::XYZ;
 use std::fs;
-use std::path::PathBuf;
-
-pub const WATTS_PER_HP: f32 = 745.6999;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct CarSpec {
@@ -16,27 +16,35 @@ pub struct CarSpec {
     /// Dimensionless aerodynamic drag coefficient (Cd/Cx).
     pub drag_coefficient: f32,
     pub frontal_area_m2: f32,
+    /// Full model height in metres, including wheels.
+    pub model_height_m: f32,
     //
     pub weight_kg: f32,
-    pub front_weight: f32,
-    /// Metres above ground, derived from the authored fraction and model height.
-    pub cg_height: f32,
+    pub center_of_mass: CenterOfMass,
+    /// Moment of inertia about the vertical axis through the center of mass, in kg·m².
+    pub yaw_inertia_kg_m2: f32,
     //
     pub engine: Engine,
-    pub audio: EngineVoice,
-    pub gearbox: Gearbox,
+    pub engine_sample_directory: Option<PathBuf>,
     //
-    pub brake_force: f32,
-
+    pub gearbox: Gearbox,
     pub chassis: Chassis,
+}
 
-    pub yaw_inertia: f32,
-
-    pub suspension_hz: f32,
+#[derive(Clone, Debug)]
+pub struct CenterOfMass {
+    /// Position between axles: 0 = rear axle, 1 = front axle.
+    pub longitudinal_fraction: f32,
+    /// Height above ground as a fraction of the full model height, in 0..=1.
+    pub height_fraction: f32,
 }
 
 #[derive(Clone, Debug)]
 pub struct Chassis {
+    /// Maximum total foot-braking force at full pressure, in newtons.
+    pub brake_force_n: f32,
+    /// Combined effective suspension spring stiffness for the whole vehicle, in N/m.
+    pub suspension_stiffness_n_m: f32,
     /// Effective driven-wheel radius in metres, derived from the model.
     pub rolling_radius: f32,
     pub wheelbase: f32,
@@ -56,11 +64,26 @@ pub struct Engine {
     pub turbo: Option<Turbo>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TorquePoint {
     pub rpm: f32,
     /// Fraction of the engine's maximum torque.
     pub torque: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Turbo {
+    pub spool_start_rpm: f32,
+    pub full_boost_rpm: f32,
+    pub spool_seconds: f32,
+    pub decay_seconds: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Gearbox {
+    pub ratios: Vec<f32>,
+    pub final_drive: f32,
+    pub reverse_ratio: f32,
 }
 
 pub fn torque_factor(curve: &[TorquePoint], rpm: f32) -> f32 {
@@ -77,48 +100,39 @@ pub fn torque_factor(curve: &[TorquePoint], rpm: f32) -> f32 {
     lower.torque + (upper.torque - lower.torque) * fraction
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
-pub struct Turbo {
-    pub spool_start_rpm: f32,
-    pub full_boost_rpm: f32,
-    pub spool_seconds: f32,
-    pub decay_seconds: f32,
-}
-
-#[derive(Clone, Debug, serde::Deserialize)]
-pub struct Gearbox {
-    pub ratios: Vec<f32>,
-    pub final_drive: f32,
-    pub reverse_ratio: f32,
-}
-/// Per-car engine timbre and mix, independent of model identity.
-#[derive(Clone, Debug, serde::Deserialize)]
-pub struct EngineVoice {
-    pub harmonics: Vec<[f32; 2]>, // frequency multiplier, amplitude
-    pub gain: f32,
-    pub coast_gain: f32,
-    pub soft_limit: Option<[f32; 2]>, // knee, headroom
-    #[serde(skip)]
-    pub sample_directory: Option<PathBuf>,
+/// Height of the center of mass above ground, in metres.
+pub fn center_of_mass_height_m(spec: &CarSpec) -> f32 {
+    spec.center_of_mass.height_fraction * spec.model_height_m
 }
 
 // Loads cars from the given directory.
-pub fn load(dirpath: &std::path::Path) -> Result<Vec<std::sync::Arc<CarSpec>>, String> {
+pub fn load(dirpath: &Path) -> Result<Vec<Arc<CarSpec>>, String> {
     let mut cars = Vec::new();
     let entries = fs::read_dir(dirpath).map_err(|e| format!("{}: {e}", dirpath.display()))?;
     for entry in entries {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if !path.is_dir() {
-            log::warn!("Skipping car entry {}: not a directory", path.display());
+        let entry = entry.map_err(|e| e.to_string())?;
+        let directory = entry.path();
+        if !directory.is_dir() {
+            log::warn!(
+                "Skipping car entry {}: not a directory",
+                directory.display()
+            );
             continue;
         }
-        let path = path.join("car.json");
+        let path = directory.join("car.json");
         if !path.is_file() {
             log::warn!("Skipping car definition {}: not a file", path.display());
             continue;
         }
-        match load_car(&path) {
-            Ok(spec) => cars.push(std::sync::Arc::new(spec)),
+        let Ok(name) = entry.file_name().into_string() else {
+            log::warn!(
+                "Skipping car entry {}: expected UTF-8 car directory name",
+                directory.display()
+            );
+            continue;
+        };
+        match load_car(&directory, name) {
+            Ok(spec) => cars.push(Arc::new(spec)),
             Err(error) => log::warn!("Cannot load car {}: {error}", path.display()),
         }
     }
@@ -126,157 +140,13 @@ pub fn load(dirpath: &std::path::Path) -> Result<Vec<std::sync::Arc<CarSpec>>, S
     Ok(cars)
 }
 
-#[derive(serde::Deserialize)]
-struct CarDefinition {
-    name: String,
-    #[serde(default = "default_paint_color")]
-    paint_color: [f32; 3],
-    weight_kg: f32,
-    brake_force: f32,
-    engine_power_hp: f32,
-    drag_coefficient: f32,
-    front_weight: f32,
-    cg_height_fraction: f32,
-    yaw_inertia: f32,
-    drive_bias: f32,
-    brake_bias: f32,
-    engine_max_torque_nm: f32,
-    engine_torque_curve: Vec<TorquePoint>,
-    redline_rpm: f32,
-    suspension_hz: f32,
-    gearbox: Gearbox,
-    audio: EngineVoice,
-    turbo: Option<Turbo>,
-}
-
-fn validate(car_definition: &CarDefinition) -> Result<(), String> {
-    if car_definition.name.trim().is_empty() {
-        return Err("expected nonempty text".into());
-    }
-    for channel in car_definition.paint_color {
-        fraction(channel)?;
-    }
-    for value in [
-        car_definition.weight_kg,
-        car_definition.brake_force,
-        car_definition.engine_power_hp,
-        car_definition.drag_coefficient,
-        car_definition.yaw_inertia,
-        car_definition.engine_max_torque_nm,
-        car_definition.redline_rpm,
-        car_definition.suspension_hz,
-        car_definition.gearbox.final_drive,
-        car_definition.gearbox.reverse_ratio,
-        car_definition.audio.gain,
-    ] {
-        positive(value)?;
-    }
-    for value in [
-        car_definition.front_weight,
-        car_definition.cg_height_fraction,
-        car_definition.drive_bias,
-        car_definition.brake_bias,
-        car_definition.audio.coast_gain,
-    ] {
-        fraction(value)?;
-    }
-    if car_definition.gearbox.ratios.is_empty() || car_definition.gearbox.ratios.len() > 254 {
-        return Err("expected 1..254 ratios".into());
-    }
-    for &ratio in &car_definition.gearbox.ratios {
-        positive(ratio)?;
-    }
-    if !car_definition
-        .gearbox
-        .ratios
-        .windows(2)
-        .all(|ratios| ratios[0] > ratios[1])
-    {
-        return Err("ratios must descend".into());
-    }
-    if car_definition.redline_rpm <= physics::car::IDLE_RPM + 250.0 {
+fn load_car(directory: &Path, name: String) -> Result<CarSpec, String> {
+    let definition = car_loading::load(&directory.join("car.json"))?;
+    if definition.engine.redline_rpm <= physics::car::IDLE_RPM + 250.0 {
         return Err("redline RPM must leave limiter recovery above idle".into());
     }
-    if car_definition.engine_torque_curve.len() < 2 {
-        return Err("torque curve requires at least two points".into());
-    }
-    for point in &car_definition.engine_torque_curve {
-        nonnegative(point.rpm)?;
-        fraction(point.torque)?;
-    }
-    if !car_definition
-        .engine_torque_curve
-        .windows(2)
-        .all(|points| points[0].rpm < points[1].rpm)
-    {
-        return Err("torque curve RPM must strictly increase".into());
-    }
-    if !car_definition
-        .engine_torque_curve
-        .iter()
-        .any(|point| point.torque > 0.0)
-    {
-        return Err("torque curve requires positive torque".into());
-    }
-    if car_definition.audio.harmonics.is_empty() {
-        return Err("expected engine harmonics".into());
-    }
-    for &[frequency, amplitude] in &car_definition.audio.harmonics {
-        positive(frequency)?;
-        nonnegative(amplitude)?;
-    }
-    if let Some([knee, headroom]) = car_definition.audio.soft_limit {
-        positive(knee)?;
-        positive(headroom)?;
-    }
-    if let Some(turbo) = &car_definition.turbo {
-        for value in [
-            turbo.spool_start_rpm,
-            turbo.full_boost_rpm,
-            turbo.spool_seconds,
-            turbo.decay_seconds,
-        ] {
-            positive(value)?;
-        }
-        if turbo.full_boost_rpm <= turbo.spool_start_rpm {
-            return Err("full boost RPM must exceed spool start RPM".into());
-        }
-    }
-    Ok(())
-}
 
-fn default_paint_color() -> [f32; 3] {
-    [1.0, 0.18, 0.08]
-}
-
-fn positive(value: f32) -> Result<(), String> {
-    if !value.is_finite() || value <= 0.0 {
-        return Err("expected finite positive number".into());
-    }
-    Ok(())
-}
-
-fn nonnegative(value: f32) -> Result<(), String> {
-    if !value.is_finite() || value < 0.0 {
-        return Err("expected finite nonnegative number".into());
-    }
-    Ok(())
-}
-
-fn fraction(value: f32) -> Result<(), String> {
-    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-        return Err("expected fraction in 0..1".into());
-    }
-    Ok(())
-}
-
-fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
-    let mut definition: CarDefinition =
-        serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    validate(&definition)?;
-
-    let design = load_model(path)?;
+    let design = load_model(directory)?;
     let height = asset::car_glb::height(&design);
     if !height.is_finite() || height <= 0.0 {
         return Err("model must have finite positive height".into());
@@ -285,39 +155,58 @@ fn load_car(path: &std::path::Path) -> Result<CarSpec, String> {
     if !frontal_area_m2.is_finite() || frontal_area_m2 <= 0.0 {
         return Err("model must have finite positive frontal area".into());
     }
-    let cg_height = definition.cg_height_fraction * height;
     let wheelbase = model_wheelbase(&design.mounts)?;
     let track_width = model_track_width(&design.mounts)?;
-    let rolling_radius = model_rolling_radius(design.wheel_radii, definition.drive_bias)?;
-    let audio_directory = path.parent().unwrap().join("audio");
-    definition.audio.sample_directory = audio_directory.is_dir().then_some(audio_directory);
+    let rolling_radius = model_rolling_radius(design.wheel_radii, definition.chassis.drive_bias)?;
+    let audio_directory = directory.join("audio");
+    let engine_sample_directory = audio_directory.is_dir().then_some(audio_directory);
 
     let spec = CarSpec {
-        name: definition.name,
+        name,
         paint_color: definition.paint_color,
         weight_kg: definition.weight_kg,
         engine: Engine {
-            max_torque_nm: definition.engine_max_torque_nm,
-            torque_curve: definition.engine_torque_curve,
-            redline_rpm: definition.redline_rpm,
-            power_watts: definition.engine_power_hp * WATTS_PER_HP,
-            turbo: definition.turbo,
+            max_torque_nm: definition.engine.max_torque_nm,
+            torque_curve: definition
+                .engine
+                .torque_curve
+                .into_iter()
+                .map(|point| TorquePoint {
+                    rpm: point.rpm,
+                    torque: point.torque,
+                })
+                .collect(),
+            redline_rpm: definition.engine.redline_rpm,
+            power_watts: definition.engine.power_kw * 1000.0,
+            turbo: definition.engine.turbo.map(|turbo| Turbo {
+                spool_start_rpm: turbo.spool_start_rpm,
+                full_boost_rpm: turbo.full_boost_rpm,
+                spool_seconds: turbo.spool_seconds,
+                decay_seconds: turbo.decay_seconds,
+            }),
         },
-        gearbox: definition.gearbox,
+        gearbox: Gearbox {
+            ratios: definition.gearbox.ratios,
+            final_drive: definition.gearbox.final_drive,
+            reverse_ratio: definition.gearbox.reverse_ratio,
+        },
         design,
-        brake_force: definition.brake_force,
-        audio: definition.audio,
-        front_weight: definition.front_weight,
-        cg_height,
-        yaw_inertia: definition.yaw_inertia,
+        engine_sample_directory,
+        center_of_mass: CenterOfMass {
+            longitudinal_fraction: definition.center_of_mass.longitudinal_fraction,
+            height_fraction: definition.center_of_mass.height_fraction,
+        },
+        model_height_m: height,
+        yaw_inertia_kg_m2: definition.yaw_inertia_kg_m2,
         chassis: Chassis {
+            brake_force_n: definition.chassis.brake_force_n,
             rolling_radius,
             wheelbase,
             track_width,
-            drive_bias: definition.drive_bias,
-            brake_bias: definition.brake_bias,
+            drive_bias: definition.chassis.drive_bias,
+            brake_bias: definition.chassis.brake_bias,
+            suspension_stiffness_n_m: definition.chassis.suspension_stiffness_n_m,
         },
-        suspension_hz: definition.suspension_hz,
         drag_coefficient: definition.drag_coefficient,
         frontal_area_m2,
     };
@@ -361,9 +250,9 @@ fn model_rolling_radius(radii: [f32; 4], drive_bias: f32) -> Result<f32, String>
     Ok(rear * (1.0 - drive_bias) + front * drive_bias)
 }
 
-fn load_model(path: &std::path::Path) -> Result<std::sync::Arc<asset::car_glb::Design>, String> {
-    let model = path.with_file_name("model.glb");
+fn load_model(directory: &Path) -> Result<Arc<asset::car_glb::Design>, String> {
+    let model = directory.join("model.glb");
     asset::car_glb::load(&model)
-        .map(std::sync::Arc::new)
+        .map(Arc::new)
         .map_err(|e| e.to_string())
 }

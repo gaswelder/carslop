@@ -1,67 +1,65 @@
 {
-  "name": "1991 Agolf GTI",
-  "weight_kg": 1000,
-  "brake_force": 22000,
-  "engine_power_hp": 116.2,
-  "drag_coefficient": 0.36201367,
-  "front_weight": 0.63,
-  "cg_height_fraction": 0.31286827,
-  "yaw_inertia": 1100,
-  "drive_bias": 1.0,
-  "brake_bias": 0.68,
-  "engine_max_torque_nm": 168,
-  "engine_torque_curve": [
-    {
-      "rpm": 1500,
-      "torque": 0.506
-    },
-    {
-      "rpm": 2000,
-      "torque": 0.506
-    },
-    {
-      "rpm": 2500,
-      "torque": 0.506
-    },
-    {
-      "rpm": 3000,
-      "torque": 0.5662
-    },
-    {
-      "rpm": 3500,
-      "torque": 0.7642
-    },
-    {
-      "rpm": 4000,
-      "torque": 0.9231
-    },
-    {
-      "rpm": 4500,
-      "torque": 0.9977
-    },
-    {
-      "rpm": 5000,
-      "torque": 0.965
-    },
-    {
-      "rpm": 5500,
-      "torque": 0.8353
-    },
-    {
-      "rpm": 6000,
-      "torque": 0.6469
-    },
-    {
-      "rpm": 6500,
-      "torque": 0.506
-    },
-    {
-      "rpm": 7000,
-      "torque": 0.506
-    }
-  ],
-  "redline_rpm": 6500,
-  "suspension_hz": 1.85,
+  "chassis": {
+    "brake_force_n": 22000,
+    "drive_bias": 1.0,
+    "brake_bias": 0.68,
+    "suspension_stiffness_n_m": 135114.884
+  },
+  "engine": {
+    "power_kw": 86.65032838,
+    "max_torque_nm": 168,
+    "torque_curve": [
+      {
+        "rpm": 1500,
+        "torque": 0.506
+      },
+      {
+        "rpm": 2000,
+        "torque": 0.506
+      },
+      {
+        "rpm": 2500,
+        "torque": 0.506
+      },
+      {
+        "rpm": 3000,
+        "torque": 0.5662
+      },
+      {
+        "rpm": 3500,
+        "torque": 0.7642
+      },
+      {
+        "rpm": 4000,
+        "torque": 0.9231
+      },
+      {
+        "rpm": 4500,
+        "torque": 0.9977
+      },
+      {
+        "rpm": 5000,
+        "torque": 0.965
+      },
+      {
+        "rpm": 5500,
+        "torque": 0.8353
+      },
+      {
+        "rpm": 6000,
+        "torque": 0.6469
+      },
+      {
+        "rpm": 6500,
+        "torque": 0.506
+      },
+      {
+        "rpm": 7000,
+        "torque": 0.506
+      }
+    ],
+    "redline_rpm": 6500
+  },
   "gearbox": {
     "ratios": [
       3.455,
@@ -73,23 +71,11 @@
     "final_drive": 3.67,
     "reverse_ratio": 3.1666667461395264
   },
-  "audio": {
-    "harmonics": [
-      [
-        1,
-        0.52
-      ],
-      [
-        3,
-        0.3
-      ],
-      [
-        6,
-        0.18
-      ]
-    ],
-    "gain": 2,
-    "coast_gain": 0.35,
-    "soft_limit": null
-  }
+  "weight_kg": 1000,
+  "drag_coefficient": 0.36201367,
+  "center_of_mass": {
+    "longitudinal_fraction": 0.63,
+    "height_fraction": 0.31286827
+  },
+  "yaw_inertia_kg_m2": 1100
 }

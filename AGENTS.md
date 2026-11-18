@@ -7,6 +7,8 @@
 
 - Declare imports with `use` instead of writing inline `crate::` paths.
 
+- Avoid re-exports. Import items directly from the module that defines them.
+
 - Do not combine a namespace and its members in `{self, ...}` imports. Import only the namespace and use `::` references for its members.
 
 - Keep items private unless production code outside their module needs them. Tests are not a reason to expose implementation details: put such tests in the owning module or remove them.

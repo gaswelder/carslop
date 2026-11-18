@@ -26,15 +26,15 @@ pub fn axle_geometry(vehicle: &car::Vehicle) -> AxleGeometry {
     let delta = car::front_wheel_angle(vehicle);
     let (sin, cos) = delta.sin_cos();
     AxleGeometry {
-        front_offset: spec.chassis.wheelbase * (1.0 - spec.front_weight),
-        rear_offset: spec.chassis.wheelbase * spec.front_weight,
+        front_offset: spec.chassis.wheelbase * (1.0 - spec.center_of_mass.longitudinal_fraction),
+        rear_offset: spec.chassis.wheelbase * spec.center_of_mass.longitudinal_fraction,
         sin,
         cos,
     }
 }
 
 fn brake_accel(vehicle: &car::Vehicle) -> f32 {
-    vehicle.spec.brake_force / vehicle.spec.weight_kg
+    vehicle.spec.chassis.brake_force_n / vehicle.spec.weight_kg
 }
 
 fn friction_coefficient(material: Material) -> f32 {
@@ -60,14 +60,15 @@ pub fn tire_capacities(vehicle: &car::Vehicle) -> [f32; 2] {
         // four-wheel rigid-body solver.
         let load = vehicle.axle_load[axle];
         let share = if axle == 0 {
-            spec.front_weight
+            spec.center_of_mass.longitudinal_fraction
         } else {
-            1.0 - spec.front_weight
+            1.0 - spec.center_of_mass.longitudinal_fraction
         };
-        let transfer =
-            spec.weight_kg * vehicle.filtered_acceleration.lateral.abs() * spec.cg_height
-                / spec.chassis.track_width
-                * share;
+        let transfer = spec.weight_kg
+            * vehicle.filtered_acceleration.lateral.abs()
+            * model::car::center_of_mass_height_m(spec)
+            / spec.chassis.track_width
+            * share;
         let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
 
         let loc = &vehicle.track;

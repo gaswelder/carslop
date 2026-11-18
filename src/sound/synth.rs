@@ -1,9 +1,10 @@
 //! Device-independent engine, road, impact, and tire synthesis.
 
 use crate::model::world::Material;
+use crate::sound;
 use crate::sound::SAMPLE_RATE;
-use crate::{model, sound};
 use std::f32::consts::TAU;
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 pub struct Voice<'a> {
@@ -11,7 +12,7 @@ pub struct Voice<'a> {
     pub load: f32,
     pub scrub: f32,
     pub surface: Material,
-    pub tuning: &'a model::car::EngineVoice,
+    pub sample_directory: Option<&'a Path>,
     pub enabled: bool,
     pub turbo_target: f32,
     pub road_speed: f32,
@@ -67,12 +68,8 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     synth.master += (f32::from(u8::from(voice.enabled)) - synth.master) * 0.002;
     synth.phase = (synth.phase + synth.frequency / SAMPLE_RATE).rem_euclid(2.0);
     let p = synth.phase * TAU;
-    let tuning = voice.tuning;
-    let harmonics: f32 = tuning
-        .harmonics
-        .iter()
-        .map(|[multiple, amplitude]| (p * multiple).sin() * amplitude)
-        .sum();
+    // Shared placeholder timbre when no recorded engine samples are available.
+    let harmonics = p.sin() * 0.6 + (p * 2.0).sin() * 0.25 + (p * 3.0).sin() * 0.15;
     // Deterministic filtered noise: independent tire scrub, intake hiss and impact grit.
     synth.noise = synth
         .noise
@@ -83,20 +80,11 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     let procedural = (p.sin() * (1.0 - synth.load) + harmonics * synth.load)
         * (0.065 + synth.load * 0.065)
         + synth.filtered_noise * synth.load * 0.025;
-    sound::engine_sample::select(&mut synth.recorded, tuning.sample_directory.as_deref());
+    sound::engine_sample::select(&mut synth.recorded, voice.sample_directory);
     let engine = if sound::engine_sample::available(&synth.recorded) {
         sound::engine_sample::sample(&mut synth.recorded, synth.frequency * 30.0, synth.load)
     } else {
         procedural
-    };
-    let engine =
-        engine * tuning.gain * (tuning.coast_gain + synth.load * (1.0 - tuning.coast_gain));
-    let engine = if let Some([knee, headroom]) = tuning.soft_limit {
-        let magnitude = engine.abs();
-        engine.signum()
-            * (magnitude.min(knee) + headroom * ((magnitude - knee).max(0.0) / headroom).tanh())
-    } else {
-        engine
     };
     let turbo_target = if voice.enabled {
         voice.turbo_target

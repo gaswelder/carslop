@@ -1,68 +1,65 @@
 {
-  "name": "1969 Mosquito SS",
-  "paint_color": [0.035, 0.56, 0.82],
-  "weight_kg": 1450.0,
-  "brake_force": 26100.0,
-  "engine_power_hp": 268.2,
-  "drag_coefficient": 0.77706002,
-  "front_weight": 0.55,
-  "cg_height_fraction": 0.40917626,
-  "yaw_inertia": 2600,
-  "drive_bias": 0.0,
-  "brake_bias": 0.65,
-  "engine_max_torque_nm": 563,
-  "engine_torque_curve": [
-    {
-      "rpm": 1500,
-      "torque": 0.667
-    },
-    {
-      "rpm": 2000,
-      "torque": 0.8096
-    },
-    {
-      "rpm": 2500,
-      "torque": 0.9231
-    },
-    {
-      "rpm": 3000,
-      "torque": 0.9888
-    },
-    {
-      "rpm": 3500,
-      "torque": 0.995
-    },
-    {
-      "rpm": 4000,
-      "torque": 0.9406
-    },
-    {
-      "rpm": 4500,
-      "torque": 0.8353
-    },
-    {
-      "rpm": 5000,
-      "torque": 0.655
-    },
-    {
-      "rpm": 5500,
-      "torque": 0.4771
-    },
-    {
-      "rpm": 6000,
-      "torque": 0.3865
-    },
-    {
-      "rpm": 6500,
-      "torque": 0.2959
-    },
-    {
-      "rpm": 7000,
-      "torque": 0.2053
-    }
-  ],
-  "redline_rpm": 6500,
-  "suspension_hz": 1.45,
+  "chassis": {
+    "brake_force_n": 26100.0,
+    "drive_bias": 0.0,
+    "brake_bias": 0.65,
+    "suspension_stiffness_n_m": 120354.891
+  },
+  "engine": {
+    "power_kw": 199.99671318,
+    "max_torque_nm": 563,
+    "torque_curve": [
+      {
+        "rpm": 1500,
+        "torque": 0.667
+      },
+      {
+        "rpm": 2000,
+        "torque": 0.8096
+      },
+      {
+        "rpm": 2500,
+        "torque": 0.9231
+      },
+      {
+        "rpm": 3000,
+        "torque": 0.9888
+      },
+      {
+        "rpm": 3500,
+        "torque": 0.995
+      },
+      {
+        "rpm": 4000,
+        "torque": 0.9406
+      },
+      {
+        "rpm": 4500,
+        "torque": 0.8353
+      },
+      {
+        "rpm": 5000,
+        "torque": 0.655
+      },
+      {
+        "rpm": 5500,
+        "torque": 0.4771
+      },
+      {
+        "rpm": 6000,
+        "torque": 0.3865
+      },
+      {
+        "rpm": 6500,
+        "torque": 0.2959
+      },
+      {
+        "rpm": 7000,
+        "torque": 0.2053
+      }
+    ],
+    "redline_rpm": 6500
+  },
   "gearbox": {
     "ratios": [
       2.52,
@@ -73,26 +70,16 @@
     "final_drive": 3.55,
     "reverse_ratio": 2.9
   },
-  "audio": {
-    "harmonics": [
-      [
-        1,
-        0.55
-      ],
-      [
-        0.5,
-        0.3
-      ],
-      [
-        3,
-        0.15
-      ]
-    ],
-    "gain": 2.1,
-    "coast_gain": 0.45,
-    "soft_limit": [
-      0.22,
-      0.06
-    ]
-  }
+  "paint_color": [
+    0.035,
+    0.56,
+    0.82
+  ],
+  "weight_kg": 1450.0,
+  "drag_coefficient": 0.77706002,
+  "center_of_mass": {
+    "longitudinal_fraction": 0.55,
+    "height_fraction": 0.40917626
+  },
+  "yaw_inertia_kg_m2": 2600
 }

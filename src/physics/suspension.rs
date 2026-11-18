@@ -1,6 +1,7 @@
 //! Chassis support, load transfer, and sprung body motion.
 
 use super::car;
+use crate::model;
 use crate::physics;
 use crate::util;
 use crate::util::geometry::XYZ;
@@ -23,17 +24,21 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
         vehicle.position.y = ground;
         vehicle.suspension_initialized = true;
     }
-    let omega = std::f32::consts::TAU * spec.suspension_hz;
-    let support = (9.81 + omega * omega * (ground - vehicle.position.y)
+    let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
+    let omega = omega_squared.sqrt();
+    let support = (9.81 + omega_squared * (ground - vehicle.position.y)
         - 1.3 * omega * vehicle.velocity.y)
         .clamp(0.0, 49.05);
     vehicle.acceleration.y = support - 9.81;
     vehicle.velocity.y += vehicle.acceleration.y * seconds;
     vehicle.position.y += vehicle.velocity.y * seconds;
-    let transfer = spec.weight_kg * vehicle.filtered_acceleration.longitudinal * spec.cg_height
+    let transfer = spec.weight_kg
+        * vehicle.filtered_acceleration.longitudinal
+        * model::car::center_of_mass_height_m(spec)
         / spec.chassis.wheelbase;
     let total_load = spec.weight_kg * support;
-    let front_load = (total_load * spec.front_weight - transfer).clamp(0.0, total_load);
+    let front_load =
+        (total_load * spec.center_of_mass.longitudinal_fraction - transfer).clamp(0.0, total_load);
     vehicle.axle_load = [front_load, total_load - front_load];
 }
 
@@ -82,15 +87,19 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
 
 pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     let spec = &vehicle.spec;
-    let target_pitch =
-        (vehicle.filtered_acceleration.longitudinal * spec.cg_height / 80.0).clamp(-0.10, 0.10);
+    let target_pitch = (vehicle.filtered_acceleration.longitudinal
+        * model::car::center_of_mass_height_m(spec)
+        / 80.0)
+        .clamp(-0.10, 0.10);
     let target_roll =
-        (vehicle.filtered_acceleration.lateral * spec.cg_height / 65.0).clamp(-0.12, 0.12);
-    let omega = std::f32::consts::TAU * spec.suspension_hz;
-    vehicle.orientation_rate.pitch += (omega * omega * (target_pitch - vehicle.orientation.pitch)
+        (vehicle.filtered_acceleration.lateral * model::car::center_of_mass_height_m(spec) / 65.0)
+            .clamp(-0.12, 0.12);
+    let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
+    let omega = omega_squared.sqrt();
+    vehicle.orientation_rate.pitch += (omega_squared * (target_pitch - vehicle.orientation.pitch)
         - 1.4 * omega * vehicle.orientation_rate.pitch)
         * dt;
-    vehicle.orientation_rate.roll += (omega * omega * (target_roll - vehicle.orientation.roll)
+    vehicle.orientation_rate.roll += (omega_squared * (target_roll - vehicle.orientation.roll)
         - 1.4 * omega * vehicle.orientation_rate.roll)
         * dt;
     vehicle.orientation.pitch += vehicle.orientation_rate.pitch * dt;
@@ -110,7 +119,7 @@ pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
         (1, angles.roll, &mut vehicle.suspension_roll),
     ] {
         let rate = &mut vehicle.suspension_rates[axis];
-        *rate += (omega * omega * (target - *angle) - 1.4 * omega * *rate) * dt;
+        *rate += (omega_squared * (target - *angle) - 1.4 * omega * *rate) * dt;
         *angle += *rate * dt;
     }
 }

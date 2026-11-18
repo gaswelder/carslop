@@ -1,5 +1,30 @@
 //! Tests through the group's production interfaces.
 
+mod car_loading {
+    use crate::model::car_loading;
+    use crate::test;
+    use std::fs;
+
+    #[test]
+    fn json_definition_loads_without_runtime_assets() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut definition = test::support::car_definition();
+        definition["engine"]["power_kw"] = serde_json::json!(90.0);
+        definition.as_object_mut().unwrap().remove("paint_color");
+        fs::write(file.path(), serde_json::to_vec(&definition).unwrap()).unwrap();
+
+        let loaded = car_loading::load(file.path()).unwrap();
+        assert_eq!(loaded.engine.power_kw, 90.0);
+        assert_eq!(loaded.paint_color, [1.0, 0.18, 0.08]);
+
+        for invalid in [-1.0, 0.0] {
+            definition["engine"]["power_kw"] = serde_json::json!(invalid);
+            fs::write(file.path(), serde_json::to_vec(&definition).unwrap()).unwrap();
+            assert!(car_loading::load(file.path()).is_err());
+        }
+    }
+}
+
 mod car {
     use crate::asset;
     use crate::model;
@@ -16,8 +41,7 @@ mod car {
         assert!(model::car::load(root.path())
             .unwrap()
             .remove(0)
-            .audio
-            .sample_directory
+            .engine_sample_directory
             .is_none());
         let audio_directory = directory.join("audio");
         fs::create_dir(&audio_directory).unwrap();
@@ -25,21 +49,57 @@ mod car {
             model::car::load(root.path())
                 .unwrap()
                 .remove(0)
-                .audio
-                .sample_directory,
+                .engine_sample_directory,
             Some(audio_directory)
         );
     }
 
     #[test]
+    fn center_of_mass_ratios_load_and_validate() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("car");
+        test::support::write_car(&directory);
+        let path = directory.join("car.json");
+        let mut definition = test::support::car_definition();
+        for longitudinal in [0.0, 0.39, 1.0] {
+            for height in [0.0, 0.35, 1.0] {
+                definition["center_of_mass"] = serde_json::json!({
+                    "longitudinal_fraction": longitudinal,
+                    "height_fraction": height
+                });
+                fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
+                let cars = model::car::load(root.path()).unwrap();
+                let car = &cars[0];
+                assert!((car.center_of_mass.longitudinal_fraction - longitudinal).abs() < 0.00001);
+                assert!((car.center_of_mass.height_fraction - height).abs() < 0.00001);
+                assert_eq!(car.model_height_m, asset::car_glb::height(&car.design));
+                assert!(
+                    (model::car::center_of_mass_height_m(car)
+                        - height * asset::car_glb::height(&car.design))
+                    .abs()
+                        < 0.00001
+                );
+            }
+        }
+        for field in ["longitudinal_fraction", "height_fraction"] {
+            for invalid in [-0.01, 1.01] {
+                definition["center_of_mass"] = serde_json::json!({
+                    "longitudinal_fraction": 0.5,
+                    "height_fraction": 0.5
+                });
+                definition["center_of_mass"][field] = serde_json::json!(invalid);
+                fs::write(&path, serde_json::to_vec(&definition).unwrap()).unwrap();
+                assert!(model::car::load(root.path()).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn pitsunda_reference_model_loads() {
         let cars = model::car::load(std::path::Path::new("data/cars")).unwrap();
-        let definition: serde_json::Value =
-            serde_json::from_slice(&fs::read("data/cars/2016-pitsunda-2/car.json").unwrap())
-                .unwrap();
         let car = cars
             .iter()
-            .find(|car| car.name == definition["name"].as_str().unwrap())
+            .find(|car| car.name == "2016-pitsunda-2")
             .expect("Pitsunda must load with its traced body and separate wheel pivots");
         assert_eq!(car.paint_color, [0.36, 0.355, 0.35]);
         assert!((asset::car_glb::height(&car.design) - 1.495).abs() < 0.002);

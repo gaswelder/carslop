@@ -1,67 +1,65 @@
 {
-  "name": "1964 Kestrel",
-  "weight_kg": 1000.0,
-  "brake_force": 20000.0,
-  "engine_power_hp": 128.7,
-  "drag_coefficient": 0.24080711,
-  "front_weight": 0.39,
-  "cg_height_fraction": 0.33496184,
-  "yaw_inertia": 1450.0,
-  "drive_bias": 0.0,
-  "brake_bias": 0.67,
-  "engine_max_torque_nm": 200,
-  "engine_torque_curve": [
-    {
-      "rpm": 1500,
-      "torque": 0.5048
-    },
-    {
-      "rpm": 2000,
-      "torque": 0.5048
-    },
-    {
-      "rpm": 2500,
-      "torque": 0.5048
-    },
-    {
-      "rpm": 3000,
-      "torque": 0.5048
-    },
-    {
-      "rpm": 3500,
-      "torque": 0.6228
-    },
-    {
-      "rpm": 4000,
-      "torque": 0.7853
-    },
-    {
-      "rpm": 4500,
-      "torque": 0.9166
-    },
-    {
-      "rpm": 5000,
-      "torque": 0.9903
-    },
-    {
-      "rpm": 5500,
-      "torque": 0.9905
-    },
-    {
-      "rpm": 6000,
-      "torque": 0.917
-    },
-    {
-      "rpm": 6500,
-      "torque": 0.7859
-    },
-    {
-      "rpm": 7000,
-      "torque": 0.6235
-    }
-  ],
-  "redline_rpm": 6500,
-  "suspension_hz": 1.65,
+  "chassis": {
+    "brake_force_n": 20000.0,
+    "drive_bias": 0.0,
+    "brake_bias": 0.67,
+    "suspension_stiffness_n_m": 107479.992
+  },
+  "engine": {
+    "power_kw": 95.97157713,
+    "max_torque_nm": 200,
+    "torque_curve": [
+      {
+        "rpm": 1500,
+        "torque": 0.5048
+      },
+      {
+        "rpm": 2000,
+        "torque": 0.5048
+      },
+      {
+        "rpm": 2500,
+        "torque": 0.5048
+      },
+      {
+        "rpm": 3000,
+        "torque": 0.5048
+      },
+      {
+        "rpm": 3500,
+        "torque": 0.6228
+      },
+      {
+        "rpm": 4000,
+        "torque": 0.7853
+      },
+      {
+        "rpm": 4500,
+        "torque": 0.9166
+      },
+      {
+        "rpm": 5000,
+        "torque": 0.9903
+      },
+      {
+        "rpm": 5500,
+        "torque": 0.9905
+      },
+      {
+        "rpm": 6000,
+        "torque": 0.917
+      },
+      {
+        "rpm": 6500,
+        "torque": 0.7859
+      },
+      {
+        "rpm": 7000,
+        "torque": 0.6235
+      }
+    ],
+    "redline_rpm": 6500
+  },
   "gearbox": {
     "ratios": [
       2.833,
@@ -73,26 +71,11 @@
     "final_drive": 4.4285712242126465,
     "reverse_ratio": 3.094
   },
-  "audio": {
-    "harmonics": [
-      [
-        1,
-        0.65
-      ],
-      [
-        2,
-        0.23
-      ],
-      [
-        4,
-        0.12
-      ]
-    ],
-    "gain": 3.2,
-    "coast_gain": 0.45,
-    "soft_limit": [
-      0.22,
-      0.06
-    ]
-  }
+  "weight_kg": 1000.0,
+  "drag_coefficient": 0.24080711,
+  "center_of_mass": {
+    "longitudinal_fraction": 0.39,
+    "height_fraction": 0.33496184
+  },
+  "yaw_inertia_kg_m2": 1450.0
 }
