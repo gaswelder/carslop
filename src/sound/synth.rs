@@ -85,14 +85,15 @@ pub fn sample(synth: &mut Synth, voice: Voice<'_>) -> f32 {
     };
     synth.turbo_spool += (turbo_target - synth.turbo_spool) * 0.0007;
     // Two low-pass filters keep compressor airflow in a higher, airy band.
-    // It brightens with turbine speed but stays behind the engine in the mix.
-    let low_cutoff = 900.0 + 1500.0 * synth.turbo_spool;
+    // Raise the lower edge to reduce low/mid airflow beneath the whistle range.
+    let low_cutoff = 2000.0 + 2500.0 * synth.turbo_spool;
     let high_cutoff = 3500.0 + 3500.0 * synth.turbo_spool;
     synth.turbo_air_low +=
         (noise - synth.turbo_air_low) * (1.0 - (-TAU * low_cutoff / SAMPLE_RATE).exp());
     synth.turbo_air_high +=
         (noise - synth.turbo_air_high) * (1.0 - (-TAU * high_cutoff / SAMPLE_RATE).exp());
-    let whoosh = (synth.turbo_air_high - synth.turbo_air_low) * 0.10 * synth.turbo_spool.powf(1.4);
+    let turbo_gain = synth.turbo_spool.powf(1.4);
+    let whoosh = (synth.turbo_air_high - synth.turbo_air_low) * 0.065 * turbo_gain;
     let road_target = (voice.road_speed.abs() / 45.0).clamp(0.0, 1.0).powf(1.3);
     synth.road_gain += (road_target - synth.road_gain) * 0.0005;
     synth.road_noise += (noise - synth.road_noise) * 0.025;
