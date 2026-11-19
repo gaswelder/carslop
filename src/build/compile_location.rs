@@ -114,7 +114,7 @@ pub fn compile_location(download_dir: &Path) -> Result<model::location::Location
         &download_dir.join("tmp/imagery.json"),
         &imagery_inputs,
         &imagery_outputs,
-        &std::env::var("DISABLE_TILE_PROCESSING").unwrap_or_default(),
+        "",
         || {
             let generated = generated_assets(&workspace)?;
             compile_imagery(&data, &paths, &generated, &acquired.boundary)

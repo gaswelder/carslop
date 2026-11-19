@@ -24,10 +24,6 @@ Subcommands:
 - add-location <openstreetmap-url> <width-km> <height-km> - download and compile a rectangular location
 - create-track track.json - compile a track from waypoints and add it to the location directory
 
-## Env vars
-
-- DISABLE_TILE_PROCESSING=1 to disable satellite tile post-processing
-
 ## Credits
 
 - **UI and sign font:** Noto Sans SemiBold and Bold, © 2018 The Noto Project Authors,

@@ -70,7 +70,6 @@ uniform int u_city_reference;
 uniform int u_concrete;
 uniform sampler2DArray u_aerial;
 uniform int u_aerial_count;
-uniform int u_aerial_style;
 uniform vec4 u_aerial_bounds[48];
 uniform int u_aerial_layers[48];
 uniform vec2 u_aerial_uv;
@@ -195,58 +194,6 @@ vec3 mapped_ground_detail(vec3 color) {
     float relief = scatter*(stone*(0.18+0.18*surface_hash(cell+23.0))-rim*0.20)*fine;
     return color*(1.0+fade*(clods+relief));
 }
-// Experimental material weights: vegetation, soil, paving, asphalt.
-// Map-authored surface colours take precedence over photo classification.
-vec4 ground_weights(vec3 photo) {
-    if (asphalt_mask() > 0.5) return vec4(0,0,0,1);
-    float grass = min(min(distance(v_color,vec3(0.39,0.48,0.25)),
-        distance(v_color,vec3(0.43,0.53,0.30))),
-        min(distance(v_color,vec3(0.40,0.46,0.28)),
-        min(distance(v_color,vec3(0.33,0.42,0.21)),distance(v_color,vec3(0.28,0.38,0.19)))));
-    if (grass < 0.018) return vec4(1,0,0,0);
-    float paving = min(min(distance(v_color,vec3(0.68,0.69,0.66)),
-        distance(v_color,vec3(0.72,0.71,0.65))),
-        min(distance(v_color,vec3(0.66,0.64,0.56)),distance(v_color,vec3(0.72,0.73,0.70))));
-    if (paving < 0.018) return vec4(0,0,1,0);
-    // The terrain fallback [0.64,0.63,0.54] deliberately uses imagery.
-    float soil = min(distance(v_color,vec3(0.62,0.58,0.46)),
-        min(distance(v_color,vec3(0.56,0.51,0.40)),distance(v_color,vec3(0.43,0.42,0.32))));
-    if (soil < 0.018) return vec4(0,1,0,0);
-    // Relative colour reduces sensitivity to exposure. This is a heuristic,
-    // not semantic segmentation: shadows and roofs remain ambiguous.
-    vec3 chroma = photo / max(dot(photo,vec3(0.333333)),0.04);
-    float vegetation = smoothstep(0.02,0.20,chroma.g-chroma.r)
-        * (1.0-smoothstep(0.90,1.08,chroma.b));
-    float earth = smoothstep(0.08,0.32,chroma.r-chroma.b);
-    vec4 weights = vec4(vegetation, (1.0-vegetation)*earth,
-        (1.0-vegetation)*(1.0-earth), 0.0);
-    return weights / max(dot(weights,vec4(1)),0.001);
-}
-vec3 hybrid_ground(vec3 photo) {
-    // Preserve mapped water and sports surfaces outside the four-material palette.
-    if (min(distance(v_color,vec3(0.21,0.57,0.67)),
-            distance(v_color,vec3(0.29,0.48,0.35))) < 0.018) return v_color;
-    vec4 weights = ground_weights(photo);
-    vec2 p = v_world.xz;
-    float coarse = surface_noise(p*0.55)-0.5;
-    float fine = (surface_noise(p*12.0)-0.5)
-        * (1.0-smoothstep(0.3,1.2,length(fwidth(p*12.0))));
-    vec3 grass = vec3(0.39,0.46,0.25)*(1.0+coarse*0.18+fine*0.10);
-    vec3 soil = vec3(0.64,0.55,0.39)*(1.0+coarse*0.13+fine*0.08);
-    vec3 paving = vec3(0.66,0.65,0.58)*(1.0+coarse*0.05+fine*0.04);
-    vec3 asphalt = asphalt_texture(vec3(0.25,0.27,0.28));
-    vec3 material = grass*weights.x+soil*weights.y+paving*weights.z+asphalt*weights.w;
-    // Retain only restrained, broad photographic variation, with a floor
-    // that prevents photographed shadows from becoming black material.
-    float variation = mix(0.94,1.06,smoothstep(0.12,0.72,dot(photo,vec3(0.299,0.587,0.114))));
-    return material*variation;
-}
-vec3 processed_aerial(vec3 photo) {
-    float luminance = dot(photo,vec3(0.299,0.587,0.114));
-    vec3 muted = mix(vec3(luminance),photo,0.68);
-    vec3 lifted = pow(max(muted,vec3(0)),vec3(0.80));
-    return mix(lifted,(floor(lifted*12.0)+0.5)/12.0,0.35)*vec3(1.03,1.01,0.94);
-}
 vec3 concrete_texture(vec3 color, vec3 normal) {
     vec3 tangent = normalize(vec3(-normal.z, 0.0, normal.x));
     vec2 p = vec2(dot(v_world, tangent), v_world.y);
@@ -290,8 +237,6 @@ void main() {
         o = vec4(mix(lit, vec3(0.57,0.73,0.80), fog), 1.0);
         return;
     }
-    vec3 surface_color = v_color;
-    bool hybrid = false;
     // World-space projection follows the existing raised surface meshes.
     if (v_material.x > -1.5 && v_material.x < -0.5
         && normalize(v_normal).y > 0.8 && v_color.r < 0.84) {
@@ -300,26 +245,7 @@ void main() {
             vec2 uv=(v_world.xz-bounds.xy)/(bounds.zw-bounds.xy);
             if (all(greaterThanEqual(uv,vec2(0.0))) && all(lessThan(uv,vec2(1.0)))) {
                 vec3 colour=texture(u_aerial,vec3(vec2(u_aerial_uv.x)+uv*u_aerial_uv.y,float(u_aerial_layers[i]))).rgb;
-                // Keep asphalt on its original photographic colour path: the
-                // processed shadow lift would counteract road darkening below.
                 bool road = asphalt_mask() > 0.5;
-                if (u_aerial_style > 0 && (u_aerial_style == 2 || !road)) {
-                    // A symmetric one-metre filter fits inside existing tile gutters.
-                    vec2 step_uv = u_aerial_uv.y / (bounds.zw-bounds.xy);
-                    vec2 tex_uv = vec2(u_aerial_uv.x)+uv*u_aerial_uv.y;
-                    float layer = float(u_aerial_layers[i]);
-                    vec3 broad = colour*0.40;
-                    broad += texture(u_aerial,vec3(tex_uv+vec2(step_uv.x,0),layer)).rgb*0.15;
-                    broad += texture(u_aerial,vec3(tex_uv-vec2(step_uv.x,0),layer)).rgb*0.15;
-                    broad += texture(u_aerial,vec3(tex_uv+vec2(0,step_uv.y),layer)).rgb*0.15;
-                    broad += texture(u_aerial,vec3(tex_uv-vec2(0,step_uv.y),layer)).rgb*0.15;
-                    if (u_aerial_style == 2) {
-                        surface_color = hybrid_ground(broad);
-                        hybrid = true;
-                        break;
-                    }
-                    colour = processed_aerial(broad);
-                }
                 if (road) colour *= 0.55;
                 else colour = mapped_ground_detail(colour);
                 float fog=smoothstep(u_fog_range.x,u_fog_range.y,length(u_eye-v_world));
@@ -333,11 +259,9 @@ void main() {
     vec3 sun = normalize(vec3(-0.45, 0.85, -0.3));
     vec3 view = normalize(u_eye - v_world);
     float paint_mask = step(0.5, v_material.x) * (1.0 - step(1.5, v_material.x));
-    vec3 paint = surface_color * mix(vec3(1.0), u_tint, paint_mask);
-    if (!hybrid) {
-        if (asphalt_mask() > 0.5) paint = asphalt_texture(paint);
-        else paint = mapped_ground_detail(paint);
-    }
+    vec3 paint = v_color * mix(vec3(1.0), u_tint, paint_mask);
+    if (asphalt_mask() > 0.5) paint = asphalt_texture(paint);
+    else paint = mapped_ground_detail(paint);
     if (u_concrete == 1 && abs(n.y) < 0.35 && abs(v_material.x) < 0.01
         && v_material.y < 0.05 && min(v_color.r, min(v_color.g, v_color.b)) > 0.55) {
         paint = concrete_texture(paint, n);
@@ -627,7 +551,6 @@ pub struct Mesh {
     car_ranges: Vec<std::ops::Range<i32>>,
     wheel_range: Vec<[std::ops::Range<i32>; 4]>,
     concrete_region: bool,
-    aerial_style: i32,
 }
 
 impl Drop for Mesh {
@@ -702,14 +625,8 @@ pub fn mesh_new(
     let concrete_region = track.origin.is_some_and(|origin| {
         (35.10..35.24).contains(&origin.lat) && (33.24..33.48).contains(&origin.lon)
     });
-    let aerial_style = if std::env::var("DISABLE_TILE_PROCESSING").as_deref() == Ok("1") {
-        0
-    } else {
-        1
-    };
     Ok(Mesh {
         concrete_region,
-        aerial_style,
         vao,
         vbo,
         ground_vertex_count,
@@ -834,11 +751,6 @@ pub fn draw_ground(
     unsafe {
         gl::BindVertexArray(mesh.vao);
         gl::UseProgram(program);
-        let aerial_style = CString::new("u_aerial_style").unwrap();
-        gl::Uniform1i(
-            gl::GetUniformLocation(program, aerial_style.as_ptr()),
-            mesh.aerial_style,
-        );
         let aerial_count = CString::new("u_aerial_count").unwrap();
         gl::Uniform1i(gl::GetUniformLocation(program, aerial_count.as_ptr()), 0);
         if let Some(aerial) = mesh.aerial.borrow_mut().as_mut() {
