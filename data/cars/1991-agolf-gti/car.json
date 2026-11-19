@@ -6,6 +6,7 @@
     "suspension_stiffness_n_m": 135114.884
   },
   "engine": {
+    "inertia_kg_m2": 0.2208,
     "power_kw": 86.65032838,
     "max_torque_nm": 168,
     "torque_curve": [

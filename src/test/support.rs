@@ -141,6 +141,7 @@ pub fn car_spec() -> &'static model::car::CarSpec {
                 suspension_stiffness_n_m: 136911.152,
             },
             engine: model::car::Engine {
+                inertia_kg_m2: 0.228,
                 max_torque_nm: 180.0,
                 torque_curve: vec![
                     model::car::TorquePoint {
@@ -189,6 +190,7 @@ pub fn car_definition() -> serde_json::Value {
         "engine": {
             "power_kw": s.engine.power_watts / 1000.0,
             "max_torque_nm": s.engine.max_torque_nm,
+            "inertia_kg_m2": s.engine.inertia_kg_m2,
             "torque_curve": s.engine.torque_curve.iter().map(|point|
                 serde_json::json!({"rpm": point.rpm, "torque": point.torque})).collect::<Vec<_>>(),
             "redline_rpm": s.engine.redline_rpm,
@@ -303,6 +305,7 @@ pub fn cars() -> Vec<std::sync::Arc<model::car::CarSpec>> {
             // Include a launch-capable AWD fixture as well as both driven axles.
             spec.engine.max_torque_nm *= 3.0;
             spec.engine.power_watts *= 3.0;
+            spec.engine.inertia_kg_m2 = 0.444;
             Arc::new(spec)
         })
         .collect()

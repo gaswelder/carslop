@@ -16,6 +16,7 @@ pub struct CarDefinition {
 
 #[derive(serde::Deserialize)]
 pub struct EngineDefinition {
+    pub inertia_kg_m2: f32,
     pub power_kw: f32,
     pub max_torque_nm: f32,
     pub torque_curve: Vec<TorquePoint>,
@@ -80,6 +81,7 @@ fn validate(car_definition: &CarDefinition) -> Result<(), String> {
         car_definition.drag_coefficient,
         car_definition.yaw_inertia_kg_m2,
         car_definition.engine.max_torque_nm,
+        car_definition.engine.inertia_kg_m2,
         car_definition.engine.redline_rpm,
         car_definition.chassis.suspension_stiffness_n_m,
         car_definition.gearbox.final_drive,

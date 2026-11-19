@@ -92,7 +92,7 @@ pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, d
         .previous
         .is_some_and(|p| (p.x - car.position.x).hypot(p.z - car.position.z) > 4.0);
     emitter.previous = Some(car.position);
-    if jumped || (motion < 3.0 && car.wheel_spin < 0.15) {
+    if jumped || (motion < 3.0 && car.tires.wheel_spin < 0.15) {
         emitter.credit = [0.0; 2];
         return;
     }
@@ -117,8 +117,8 @@ pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, d
         };
         let effect = if dusty && motion > 5.0 {
             Some((Kind::Dust, (motion / 14.0).clamp(0.0, 1.0) * 0.6))
-        } else if car.tire_scrub > 0.25 {
-            Some((Kind::Smoke, car.tire_scrub.clamp(0.0, 1.0)))
+        } else if car.tires.scrub > 0.25 {
+            Some((Kind::Smoke, car.tires.scrub.clamp(0.0, 1.0)))
         } else {
             None
         };

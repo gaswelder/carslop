@@ -504,7 +504,7 @@ mod skid_marks {
             model::world::heading(road),
             model,
         );
-        car.tire_scrub = 0.9;
+        car.tires.scrub = 0.9;
         car
     }
 
@@ -519,7 +519,7 @@ mod skid_marks {
         render::skid_marks::record(&mut marks, 0, &sliding(model.clone(), 100.5));
         assert!(render::skid_marks::vertices(&marks).is_empty());
         let mut car = sliding(model.clone(), 101.0);
-        car.tire_scrub = 0.0;
+        car.tires.scrub = 0.0;
         render::skid_marks::record(&mut marks, 0, &car);
         render::skid_marks::record(&mut marks, 0, &sliding(model, 101.5));
         assert!(render::skid_marks::vertices(&marks).is_empty());
@@ -571,7 +571,7 @@ mod tire_particles {
             util::geometry::xz_map(road.tangent, |v| v * 10.0),
             car.velocity.y,
         );
-        car.tire_scrub = 0.9;
+        car.tires.scrub = 0.9;
         car
     }
 

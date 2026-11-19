@@ -269,5 +269,5 @@ pub fn solve(
 }
 
 #[cfg(test)]
-#[path = "tests/tire.rs"]
+#[path = "tests/tire_solver.rs"]
 mod tests;

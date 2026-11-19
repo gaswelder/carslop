@@ -8,6 +8,25 @@ use crate::util::geometry::XYZ;
 use crate::util::geometry::XZ;
 use crate::world;
 
+/// Normal force supported by each axle, in newtons.
+#[derive(Default)]
+pub struct AxleLoad {
+    pub front: f32,
+    pub rear: f32,
+}
+
+/// Terrain-following suspension motion and supported axle loads.
+#[derive(Default)]
+pub struct SuspensionState {
+    pub pitch: f32,
+    pub roll: f32,
+    pub axle_load: AxleLoad,
+    /// Smoothed local acceleration for cosmetic body lean only, in m/s².
+    visual_acceleration: LocalAcceleration,
+    rates: [f32; 2],
+    initialized: bool,
+}
+
 /// Acceleration along the car’s longitudinal and lateral axes, in m/s².
 #[derive(Default)]
 pub struct LocalAcceleration {
@@ -21,9 +40,9 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     // At a crest its contact force can drop to zero; gravity then governs
     // flight until the spring compresses again on landing.
     let ground = ride_height(vehicle);
-    if !vehicle.suspension_initialized {
+    if !vehicle.suspension.initialized {
         vehicle.position.y = ground;
-        vehicle.suspension_initialized = true;
+        vehicle.suspension.initialized = true;
     }
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();
@@ -40,7 +59,7 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     let total_load = spec.weight_kg * support;
     let front_load =
         (total_load * spec.center_of_mass.longitudinal_fraction - transfer).clamp(0.0, total_load);
-    vehicle.axle_load = car::AxleLoad {
+    vehicle.suspension.axle_load = AxleLoad {
         front: front_load,
         rear: total_load - front_load,
     };
@@ -125,19 +144,22 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
 pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     // This filter only steadies rendered pitch and roll; tire loads use raw acceleration.
     let blend = 1.0 - (-dt * 12.0).exp();
-    vehicle.visual_acceleration.longitudinal += (vehicle.local_acceleration.longitudinal
-        - vehicle.visual_acceleration.longitudinal)
+    vehicle.suspension.visual_acceleration.longitudinal +=
+        (vehicle.local_acceleration.longitudinal
+            - vehicle.suspension.visual_acceleration.longitudinal)
+            * blend;
+    vehicle.suspension.visual_acceleration.lateral += (vehicle.local_acceleration.lateral
+        - vehicle.suspension.visual_acceleration.lateral)
         * blend;
-    vehicle.visual_acceleration.lateral +=
-        (vehicle.local_acceleration.lateral - vehicle.visual_acceleration.lateral) * blend;
     let spec = &vehicle.spec;
-    let target_pitch = (vehicle.visual_acceleration.longitudinal
+    let target_pitch = (vehicle.suspension.visual_acceleration.longitudinal
         * model::car::center_of_mass_height_m(spec)
         / 80.0)
         .clamp(-0.10, 0.10);
-    let target_roll =
-        (vehicle.visual_acceleration.lateral * model::car::center_of_mass_height_m(spec) / 65.0)
-            .clamp(-0.12, 0.12);
+    let target_roll = (vehicle.suspension.visual_acceleration.lateral
+        * model::car::center_of_mass_height_m(spec)
+        / 65.0)
+        .clamp(-0.12, 0.12);
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();
     vehicle.orientation_rate.pitch += (omega_squared * (target_pitch - vehicle.orientation.pitch)
@@ -150,20 +172,24 @@ pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     vehicle.orientation.roll += vehicle.orientation_rate.roll * dt;
     // The sprung body follows terrain through damped angular springs.
     // Wheels follow the contact surface independently in the renderer.
-    let angles = if vehicle.axle_load.front + vehicle.axle_load.rear > 0.0 {
+    let angles = if vehicle.suspension.axle_load.front + vehicle.suspension.axle_load.rear > 0.0 {
         ground_angles(vehicle)
     } else {
         GroundAngles {
-            pitch: vehicle.suspension_pitch,
-            roll: vehicle.suspension_roll,
+            pitch: vehicle.suspension.pitch,
+            roll: vehicle.suspension.roll,
         }
     };
     for (axis, target, angle) in [
-        (0, angles.pitch, &mut vehicle.suspension_pitch),
-        (1, angles.roll, &mut vehicle.suspension_roll),
+        (0, angles.pitch, &mut vehicle.suspension.pitch),
+        (1, angles.roll, &mut vehicle.suspension.roll),
     ] {
-        let rate = &mut vehicle.suspension_rates[axis];
+        let rate = &mut vehicle.suspension.rates[axis];
         *rate += (omega_squared * (target - *angle) - 1.4 * omega * *rate) * dt;
         *angle += *rate * dt;
     }
 }
+
+#[cfg(test)]
+#[path = "tests/suspension.rs"]
+mod tests;

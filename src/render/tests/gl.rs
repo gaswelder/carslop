@@ -162,8 +162,8 @@ fn wheels_follow_a_bump_independently_with_bounded_compression_and_droop() {
         test::support::car(),
         track,
     );
-    car.suspension_pitch = 0.0;
-    car.suspension_roll = 0.0;
+    car.suspension.pitch = 0.0;
+    car.suspension.roll = 0.0;
     let body = vehicle_body_matrix(&car);
     let wheel_y: [f32; 4] = std::array::from_fn(|i| {
         let matrix = vehicle_wheel_matrix(&car, body, i);

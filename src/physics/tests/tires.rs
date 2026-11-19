@@ -1,6 +1,7 @@
 use super::tire_contacts;
 use crate::physics::car;
-use crate::physics::tire;
+use crate::physics::suspension;
+use crate::physics::tire_solver;
 use crate::test;
 use crate::util::geometry::XYZ;
 
@@ -20,13 +21,13 @@ fn cornering_stiffness_follows_current_axle_load_independently_of_surface_grip()
         tire_contacts(
             vehicle,
             car::Controls::default(),
-            tire::Motion::default(),
+            tire_solver::Motion::default(),
             capacities,
             0.0,
             false,
         )
     };
-    vehicle.axle_load = car::AxleLoad {
+    vehicle.suspension.axle_load = suspension::AxleLoad {
         front: 4000.0,
         rear: 4000.0,
     };
@@ -34,7 +35,7 @@ fn cornering_stiffness_follows_current_axle_load_independently_of_surface_grip()
     assert!(balanced[0].corner_stiffness > 0.0);
     assert_eq!(balanced[0].corner_stiffness, balanced[1].corner_stiffness);
 
-    vehicle.axle_load = car::AxleLoad {
+    vehicle.suspension.axle_load = suspension::AxleLoad {
         front: 8000.0,
         rear: 2000.0,
     };

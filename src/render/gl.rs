@@ -750,7 +750,7 @@ pub fn mesh_draw(
         let reverse_light = gl::GetUniformLocation(program, reverse_light.as_ptr());
         gl::Uniform1f(
             reverse_light,
-            if car.gear == physics::car::REVERSE_GEAR {
+            if car.gearbox.gear == physics::powertrain::REVERSE_GEAR {
                 1.0
             } else {
                 0.0
@@ -1378,8 +1378,8 @@ pub fn vehicle_body_matrix(vehicle: &physics::car::Vehicle) -> [f32; 16] {
     body_model_matrix(
         vehicle.position,
         vehicle.orientation.yaw,
-        vehicle.suspension_pitch + vehicle.orientation.pitch,
-        vehicle.suspension_roll + vehicle.orientation.roll,
+        vehicle.suspension.pitch + vehicle.orientation.pitch,
+        vehicle.suspension.roll + vehicle.orientation.roll,
     )
 }
 
@@ -1469,11 +1469,11 @@ fn vehicle_wheel_local_matrix(
         ),
         center,
         if front {
-            physics::car::front_wheel_angle(car)
+            physics::steering::front_wheel_angle(car)
         } else {
             0.0
         },
-        car.wheel_phase[usize::from(front)],
+        car.tires.wheel_phase[usize::from(front)],
     )
 }
 

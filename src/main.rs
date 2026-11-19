@@ -1,6 +1,7 @@
 mod app;
 mod asset;
 mod build;
+mod driver;
 mod model;
 mod physics;
 mod render;
@@ -696,7 +697,7 @@ fn handle_key(app: &mut App, key: Keycode) {
             }
         }
         Keycode::A | Keycode::Z if app.session.state == GameState::Driving => {
-            physics::car::shift(&mut app.session.car, key == Keycode::A);
+            driver::shift(&mut app.session.car, key == Keycode::A);
         }
         Keycode::V => {
             if let Some(audio) = &mut app.audio {
@@ -813,7 +814,7 @@ fn render_scene(app: &mut App, frame_time: Duration) {
                 rpm: car.engine.rpm,
                 redline_rpm: car.spec.engine.redline_rpm,
                 speed_kmh: physics::car::longitudinal_speed(car).abs() * 3.6,
-                gear: car.gear,
+                gear: car.gearbox.gear,
                 turbo_boost: car
                     .spec
                     .engine

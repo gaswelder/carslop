@@ -6,15 +6,15 @@ mod powertrain {
     #[test]
     fn brakes_balance_tire_reaction_and_abs_prevents_wheel_lock() {
         for direction in [-1.0, 1.0] {
-            let step = physics::powertrain::new(
-                3000.0,
-                20.0 * direction,
-                0.0,
-                0.25,
-                12.0,
-                0.0,
-                1.0 / 240.0,
-            );
+            let step = physics::powertrain::Step {
+                engine_omega: 3000.0 * std::f32::consts::TAU / 60.0,
+                wheel_omega: 20.0 * direction,
+                engine_inertia: 0.25,
+                wheel_inertia: 2.4,
+                ratio: 12.0,
+                max_impulse: 0.0,
+                dt: 1.0 / 240.0,
+            };
             let rolling_speed = 19.5 * 0.32 * direction;
             let rotation = physics::powertrain::finish(
                 &step,
@@ -24,7 +24,7 @@ mod powertrain {
                 rolling_speed,
             );
             assert!((rotation.wheel_omega * 0.32 - rolling_speed).abs() < 0.00001);
-            assert!((rotation.engine_rpm - 3000.0).abs() < 0.001);
+            assert_eq!(rotation.crankshaft_impulse, 0.0);
 
             let released =
                 physics::powertrain::finish(&step, 0.0, 0.32, 8000.0, 25.0 * 0.32 * direction);
@@ -42,10 +42,18 @@ mod powertrain {
 
     #[test]
     fn static_brake_and_clutch_exchange_torque_without_rotating_the_wheels() {
-        let step = physics::powertrain::new(3000.0, 0.0, 0.0, 0.25, 12.0, 100.0, 1.0 / 240.0);
+        let step = physics::powertrain::Step {
+            engine_omega: 3000.0 * std::f32::consts::TAU / 60.0,
+            wheel_omega: 0.0,
+            engine_inertia: 0.25,
+            wheel_inertia: 2.4,
+            ratio: 12.0,
+            max_impulse: 100.0 * (1.0 / 240.0),
+            dt: 1.0 / 240.0,
+        };
         let held = physics::powertrain::finish(&step, 0.0, 0.32, 8000.0, 0.0);
         assert!(held.wheel_omega.abs() < 0.00001);
-        assert!(held.engine_rpm < 3000.0);
+        assert!(held.crankshaft_impulse < 0.0);
         let released = physics::powertrain::finish(&step, 0.0, 0.32, 0.0, 0.0);
         assert!(released.wheel_omega > 0.0);
     }
@@ -53,19 +61,22 @@ mod powertrain {
     #[test]
     fn locked_clutch_and_tires_preserve_gearing_and_exchange_momentum() {
         for dt in [1.0 / 60.0, 1.0 / 240.0] {
-            let step = physics::powertrain::new(
-                3000.0,
-                3000.0 * std::f32::consts::TAU / 60.0 / 12.0,
-                150.0,
-                0.25,
-                12.0,
-                1000.0,
+            let step = physics::powertrain::Step {
+                engine_omega: 3000.0 * std::f32::consts::TAU / 60.0 + 150.0 / 0.25 * dt,
+                wheel_omega: 3000.0 * std::f32::consts::TAU / 60.0 / 12.0,
+                engine_inertia: 0.25,
+                wheel_inertia: 2.4,
+                ratio: 12.0,
+                max_impulse: 1000.0 * dt,
                 dt,
-            );
+            };
             let speed = (3000.0 * std::f32::consts::TAU / 60.0 / 12.0) * 0.32;
             let force = physics::powertrain::road_force(&step, speed, 1200.0, 0.32);
             let rotation = physics::powertrain::finish(&step, force, 0.32, 0.0, 0.0);
-            let rpm = rotation.engine_rpm;
+            let rpm = (3000.0 * std::f32::consts::TAU / 60.0
+                + (150.0 * dt + rotation.crankshaft_impulse) / 0.25)
+                * 60.0
+                / std::f32::consts::TAU;
             let wheel = rotation.wheel_omega;
             assert!((wheel * 0.32 - (speed + force / 1200.0 * dt)).abs() < 0.0001);
             assert!((rpm - wheel * 12.0 * 60.0 / std::f32::consts::TAU).abs() < 0.01);
@@ -73,7 +84,11 @@ mod powertrain {
                 + 2.4 * (3000.0 * std::f32::consts::TAU / 60.0 / 12.0) / 12.0;
             let momentum_after = 0.25 * rpm * std::f32::consts::TAU / 60.0 + 2.4 * wheel / 12.0;
             assert!(
-                (momentum_after - momentum_before - (150.0 - force * 0.32 / 12.0) * dt).abs()
+                (momentum_after
+                    - momentum_before
+                    - (150.0 - force * 0.32 / 12.0) * dt
+                    - 0.1 * rotation.crankshaft_impulse)
+                    .abs()
                     < 0.0001
             );
         }
@@ -81,17 +96,23 @@ mod powertrain {
 
     #[test]
     fn slipping_clutch_transfers_momentum_and_dissipates_energy() {
-        let step = physics::powertrain::new(6000.0, 0.0, 0.0, 0.25, 12.0, 400.0, 1.0 / 240.0);
+        let step = physics::powertrain::Step {
+            engine_omega: 6000.0 * std::f32::consts::TAU / 60.0,
+            wheel_omega: 0.0,
+            engine_inertia: 0.25,
+            wheel_inertia: 2.4,
+            ratio: 12.0,
+            max_impulse: 400.0 * (1.0 / 240.0),
+            dt: 1.0 / 240.0,
+        };
         let rotation = physics::powertrain::finish(&step, 0.0, 0.32, 0.0, 0.0);
-        let rpm = rotation.engine_rpm;
+        let rpm = (6000.0 * std::f32::consts::TAU / 60.0 + rotation.crankshaft_impulse / 0.25)
+            * 60.0
+            / std::f32::consts::TAU;
         let wheel = rotation.wheel_omega;
         let omega = rpm * std::f32::consts::TAU / 60.0;
         assert!(rpm < 6000.0 && wheel > 0.0);
-        assert!(
-            (0.25 * omega + 2.4 * wheel / 12.0 - 0.25 * (6000.0 * std::f32::consts::TAU / 60.0))
-                .abs()
-                < 0.0001
-        );
+        assert!((2.4 * wheel + 0.9 * rotation.crankshaft_impulse * 12.0).abs() < 0.0001);
         assert!(
             0.5 * 0.25 * omega * omega + 0.5 * 2.4 * wheel * wheel
                 < 0.5
@@ -102,22 +123,70 @@ mod powertrain {
     }
 
     #[test]
+    fn transmission_losses_follow_power_flow_and_dissipate_energy() {
+        for wheel in [-50.0, -1.0, 0.0, 1.0, 20.0, 50.0] {
+            let omega = 3000.0 * std::f32::consts::TAU / 60.0;
+            let step = physics::powertrain::Step {
+                engine_omega: 3000.0 * std::f32::consts::TAU / 60.0,
+                wheel_omega: wheel,
+                engine_inertia: 0.25,
+                wheel_inertia: 2.4,
+                ratio: 12.0,
+                max_impulse: 400.0 * (1.0 / 240.0),
+                dt: 1.0 / 240.0,
+            };
+            let rotation = physics::powertrain::finish(&step, 0.0, 0.32, 0.0, 0.0);
+            let engine = omega + rotation.crankshaft_impulse / 0.25;
+            let wheel_impulse = 2.4 * (rotation.wheel_omega - wheel);
+            let retained = if wheel_impulse * wheel >= 0.0 {
+                0.9
+            } else {
+                1.0 / 0.9
+            };
+            assert!((wheel_impulse + retained * 12.0 * rotation.crankshaft_impulse).abs() < 0.0001);
+            let before = 0.5 * 0.25 * omega * omega + 0.5 * 2.4 * wheel * wheel;
+            let after = 0.5 * 0.25 * engine * engine
+                + 0.5 * 2.4 * rotation.wheel_omega * rotation.wheel_omega;
+            assert!(after < before, "wheel speed {wheel}: {before} -> {after}");
+        }
+    }
+
+    #[test]
     fn lost_grip_accelerates_rotating_parts_and_open_clutch_isolates_engine() {
-        let loaded = physics::powertrain::new(3000.0, 20.0, 150.0, 0.25, 12.0, 500.0, 1.0 / 240.0);
+        let loaded = physics::powertrain::Step {
+            engine_omega: 3000.0 * std::f32::consts::TAU / 60.0 + 150.0 / 0.25 * (1.0 / 240.0),
+            wheel_omega: 20.0,
+            engine_inertia: 0.25,
+            wheel_inertia: 2.4,
+            ratio: 12.0,
+            max_impulse: 500.0 * (1.0 / 240.0),
+            dt: 1.0 / 240.0,
+        };
         let force = physics::powertrain::road_force(&loaded, 6.4, 1200.0, 0.32);
         let grip = physics::powertrain::finish(&loaded, force, 0.32, 0.0, 0.0);
         let slip = physics::powertrain::finish(&loaded, 0.0, 0.32, 0.0, 0.0);
-        assert!(slip.engine_rpm > grip.engine_rpm && slip.wheel_omega > grip.wheel_omega);
-        let open = physics::powertrain::new(3000.0, 20.0, 150.0, 0.25, 12.0, 0.0, 1.0 / 240.0);
+        assert!(
+            slip.crankshaft_impulse > grip.crankshaft_impulse
+                && slip.wheel_omega > grip.wheel_omega
+        );
+        let open = physics::powertrain::Step {
+            engine_omega: 3000.0 * std::f32::consts::TAU / 60.0 + 150.0 / 0.25 * (1.0 / 240.0),
+            wheel_omega: 20.0,
+            engine_inertia: 0.25,
+            wheel_inertia: 2.4,
+            ratio: 12.0,
+            max_impulse: 0.0,
+            dt: 1.0 / 240.0,
+        };
         assert_eq!(
-            physics::powertrain::finish(&(open), 0.0, 0.32, 0.0, 0.0).engine_rpm,
-            physics::powertrain::finish(&(open), 5000.0, 0.32, 0.0, 0.0).engine_rpm
+            physics::powertrain::finish(&(open), 0.0, 0.32, 0.0, 0.0).crankshaft_impulse,
+            physics::powertrain::finish(&(open), 5000.0, 0.32, 0.0, 0.0).crankshaft_impulse
         );
     }
 }
 
-mod tire {
-    use crate::physics::tire::*;
+mod tire_solver {
+    use crate::physics::tire_solver::*;
 
     const MASS: f32 = 1200.0;
     const INERTIA: f32 = 1600.0;
@@ -289,20 +358,22 @@ mod tire {
 }
 
 mod car {
-    use crate::physics::car::{Controls, Vehicle, NEUTRAL_GEAR, REVERSE_GEAR};
+    use crate::driver;
+    use crate::physics::car::{Controls, Vehicle};
+    use crate::physics::powertrain::{NEUTRAL_GEAR, REVERSE_GEAR};
     use crate::util::geometry::XYZ;
     use crate::{model, physics, test, world};
     use std::time::Duration;
 
     fn select_reverse(vehicle: &mut Vehicle) {
-        physics::car::shift(vehicle, false);
-        physics::car::shift(vehicle, false);
-        assert_eq!(vehicle.gear, REVERSE_GEAR);
+        driver::shift(vehicle, false);
+        driver::shift(vehicle, false);
+        assert_eq!(vehicle.gearbox.gear, REVERSE_GEAR);
     }
     fn select_drive(vehicle: &mut Vehicle) {
-        physics::car::shift(vehicle, true);
-        physics::car::shift(vehicle, true);
-        assert_eq!(vehicle.gear, 1);
+        driver::shift(vehicle, true);
+        driver::shift(vehicle, true);
+        assert_eq!(vehicle.gearbox.gear, 1);
     }
 
     #[test]
@@ -321,25 +392,25 @@ mod car {
             x: 0.0,
             z: 40.0,
         };
-        assert_eq!(car.gear, 1);
-        physics::car::shift(&mut car, true);
-        assert_eq!(car.gear, 2);
+        assert_eq!(car.gearbox.gear, 1);
+        driver::shift(&mut car, true);
+        assert_eq!(car.gearbox.gear, 2);
         car.velocity = XYZ {
             y: car.velocity.y,
             x: 0.0,
             z: 0.0,
         };
-        assert_eq!(car.gear, 2);
-        physics::car::shift(&mut car, false);
-        physics::car::shift(&mut car, false);
-        assert_eq!(car.gear, NEUTRAL_GEAR);
+        assert_eq!(car.gearbox.gear, 2);
+        driver::shift(&mut car, false);
+        driver::shift(&mut car, false);
+        assert_eq!(car.gearbox.gear, NEUTRAL_GEAR);
         car.velocity = XYZ {
             y: car.velocity.y,
             x: 2.0,
             z: 0.0,
         };
-        physics::car::shift(&mut car, false);
-        assert_eq!(car.gear, REVERSE_GEAR);
+        driver::shift(&mut car, false);
+        assert_eq!(car.gearbox.gear, REVERSE_GEAR);
         assert_eq!(
             car.velocity,
             XYZ {
@@ -348,14 +419,14 @@ mod car {
                 z: 0.0
             }
         );
-        physics::car::shift(&mut car, true);
-        assert_eq!(car.gear, NEUTRAL_GEAR);
-        physics::car::shift(&mut car, true);
-        assert_eq!(car.gear, 1);
+        driver::shift(&mut car, true);
+        assert_eq!(car.gearbox.gear, NEUTRAL_GEAR);
+        driver::shift(&mut car, true);
+        assert_eq!(car.gearbox.gear, 1);
         for _ in 0..20 {
-            physics::car::shift(&mut car, true);
+            driver::shift(&mut car, true);
         }
-        assert_eq!(car.gear, car.spec.gearbox.ratios.len() as u8);
+        assert_eq!(car.gearbox.gear, car.spec.gearbox.ratios.len() as u8);
         physics::car::reset(
             &mut car,
             XYZ {
@@ -365,7 +436,7 @@ mod car {
             },
             0.0,
         );
-        assert_eq!(car.gear, 1);
+        assert_eq!(car.gearbox.gear, 1);
     }
     #[test]
     fn every_car_can_reverse_brake_and_drive_forward_again() {
@@ -380,7 +451,7 @@ mod car {
                 model.clone(),
             );
             select_reverse(&mut v);
-            assert_eq!(v.gear, REVERSE_GEAR);
+            assert_eq!(v.gearbox.gear, REVERSE_GEAR);
             for _ in 0..720 {
                 v.position = physics::vehicle_location::vehicle_position(road, 0.0); // straight-line test treadmill
                 physics::car::update(
@@ -398,7 +469,7 @@ mod car {
                 "reverse speed for {model:?}: {}",
                 physics::car::longitudinal_speed(&v)
             );
-            assert_eq!(v.gear, REVERSE_GEAR);
+            assert_eq!(v.gearbox.gear, REVERSE_GEAR);
 
             physics::car::update(
                 &mut v,
@@ -409,9 +480,9 @@ mod car {
                 },
             );
             assert!(physics::car::longitudinal_speed(&v).abs() < 0.001);
-            assert_eq!(v.gear, REVERSE_GEAR);
+            assert_eq!(v.gearbox.gear, REVERSE_GEAR);
             select_drive(&mut v);
-            assert_eq!(v.gear, 1);
+            assert_eq!(v.gearbox.gear, 1);
             physics::car::update(
                 &mut v,
                 Duration::from_millis(500),
@@ -425,7 +496,7 @@ mod car {
                 "{model:?} failed to pull away: {}, engine {}, wheel {}",
                 physics::car::longitudinal_speed(&v),
                 v.engine.rpm,
-                v.wheel_spin
+                v.tires.wheel_spin
             );
         }
     }

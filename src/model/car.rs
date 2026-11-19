@@ -57,6 +57,8 @@ pub struct Chassis {
 
 #[derive(Clone, Debug)]
 pub struct Engine {
+    /// Effective crankshaft and flywheel rotational inertia, in kg m².
+    pub inertia_kg_m2: f32,
     pub max_torque_nm: f32,
     pub torque_curve: Vec<TorquePoint>,
     pub redline_rpm: f32,
@@ -142,7 +144,7 @@ pub fn load(dirpath: &Path) -> Result<Vec<Arc<CarSpec>>, String> {
 
 fn load_car(directory: &Path, name: String) -> Result<CarSpec, String> {
     let definition = car_loading::load(&directory.join("car.json"))?;
-    if definition.engine.redline_rpm <= physics::car::IDLE_RPM + 250.0 {
+    if definition.engine.redline_rpm <= physics::engine::IDLE_RPM + 250.0 {
         return Err("redline RPM must leave limiter recovery above idle".into());
     }
 
@@ -166,6 +168,7 @@ fn load_car(directory: &Path, name: String) -> Result<CarSpec, String> {
         paint_color: definition.paint_color,
         weight_kg: definition.weight_kg,
         engine: Engine {
+            inertia_kg_m2: definition.engine.inertia_kg_m2,
             max_torque_nm: definition.engine.max_torque_nm,
             torque_curve: definition
                 .engine

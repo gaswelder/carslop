@@ -40,7 +40,7 @@ pub fn break_trail(skid_marks: &mut SkidMarks, car: usize) {
 }
 
 pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
-    if car.tire_scrub < 0.15 {
+    if car.tires.scrub < 0.15 {
         break_trail(skid_marks, index);
         return;
     }
@@ -107,7 +107,7 @@ pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
             skid_marks.marks.push_back(Mark {
                 from,
                 to: (to),
-                strength: car.tire_scrub,
+                strength: car.tires.scrub,
                 age: 0.0,
                 base_color: render::scene::road_color(
                     &car.track,

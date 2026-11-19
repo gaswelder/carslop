@@ -1044,9 +1044,9 @@ fn append_instruments(v: &mut Vec<Vertex>, gauges: Gauges, viewport: [f32; 2]) {
     font_label(
         &mut c,
         &ui::hud_atlas::get().digits,
-        &if gauges.gear == physics::car::NEUTRAL_GEAR {
+        &if gauges.gear == physics::powertrain::NEUTRAL_GEAR {
             "N".into()
-        } else if gauges.gear == physics::car::REVERSE_GEAR {
+        } else if gauges.gear == physics::powertrain::REVERSE_GEAR {
             "R".into()
         } else {
             gauges.gear.to_string()

@@ -76,7 +76,7 @@ pub fn update(
         } else {
             car.engine.load
         },
-        scrub: car.tire_scrub,
+        scrub: car.tires.scrub,
         surface: tire_material(car),
         sample_directory: car.spec.engine_sample_directory.as_deref(),
         enabled,
@@ -107,7 +107,7 @@ fn output_sample(driving: f32) -> f32 {
 }
 
 fn engine_frequency(rpm: f32) -> f32 {
-    rpm.max(physics::car::IDLE_RPM) / 30.0
+    rpm.max(physics::engine::IDLE_RPM) / 30.0
 }
 
 // Use the supporting deck before the ground beneath it, including on bridges.

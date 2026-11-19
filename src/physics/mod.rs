@@ -1,9 +1,10 @@
 pub mod car;
-mod contact;
-mod engine;
-mod powertrain;
-mod suspension;
-mod tire;
+pub mod engine;
+pub mod powertrain;
+pub mod steering;
+pub mod suspension;
+mod tire_solver;
+pub mod tires;
 pub mod vehicle_location;
 
 #[cfg(test)]
