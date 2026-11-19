@@ -208,6 +208,10 @@ fn tire_contact(
 }
 
 pub fn update_feedback(vehicle: &mut car::Vehicle, lateral_speed: f32, handbrake: bool) {
+    if vehicle.suspension.axle_load.front + vehicle.suspension.axle_load.rear <= 0.0 {
+        vehicle.tires.scrub = 0.0;
+        return;
+    }
     let motion = vehicle.velocity.x.hypot(vehicle.velocity.z);
     let sliding = ((lateral_speed.abs() - 0.8) / 3.0).clamp(0.0, 1.0);
     let braking = if handbrake { 0.8 } else { 0.0 };

@@ -170,6 +170,37 @@ fn force_telemetry_reports_braking_and_engine_drag() {
 }
 
 #[test]
+fn tire_scrub_stops_in_flight_and_resumes_on_landing() {
+    for handbrake in [false, true] {
+        let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
+        car.velocity.x = 10.0;
+        car.velocity.z = 20.0;
+        car.engine.rpm = 3500.0;
+        let controls = Controls {
+            throttle: 1.0,
+            handbrake,
+            ..Controls::default()
+        };
+        let dt = Duration::from_micros(4000);
+        update(&mut car, dt, controls);
+        assert!(car.tires.scrub > 0.0);
+
+        car.position.y += 10.0;
+        car.tires.driven_wheel_omega = 200.0;
+        update(&mut car, dt, controls);
+        assert_eq!(car.suspension.axle_load.front, 0.0);
+        assert_eq!(car.suspension.axle_load.rear, 0.0);
+        assert!(car.tires.wheel_spin > 0.0);
+        assert_eq!(car.tires.scrub, 0.0);
+
+        car.position.y = suspension::ride_height(&car);
+        car.velocity.y = 0.0;
+        update(&mut car, dt, controls);
+        assert!(car.tires.scrub > 0.0);
+    }
+}
+
+#[test]
 fn force_telemetry_has_no_tire_force_without_ground_contact_or_resistance_at_rest() {
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
     car.gearbox.gear = 1;
