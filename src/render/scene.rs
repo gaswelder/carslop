@@ -565,19 +565,23 @@ fn bake_road(b: &mut Builder, track: &world::locations::WorldLocation, coastal: 
     }
 }
 
-fn tree(b: &mut Builder, track: &world::locations::WorldLocation, x: f32, z: f32, scale: f32) {
-    let y = terrain_height(track, x, z) - 0.15;
+fn tree(b: &mut Builder, track: &world::locations::WorldLocation, tree: &model::world::Tree) {
+    let XZ { x, z } = tree.coords;
+    let scale = tree.height_meters / 4.3;
+    let trunk = world::trees::authored_trunk(tree);
+    let ground = terrain_height(track, x, z);
+    let y = ground + trunk.base_offset;
     cuboid(
         b,
         XYZ {
-            x: x - 0.14,
+            x: x - trunk.radius,
             y,
-            z: z - 0.14,
+            z: z - trunk.radius,
         },
         XYZ {
-            x: x + 0.14,
-            y: y + 2.2 * scale,
-            z: z + 0.14,
+            x: x + trunk.radius,
+            y: ground + trunk.top_offset,
+            z: z + trunk.radius,
         },
         matte([0.28, 0.22, 0.14]),
     );
@@ -794,7 +798,7 @@ pub fn authored_scenery(track: &world::locations::WorldLocation, coastal: bool) 
 
 fn scenery(b: &mut Builder, track: &world::locations::WorldLocation) {
     for t in model::world::trees(track) {
-        tree(b, track, t.coords.x, t.coords.z, t.height_meters / 4.3);
+        tree(b, track, t);
     }
     for building in world::buildings::buildings(track) {
         house(

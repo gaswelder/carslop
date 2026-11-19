@@ -569,6 +569,12 @@ fn constrain_road(vehicle: &mut Vehicle, velocity: &mut XZ<f32>) -> f32 {
             impact = impact.max(physics::vehicle_location::deflect(velocity, normal));
         }
     }
+    impact = impact.max(world::trees::constrain(
+        &vehicle.track,
+        &mut vehicle.position,
+        velocity,
+        asset::car_glb::height(&vehicle.spec.design),
+    ));
     vehicle.position.y = suspension::ride_height(vehicle);
     impact
 }

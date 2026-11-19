@@ -59,6 +59,11 @@ fn clear_for_car(world: &WorldLocation, p: XYZ) -> bool {
             > world::locations::CAR_RADIUS + 0.15
         && world::mapped_objects::mapped_object_clearance(world, util::geometry::xz(p))
             > world::locations::CAR_RADIUS + 0.15
+        && world::trees::clearance(
+            world,
+            util::geometry::at_height(util::geometry::xz(p), p.y + VEHICLE_ORIGIN_HEIGHT),
+            1.7,
+        ) > world::locations::CAR_RADIUS + 0.15
 }
 pub fn recovery(world: &WorldLocation, p: XYZ) -> RoadSample {
     // Service roads may lead into garages. Never recover inside a footprint.
@@ -118,6 +123,18 @@ pub fn spawn(world: &WorldLocation) -> RoadSample {
             ) > world::locations::CAR_RADIUS + 0.15
                 && world::barriers::barrier_clearance(world, util::geometry::xz(sample.point))
                     > world::locations::CAR_RADIUS + 0.15
+                && world::mapped_objects::mapped_object_clearance(
+                    world,
+                    util::geometry::xz(sample.point),
+                ) > world::locations::CAR_RADIUS + 0.15
+                && world::trees::clearance(
+                    world,
+                    util::geometry::at_height(
+                        util::geometry::xz(sample.point),
+                        sample.point.y + VEHICLE_ORIGIN_HEIGHT,
+                    ),
+                    1.7,
+                ) > world::locations::CAR_RADIUS + 0.15
             {
                 if world::roads::road_lines(world)[i].direction == -1 {
                     sample.tangent = util::geometry::xz_map(sample.tangent, |v| -v);
@@ -196,6 +213,12 @@ pub fn constrain(
     ));
     impact = impact.max(world::transport::constrain_transport(
         world, position, velocity,
+    ));
+    impact = impact.max(world::trees::constrain(
+        world,
+        position,
+        velocity,
+        vehicle_height,
     ));
     // The saved extract is a finite driving area. Low curbs are crossable;
     // the crop boundary remains solid so the car cannot leave terrain data.

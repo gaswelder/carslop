@@ -892,7 +892,8 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
         x: (variation(id, 22) - 0.5) * r * 0.16,
         z: (variation(id, 23) - 0.5) * r * 0.16,
     };
-    let trunk_radius = (r * (0.055 + variation(id, 24) * 0.035)).clamp(0.08, 0.27);
+    let trunk = world::trees::mapped_trunk(city, tree);
+    let trunk_radius = trunk.radius;
     let bark = render::scene::matte(tinted([0.38, 0.31, 0.23], 0.78 + variation(id, 25) * 0.35));
     // A tapered six-sided trunk has the same triangle budget as the old cuboid.
     for i in 0..6 {
@@ -903,13 +904,9 @@ fn mapped_tree(b: &mut Builder, city: &WorldLocation, tree: &world::landscape::T
             XYZ {
                 x: x + angle.cos() * trunk_radius * scale + if top { lean.x } else { 0.0 },
                 y: y + if top {
-                    h * if kind == Some(TreeKind::Palm) {
-                        0.88
-                    } else {
-                        0.65
-                    }
+                    trunk.top_offset
                 } else {
-                    -0.05
+                    trunk.base_offset
                 },
                 z: z + angle.sin() * trunk_radius * scale + if top { lean.z } else { 0.0 },
             }

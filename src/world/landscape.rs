@@ -124,11 +124,22 @@ pub fn append_imagery_trees(trees: &mut Vec<Tree>, extra: Vec<Tree>) -> Result<(
 pub struct GroundCover {
     triangles: Vec<Triangle>,
     trees: Vec<Tree>,
+    tree_index: rstar::RTree<rstar::primitives::GeomWithData<[f32; 2], usize>>,
     grid: std::collections::HashMap<(i32, i32), Vec<usize>>,
 }
 
 pub fn new(triangles: Vec<Triangle>, trees: Vec<Tree>) -> GroundCover {
+    let tree_index = rstar::RTree::bulk_load(
+        trees
+            .iter()
+            .enumerate()
+            .map(|(index, tree)| {
+                rstar::primitives::GeomWithData::new([tree.coords.x, tree.coords.z], index)
+            })
+            .collect(),
+    );
     let mut cover = GroundCover {
+        tree_index,
         triangles,
         trees,
         grid: Default::default(),
@@ -141,6 +152,19 @@ pub fn triangles(ground_cover: &GroundCover) -> &[Triangle] {
 }
 pub fn trees(ground_cover: &GroundCover) -> &[Tree] {
     &ground_cover.trees
+}
+
+/// Query centres only; callers include the maximum trunk radius in `reach`.
+pub fn nearby_trees(
+    ground_cover: &GroundCover,
+    p: XZ<f32>,
+    reach: f32,
+) -> impl Iterator<Item = &Tree> {
+    let bounds = rstar::AABB::from_corners([p.x - reach, p.z - reach], [p.x + reach, p.z + reach]);
+    ground_cover
+        .tree_index
+        .locate_in_envelope_intersecting(&bounds)
+        .map(|entry| &ground_cover.trees[entry.data])
 }
 
 fn index_ground(ground_cover: &mut GroundCover) {
