@@ -13,23 +13,6 @@ Also, I had to start looking into the code because generated technical decisions
 
 In-game screenshot at [Engomi, Nicosia](https://www.google.com/maps/search/?api=1&query=35.1670537,33.3169556)
 
-## Controls
-
-| Key                 | Action                               |
-| ------------------- | ------------------------------------ |
-| Up / Down           | Accelerate / brake                   |
-| Left / Right        | Steer                                |
-| A / Z               | Shift up / down                      |
-| Space               | Handbrake                            |
-| C                   | Cycle cameras                        |
-| Esc                 | Pause / resume                       |
-| R                   | Restart                              |
-| H                   | Recover the car                      |
-| M                   | Open / close the full map            |
-| Mouse wheel / + / - | Zoom the full map in / out           |
-| L                   | Return to location and car selection |
-| V                   | Toggle audio mute                    |
-
 ## Usage
 
 Run:
@@ -45,40 +28,7 @@ Subcommands:
 
 - DISABLE_TILE_PROCESSING=1 to disable satellite tile post-processing
 
-## GLB models of the cars
-
-Export static triangulated glTF 2.0 as `model.glb`: metres, Y up, +Z forward, one embedded
-buffer and opaque materials. Name parts `body`, `wheel_rl`, `wheel_rr`,
-`wheel_fl`, `wheel_fr`. Left/right wheels use negative/positive X.
-Wheel origins are axle mounts; wheels spin about X and steer about Y.
-
-Use vertex colours or solid PBR materials; textures, transparency, animation,
-skinning, morphs, sparse accessors and external buffers are unsupported.
-Material extras `{"carslop_material": [CODE, GLOSS]}` use gloss 0–1 and codes:
-0 fixed colour, 1 paint, 2 glass, 3 metal, 4 optical lens, 5 brake lens,
-6 reverse lens. Normals and winding must face outward.
-
-## Building models
-
-Reusable window, entrance, and balcony GLBs live in `data/buildings/`.
-`parts.json` selects the models and controls fitting, scaling, and placement.
-Location baking combines these parts with mapped building shells into
-`scene.pack`; play loads the baked geometry. See
-[architectural asset conventions](data/buildings/README.md) for editing and export
-instructions. Rebuild edited artwork with `cargo run -- bake-scene --location nicosia`.
-
-## Tests
-
-Run the suite with `cargo test`. Group API tests live in `src/<group>/tests.rs`.
-Targeted implementation tests live in `src/<group>/tests/<module>.rs`, attached
-to their owning module with `#[path]` so implementation details stay private.
-Settings tests use the group's single test file with the same ownership rule.
-Shared fixture builders belong in test support modules.
-
-Audio synthesis and spatialization, map projection, and OSM map translation have
-device-independent production interfaces used by both callers and tests.
-
-## Credits and distribution
+## Credits
 
 - **UI and sign font:** Noto Sans SemiBold and Bold, © 2018 The Noto Project Authors,
   from [Noto Fonts](https://github.com/notofonts/noto-fonts), under the
