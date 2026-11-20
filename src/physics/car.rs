@@ -237,7 +237,7 @@ fn solve_traction(
     let front_speed = longitudinal * cos + (lateral + vehicle.angular_velocity.yaw * a) * sin;
     let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
     let drivetrain = predict_powertrain(vehicle, throttle, driven_speed, seconds);
-    let torque_nm = vehicle.engine.torque_nm;
+    let torque_nm = vehicle.engine.out_torque;
     let drive = drivetrain.as_ref().map_or(0.0, |step| {
         physics::powertrain::road_force(
             step,
@@ -332,8 +332,8 @@ fn predict_powertrain(
     driven_speed: f32,
     seconds: f32,
 ) -> Option<physics::powertrain::Step> {
-    engine::update(&mut vehicle.engine, throttle);
-    powertrain::drivetrain_step(vehicle, vehicle.engine.torque_nm, seconds, driven_speed)
+    engine::update(&mut vehicle.engine, throttle, seconds);
+    powertrain::drivetrain_step(vehicle, seconds, driven_speed)
 }
 
 fn advance_body(
@@ -441,7 +441,7 @@ fn finish_drivetrain(
         vehicle.tires.driven_wheel_omega = driven_speed / spec.chassis.rolling_radius;
         0.0
     };
-    engine::advance(&mut vehicle.engine, crankshaft_impulse, seconds);
+    vehicle.engine.in_torque = crankshaft_impulse / seconds;
     tires::update_wheel_spin(vehicle, driven_speed);
 }
 

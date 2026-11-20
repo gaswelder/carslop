@@ -15,21 +15,29 @@ fn new(position: XYZ, heading: f32, spec: std::sync::Arc<model::car::CarSpec>) -
 
 // At full throttle, combustion produces positive net torque unless fuel is cut.
 fn fuel_is_cut(vehicle: &mut Vehicle) -> bool {
-    engine::update(&mut vehicle.engine, 1.0);
-    vehicle.engine.torque_nm <= 0.0
+    engine::update(&mut vehicle.engine, 1.0, 0.0);
+    vehicle.engine.out_torque <= 0.0
 }
 
 fn latch_fuel_cut(vehicle: &mut Vehicle) {
     let rpm = vehicle.engine.rpm;
     vehicle.engine.rpm = vehicle.spec.engine.redline_rpm;
-    engine::update(&mut vehicle.engine, 1.0);
-    engine::advance(&mut vehicle.engine, 0.0, 0.0);
+    vehicle.engine.in_torque = 0.0;
+    engine::update(&mut vehicle.engine, 1.0, 0.0);
     vehicle.engine.rpm = rpm;
 }
 
 // Set road speed for a target coupled RPM without exposing engine internals.
 fn speed_at_rpm(spec: &model::car::CarSpec, rpm: f32, gear: u8) -> f32 {
     rpm / physics::powertrain::coupled_rpm(spec, 1.0, gear)
+}
+
+// The clutch reaction is pending until the next engine update. Account for
+// that angular impulse when comparing the two sides of a locked clutch.
+fn rpm_with_pending_feedback(vehicle: &Vehicle, dt: f32) -> f32 {
+    vehicle.engine.rpm
+        + vehicle.engine.in_torque / vehicle.spec.engine.inertia_kg_m2 * dt * 60.0
+            / std::f32::consts::TAU
 }
 
 fn set_longitudinal_speed(vehicle: &mut Vehicle, speed: f32) {
@@ -383,8 +391,8 @@ fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
             );
             assert_eq!(car.velocity, velocity);
             assert_eq!(car.orientation.yaw, heading);
-            engine::update(&mut car.engine, 1.0);
-            assert!(car.engine.torque_nm > 0.0);
+            engine::update(&mut car.engine, 1.0, 0.0);
+            assert!(car.engine.out_torque > 0.0);
             for _ in 0..240 * 8 {
                 treadmill_tick(
                     &mut car,
@@ -1551,8 +1559,8 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
                 * physics::powertrain::coupled_rpm(&model, 1.0, 1)
                 * model.chassis.rolling_radius;
             assert!(
-                (car.engine.rpm - shaft_rpm).abs() < 1.0,
-                "{model:?}: clutch lock must determine crankshaft RPM"
+                (rpm_with_pending_feedback(&car, PHYSICS_DT) - shaft_rpm).abs() < 1.0,
+                "{model:?}: clutch feedback must match crankshaft and shaft RPM"
             );
         }
     }
@@ -1582,9 +1590,7 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
         car.engine.rpm < before,
         "engine coasts while the clutch is open"
     );
-    assert!(
-        powertrain::drivetrain_step(&(car), 1.0, 1.0 / 240.0, longitudinal_speed(&car)).is_none()
-    );
+    assert!(powertrain::drivetrain_step(&(car), 1.0 / 240.0, longitudinal_speed(&car)).is_none());
     for _ in 0..240 {
         treadmill_tick(
             &mut car,
@@ -1595,7 +1601,7 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
         );
     }
     assert!(
-        (car.engine.rpm
+        (rpm_with_pending_feedback(&car, PHYSICS_DT)
             - physics::powertrain::coupled_rpm(
                 &car.spec,
                 longitudinal_speed(&car),
@@ -1706,7 +1712,7 @@ fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
             longitudinal_speed(&car).abs() < 0.01,
             "neutral must not propel the car"
         );
-        assert!(powertrain::drivetrain_step(&(car), 1.0, 1.0 / 240.0, 0.0).is_none());
+        assert!(powertrain::drivetrain_step(&(car), 1.0 / 240.0, 0.0).is_none());
         assert_eq!(car.engine.turbo_boost, 0.0);
     }
 }
@@ -1742,8 +1748,8 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             ] {
                 car.engine.rpm = rpm;
                 set_longitudinal_speed(&mut car, speed_at_rpm(&model, rpm, gear));
-                engine::update(&mut car.engine, pedal.throttle);
-                engine::advance(&mut car.engine, 0.0, 0.0);
+                car.engine.in_torque = 0.0;
+                engine::update(&mut car.engine, pedal.throttle, 0.0);
                 assert_eq!(
                     fuel_is_cut(&mut car),
                     cut,
@@ -1755,8 +1761,8 @@ fn fuel_limiter_uses_the_same_thresholds_in_neutral_forward_and_reverse() {
             car.engine.rpm = car.spec.engine.redline_rpm;
             let speed = speed_at_rpm(&model, car.spec.engine.redline_rpm + 1.0, gear);
             set_longitudinal_speed(&mut car, speed);
-            engine::update(&mut car.engine, pedal.throttle);
-            engine::advance(&mut car.engine, 0.0, 0.01);
+            car.engine.in_torque = 0.0;
+            engine::update(&mut car.engine, pedal.throttle, 0.01);
             assert!(car.engine.load < 1.0, "fuel cut must reach engine audio");
         }
     }
@@ -1794,8 +1800,8 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
         car.engine.rpm = car.spec.engine.redline_rpm - 100.0;
         driver::shift(&mut car, gear == REVERSE_GEAR);
         assert_eq!(car.gearbox.gear, NEUTRAL_GEAR);
-        engine::update(&mut car.engine, 0.0);
-        engine::advance(&mut car.engine, 0.0, 0.0);
+        car.engine.in_torque = 0.0;
+        engine::update(&mut car.engine, 0.0, 0.0);
         assert!(
             fuel_is_cut(&mut car),
             "shifting must not reset limiter hysteresis"
@@ -1821,8 +1827,8 @@ fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
             ..Controls::default()
         };
         for _ in 0..600 {
-            engine::update(&mut car.engine, pedal.throttle);
-            engine::advance(&mut car.engine, 0.0, 1.0 / 60.0);
+            car.engine.in_torque = 0.0;
+            engine::update(&mut car.engine, pedal.throttle, 1.0 / 60.0);
         }
         let stationary = car.engine.rpm;
         assert!(stationary > engine::IDLE_RPM && stationary < model.engine.redline_rpm);
@@ -1835,16 +1841,16 @@ fn neutral_partial_throttle_balances_drag_independently_of_road_speed() {
         rolling.engine.rpm = stationary;
         set_longitudinal_speed(&mut rolling, 30.0);
         for _ in 0..120 {
-            engine::update(&mut car.engine, pedal.throttle);
-            engine::advance(&mut car.engine, 0.0, 1.0 / 60.0);
-            engine::update(&mut rolling.engine, pedal.throttle);
-            engine::advance(&mut rolling.engine, 0.0, 1.0 / 60.0);
+            car.engine.in_torque = 0.0;
+            engine::update(&mut car.engine, pedal.throttle, 1.0 / 60.0);
+            rolling.engine.in_torque = 0.0;
+            engine::update(&mut rolling.engine, pedal.throttle, 1.0 / 60.0);
             assert_eq!(car.engine.rpm, rolling.engine.rpm);
         }
         car.gearbox.gear = 1;
         latch_fuel_cut(&mut car);
-        engine::update(&mut car.engine, pedal.throttle);
-        engine::advance(&mut car.engine, 0.0, 1.0 / 60.0);
+        car.engine.in_torque = 0.0;
+        engine::update(&mut car.engine, pedal.throttle, 1.0 / 60.0);
         assert!(
             !fuel_is_cut(&mut car),
             "RPM below the recovery threshold clears the limiter"

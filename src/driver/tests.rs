@@ -70,10 +70,10 @@ fn forward_downshift_blips_the_actual_throttle_with_the_player_pedal_released() 
         0.01,
     );
     assert!(pedals.throttle > 0.0);
-    engine::update(&mut vehicle.engine, pedals.throttle);
-    assert!(vehicle.engine.torque_nm > 0.0);
-    engine::update(&mut vehicle.engine, 0.0);
-    assert!(vehicle.engine.torque_nm < 0.0);
+    engine::update(&mut vehicle.engine, pedals.throttle, 0.0);
+    assert!(vehicle.engine.out_torque > 0.0);
+    engine::update(&mut vehicle.engine, 0.0, 0.0);
+    assert!(vehicle.engine.out_torque < 0.0);
 }
 
 #[test]

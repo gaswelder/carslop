@@ -21,8 +21,7 @@ pub struct Rotation {
 }
 
 pub struct Step {
-    /// Free crankshaft speed predicted before solving the clutch reaction.
-    /// The engine applies its torque and the solved reaction in its update.
+    /// Current crankshaft speed after the engine update.
     pub engine_omega: f32,
     pub wheel_omega: f32,
     pub engine_inertia: f32,
@@ -51,12 +50,7 @@ pub fn coupled_rpm(car_spec: &model::car::CarSpec, speed: f32, gear: u8) -> f32 
         * gearbox.final_drive
 }
 
-pub fn drivetrain_step(
-    vehicle: &car::Vehicle,
-    torque_nm: f32,
-    dt: f32,
-    speed: f32,
-) -> Option<Step> {
+pub fn drivetrain_step(vehicle: &car::Vehicle, dt: f32, speed: f32) -> Option<Step> {
     if vehicle.gearbox.gear == NEUTRAL_GEAR || driver::is_shifting(&vehicle.driver) {
         return None;
     }
@@ -80,8 +74,7 @@ pub fn drivetrain_step(
         1.0
     };
     Some(Step {
-        engine_omega: vehicle.engine.rpm * std::f32::consts::TAU / 60.0
-            + torque_nm / spec.engine.inertia_kg_m2 * dt,
+        engine_omega: vehicle.engine.rpm * std::f32::consts::TAU / 60.0,
         wheel_omega: vehicle.tires.driven_wheel_omega * direction,
         engine_inertia: spec.engine.inertia_kg_m2,
         wheel_inertia: 2.4,
