@@ -53,11 +53,18 @@ pub struct Input {
 
 /// Sample environmental and chassis outputs without modifying either component.
 pub fn sample(vehicle: &car::Vehicle) -> Input {
+    // CG drag slows the car without the pitching moment of a tire force.
+    // Remove only its measured contribution, preserving rolling resistance,
+    // tire braking, and collision impulses in load transfer.
+    let aerodynamic = vehicle.chassis.out_aerodynamic_acceleration;
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
     Input {
         height: vehicle.chassis.position.y,
         vertical_speed: vehicle.chassis.velocity.y,
-        longitudinal_acceleration: car::longitudinal_acceleration(vehicle),
-        lateral_acceleration: car::lateral_acceleration(vehicle),
+        longitudinal_acceleration: car::longitudinal_acceleration(vehicle)
+            - (aerodynamic.x * sin + aerodynamic.z * cos),
+        lateral_acceleration: car::lateral_acceleration(vehicle)
+            - (aerodynamic.x * cos - aerodynamic.z * sin),
         ground_height: ride_height(vehicle),
         ground_angles: ground_angles(vehicle),
         orientation: vehicle.chassis.orientation,

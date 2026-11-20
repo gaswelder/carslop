@@ -31,6 +31,8 @@ pub struct State {
     pub in_torque: Orientation,
     /// Applied rolling and aerodynamic resistance, in N.
     pub out_resistance: f32,
+    /// World-space acceleration from drag acting through the center of mass.
+    pub out_aerodynamic_acceleration: XYZ,
 }
 
 pub fn new(position: XYZ, heading: f32) -> State {
@@ -46,6 +48,7 @@ pub fn new(position: XYZ, heading: f32) -> State {
         in_force: XYZ::default(),
         in_torque: Orientation::default(),
         out_resistance: 0.0,
+        out_aerodynamic_acceleration: XYZ::default(),
     }
 }
 
@@ -68,6 +71,15 @@ pub fn update(state: &mut State, spec: &model::car::CarSpec, dt: f32) {
         (longitudinal - new_longitudinal).abs() * spec.weight_kg / dt
     } else {
         0.0
+    };
+    // Partition the resistance actually applied, including the stop-at-zero
+    // limit. Rolling resistance acts at the road; aerodynamic drag acts at CG.
+    let aerodynamic_share = aerodynamic_drag(spec, speed) / resistance_force(spec, speed);
+    let aerodynamic_acceleration = (new_longitudinal - longitudinal) / dt * aerodynamic_share;
+    state.out_aerodynamic_acceleration = XYZ {
+        x: sin * aerodynamic_acceleration,
+        y: 0.0,
+        z: cos * aerodynamic_acceleration,
     };
     state.velocity.x = sin * new_longitudinal + cos * lateral;
     state.velocity.z = cos * new_longitudinal - sin * lateral;
@@ -217,9 +229,11 @@ fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
 }
 
 fn resistance_force(spec: &model::car::CarSpec, speed: f32) -> f32 {
-    let drag =
-        0.5 * AIR_DENSITY_KG_M3 * spec.drag_coefficient * spec.frontal_area_m2 * speed * speed;
-    0.25 * spec.weight_kg + drag
+    0.25 * spec.weight_kg + aerodynamic_drag(spec, speed)
+}
+
+fn aerodynamic_drag(spec: &model::car::CarSpec, speed: f32) -> f32 {
+    0.5 * AIR_DENSITY_KG_M3 * spec.drag_coefficient * spec.frontal_area_m2 * speed * speed
 }
 
 #[cfg(test)]

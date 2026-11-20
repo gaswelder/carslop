@@ -93,6 +93,46 @@ fn set_longitudinal_speed(vehicle: &mut car::Vehicle, speed: f32) {
     vehicle.chassis.velocity.z = cos * speed;
 }
 
+#[test]
+fn cg_drag_does_not_transfer_load_but_ground_braking_does() {
+    for direction in [-1.0, 1.0] {
+        for drag_coefficient in [0.0, 2.0] {
+            for braking_acceleration in [0.0, 4.0] {
+                let mut vehicle = vehicle();
+                let mut spec = (*vehicle.spec).clone();
+                spec.drag_coefficient = drag_coefficient;
+                vehicle.spec = std::sync::Arc::new(spec);
+                set_longitudinal_speed(&mut vehicle, direction * 45.0);
+                let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
+                let braking_force = -direction * braking_acceleration * vehicle.spec.weight_kg;
+                vehicle.chassis.in_force = XYZ {
+                    x: sin * braking_force,
+                    y: 0.0,
+                    z: cos * braking_force,
+                };
+                let previous_velocity = vehicle.chassis.velocity;
+                let dt = 0.05;
+                chassis::update(&mut vehicle.chassis, &vehicle.spec, dt);
+                chassis::measure_acceleration(&mut vehicle.chassis, previous_velocity, dt);
+                let motion = sample(&vehicle);
+                // Rolling resistance contributes 0.25 m/s² at road level.
+                let expected_acceleration = -direction * (braking_acceleration + 0.25);
+                assert!((motion.longitudinal_acceleration - expected_acceleration).abs() < 0.0002);
+                assert!(motion.lateral_acceleration.abs() < 0.0002);
+                vehicle.suspension.in_motion = motion;
+                update(&mut vehicle.suspension, &vehicle.spec, dt);
+                let total = vehicle.suspension.out_force;
+                let expected_front = total * vehicle.spec.center_of_mass.longitudinal_fraction
+                    - vehicle.spec.weight_kg
+                        * expected_acceleration
+                        * model::car::center_of_mass_height_m(&vehicle.spec)
+                        / vehicle.spec.chassis.wheelbase;
+                assert!((vehicle.suspension.axle_load.front - expected_front).abs() < 0.1);
+            }
+        }
+    }
+}
+
 fn set_longitudinal_acceleration(vehicle: &mut car::Vehicle, acceleration: f32) {
     let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
     vehicle.chassis.acceleration = XYZ {
