@@ -46,9 +46,9 @@ pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
     }
     let centers = car.spec.design.mounts;
     let contacts: [(XYZ, bool); 2] = [centers[0], centers[1]].map(|p| {
-        let (s, c) = car.orientation.yaw.sin_cos();
-        let x = car.position.x + p.x * c + p.z * s;
-        let z = car.position.z - p.x * s + p.z * c;
+        let (s, c) = car.chassis.orientation.yaw.sin_cos();
+        let x = car.chassis.position.x + p.x * c + p.z * s;
+        let z = car.chassis.position.z - p.x * s + p.z * c;
         let road = world::roads::project(&car.track, XYZ { x, y: 0.0, z });
         (
             XYZ {
@@ -56,7 +56,7 @@ pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
                 y: world::transport::drive_height_near(
                     &car.track,
                     XZ { x, z },
-                    car.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                    car.chassis.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
                 ) + 0.078,
                 z,
             },
@@ -66,7 +66,7 @@ pub fn record(skid_marks: &mut SkidMarks, index: usize, car: &Vehicle) {
                     city,
                     XYZ {
                         x,
-                        y: car.position.y,
+                        y: car.chassis.position.y,
                         z,
                     },
                 )

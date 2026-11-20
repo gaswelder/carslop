@@ -86,21 +86,21 @@ pub fn reset_car(tire_particles: &mut TireParticles, owner: usize) {
 
 pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, dt: Duration) {
     let dt = dt.as_secs_f32().min(0.1);
-    let motion = car.velocity.x.hypot(car.velocity.z);
+    let motion = car.chassis.velocity.x.hypot(car.chassis.velocity.z);
     let emitter = &mut tire_particles.emitters[owner];
     let jumped = emitter
         .previous
-        .is_some_and(|p| (p.x - car.position.x).hypot(p.z - car.position.z) > 4.0);
-    emitter.previous = Some(car.position);
+        .is_some_and(|p| (p.x - car.chassis.position.x).hypot(p.z - car.chassis.position.z) > 4.0);
+    emitter.previous = Some(car.chassis.position);
     if jumped || (motion < 3.0 && car.tires.wheel_spin < 0.15) {
         emitter.credit = [0.0; 2];
         return;
     }
     let centers = car.spec.design.mounts;
-    let (s, c) = car.orientation.yaw.sin_cos();
+    let (s, c) = car.chassis.orientation.yaw.sin_cos();
     for (wheel, center) in centers[..2].iter().enumerate() {
-        let x = car.position.x + center.x * c + center.z * s;
-        let z = car.position.z - center.x * s + center.z * c;
+        let x = car.chassis.position.x + center.x * c + center.z * s;
+        let z = car.chassis.position.z - center.x * s + center.z * c;
         let road = world::roads::project(&car.track, XYZ { x, y: 0.0, z });
         let dusty = if world::street_surface::has_compiled_roads(&car.track) {
             let city = &car.track;
@@ -108,7 +108,7 @@ pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, d
                 city,
                 XYZ {
                     x,
-                    y: car.position.y,
+                    y: car.chassis.position.y,
                     z,
                 },
             )
@@ -146,14 +146,14 @@ pub fn record(tire_particles: &mut TireParticles, owner: usize, car: &Vehicle, d
                     y: world::transport::drive_height_near(
                         &car.track,
                         XZ { x, z },
-                        car.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+                        car.chassis.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
                     ) + 0.18,
                     z,
                 },
                 velocity: XYZ {
-                    x: car.velocity.x * 0.08 - s * 0.35 + jitter * 0.2,
+                    x: car.chassis.velocity.x * 0.08 - s * 0.35 + jitter * 0.2,
                     y: if smoke { 0.48 } else { 0.30 },
-                    z: car.velocity.z * 0.08 - c * 0.35 - jitter * 0.2,
+                    z: car.chassis.velocity.z * 0.08 - c * 0.35 - jitter * 0.2,
                 },
                 age: 0.0,
                 lifetime: if smoke { 1.1 } else { 0.75 },

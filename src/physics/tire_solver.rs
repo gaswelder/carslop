@@ -60,6 +60,7 @@ pub struct Impulse {
     pub lateral: f32,
 }
 
+#[derive(Clone, Copy, Default)]
 pub struct Contact {
     pub offset: f32,
     pub sin: f32,

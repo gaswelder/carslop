@@ -17,10 +17,10 @@ pub struct ContactShadow {
 pub fn new(car: &Vehicle) -> ContactShadow {
     let wheel = car.spec.design.mounts[0];
     ContactShadow {
-        origin: car.position,
+        origin: car.chassis.position,
         axes: [
-            car.orientation.yaw.sin(),
-            car.orientation.yaw.cos(),
+            car.chassis.orientation.yaw.sin(),
+            car.chassis.orientation.yaw.cos(),
             wheel.x.abs() + 0.45,
             car.spec.chassis.wheelbase * 0.5 + 1.05,
         ],

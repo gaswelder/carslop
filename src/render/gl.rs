@@ -1288,10 +1288,10 @@ fn camera_at_up(aspect: f32, eye: XYZ, target: XYZ, horizontal_shift: f32, up_ax
 /// Body transform shared by rendering and the bonnet camera mount.
 pub fn vehicle_body_matrix(vehicle: &physics::car::Vehicle) -> [f32; 16] {
     body_model_matrix(
-        vehicle.position,
-        vehicle.orientation.yaw,
-        vehicle.suspension.pitch + vehicle.orientation.pitch,
-        vehicle.suspension.roll + vehicle.orientation.roll,
+        vehicle.chassis.position,
+        vehicle.chassis.orientation.yaw,
+        vehicle.suspension.pitch + vehicle.chassis.orientation.pitch,
+        vehicle.suspension.roll + vehicle.chassis.orientation.roll,
     )
 }
 
@@ -1362,7 +1362,7 @@ fn vehicle_wheel_local_matrix(
     let ground = world::transport::drive_height_near(
         &car.track,
         util::geometry::xz(mounted),
-        car.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+        car.chassis.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
     );
     let radius = car.spec.design.wheel_radii[index];
     // Bounded compression/droop keeps tires following bumps while the body
@@ -1381,7 +1381,7 @@ fn vehicle_wheel_local_matrix(
         ),
         center,
         if front { car.steering.angle } else { 0.0 },
-        car.tires.wheel_phase[usize::from(front)],
+        car.wheels.phase[usize::from(front)],
     )
 }
 

@@ -90,8 +90,8 @@ pub fn new(car: &car::Vehicle) -> ChaseCamera {
     let mut camera = ChaseCamera {
         track: car.track.clone(),
         view: FollowView::Close,
-        anchor: car.position,
-        heading: car.orientation.yaw,
+        anchor: car.chassis.position,
+        heading: car.chassis.orientation.yaw,
         look_ahead: XYZ {
             x: 0.0,
             y: 0.0,
@@ -124,8 +124,8 @@ pub fn toggle_view(chase_camera: &mut ChaseCamera) {
 pub fn snap(chase_camera: &mut ChaseCamera, car: &car::Vehicle) {
     chase_camera.bonnet = bonnet_pose(car);
     chase_camera.track = car.track.clone();
-    chase_camera.anchor = car.position;
-    chase_camera.heading = car.orientation.yaw.rem_euclid(TAU);
+    chase_camera.anchor = car.chassis.position;
+    chase_camera.heading = car.chassis.orientation.yaw.rem_euclid(TAU);
     chase_camera.look_ahead = desired_look(car);
     if let Some(dimensions) = chase_dimensions(chase_camera.view) {
         chase_camera.distance = dimensions.distance;
@@ -141,20 +141,21 @@ pub fn update(chase_camera: &mut ChaseCamera, car: &car::Vehicle, frame_time: Du
     let dt = frame_time.as_secs_f32().min(0.25);
     chase_camera.bonnet = bonnet_pose(car);
     if dt > 0.0 {
-        chase_camera.anchor = car.position;
+        chase_camera.anchor = car.chassis.position;
     }
 
     // A little velocity alignment stabilizes slides without swinging away
     // from the nose or forcing the camera to follow the route instead.
-    let motion = car.velocity.x.hypot(car.velocity.z);
+    let motion = car.chassis.velocity.x.hypot(car.chassis.velocity.z);
     let drift = if motion > 1.0 {
-        angle(car.velocity.x.atan2(car.velocity.z) - car.orientation.yaw).clamp(-0.35, 0.35)
+        angle(car.chassis.velocity.x.atan2(car.chassis.velocity.z) - car.chassis.orientation.yaw)
+            .clamp(-0.35, 0.35)
             * (car::longitudinal_speed(car).max(0.0) / 12.0).clamp(0.0, 1.0)
             * 0.25
     } else {
         0.0
     };
-    let heading = car.orientation.yaw + drift;
+    let heading = car.chassis.orientation.yaw + drift;
     chase_camera.heading = (chase_camera.heading
         + angle(heading - chase_camera.heading) * damp(7.0, dt))
     .rem_euclid(TAU);
@@ -236,8 +237,8 @@ fn desired_look(car: &car::Vehicle) -> XYZ {
     // Look a little along actual reverse travel without flipping the chase rig.
     let direction = if speed < 0.0 { -1.0 } else { 1.0 };
     let forward = XZ {
-        x: car.orientation.yaw.sin() * direction,
-        z: car.orientation.yaw.cos() * direction,
+        x: car.chassis.orientation.yaw.sin() * direction,
+        z: car.chassis.orientation.yaw.cos() * direction,
     };
     XYZ {
         x: forward.x * distance,

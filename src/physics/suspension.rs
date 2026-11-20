@@ -1,6 +1,7 @@
 //! Chassis support, load transfer, and sprung body motion.
 
 use super::car;
+use super::chassis;
 use crate::model;
 use crate::physics;
 use crate::util;
@@ -18,6 +19,10 @@ pub struct AxleLoad {
 /// Terrain-following suspension motion and supported axle loads.
 #[derive(Default)]
 pub struct State {
+    pub in_motion: Input,
+    pub out_force: f32,
+    pub out_torque: chassis::Orientation,
+    pub out_height: Option<f32>,
     pub pitch: f32,
     pub roll: f32,
     pub axle_load: AxleLoad,
@@ -34,62 +39,102 @@ struct LocalAcceleration {
     lateral: f32,
 }
 
-pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
-    let spec = &vehicle.spec;
-    // Suspension supports the chassis rather than pinning it to terrain.
-    // At a crest its contact force can drop to zero; gravity then governs
-    // flight until the spring compresses again on landing.
-    let ground = ride_height(vehicle);
-    if !vehicle.suspension.initialized {
-        vehicle.position.y = ground;
-        vehicle.suspension.initialized = true;
+#[derive(Default)]
+pub struct Input {
+    pub height: f32,
+    pub vertical_speed: f32,
+    pub longitudinal_acceleration: f32,
+    pub lateral_acceleration: f32,
+    pub ground_height: f32,
+    pub ground_angles: GroundAngles,
+    pub orientation: chassis::Orientation,
+    pub angular_velocity: chassis::Orientation,
+}
+
+/// Sample environmental and chassis outputs without modifying either component.
+pub fn sample(vehicle: &car::Vehicle) -> Input {
+    Input {
+        height: vehicle.chassis.position.y,
+        vertical_speed: vehicle.chassis.velocity.y,
+        longitudinal_acceleration: car::longitudinal_acceleration(vehicle),
+        lateral_acceleration: car::lateral_acceleration(vehicle),
+        ground_height: ride_height(vehicle),
+        ground_angles: ground_angles(vehicle),
+        orientation: vehicle.chassis.orientation,
+        angular_velocity: vehicle.chassis.angular_velocity,
     }
+}
+
+/// Publish support force, body torques, and axle loads from the sampled motion.
+pub fn update(state: &mut State, spec: &model::car::CarSpec, dt: f32) {
+    let ground = state.in_motion.ground_height;
+    state.out_height = if state.initialized {
+        None
+    } else {
+        Some(ground)
+    };
+    let height = if state.initialized {
+        state.in_motion.height
+    } else {
+        ground
+    };
+    state.initialized = true;
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();
-    let support = (9.81 + omega_squared * (ground - vehicle.position.y)
-        - 1.3 * omega * vehicle.velocity.y)
+    let support = (9.81 + omega_squared * (ground - height)
+        - 1.3 * omega * state.in_motion.vertical_speed)
         .clamp(0.0, 49.05);
-    vehicle.acceleration.y = support - 9.81;
-    vehicle.velocity.y += vehicle.acceleration.y * seconds;
-    vehicle.position.y += vehicle.velocity.y * seconds;
+    state.out_force = spec.weight_kg * support;
     let transfer = spec.weight_kg
-        * car::longitudinal_acceleration(vehicle)
+        * state.in_motion.longitudinal_acceleration
         * model::car::center_of_mass_height_m(spec)
         / spec.chassis.wheelbase;
-    let total_load = spec.weight_kg * support;
-    let front_load =
-        (total_load * spec.center_of_mass.longitudinal_fraction - transfer).clamp(0.0, total_load);
-    vehicle.suspension.axle_load = AxleLoad {
-        front: front_load,
-        rear: total_load - front_load,
+    let front = (state.out_force * spec.center_of_mass.longitudinal_fraction - transfer)
+        .clamp(0.0, state.out_force);
+    state.axle_load = AxleLoad {
+        front,
+        rear: state.out_force - front,
     };
+    update_body_motion(state, spec, dt);
 }
 
 pub fn ride_height(vehicle: &car::Vehicle) -> f32 {
+    surface_height(
+        &vehicle.spec,
+        &vehicle.track,
+        vehicle.chassis.position,
+        vehicle.chassis.orientation.yaw,
+    )
+}
+
+pub fn surface_height(
+    spec: &model::car::CarSpec,
+    track: &world::locations::WorldLocation,
+    position: XYZ,
+    yaw: f32,
+) -> f32 {
     let height = |p| {
         world::transport::drive_height_near(
-            &vehicle.track,
+            track,
             p,
-            vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+            position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
         ) + physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT
     };
-    if !world::street_surface::has_compiled_roads(&vehicle.track) {
-        return height(util::geometry::xz(vehicle.position));
+    if !world::street_surface::has_compiled_roads(track) {
+        return height(util::geometry::xz(position));
     }
     (0..4)
-        .map(|index| {
-            height(wheel_position(
-                vehicle,
-                vehicle.position,
-                vehicle.orientation.yaw,
-                index,
-            )) * wheel_share(vehicle, index)
-        })
+        .map(|index| height(wheel_position(spec, position, yaw, index)) * wheel_share(spec, index))
         .sum()
 }
 
-pub fn wheel_position(vehicle: &car::Vehicle, position: XYZ, yaw: f32, index: usize) -> XZ<f32> {
-    let mount = vehicle.spec.design.mounts[index];
+pub fn wheel_position(
+    spec: &model::car::CarSpec,
+    position: XYZ,
+    yaw: f32,
+    index: usize,
+) -> XZ<f32> {
+    let mount = spec.design.mounts[index];
     let (sin, cos) = yaw.sin_cos();
     XZ {
         x: position.x + mount.x * cos + mount.z * sin,
@@ -97,8 +142,8 @@ pub fn wheel_position(vehicle: &car::Vehicle, position: XYZ, yaw: f32, index: us
     }
 }
 
-pub fn wheel_share(vehicle: &car::Vehicle, index: usize) -> f32 {
-    let front = vehicle.spec.center_of_mass.longitudinal_fraction;
+pub fn wheel_share(spec: &model::car::CarSpec, index: usize) -> f32 {
+    let front = spec.center_of_mass.longitudinal_fraction;
     if index >= 2 {
         front * 0.5
     } else {
@@ -106,23 +151,24 @@ pub fn wheel_share(vehicle: &car::Vehicle, index: usize) -> f32 {
     }
 }
 
+#[derive(Default)]
 pub struct GroundAngles {
     pub pitch: f32,
     pub roll: f32,
 }
 
 pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
     let h = |dx: f32, dz: f32| {
         let p = XYZ {
-            x: vehicle.position.x + dx,
-            y: vehicle.position.y,
-            z: vehicle.position.z + dz,
+            x: vehicle.chassis.position.x + dx,
+            y: vehicle.chassis.position.y,
+            z: vehicle.chassis.position.z + dz,
         };
         world::transport::drive_height_near(
             &vehicle.track,
             util::geometry::xz(p),
-            vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
+            vehicle.chassis.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT,
         )
     };
     let length = vehicle.spec.chassis.wheelbase;
@@ -141,50 +187,49 @@ pub fn ground_angles(vehicle: &car::Vehicle) -> GroundAngles {
     }
 }
 
-pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
+fn update_body_motion(state: &mut State, spec: &model::car::CarSpec, dt: f32) {
     // This filter only steadies rendered pitch and roll; tire loads use raw acceleration.
     let blend = 1.0 - (-dt * 12.0).exp();
-    vehicle.suspension.visual_acceleration.longitudinal +=
-        (car::longitudinal_acceleration(vehicle)
-            - vehicle.suspension.visual_acceleration.longitudinal)
-            * blend;
-    vehicle.suspension.visual_acceleration.lateral += (car::lateral_acceleration(vehicle)
-        - vehicle.suspension.visual_acceleration.lateral)
+    state.visual_acceleration.longitudinal += (state.in_motion.longitudinal_acceleration
+        - state.visual_acceleration.longitudinal)
         * blend;
-    let spec = &vehicle.spec;
-    let target_pitch = (vehicle.suspension.visual_acceleration.longitudinal
-        * model::car::center_of_mass_height_m(spec)
-        / 80.0)
-        .clamp(-0.10, 0.10);
-    let target_roll = (vehicle.suspension.visual_acceleration.lateral
-        * model::car::center_of_mass_height_m(spec)
-        / 65.0)
-        .clamp(-0.12, 0.12);
+    state.visual_acceleration.lateral +=
+        (state.in_motion.lateral_acceleration - state.visual_acceleration.lateral) * blend;
+    let target_pitch =
+        (state.visual_acceleration.longitudinal * model::car::center_of_mass_height_m(spec) / 80.0)
+            .clamp(-0.10, 0.10);
+    let target_roll =
+        (state.visual_acceleration.lateral * model::car::center_of_mass_height_m(spec) / 65.0)
+            .clamp(-0.12, 0.12);
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();
-    vehicle.angular_velocity.pitch += (omega_squared * (target_pitch - vehicle.orientation.pitch)
-        - 1.4 * omega * vehicle.angular_velocity.pitch)
-        * dt;
-    vehicle.angular_velocity.roll += (omega_squared * (target_roll - vehicle.orientation.roll)
-        - 1.4 * omega * vehicle.angular_velocity.roll)
-        * dt;
-    vehicle.orientation.pitch += vehicle.angular_velocity.pitch * dt;
-    vehicle.orientation.roll += vehicle.angular_velocity.roll * dt;
+    state.out_torque = chassis::Orientation {
+        pitch: spec.weight_kg
+            * (omega_squared * (target_pitch - state.in_motion.orientation.pitch)
+                - 1.4 * omega * state.in_motion.angular_velocity.pitch),
+        roll: spec.weight_kg
+            * (omega_squared * (target_roll - state.in_motion.orientation.roll)
+                - 1.4 * omega * state.in_motion.angular_velocity.roll),
+        yaw: 0.0,
+    };
     // The sprung body follows terrain through damped angular springs.
     // Wheels follow the contact surface independently in the renderer.
-    let angles = if vehicle.suspension.axle_load.front + vehicle.suspension.axle_load.rear > 0.0 {
-        ground_angles(vehicle)
+    let angles = if state.axle_load.front + state.axle_load.rear > 0.0 {
+        GroundAngles {
+            pitch: state.in_motion.ground_angles.pitch,
+            roll: state.in_motion.ground_angles.roll,
+        }
     } else {
         GroundAngles {
-            pitch: vehicle.suspension.pitch,
-            roll: vehicle.suspension.roll,
+            pitch: state.pitch,
+            roll: state.roll,
         }
     };
     for (axis, target, angle) in [
-        (0, angles.pitch, &mut vehicle.suspension.pitch),
-        (1, angles.roll, &mut vehicle.suspension.roll),
+        (0, angles.pitch, &mut state.pitch),
+        (1, angles.roll, &mut state.roll),
     ] {
-        let rate = &mut vehicle.suspension.rates[axis];
+        let rate = &mut state.rates[axis];
         *rate += (omega_squared * (target - *angle) - 1.4 * omega * *rate) * dt;
         *angle += *rate * dt;
     }

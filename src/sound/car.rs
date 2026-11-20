@@ -69,7 +69,7 @@ pub fn update(
     }
     let voice = sound::synth::Voice {
         turbo_target: car.engine.turbo_spool,
-        road_speed: car.velocity.x.hypot(car.velocity.z),
+        road_speed: car.chassis.velocity.x.hypot(car.chassis.velocity.z),
         frequency: engine_frequency(car.engine.rpm),
         load: if throttle {
             car.engine.load.max(0.15)
@@ -81,7 +81,7 @@ pub fn update(
         sample_directory: car.spec.engine_sample_directory.as_deref(),
         enabled,
     };
-    let placement = sound::spatial::placement(car.position, listener);
+    let placement = sound::spatial::placement(car.chassis.position, listener);
     let samples: Vec<f32> = (0..count)
         .flat_map(|_| {
             let driving = sound::spatial::sample(
@@ -113,8 +113,8 @@ fn engine_frequency(rpm: f32) -> f32 {
 // Use the supporting deck before the ground beneath it, including on bridges.
 fn tire_material(car: &physics::car::Vehicle) -> Material {
     let location = &car.track;
-    let position = util::geometry::xz(car.position);
-    let reference = car.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+    let position = util::geometry::xz(car.chassis.position);
+    let reference = car.chassis.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
     if let Some(deck) = world::map_details::nearby_decks(&location.details, position).find(|deck| {
         world::map_details::height_on(deck, position)
             .is_some_and(|height| (height - reference).abs() < 1.5)

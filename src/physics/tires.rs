@@ -1,4 +1,4 @@
-//! Tire runtime state, wheel rotation, effects, and axle contacts.
+//! Tire contact forces, slip, and effects.
 
 use super::car;
 use super::car::Axle;
@@ -15,17 +15,64 @@ use crate::world;
 // grip reduces the entire friction circle, so lifting can unwind a slide.
 const FRONT_LIMIT_GRIP: f32 = 0.86;
 
-/// Runtime wheel rotation and tire effects.
+/// Tire force ports and visual feedback.
 #[derive(Default)]
 pub struct State {
     /// Effect intensity from zero to one for squeal, smoke, and skid marks.
     pub scrub: f32,
     /// Normalized driven wheel slip magnitude, from zero to one.
     pub wheel_spin: f32,
-    /// Cosmetic rear/front axle rotation angles, in radians.
-    pub wheel_phase: [f32; 2],
-    /// Signed driven wheel angular speed, in radians per second.
-    pub driven_wheel_omega: f32,
+    pub in_motion: physics::tire_solver::Motion,
+    pub in_free_motion: physics::tire_solver::Motion,
+    pub in_contacts: [physics::tire_solver::Contact; 2],
+    /// Contact force along/across the chassis axes, in N.
+    pub out_force: Force,
+    /// Contact yaw torque, in N m.
+    pub out_torque: f32,
+    /// Forces along/across each axle, in N.
+    pub out_axle_force: [Force; 2],
+    /// Motion predicted by the contact constraints, for clutch/ABS coupling.
+    pub out_contact_motion: physics::tire_solver::Motion,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Force {
+    pub longitudinal: f32,
+    pub lateral: f32,
+}
+
+/// Solve contact forces without modifying chassis or wheel motion.
+pub fn update(state: &mut State, spec: &model::car::CarSpec, dt: f32) {
+    if dt <= 0.0 {
+        state.out_force = Force::default();
+        state.out_torque = 0.0;
+        state.out_axle_force = [Force::default(); 2];
+        state.out_contact_motion = state.in_motion;
+        return;
+    }
+    let contacts = state.in_contacts;
+    let solved = physics::tire_solver::solve(
+        state.in_motion,
+        state.in_free_motion,
+        contacts,
+        spec.weight_kg,
+        spec.yaw_inertia_kg_m2,
+        dt,
+    );
+    state.out_contact_motion = solved.motion;
+    state.out_axle_force = solved.impulses.map(|impulse| Force {
+        longitudinal: impulse.longitudinal / dt,
+        lateral: impulse.lateral / dt,
+    });
+    state.out_force = Force::default();
+    state.out_torque = 0.0;
+    for (contact, force) in contacts.iter().zip(state.out_axle_force) {
+        let longitudinal = force.longitudinal * contact.cos - force.lateral * contact.sin;
+        let lateral = force.longitudinal * contact.sin + force.lateral * contact.cos;
+        state.out_force.longitudinal += longitudinal;
+        state.out_force.lateral += lateral;
+        state.out_torque += contact.offset * lateral;
+    }
 }
 
 pub struct AxleGeometry {
@@ -90,7 +137,7 @@ pub fn tire_capacity(vehicle: &car::Vehicle, axle: Axle) -> f32 {
     let imbalance = (2.0 * transfer / load.max(1.0)).clamp(0.0, 1.0);
 
     let loc = &vehicle.track;
-    let position = vehicle.position;
+    let position = vehicle.chassis.position;
 
     let reference = position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
     let deck =
@@ -162,7 +209,8 @@ fn tire_contact(
     } = axle_geometry(vehicle);
     let longitudinal = motion.longitudinal;
     let lateral = motion.lateral;
-    let front_speed = longitudinal * cos + (lateral + vehicle.angular_velocity.yaw * a) * sin;
+    let front_speed =
+        longitudinal * cos + (lateral + vehicle.chassis.angular_velocity.yaw * a) * sin;
     let brake = vehicle.brake_pressure * spec.chassis.brake_force_n;
     let drive_share = if axle == Axle::Front {
         drive_bias
@@ -175,7 +223,7 @@ fn tire_contact(
         longitudinal
     };
     let longitudinal_slip = if drive_share > 0.0 && drivetrain_engaged {
-        vehicle.tires.driven_wheel_omega * spec.chassis.rolling_radius - wheel_speed
+        vehicle.wheels.omega * spec.chassis.rolling_radius - wheel_speed
     } else {
         0.0
     };
@@ -211,7 +259,7 @@ pub fn update_feedback(vehicle: &mut car::Vehicle, lateral_speed: f32, handbrake
         vehicle.tires.scrub = 0.0;
         return;
     }
-    let motion = vehicle.velocity.x.hypot(vehicle.velocity.z);
+    let motion = vehicle.chassis.velocity.x.hypot(vehicle.chassis.velocity.z);
     let sliding = ((lateral_speed.abs() - 0.8) / 3.0).clamp(0.0, 1.0);
     let braking = if handbrake { 0.8 } else { 0.0 };
     vehicle.tires.scrub = (sliding.max(braking) * ((motion - 1.5) / 2.5).clamp(0.0, 1.0))
@@ -220,38 +268,8 @@ pub fn update_feedback(vehicle: &mut car::Vehicle, lateral_speed: f32, handbrake
 
 pub fn update_wheel_spin(vehicle: &mut car::Vehicle, driven_speed: f32) {
     let spec = &vehicle.spec;
-    let slip_speed = vehicle.tires.driven_wheel_omega * spec.chassis.rolling_radius - driven_speed;
+    let slip_speed = vehicle.wheels.omega * spec.chassis.rolling_radius - driven_speed;
     vehicle.tires.wheel_spin = (slip_speed.abs() / 8.0).clamp(0.0, 1.0);
-}
-
-pub fn update_wheel_rotation(
-    vehicle: &mut car::Vehicle,
-    longitudinal: f32,
-    handbrake: bool,
-    seconds: f32,
-) {
-    let spec = &vehicle.spec;
-    let spin = longitudinal * seconds / spec.chassis.rolling_radius;
-    let spin_slip =
-        (vehicle.tires.driven_wheel_omega - longitudinal / spec.chassis.rolling_radius) * seconds;
-    vehicle.tires.wheel_phase[1] = (vehicle.tires.wheel_phase[1]
-        + spin
-        + if spec.chassis.drive_bias > 0.0 {
-            spin_slip
-        } else {
-            0.0
-        })
-    .rem_euclid(std::f32::consts::TAU);
-    if !handbrake {
-        vehicle.tires.wheel_phase[0] = (vehicle.tires.wheel_phase[0]
-            + spin
-            + if spec.chassis.drive_bias < 1.0 {
-                spin_slip
-            } else {
-                0.0
-            })
-        .rem_euclid(std::f32::consts::TAU);
-    }
 }
 
 #[cfg(test)]

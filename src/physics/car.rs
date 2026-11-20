@@ -1,9 +1,10 @@
+use super::chassis;
 use super::engine;
 use super::powertrain;
 use super::steering;
 use super::suspension;
 use super::tires;
-use crate::asset;
+use super::wheels;
 use crate::driver;
 use crate::model;
 use crate::physics;
@@ -16,22 +17,12 @@ use std::time::Duration;
 /// Maximum physics substep duration, in seconds.
 const PHYSICS_DT: f32 = 1.0 / 240.0;
 
-const AIR_DENSITY_KG_M3: f32 = 1.225;
-
 #[derive(Clone, Copy, Default)]
 pub struct Controls {
     pub throttle: f32,
     pub brake: f32,
     pub steering: f32,
     pub handbrake: bool,
-}
-
-/// Pitch, roll, and yaw components of orientation or its rate of change.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Orientation {
-    pub pitch: f32,
-    pub roll: f32,
-    pub yaw: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,22 +35,14 @@ pub struct Vehicle {
     pub spec: std::sync::Arc<model::car::CarSpec>,
     pub track: std::sync::Arc<world::locations::WorldLocation>,
     //
-    pub position: XYZ,
-    /// World-space velocity in metres per second.
-    pub velocity: XYZ,
-    /// World-space velocity change over the last physics substep, in m/s².
-    pub acceleration: XYZ,
-    /// Angles in radians. Pitch and roll are lean relative to the terrain-following
-    /// suspension; yaw is the heading in world space.
-    pub orientation: Orientation,
-    /// Time derivatives of the orientation components, in radians per second.
-    pub angular_velocity: Orientation,
+    pub chassis: chassis::State,
     //
     pub brake_lights: bool,
     pub brake_pressure: f32,
     pub engine: engine::State,
     pub suspension: suspension::State,
     pub tires: tires::State,
+    pub wheels: wheels::State,
     pub steering: steering::State,
     pub gearbox: powertrain::State,
     pub driver: driver::State,
@@ -86,23 +69,17 @@ pub fn on_track(
 ) -> Vehicle {
     let engine = engine::new(&spec.engine);
     let mut car = Vehicle {
-        spec,
+        spec: spec.clone(),
         track,
-        position,
-        velocity: XYZ::default(),
-        acceleration: XYZ::default(),
-        orientation: Orientation {
-            yaw: heading,
-            ..Orientation::default()
-        },
-        angular_velocity: Orientation::default(),
+        chassis: chassis::new(position, heading),
         engine,
         suspension: suspension::State::default(),
         brake_pressure: 0.0,
         steering: steering::State::default(),
         tires: tires::State::default(),
+        wheels: wheels::new(),
         brake_lights: false,
-        gearbox: powertrain::State { gear: 1 },
+        gearbox: powertrain::new(&spec),
         driver: driver::new(driver::Assistance {
             lift_on_shift: true,
             rev_matching: true,
@@ -148,18 +125,23 @@ pub fn update(vehicle: &mut Vehicle, dt: Duration, controls: Controls) -> f32 {
 }
 
 fn update_substep(vehicle: &mut Vehicle, controls: Controls, dt: f32) -> f32 {
-    let previous_velocity = vehicle.velocity;
+    let previous_velocity = vehicle.chassis.velocity;
     let controls = update_inputs(vehicle, controls, dt);
     let frame = motion_frame(vehicle);
 
-    suspension::update_suspension(vehicle, dt);
-    let traction = solve_traction(vehicle, controls, &frame, dt);
-    apply_chassis_motion(vehicle, &frame, traction, dt);
-    // Body lean follows this step's actual acceleration before contacts resolve.
-    update_acceleration(vehicle, previous_velocity, dt);
-    let impact = advance_body(vehicle, controls, &frame, dt);
+    vehicle.suspension.in_motion = suspension::sample(vehicle);
+    suspension::update(&mut vehicle.suspension, &vehicle.spec, dt);
+    if let Some(height) = vehicle.suspension.out_height {
+        vehicle.chassis.position.y = height;
+    }
+    solve_traction(vehicle, controls, &frame, dt);
+    let previous_position = vehicle.chassis.position;
+    let previous_yaw = vehicle.chassis.orientation.yaw;
+    chassis::update(&mut vehicle.chassis, &vehicle.spec, dt);
+    vehicle.force_telemetry.resistance_force_n = vehicle.chassis.out_resistance;
+    let impact = resolve_contacts(vehicle, previous_position, previous_yaw);
     // Include contact impulses in the next substep's load transfer and tire grip.
-    update_acceleration(vehicle, previous_velocity, dt);
+    chassis::measure_acceleration(&mut vehicle.chassis, previous_velocity, dt);
     impact
 }
 
@@ -173,19 +155,20 @@ struct MotionFrame {
 
 fn motion_frame(vehicle: &Vehicle) -> MotionFrame {
     let forward = XZ {
-        x: vehicle.orientation.yaw.sin(),
-        z: vehicle.orientation.yaw.cos(),
+        x: vehicle.chassis.orientation.yaw.sin(),
+        z: vehicle.chassis.orientation.yaw.cos(),
     };
     let right = XZ {
-        x: vehicle.orientation.yaw.cos(),
-        z: -vehicle.orientation.yaw.sin(),
+        x: vehicle.chassis.orientation.yaw.cos(),
+        z: -vehicle.chassis.orientation.yaw.sin(),
     };
-    let gradient = physics::vehicle_location::ground_gradient(&vehicle.track, vehicle.position);
+    let gradient =
+        physics::vehicle_location::ground_gradient(&vehicle.track, vehicle.chassis.position);
     // Horizontal component of gravity projected onto y = h(x, z).
     // The planar gravity projection divides by 1 + |gradient|².
     let gravity = util::geometry::xz_map(gradient, |g| -9.81 * g / (1.0 + dot(gradient, gradient)));
-    let longitudinal = dot(util::geometry::xz(vehicle.velocity), forward);
-    let lateral = dot(util::geometry::xz(vehicle.velocity), right);
+    let longitudinal = dot(util::geometry::xz(vehicle.chassis.velocity), forward);
+    let lateral = dot(util::geometry::xz(vehicle.chassis.velocity), right);
     MotionFrame {
         forward,
         right,
@@ -193,30 +176,14 @@ fn motion_frame(vehicle: &Vehicle) -> MotionFrame {
         motion: physics::tire_solver::Motion {
             longitudinal,
             lateral,
-            yaw_rate: vehicle.angular_velocity.yaw,
+            yaw_rate: vehicle.chassis.angular_velocity.yaw,
         },
     }
 }
 
-struct Traction {
-    motion: physics::tire_solver::Motion,
-    tire_force_n: f32,
-    torque_nm: f32,
-}
-
 /// Solve the coupled engine, clutch, and tire reactions.
-fn solve_traction(
-    vehicle: &mut Vehicle,
-    controls: Controls,
-    frame: &MotionFrame,
-    seconds: f32,
-) -> Traction {
+fn solve_traction(vehicle: &mut Vehicle, controls: Controls, frame: &MotionFrame, seconds: f32) {
     let spec = vehicle.spec.clone();
-    let direction = if vehicle.gearbox.gear == powertrain::REVERSE_GEAR {
-        -1.0
-    } else {
-        1.0
-    };
     let forward = frame.forward;
     let right = frame.right;
     let gravity = frame.gravity;
@@ -234,25 +201,24 @@ fn solve_traction(
     let capacities = [Axle::Front, Axle::Rear].map(|axle| tires::tire_capacity(vehicle, axle));
     let throttle = controls.throttle.clamp(0.0, 1.0);
     let drive_bias = spec.chassis.drive_bias;
-    let front_speed = longitudinal * cos + (lateral + vehicle.angular_velocity.yaw * a) * sin;
+    let front_speed =
+        longitudinal * cos + (lateral + vehicle.chassis.angular_velocity.yaw * a) * sin;
     let driven_speed = front_speed * drive_bias + longitudinal * (1.0 - drive_bias);
-    let drivetrain = predict_powertrain(vehicle, throttle, driven_speed, seconds);
+    engine::update(&mut vehicle.engine, throttle, seconds);
+    vehicle.gearbox.in_engine_rpm = vehicle.engine.rpm;
+    vehicle.gearbox.in_wheel_omega = vehicle.wheels.omega;
+    vehicle.gearbox.in_speed = driven_speed;
+    vehicle.gearbox.in_shifting = driver::is_shifting(&vehicle.driver);
+    let drivetrain_engaged = powertrain::engaged(&vehicle.gearbox);
     let torque_nm = vehicle.engine.out_torque;
-    let drive = drivetrain.as_ref().map_or(0.0, |step| {
-        physics::powertrain::road_force(
-            step,
-            driven_speed * direction,
-            spec.weight_kg,
-            spec.chassis.rolling_radius,
-        ) * direction
-    });
+    let drive = powertrain::requested_force(&vehicle.gearbox, seconds);
     let contacts = tires::tire_contacts(
         vehicle,
         controls,
         motion,
         capacities,
         drive,
-        drivetrain.is_some(),
+        drivetrain_engaged,
     );
     let driven_brake_force: f32 = contacts
         .iter()
@@ -266,107 +232,43 @@ fn solve_traction(
         })
         .map(|(_, contact)| contact.brake_force)
         .sum();
-    let solved = physics::tire_solver::solve(
-        motion,
-        physics::tire_solver::Motion {
-            longitudinal: longitudinal + dot(gravity, forward) * seconds,
-            lateral: lateral + dot(gravity, right) * seconds,
-            ..motion
-        },
-        contacts,
-        spec.weight_kg,
-        spec.yaw_inertia_kg_m2,
-        seconds,
-    );
-    let tire_force = (solved.impulses[0].longitudinal * cos - solved.impulses[0].lateral * sin
-        + solved.impulses[1].longitudinal)
-        / seconds;
-    finish_drivetrain(
-        vehicle,
-        drivetrain,
-        &solved,
-        controls,
-        driven_speed,
-        driven_brake_force,
-        seconds,
-    );
-    Traction {
-        motion: solved.motion,
-        tire_force_n: tire_force,
-        torque_nm,
-    }
-}
-
-fn apply_chassis_motion(
-    vehicle: &mut Vehicle,
-    frame: &MotionFrame,
-    traction: Traction,
-    seconds: f32,
-) {
-    let spec = &vehicle.spec;
-    let forward = frame.forward;
-    let right = frame.right;
-    let longitudinal = frame.motion.longitudinal;
-    vehicle.angular_velocity.yaw = traction.motion.yaw_rate;
-    let resistance = resistance_force(spec, longitudinal) / spec.weight_kg * seconds;
-    let new_longitudinal = traction.motion.longitudinal.signum()
-        * (traction.motion.longitudinal.abs() - resistance).max(0.0);
+    vehicle.tires.in_motion = motion;
+    vehicle.tires.in_free_motion = physics::tire_solver::Motion {
+        longitudinal: longitudinal + dot(gravity, forward) * seconds,
+        lateral: lateral + dot(gravity, right) * seconds,
+        ..motion
+    };
+    vehicle.tires.in_contacts = contacts;
+    tires::update(&mut vehicle.tires, &spec, seconds);
+    finish_drivetrain(vehicle, controls, driven_speed, driven_brake_force, seconds);
+    let force = vehicle.tires.out_force;
+    vehicle.chassis.in_force = XYZ {
+        x: forward.x * force.longitudinal + right.x * force.lateral + gravity.x * spec.weight_kg,
+        y: vehicle.suspension.out_force - 9.81 * spec.weight_kg,
+        z: forward.z * force.longitudinal + right.z * force.lateral + gravity.z * spec.weight_kg,
+    };
+    vehicle.chassis.in_torque = chassis::Orientation {
+        yaw: vehicle.tires.out_torque,
+        ..vehicle.suspension.out_torque
+    };
     vehicle.force_telemetry = ForceTelemetry {
-        drive_force_n: traction.tire_force_n,
-        resistance_force_n: (traction.motion.longitudinal - new_longitudinal).abs()
-            * spec.weight_kg
-            / seconds,
-        torque_nm: traction.torque_nm,
-    };
-    let new_lateral = traction.motion.lateral;
-    vehicle.velocity = XYZ {
-        y: vehicle.velocity.y,
-        x: forward.x * new_longitudinal + right.x * new_lateral,
-        z: forward.z * new_longitudinal + right.z * new_lateral,
+        drive_force_n: force.longitudinal,
+        torque_nm,
+        resistance_force_n: 0.0,
     };
 }
 
-fn predict_powertrain(
-    vehicle: &mut Vehicle,
-    throttle: f32,
-    driven_speed: f32,
-    seconds: f32,
-) -> Option<physics::powertrain::Step> {
-    engine::update(&mut vehicle.engine, throttle, seconds);
-    powertrain::drivetrain_step(vehicle, seconds, driven_speed)
-}
-
-fn advance_body(
-    vehicle: &mut Vehicle,
-    controls: Controls,
-    frame: &MotionFrame,
-    seconds: f32,
-) -> f32 {
-    suspension::update_body_motion(vehicle, seconds);
-    let previous_yaw = vehicle.orientation.yaw;
-    vehicle.orientation.yaw = (vehicle.orientation.yaw + vehicle.angular_velocity.yaw * seconds)
-        .rem_euclid(std::f32::consts::TAU);
-    let previous_position = vehicle.position;
-    vehicle.position.x += vehicle.velocity.x * seconds;
-    vehicle.position.z += vehicle.velocity.z * seconds;
-    tires::update_wheel_rotation(
-        vehicle,
-        frame.motion.longitudinal,
-        controls.handbrake,
-        seconds,
-    );
-    let chassis_height = vehicle.position.y;
-    let impact = resolve_road(vehicle);
-    vehicle.position.y = chassis_height;
-    impact.max(resolve_curbs(vehicle, previous_position, previous_yaw))
-}
-
-fn update_acceleration(vehicle: &mut Vehicle, previous_velocity: XYZ, seconds: f32) {
-    vehicle.acceleration = XYZ {
-        x: (vehicle.velocity.x - previous_velocity.x) / seconds,
-        y: (vehicle.velocity.y - previous_velocity.y) / seconds,
-        z: (vehicle.velocity.z - previous_velocity.z) / seconds,
-    };
+fn resolve_contacts(vehicle: &mut Vehicle, previous_position: XYZ, previous_yaw: f32) -> f32 {
+    let height = vehicle.chassis.position.y;
+    let impact = chassis::resolve_road(&mut vehicle.chassis, &vehicle.spec, &vehicle.track);
+    vehicle.chassis.position.y = height;
+    impact.max(chassis::resolve_curbs(
+        &mut vehicle.chassis,
+        &vehicle.spec,
+        &vehicle.track,
+        previous_position,
+        previous_yaw,
+    ))
 }
 
 fn update_inputs(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> Controls {
@@ -388,185 +290,75 @@ fn update_inputs(vehicle: &mut Vehicle, controls: Controls, seconds: f32) -> Con
 
 fn finish_drivetrain(
     vehicle: &mut Vehicle,
-    drivetrain: Option<physics::powertrain::Step>,
-    solved: &physics::tire_solver::Solution,
     controls: Controls,
     driven_speed: f32,
     driven_brake_force: f32,
     seconds: f32,
 ) {
-    let spec = vehicle.spec.clone();
+    let spec = &vehicle.spec;
     let drive_bias = spec.chassis.drive_bias;
-    let direction = if vehicle.gearbox.gear == powertrain::REVERSE_GEAR {
-        -1.0
-    } else {
-        1.0
-    };
-    let tires::AxleGeometry {
-        front_offset: a,
-        sin,
-        cos,
-        ..
-    } = tires::axle_geometry(vehicle);
-    let crankshaft_impulse = if let Some(step) = drivetrain {
-        // Tire force acts on the chassis and reacts on the wheels.
-        // Brake torque acts on the wheels separately; inferring drive
-        // reaction by subtracting requested braking invents torque
-        // whenever the combined contact force reaches its grip limit.
-        let mut reaction = 0.0;
-        for (axle, share) in [drive_bias, 1.0 - drive_bias].into_iter().enumerate() {
-            if share > 0.0 {
-                reaction += solved.impulses[axle].longitudinal / seconds;
+    let geometry = tires::axle_geometry(vehicle);
+    let motion = vehicle.tires.out_contact_motion;
+    let reaction: f32 = vehicle
+        .tires
+        .out_axle_force
+        .iter()
+        .enumerate()
+        .filter(|(axle, _)| {
+            if *axle == 0 {
+                drive_bias > 0.0
+            } else {
+                drive_bias < 1.0
             }
-        }
-        let reaction = reaction * direction;
-        let front_speed = solved.motion.longitudinal * cos
-            + (solved.motion.lateral + a * solved.motion.yaw_rate) * sin;
-        let rear_speed = if controls.handbrake {
-            0.0
-        } else {
-            solved.motion.longitudinal
-        };
-        let rolling_speed = front_speed * drive_bias + rear_speed * (1.0 - drive_bias);
-        let rotation = physics::powertrain::finish(
-            &step,
-            reaction,
-            spec.chassis.rolling_radius,
-            driven_brake_force,
-            rolling_speed * direction,
-        );
-        vehicle.tires.driven_wheel_omega = rotation.wheel_omega * direction;
-        rotation.crankshaft_impulse
-    } else {
-        vehicle.tires.driven_wheel_omega = driven_speed / spec.chassis.rolling_radius;
+        })
+        .map(|(_, force)| force.longitudinal)
+        .sum();
+    let front_speed = motion.longitudinal * geometry.cos
+        + (motion.lateral + geometry.front_offset * motion.yaw_rate) * geometry.sin;
+    let rear_speed = if controls.handbrake {
         0.0
+    } else {
+        motion.longitudinal
     };
-    vehicle.engine.in_torque = crankshaft_impulse / seconds;
+    vehicle.gearbox.in_force = reaction;
+    vehicle.gearbox.in_brake_force = driven_brake_force;
+    vehicle.gearbox.in_rolling_speed = front_speed * drive_bias + rear_speed * (1.0 - drive_bias);
+    powertrain::update(&mut vehicle.gearbox, seconds);
+    vehicle.engine.in_torque = vehicle.gearbox.out_reaction_torque;
+    vehicle.wheels.in_torque = vehicle.gearbox.out_torque;
+    vehicle.wheels.in_force = reaction;
+    vehicle.wheels.in_brake_torque = vehicle.gearbox.out_brake_torque;
+    vehicle.wheels.in_speed = driven_speed;
+    vehicle.wheels.in_body_speed = longitudinal_speed(vehicle);
+    vehicle.wheels.in_engaged = powertrain::engaged(&vehicle.gearbox);
+    vehicle.wheels.in_handbrake = controls.handbrake;
+    wheels::update(&mut vehicle.wheels, spec, seconds);
     tires::update_wheel_spin(vehicle, driven_speed);
-}
-
-/// Approximate an inelastic tyre/corner collision for each wheel crossing.
-/// Removing velocity into the corner normal dissipates energy; the remaining
-/// tangent velocity lifts the chassis. Wheel load shares distribute the impulse
-/// without applying a whole-car collision four times.
-fn resolve_curbs(vehicle: &mut Vehicle, previous_position: XYZ, previous_yaw: f32) -> f32 {
-    if !world::street_surface::has_compiled_roads(&vehicle.track)
-        || vehicle.position.y - suspension::ride_height(vehicle) > 0.16
-    {
-        return 0.0;
-    }
-    let velocity = vehicle.velocity;
-    let mut change: XYZ = XYZ::default();
-    for index in 0..4 {
-        let a = suspension::wheel_position(vehicle, previous_position, previous_yaw, index);
-        let b =
-            suspension::wheel_position(vehicle, vehicle.position, vehicle.orientation.yaw, index);
-        let reference = vehicle.position.y - physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
-        if world::transport::deck_height(&vehicle.track, b, reference)
-            .is_some_and(|height| (height - reference).abs() < 1.0)
-        {
-            continue;
-        }
-        let Some(crossing) = physics::vehicle_location::crossed_curb(&vehicle.track, a, b) else {
-            continue;
-        };
-        let radius = vehicle.spec.design.wheel_radii[index];
-        // At first contact with a step, the tyre centre is r-h above its
-        // corner. Steps at or above the axle give a horizontal contact normal.
-        let up = (1.0 - crossing.rise / radius).clamp(0.0, 1.0);
-        let horizontal = (1.0 - up * up).sqrt();
-        let across = dot(util::geometry::xz(velocity), crossing.normal);
-        let direction = dot(
-            XZ {
-                x: b.x - a.x,
-                z: b.z - a.z,
-            },
-            crossing.normal,
-        )
-        .signum();
-        let closing = (across * direction * horizontal - velocity.y * up).max(0.0);
-        let impulse = closing * suspension::wheel_share(vehicle, index);
-        change.x -= crossing.normal.x * direction * horizontal * impulse;
-        change.z -= crossing.normal.z * direction * horizontal * impulse;
-        change.y += up * impulse;
-    }
-    vehicle.velocity.x += change.x;
-    vehicle.velocity.y += change.y;
-    vehicle.velocity.z += change.z;
-    change.x.hypot(change.z)
-}
-
-fn resolve_road(vehicle: &mut Vehicle) -> f32 {
-    let mut velocity = util::geometry::xz(vehicle.velocity);
-    let impact = constrain_road(vehicle, &mut velocity);
-    vehicle.velocity.x = velocity.x;
-    vehicle.velocity.z = velocity.z;
-    impact
-}
-
-fn constrain_road(vehicle: &mut Vehicle, velocity: &mut XZ<f32>) -> f32 {
-    if world::street_surface::has_compiled_roads(&vehicle.track) {
-        let city = &vehicle.track;
-        return physics::vehicle_location::constrain(
-            city,
-            &mut vehicle.position,
-            velocity,
-            asset::car_glb::height(&vehicle.spec.design),
-        );
-    }
-    let bounds = world::elevation::terrain_bounds(&vehicle.track);
-    let mut impact = 0.0_f32;
-    for (axis, (coordinate, min, max)) in [
-        (0, bounds.min.x, bounds.max.x),
-        (2, bounds.min.z, bounds.max.z),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let limit = [
-            min + world::locations::CAR_RADIUS,
-            max - world::locations::CAR_RADIUS,
-        ];
-        let clamped =
-            util::geometry::xyz_component(vehicle.position, coordinate).clamp(limit[0], limit[1]);
-        let excess = util::geometry::xyz_component(vehicle.position, coordinate) - clamped;
-        if excess.abs() > 0.0001 {
-            *util::geometry::xyz_component_mut(&mut vehicle.position, coordinate) = clamped;
-            let mut normal = XZ { x: 0.0, z: 0.0 };
-            *util::geometry::xz_component_mut(&mut normal, axis) = excess.signum();
-            impact = impact.max(physics::vehicle_location::deflect(velocity, normal));
-        }
-    }
-    impact = impact.max(world::trees::constrain(
-        &vehicle.track,
-        &mut vehicle.position,
-        velocity,
-        asset::car_glb::height(&vehicle.spec.design),
-    ));
-    vehicle.position.y = suspension::ride_height(vehicle);
-    impact
 }
 
 /// Signed velocity along the vehicle's forward axis, in metres per second.
 pub fn longitudinal_speed(vehicle: &Vehicle) -> f32 {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
-    dot(util::geometry::xz(vehicle.velocity), XZ { x: sin, z: cos })
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
+    dot(
+        util::geometry::xz(vehicle.chassis.velocity),
+        XZ { x: sin, z: cos },
+    )
 }
 
 /// Acceleration along the vehicle's forward axis, in m/s².
 pub fn longitudinal_acceleration(vehicle: &Vehicle) -> f32 {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
     dot(
-        util::geometry::xz(vehicle.acceleration),
+        util::geometry::xz(vehicle.chassis.acceleration),
         XZ { x: sin, z: cos },
     )
 }
 
 /// Acceleration along the vehicle's right-facing axis, in m/s².
 pub fn lateral_acceleration(vehicle: &Vehicle) -> f32 {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
     dot(
-        util::geometry::xz(vehicle.acceleration),
+        util::geometry::xz(vehicle.chassis.acceleration),
         XZ { x: cos, z: -sin },
     )
 }
@@ -574,26 +366,16 @@ pub fn lateral_acceleration(vehicle: &Vehicle) -> f32 {
 /// Signed velocity along the vehicle's right-facing axis, in metres per second.
 fn lateral_speed(vehicle: &Vehicle) -> f32 {
     dot(
-        util::geometry::xz(vehicle.velocity),
+        util::geometry::xz(vehicle.chassis.velocity),
         XZ {
-            x: vehicle.orientation.yaw.cos(),
-            z: -vehicle.orientation.yaw.sin(),
+            x: vehicle.chassis.orientation.yaw.cos(),
+            z: -vehicle.chassis.orientation.yaw.sin(),
         },
     )
 }
 
 fn dot(a: XZ<f32>, b: XZ<f32>) -> f32 {
     a.x * b.x + a.z * b.z
-}
-
-fn resistance_force(car_spec: &model::car::CarSpec, speed: f32) -> f32 {
-    let drag_force = 0.5
-        * AIR_DENSITY_KG_M3
-        * car_spec.drag_coefficient
-        * car_spec.frontal_area_m2
-        * speed
-        * speed;
-    0.25 * car_spec.weight_kg + drag_force
 }
 
 #[cfg(test)]

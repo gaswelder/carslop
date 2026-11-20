@@ -2,6 +2,7 @@ use super::*;
 use crate::driver;
 use crate::model;
 use crate::physics;
+use crate::physics::chassis::Orientation;
 use crate::physics::powertrain::{NEUTRAL_GEAR, REVERSE_GEAR};
 use crate::storage;
 use crate::test;
@@ -41,27 +42,18 @@ fn rpm_with_pending_feedback(vehicle: &Vehicle, dt: f32) -> f32 {
 }
 
 fn set_longitudinal_speed(vehicle: &mut Vehicle, speed: f32) {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
-    vehicle.velocity = XYZ {
-        y: vehicle.velocity.y,
+    let (sin, cos) = vehicle.chassis.orientation.yaw.sin_cos();
+    vehicle.chassis.velocity = XYZ {
+        y: vehicle.chassis.velocity.y,
         x: sin * speed,
         z: cos * speed,
-    };
-}
-
-fn set_longitudinal_acceleration(vehicle: &mut Vehicle, acceleration: f32) {
-    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
-    vehicle.acceleration = XYZ {
-        x: sin * acceleration,
-        y: 0.0,
-        z: cos * acceleration,
     };
 }
 
 // Rolling fixtures start with wheels and engine matched to their road speed.
 fn initialize_rolling_drivetrain(vehicle: &mut Vehicle) {
     let speed = longitudinal_speed(vehicle);
-    vehicle.tires.driven_wheel_omega = speed / vehicle.spec.chassis.rolling_radius;
+    vehicle.wheels.omega = speed / vehicle.spec.chassis.rolling_radius;
     if vehicle.gearbox.gear != NEUTRAL_GEAR {
         vehicle.engine.rpm = vehicle.engine.rpm.max(physics::powertrain::coupled_rpm(
             &vehicle.spec,
@@ -74,12 +66,13 @@ fn initialize_rolling_drivetrain(vehicle: &mut Vehicle) {
 // Initialize through the suspension interface while preserving the test's
 // imposed chassis pose and telemetry (including deliberately airborne poses).
 fn initialize_suspension(vehicle: &mut Vehicle) {
-    let position = vehicle.position;
-    let acceleration = vehicle.acceleration;
+    let position = vehicle.chassis.position;
+    let acceleration = vehicle.chassis.acceleration;
     let axle_load = std::mem::take(&mut vehicle.suspension.axle_load);
-    suspension::update_suspension(vehicle, 0.0);
-    vehicle.position = position;
-    vehicle.acceleration = acceleration;
+    vehicle.suspension.in_motion = suspension::sample(vehicle);
+    suspension::update(&mut vehicle.suspension, &vehicle.spec, 0.0);
+    vehicle.chassis.position = position;
+    vehicle.chassis.acceleration = acceleration;
     vehicle.suspension.axle_load = axle_load;
 }
 
@@ -88,42 +81,42 @@ fn world_acceleration_tracks_airborne_motion_and_collision_impulses() {
     for collision in [false, true] {
         let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
         car.gearbox.gear = NEUTRAL_GEAR;
-        car.orientation.yaw = 0.7;
+        car.chassis.orientation.yaw = 0.7;
         if collision {
             let bounds = world::elevation::terrain_bounds(&car.track);
-            car.position.x = bounds.min.x - 1.0;
+            car.chassis.position.x = bounds.min.x - 1.0;
         }
-        car.position.y += 100.0;
+        car.chassis.position.y += 100.0;
         initialize_suspension(&mut car);
-        car.velocity = XYZ {
+        car.chassis.velocity = XYZ {
             x: -4.0,
             y: 2.0,
             z: 8.0,
         };
-        let previous_velocity = car.velocity;
+        let previous_velocity = car.chassis.velocity;
         let dt = Duration::from_micros(4000);
         let seconds = dt.as_secs_f32();
         let impact = update(&mut car, dt, Controls::default());
         assert_eq!(impact > 0.0, collision);
-        assert!((car.acceleration.y + 9.81).abs() < 0.001);
-        assert!((car.velocity.y - (2.0 - 9.81 * seconds)).abs() < 0.000001);
+        assert!((car.chassis.acceleration.y + 9.81).abs() < 0.001);
+        assert!((car.chassis.velocity.y - (2.0 - 9.81 * seconds)).abs() < 0.000001);
         for axis in 0..3 {
-            let change = util::geometry::xyz_component(car.velocity, axis)
+            let change = util::geometry::xyz_component(car.chassis.velocity, axis)
                 - util::geometry::xyz_component(previous_velocity, axis);
-            let acceleration = util::geometry::xyz_component(car.acceleration, axis);
+            let acceleration = util::geometry::xyz_component(car.chassis.acceleration, axis);
             assert!((acceleration * seconds - change).abs() < 0.000001);
         }
         if collision {
             assert!(
-                car.acceleration.x > 10.0,
+                car.chassis.acceleration.x > 10.0,
                 "collision impulse must reach acceleration"
             );
         }
-        let velocity = car.velocity;
-        let acceleration = car.acceleration;
+        let velocity = car.chassis.velocity;
+        let acceleration = car.chassis.acceleration;
         update(&mut car, Duration::ZERO, Controls::default());
-        assert_eq!(car.velocity, velocity);
-        assert_eq!(car.acceleration, acceleration);
+        assert_eq!(car.chassis.velocity, velocity);
+        assert_eq!(car.chassis.acceleration, acceleration);
     }
 }
 
@@ -134,15 +127,15 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
         car.gearbox.gear = gear;
         let direction = if gear == REVERSE_GEAR { -1.0 } else { 1.0 };
         let forward = XZ {
-            x: car.orientation.yaw.sin(),
-            z: car.orientation.yaw.cos(),
+            x: car.chassis.orientation.yaw.sin(),
+            z: car.chassis.orientation.yaw.cos(),
         };
-        car.velocity = util::geometry::at_height(
+        car.chassis.velocity = util::geometry::at_height(
             util::geometry::xz_map(forward, |v| v * 10.0 * direction),
-            car.velocity.y,
+            car.chassis.velocity.y,
         );
         car.engine.rpm = 3500.0;
-        let before = dot(util::geometry::xz(car.velocity), forward);
+        let before = dot(util::geometry::xz(car.chassis.velocity), forward);
         let dt = Duration::from_micros(4000);
         physics::car::update(
             &mut car,
@@ -153,7 +146,8 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
             },
         );
         let telemetry = car.force_telemetry;
-        let actual = (dot(util::geometry::xz(car.velocity), forward) - before) * car.spec.weight_kg
+        let actual = (dot(util::geometry::xz(car.chassis.velocity), forward) - before)
+            * car.spec.weight_kg
             / dt.as_secs_f32();
         assert!((longitudinal_acceleration(&car) - actual / car.spec.weight_kg).abs() < 0.001);
         let reported = telemetry.drive_force_n - direction * telemetry.resistance_force_n;
@@ -174,10 +168,10 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
 fn force_telemetry_reports_braking_and_engine_drag() {
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
     car.gearbox.gear = NEUTRAL_GEAR;
-    car.velocity = XYZ {
-        y: car.velocity.y,
-        x: car.orientation.yaw.sin() * 10.0,
-        z: car.orientation.yaw.cos() * 10.0,
+    car.chassis.velocity = XYZ {
+        y: car.chassis.velocity.y,
+        x: car.chassis.orientation.yaw.sin() * 10.0,
+        z: car.chassis.orientation.yaw.cos() * 10.0,
     };
     car.engine.rpm = 3500.0;
     for _ in 0..30 {
@@ -203,8 +197,8 @@ fn force_telemetry_reports_braking_and_engine_drag() {
 fn tire_scrub_stops_in_flight_and_resumes_on_landing() {
     for handbrake in [false, true] {
         let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-        car.velocity.x = 10.0;
-        car.velocity.z = 20.0;
+        car.chassis.velocity.x = 10.0;
+        car.chassis.velocity.z = 20.0;
         car.engine.rpm = 3500.0;
         let controls = Controls {
             throttle: 1.0,
@@ -215,16 +209,16 @@ fn tire_scrub_stops_in_flight_and_resumes_on_landing() {
         update(&mut car, dt, controls);
         assert!(car.tires.scrub > 0.0);
 
-        car.position.y += 10.0;
-        car.tires.driven_wheel_omega = 200.0;
+        car.chassis.position.y += 10.0;
+        car.wheels.omega = 200.0;
         update(&mut car, dt, controls);
         assert_eq!(car.suspension.axle_load.front, 0.0);
         assert_eq!(car.suspension.axle_load.rear, 0.0);
         assert!(car.tires.wheel_spin > 0.0);
         assert_eq!(car.tires.scrub, 0.0);
 
-        car.position.y = suspension::ride_height(&car);
-        car.velocity.y = 0.0;
+        car.chassis.position.y = suspension::ride_height(&car);
+        car.chassis.velocity.y = 0.0;
         update(&mut car, dt, controls);
         assert!(car.tires.scrub > 0.0);
     }
@@ -234,7 +228,7 @@ fn tire_scrub_stops_in_flight_and_resumes_on_landing() {
 fn force_telemetry_has_no_tire_force_without_ground_contact_or_resistance_at_rest() {
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
     car.gearbox.gear = 1;
-    car.position.y += 10.0;
+    car.chassis.position.y += 10.0;
     initialize_suspension(&mut car);
     car.engine.rpm = 3500.0;
     physics::car::update(
@@ -273,17 +267,17 @@ fn mapped_speed_table_moves_the_suspension_and_settles() {
             track,
         );
         car.gearbox.gear = NEUTRAL_GEAR;
-        car.velocity = XYZ {
-            y: car.velocity.y,
+        car.chassis.velocity = XYZ {
+            y: car.chassis.velocity.y,
             x: 5.,
             z: 0.,
         };
         let mut peak_height: f32 = 0.;
         let mut peak_pitch: f32 = 0.;
         for _ in 0..hz * 3 {
-            if car.position.x > 18. {
-                car.velocity = XYZ {
-                    y: car.velocity.y,
+            if car.chassis.position.x > 18. {
+                car.chassis.velocity = XYZ {
+                    y: car.chassis.velocity.y,
                     ..XYZ::default()
                 };
             }
@@ -292,45 +286,19 @@ fn mapped_speed_table_moves_the_suspension_and_settles() {
                 Duration::from_secs_f64(1. / hz as f64),
                 Controls::default(),
             );
-            peak_height = peak_height.max(car.position.y - 7.48);
+            peak_height = peak_height.max(car.chassis.position.y - 7.48);
             peak_pitch = peak_pitch.max(car.suspension.pitch.abs());
-            assert!(util::geometry::iter(&(car.position)).all(|v| v.is_finite()));
+            assert!(util::geometry::iter(&(car.chassis.position)).all(|v| v.is_finite()));
         }
         assert!(
             peak_height > 0.04 && peak_height < 0.3,
             "heave {peak_height}"
         );
         assert!(peak_pitch > 0.01 && peak_pitch < 0.2, "pitch {peak_pitch}");
-        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.01);
+        assert!((car.chassis.position.y - suspension::ride_height(&(car))).abs() < 0.01);
         peak_height
     };
     assert!((run(60) - run(240)).abs() < 0.02);
-}
-
-#[test]
-fn aerodynamic_drag_uses_coefficient_area_and_mass() {
-    let mut spec = test::support::car_spec().clone();
-    spec.drag_coefficient = 0.3;
-    spec.frontal_area_m2 = 2.0;
-    spec.weight_kg = 1000.0;
-    // At 20 m/s this gives 147 N of aerodynamic drag, plus rolling resistance.
-    let drag = resistance_force(&spec, 20.0) - resistance_force(&spec, 0.0);
-    assert!((drag - 147.0).abs() < 0.0001);
-    assert_eq!(resistance_force(&spec, 0.0), 250.0);
-    assert_eq!(
-        resistance_force(&(spec), -20.0),
-        resistance_force(&(spec), 20.0)
-    );
-    spec.weight_kg *= 2.0;
-    let heavier = resistance_force(&spec, 20.0) - resistance_force(&spec, 0.0);
-    assert!((heavier - drag).abs() < 0.0001);
-    assert_eq!(resistance_force(&spec, 0.0), 500.0);
-    spec.drag_coefficient *= 2.0;
-    let more_drag = resistance_force(&spec, 20.0) - resistance_force(&spec, 0.0);
-    assert!((more_drag - 2.0 * drag).abs() < 0.0001);
-    spec.frontal_area_m2 *= 2.0;
-    let larger_area = resistance_force(&spec, 20.0) - resistance_force(&spec, 0.0);
-    assert!((larger_area - 4.0 * drag).abs() < 0.0001);
 }
 
 fn hill_car(uphill: bool) -> Vehicle {
@@ -372,25 +340,25 @@ fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
                 driver::shift(&mut car, false);
                 driver::shift(&mut car, false);
             }
-            car.velocity = XYZ {
-                y: car.velocity.y,
-                x: car.orientation.yaw.sin() * initial_speed,
-                z: car.orientation.yaw.cos() * initial_speed,
+            car.chassis.velocity = XYZ {
+                y: car.chassis.velocity.y,
+                x: car.chassis.orientation.yaw.sin() * initial_speed,
+                z: car.chassis.orientation.yaw.cos() * initial_speed,
             };
 
-            let velocity = car.velocity;
-            let heading = car.orientation.yaw;
+            let velocity = car.chassis.velocity;
+            let heading = car.chassis.orientation.yaw;
             // Both directions pass through neutral while still moving.
             driver::shift(&mut car, initial_speed < 0.0);
             assert_eq!(car.gearbox.gear, NEUTRAL_GEAR);
-            assert_eq!(car.velocity, velocity);
+            assert_eq!(car.chassis.velocity, velocity);
             driver::shift(&mut car, initial_speed < 0.0);
             assert_eq!(
                 car.gearbox.gear,
                 if initial_speed > 0.0 { REVERSE_GEAR } else { 1 }
             );
-            assert_eq!(car.velocity, velocity);
-            assert_eq!(car.orientation.yaw, heading);
+            assert_eq!(car.chassis.velocity, velocity);
+            assert_eq!(car.chassis.orientation.yaw, heading);
             engine::update(&mut car.engine, 1.0, 0.0);
             assert!(car.engine.out_torque > 0.0);
             for _ in 0..240 * 8 {
@@ -415,13 +383,13 @@ fn rolling_direction_changes_keep_momentum_then_reverse_under_power() {
 fn sliding_car(model: std::sync::Arc<model::car::CarSpec>, gear: u8) -> Vehicle {
     let mut car = level_route_car(world::locations::LocationId::Compact, model);
     car.gearbox.gear = gear;
-    let h = car.orientation.yaw;
-    car.velocity = XYZ {
-        y: car.velocity.y,
+    let h = car.chassis.orientation.yaw;
+    car.chassis.velocity = XYZ {
+        y: car.chassis.velocity.y,
         x: h.sin() * 15.0 + h.cos() * 6.0,
         z: h.cos() * 15.0 - h.sin() * 6.0,
     };
-    car.angular_velocity.yaw = 0.5;
+    car.chassis.angular_velocity.yaw = 0.5;
     initialize_rolling_drivetrain(&mut car);
     car
 }
@@ -432,7 +400,7 @@ fn assert_slide_recovers(model: std::sync::Arc<model::car::CarSpec>, gear: u8) {
         treadmill_tick(&mut car, Controls::default());
     }
     let rear_side = lateral_speed(&car)
-        - car.angular_velocity.yaw
+        - car.chassis.angular_velocity.yaw
             * model.chassis.wheelbase
             * model.center_of_mass.longitudinal_fraction;
     let angle = rear_side
@@ -445,7 +413,7 @@ fn assert_slide_recovers(model: std::sync::Arc<model::car::CarSpec>, gear: u8) {
         model.name
     );
     assert!(
-        car.angular_velocity.yaw.abs() < 0.15,
+        car.chassis.angular_velocity.yaw.abs() < 0.15,
         "{} gear {gear}: rotation persists after lift",
         model.name
     );
@@ -491,15 +459,17 @@ fn strong_engine_braking_dissipates_energy_during_a_rear_drive_slide() {
         .unwrap();
     let mut coasting = sliding_car(model.clone(), 1);
     let mut free_rolling = sliding_car(model.clone(), NEUTRAL_GEAR);
-    let initial_energy =
-        0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
-            + 0.5 * model.yaw_inertia_kg_m2 * coasting.angular_velocity.yaw.powi(2);
+    let initial_energy = 0.5
+        * model.weight_kg
+        * (coasting.chassis.velocity.x.powi(2) + coasting.chassis.velocity.z.powi(2))
+        + 0.5 * model.yaw_inertia_kg_m2 * coasting.chassis.angular_velocity.yaw.powi(2);
     for _ in 0..480 {
         treadmill_tick(&mut coasting, Controls::default());
         treadmill_tick(&mut free_rolling, Controls::default());
-        let energy =
-            0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
-                + 0.5 * model.yaw_inertia_kg_m2 * coasting.angular_velocity.yaw.powi(2);
+        let energy = 0.5
+            * model.weight_kg
+            * (coasting.chassis.velocity.x.powi(2) + coasting.chassis.velocity.z.powi(2))
+            + 0.5 * model.yaw_inertia_kg_m2 * coasting.chassis.angular_velocity.yaw.powi(2);
         assert!(energy.is_finite() && energy <= initial_energy * 1.001);
         assert!(
             coasting.suspension.axle_load.front >= 0.0 && coasting.suspension.axle_load.rear >= 0.0
@@ -558,10 +528,10 @@ fn revving_in_neutral_then_engaging_a_gear_spins_the_driven_wheels() {
             treadmill_tick(&mut car, Controls::default());
         }
         assert!(car.tires.wheel_spin < 0.01);
-        let position = car.position;
-        let heading = car.orientation.yaw;
+        let position = car.chassis.position;
+        let heading = car.chassis.orientation.yaw;
         physics::car::reset(&mut car, position, heading);
-        assert_eq!(car.tires.driven_wheel_omega, 0.0);
+        assert_eq!(car.wheels.omega, 0.0);
     }
 }
 
@@ -569,9 +539,9 @@ fn revving_in_neutral_then_engaging_a_gear_spins_the_driven_wheels() {
 fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
     let run = |throttle| {
         let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-        let h = car.orientation.yaw;
-        car.velocity = XYZ {
-            y: car.velocity.y,
+        let h = car.chassis.orientation.yaw;
+        car.chassis.velocity = XYZ {
+            y: car.chassis.velocity.y,
             x: h.sin() * 10.0 + h.cos() * 2.0,
             z: h.cos() * 10.0 - h.sin() * 2.0,
         };
@@ -585,7 +555,7 @@ fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
             },
         );
         dot(
-            util::geometry::xz(car.velocity),
+            util::geometry::xz(car.chassis.velocity),
             XZ {
                 x: h.cos(),
                 z: -h.sin(),
@@ -597,12 +567,12 @@ fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         "drive torque must reduce available cornering force"
     );
     let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
-    car.velocity = XYZ {
-        y: car.velocity.y,
-        x: car.orientation.yaw.sin() * 20.0,
-        z: car.orientation.yaw.cos() * 20.0,
+    car.chassis.velocity = XYZ {
+        y: car.chassis.velocity.y,
+        x: car.chassis.orientation.yaw.sin() * 20.0,
+        z: car.chassis.orientation.yaw.cos() * 20.0,
     };
-    car.angular_velocity.yaw = 0.5;
+    car.chassis.angular_velocity.yaw = 0.5;
     initialize_rolling_drivetrain(&mut car);
     physics::car::update(
         &mut car,
@@ -610,7 +580,7 @@ fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         Controls::default(),
     );
     assert!(
-        car.angular_velocity.yaw > 0.0 && car.angular_velocity.yaw < 0.5,
+        car.chassis.angular_velocity.yaw > 0.0 && car.chassis.angular_velocity.yaw < 0.5,
         "tire torque should slow existing rotation without deleting it"
     );
 }
@@ -628,9 +598,9 @@ fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
             test::support::car(),
             track,
         );
-        car.velocity = util::geometry::at_height(
+        car.chassis.velocity = util::geometry::at_height(
             util::geometry::xz_map(road.tangent, |v| v * 8.0),
-            car.velocity.y,
+            car.chassis.velocity.y,
         );
         let mut peak_pitch: f32 = 0.0;
         let mut peak_heave: f32 = 0.0;
@@ -641,15 +611,15 @@ fn bump_moves_sprung_body_then_settles_at_different_frame_rates() {
                 Controls::default(),
             );
             peak_pitch = peak_pitch.max(car.suspension.pitch.abs());
-            peak_heave = peak_heave.max((car.position.y - 0.48).abs());
+            peak_heave = peak_heave.max((car.chassis.position.y - 0.48).abs());
         }
         println!(
             "{hz} Hz: bump pitch {peak_pitch}, heave {peak_heave}, final {}",
-            car.position.y
+            car.chassis.position.y
         );
         assert!(peak_pitch > 0.01 && peak_pitch < 0.15);
         assert!(peak_heave > 0.025 && peak_heave < 0.25);
-        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.003);
+        assert!((car.chassis.position.y - suspension::ride_height(&(car))).abs() < 0.003);
         assert!(car.suspension.pitch.abs() < 0.002);
         assert!(car.suspension.roll.abs() < 0.002);
         (peak_pitch, peak_heave)
@@ -674,11 +644,16 @@ fn fixed_suspension_stiffness_gives_less_acceleration_with_more_mass() {
         );
         let ground = suspension::ride_height(&car);
         initialize_suspension(&mut car);
-        car.position.y = ground - 0.05;
-        car.velocity.y = 0.0;
-        suspension::update_suspension(&mut car, 1.0 / 240.0);
+        car.chassis.position.y = ground - 0.05;
+        car.chassis.velocity.y = 0.0;
+        car.suspension.in_motion = suspension::sample(&car);
+        suspension::update(&mut car.suspension, &car.spec, 1.0 / 240.0);
         // The same compression produces 5000 N of restoring force in both cars.
-        assert!((car.acceleration.y * mass - 5000.0).abs() < 1.0);
+        let previous_velocity = car.chassis.velocity;
+        car.chassis.in_force.y = car.suspension.out_force - 9.81 * mass;
+        chassis::update(&mut car.chassis, &car.spec, PHYSICS_DT);
+        chassis::measure_acceleration(&mut car.chassis, previous_velocity, PHYSICS_DT);
+        assert!((car.chassis.acceleration.y * mass - 5000.0).abs() < 1.0);
     }
 }
 
@@ -687,12 +662,12 @@ fn chassis_can_unload_land_and_settle() {
     let mut car = level_route_car(test::support::authored_id(), test::support::car());
     let ground = suspension::ride_height(&car);
     initialize_suspension(&mut car);
-    car.position.y = ground + 0.5;
+    car.chassis.position.y = ground + 0.5;
     physics::car::update(&mut car, Duration::from_millis(20), Controls::default());
     assert_eq!(car.suspension.axle_load.front, 0.0);
     assert_eq!(car.suspension.axle_load.rear, 0.0);
-    assert!(car.position.y > ground + 0.49);
-    assert!(car.velocity.y < 0.0);
+    assert!(car.chassis.position.y > ground + 0.49);
+    assert!(car.chassis.velocity.y < 0.0);
     for _ in 0..240 * 3 {
         physics::car::update(
             &mut car,
@@ -700,8 +675,8 @@ fn chassis_can_unload_land_and_settle() {
             Controls::default(),
         );
     }
-    assert!((car.position.y - ground).abs() < 0.002);
-    assert!(car.velocity.y.abs() < 0.002);
+    assert!((car.chassis.position.y - ground).abs() < 0.002);
+    assert!(car.chassis.velocity.y.abs() < 0.002);
     assert!(
         ((car.suspension.axle_load.front + car.suspension.axle_load.rear) / car.spec.weight_kg
             - 9.81)
@@ -720,13 +695,13 @@ fn elevation_changes_coasting_and_power_in_both_directions() {
                 let mut car = hill_car(uphill);
                 if reverse {
                     select_reverse(&mut car);
-                    car.orientation.yaw += std::f32::consts::PI;
+                    car.chassis.orientation.yaw += std::f32::consts::PI;
                 }
                 let sign = if reverse { -1.0 } else { 1.0 };
-                car.velocity = XYZ {
-                    y: car.velocity.y,
-                    x: car.orientation.yaw.sin() * 8.0 * sign,
-                    z: car.orientation.yaw.cos() * 8.0 * sign,
+                car.chassis.velocity = XYZ {
+                    y: car.chassis.velocity.y,
+                    x: car.chassis.orientation.yaw.sin() * 8.0 * sign,
+                    z: car.chassis.orientation.yaw.cos() * 8.0 * sign,
                 };
                 physics::car::update(
                     &mut car,
@@ -831,13 +806,13 @@ fn level_route_car(
 // bends and barriers cannot masquerade as acceleration or braking limits.
 fn treadmill_tick(car: &mut Vehicle, controls: Controls) -> f32 {
     let road = world::locations::at_distance(&car.track, 50.0);
-    car.position = physics::vehicle_location::vehicle_position(road, 0.0);
-    let previous = car.position;
+    car.chassis.position = physics::vehicle_location::vehicle_position(road, 0.0);
+    let previous = car.chassis.position;
     physics::car::update(car, Duration::from_secs_f64(1.0 / 240.0), controls);
     dot(
         XZ {
-            x: car.position.x - previous.x,
-            z: car.position.z - previous.z,
+            x: car.chassis.position.x - previous.x,
+            z: car.chassis.position.z - previous.z,
         },
         road.tangent,
     )
@@ -853,18 +828,20 @@ fn steering_run(car: &mut Vehicle, speed: f32, input: f32, seconds: f64, hz: f64
     let mut remaining = seconds;
     while remaining > 1e-8 {
         let step = remaining.min(1.0 / hz);
-        car.position = physics::vehicle_location::vehicle_position(road, 0.0);
+        car.chassis.position = physics::vehicle_location::vehicle_position(road, 0.0);
         let lateral = dot(
-            util::geometry::xz(car.velocity),
+            util::geometry::xz(car.chassis.velocity),
             XZ {
-                x: car.orientation.yaw.cos(),
-                z: -car.orientation.yaw.sin(),
+                x: car.chassis.orientation.yaw.cos(),
+                z: -car.chassis.orientation.yaw.sin(),
             },
         );
-        car.velocity = XYZ {
-            y: car.velocity.y,
-            x: car.orientation.yaw.sin() * speed + car.orientation.yaw.cos() * lateral,
-            z: car.orientation.yaw.cos() * speed - car.orientation.yaw.sin() * lateral,
+        car.chassis.velocity = XYZ {
+            y: car.chassis.velocity.y,
+            x: car.chassis.orientation.yaw.sin() * speed
+                + car.chassis.orientation.yaw.cos() * lateral,
+            z: car.chassis.orientation.yaw.cos() * speed
+                - car.chassis.orientation.yaw.sin() * lateral,
         };
 
         physics::car::update(
@@ -884,21 +861,21 @@ fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
     let model = test::support::car();
     for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-        let heading = car.orientation.yaw;
+        let heading = car.chassis.orientation.yaw;
         steering_run(&mut car, speed, 0.2, 0.1, 120.0);
         let tap_angle = car.steering.angle.abs();
         steering_run(&mut car, speed, 0.0, 0.4, 120.0);
-        let tap = test::support::angle(car.orientation.yaw - heading).abs();
+        let tap = test::support::angle(car.chassis.orientation.yaw - heading).abs();
         assert!(tap > 0.0, "a steering tap must turn the car");
         assert!(car.steering.angle.abs() < tap_angle * 0.5);
         let mut held = level_route_car(world::locations::LocationId::Compact, model.clone());
         steering_run(&mut held, speed, 0.2, 0.5, 120.0);
         assert!(
-            car.angular_velocity.yaw.abs() < held.angular_velocity.yaw.abs(),
+            car.chassis.angular_velocity.yaw.abs() < held.chassis.angular_velocity.yaw.abs(),
             "releasing steering must reduce yaw compared with holding it"
         );
         steering_run(&mut held, speed, 0.2, 0.5, 120.0);
-        let turn = test::support::angle(held.orientation.yaw - heading).abs();
+        let turn = test::support::angle(held.chassis.orientation.yaw - heading).abs();
         assert!(
             turn > tap * 3.0,
             "holding must produce a stronger turn than tapping"
@@ -911,20 +888,23 @@ fn tire_torque_turns_and_countersteering_reverses_rotation() {
     for model in test::support::cars() {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         steering_run(&mut car, 15.0, 0.25, 0.6, 240.0);
-        assert!(car.angular_velocity.yaw < 0.0);
-        assert!(car.angular_velocity.yaw.is_finite() && car.angular_velocity.yaw.abs() < 2.0);
+        assert!(car.chassis.angular_velocity.yaw < 0.0);
+        assert!(
+            car.chassis.angular_velocity.yaw.is_finite()
+                && car.chassis.angular_velocity.yaw.abs() < 2.0
+        );
         steering_run(&mut car, 15.0, -0.5, 0.8, 240.0);
         assert!(
-            car.angular_velocity.yaw > 0.0,
+            car.chassis.angular_velocity.yaw > 0.0,
             "{model:?} countersteering remained in original turn"
         );
         assert!(car.steering.angle > 0.0);
         steering_run(&mut car, 0.0, 0.0, 0.02, 240.0);
-        assert!(car.angular_velocity.yaw.is_finite());
-        let position = car.position;
-        let heading = car.orientation.yaw;
+        assert!(car.chassis.angular_velocity.yaw.is_finite());
+        let position = car.chassis.position;
+        let heading = car.chassis.orientation.yaw;
         physics::car::reset(&mut car, position, heading);
-        assert_eq!(car.angular_velocity.yaw, 0.0);
+        assert_eq!(car.chassis.angular_velocity.yaw, 0.0);
         assert_eq!(car.steering.angle, 0.0);
     }
 }
@@ -985,10 +965,22 @@ fn steering_response_is_independent_of_frame_grouping_with_identical_physics_ste
     for milliseconds in [8, 16, 32] {
         // update subdivides these frames into identical 4 ms physics steps.
         let car = steering_sequence(Duration::from_millis(milliseconds));
-        assert_eq!(car.position, reference.position, "{milliseconds} ms frames");
-        assert_eq!(car.velocity, reference.velocity, "{milliseconds} ms frames");
-        assert_eq!(car.orientation.yaw, reference.orientation.yaw);
-        assert_eq!(car.angular_velocity.yaw, reference.angular_velocity.yaw);
+        assert_eq!(
+            car.chassis.position, reference.chassis.position,
+            "{milliseconds} ms frames"
+        );
+        assert_eq!(
+            car.chassis.velocity, reference.chassis.velocity,
+            "{milliseconds} ms frames"
+        );
+        assert_eq!(
+            car.chassis.orientation.yaw,
+            reference.chassis.orientation.yaw
+        );
+        assert_eq!(
+            car.chassis.angular_velocity.yaw,
+            reference.chassis.angular_velocity.yaw
+        );
     }
 }
 
@@ -998,9 +990,10 @@ fn steering_response_converges_as_physics_steps_shrink() {
     let mut previous_error = f32::INFINITY;
     for microseconds in [4000, 2000, 1000, 500, 250] {
         let car = steering_sequence(Duration::from_micros(microseconds));
-        let error = test::support::angle(car.orientation.yaw - reference.orientation.yaw)
-            .abs()
-            .to_degrees();
+        let error =
+            test::support::angle(car.chassis.orientation.yaw - reference.chassis.orientation.yaw)
+                .abs()
+                .to_degrees();
         assert!(
             error < previous_error,
             "{microseconds} us steps: heading error {error} degrees did not improve from {previous_error}"
@@ -1018,15 +1011,15 @@ fn selected_gears_hold_across_speeds_and_explicit_upshifts_drop_coupled_rpm() {
     for model in test::support::cars() {
         let mut car = level_route_car(test::support::authored_id(), model.clone());
         let forward = XZ {
-            x: car.orientation.yaw.sin(),
-            z: car.orientation.yaw.cos(),
+            x: car.chassis.orientation.yaw.sin(),
+            z: car.chassis.orientation.yaw.cos(),
         };
         for gear in REVERSE_GEAR..=model.gearbox.ratios.len() as u8 {
             car.gearbox.gear = gear;
             for speed in [-10.0, 0.0, 10.0, 60.0] {
-                car.velocity = util::geometry::at_height(
+                car.chassis.velocity = util::geometry::at_height(
                     util::geometry::xz_map(forward, |v| v * speed),
-                    car.velocity.y,
+                    car.chassis.velocity.y,
                 );
                 physics::car::update(&mut car, Duration::from_micros(4000), Controls::default());
                 assert_eq!(
@@ -1138,7 +1131,7 @@ fn curb_car(height: f32) -> Vehicle {
     );
     car.gearbox.gear = NEUTRAL_GEAR;
     initialize_suspension(&mut car);
-    car.velocity.z = 8.0;
+    car.chassis.velocity.z = 8.0;
     car
 }
 
@@ -1148,19 +1141,19 @@ fn taller_curbs_and_smaller_tyres_produce_stronger_physical_impacts() {
     let mut tall_loss = 0.0;
     for height in [0.08, 0.14, 0.25] {
         let mut car = curb_car(height);
-        let before = car.position;
-        car.position.z += 0.1;
-        let energy_before = car.velocity.z.powi(2);
-        let loss = resolve_curbs(&mut car, before, 0.0);
+        let before = car.chassis.position;
+        car.chassis.position.z += 0.1;
+        let energy_before = car.chassis.velocity.z.powi(2);
+        let loss = chassis::resolve_curbs(&mut car.chassis, &car.spec, &car.track, before, 0.0);
         assert!(
             loss > previous_loss,
             "height {height}: {loss} <= {previous_loss}"
         );
         assert!(
-            car.velocity.y > 0.0,
+            car.chassis.velocity.y > 0.0,
             "impact must reach chassis vertical velocity"
         );
-        assert!(car.velocity.z.powi(2) + car.velocity.y.powi(2) <= energy_before);
+        assert!(car.chassis.velocity.z.powi(2) + car.chassis.velocity.y.powi(2) <= energy_before);
         previous_loss = loss;
         tall_loss = loss;
     }
@@ -1171,40 +1164,49 @@ fn taller_curbs_and_smaller_tyres_produce_stronger_physical_impacts() {
     let mut small = curb_car(0.25);
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut small.spec).design).wheel_radii =
         [0.25; 4];
-    let before = small.position;
-    small.position.z += 0.1;
-    assert!(resolve_curbs(&mut small, before, 0.0) > tall_loss);
+    let before = small.chassis.position;
+    small.chassis.position.z += 0.1;
+    assert!(
+        chassis::resolve_curbs(&mut small.chassis, &small.spec, &small.track, before, 0.0)
+            > tall_loss
+    );
 }
 
 #[test]
 fn kerb_impact_scales_with_speed_and_the_number_of_crossing_wheels() {
     let mut slow = curb_car(0.25);
-    slow.velocity.z = 4.0;
-    let before = slow.position;
-    slow.position.z += 0.1;
-    let slow_loss = resolve_curbs(&mut slow, before, 0.0);
+    slow.chassis.velocity.z = 4.0;
+    let before = slow.chassis.position;
+    slow.chassis.position.z += 0.1;
+    let slow_loss = chassis::resolve_curbs(&mut slow.chassis, &slow.spec, &slow.track, before, 0.0);
     let mut fast = curb_car(0.25);
-    fast.velocity.z = 16.0;
-    let before = fast.position;
-    fast.position.z += 0.1;
-    let fast_loss = resolve_curbs(&mut fast, before, 0.0);
+    fast.chassis.velocity.z = 16.0;
+    let before = fast.chassis.position;
+    fast.chassis.position.z += 0.1;
+    let fast_loss = chassis::resolve_curbs(&mut fast.chassis, &fast.spec, &fast.track, before, 0.0);
     assert!(fast_loss > slow_loss * 3.0);
-    assert!(fast.velocity.y > slow.velocity.y * 3.0);
+    assert!(fast.chassis.velocity.y > slow.chassis.velocity.y * 3.0);
 
     // Turn slightly so only the left front wheel crosses this substep.
     let mut diagonal = curb_car(0.25);
-    diagonal.velocity.z = 16.0;
-    diagonal.orientation.yaw = 0.4;
-    diagonal.position.z = -1.49;
-    let before = diagonal.position;
-    diagonal.position.z += 0.1;
-    let one_wheel_loss = resolve_curbs(&mut diagonal, before, 0.4);
+    diagonal.chassis.velocity.z = 16.0;
+    diagonal.chassis.orientation.yaw = 0.4;
+    diagonal.chassis.position.z = -1.49;
+    let before = diagonal.chassis.position;
+    diagonal.chassis.position.z += 0.1;
+    let one_wheel_loss = chassis::resolve_curbs(
+        &mut diagonal.chassis,
+        &diagonal.spec,
+        &diagonal.track,
+        before,
+        0.4,
+    );
     assert!(one_wheel_loss > 0.0 && one_wheel_loss < fast_loss * 0.75);
 
     // The front axle raises its share of support before the car centre
     // crosses; the rear axle is still on the asphalt.
     let mut straddling = curb_car(0.25);
-    straddling.position.z = -0.5;
+    straddling.chassis.position.z = -0.5;
     let height = suspension::ride_height(&straddling);
     assert!(height > 0.48 && height < 0.68);
 }
@@ -1215,31 +1217,31 @@ fn kerb_impacts_respect_crossing_direction_and_ground_contact() {
         let mut car = curb_car(0.25);
         if mode == 0 {
             // Moving along the kerb.
-            car.velocity.x = 8.0;
-            car.velocity.z = 0.0;
+            car.chassis.velocity.x = 8.0;
+            car.chassis.velocity.z = 0.0;
         } else if mode == 1 {
             // Leaving the pavement: fall under gravity.
-            car.position.z = 1.3;
-            car.position.y += 0.2;
-            car.velocity.z = -8.0;
+            car.chassis.position.z = 1.3;
+            car.chassis.position.y += 0.2;
+            car.chassis.velocity.z = -8.0;
         } else if mode == 2 {
             // Flying over it.
-            car.position.y += 2.0;
+            car.chassis.position.y += 2.0;
         } else {
             // Scraping diagonally preserves velocity along the kerb.
-            car.velocity.x = 5.0;
+            car.chassis.velocity.x = 5.0;
         }
-        let before = car.position;
-        car.position.x += car.velocity.x * 0.02;
-        car.position.z += car.velocity.z * 0.02;
-        let velocity = car.velocity;
-        let loss = resolve_curbs(&mut car, before, 0.0);
+        let before = car.chassis.position;
+        car.chassis.position.x += car.chassis.velocity.x * 0.02;
+        car.chassis.position.z += car.chassis.velocity.z * 0.02;
+        let velocity = car.chassis.velocity;
+        let loss = chassis::resolve_curbs(&mut car.chassis, &car.spec, &car.track, before, 0.0);
         if mode < 3 {
             assert_eq!(loss, 0.0);
-            assert_eq!(car.velocity, velocity);
+            assert_eq!(car.chassis.velocity, velocity);
         } else {
             assert!(loss > 0.0);
-            assert_eq!(car.velocity.x, velocity.x);
+            assert_eq!(car.chassis.velocity.x, velocity.x);
         }
     }
 }
@@ -1253,26 +1255,29 @@ fn kerb_crossings_are_stable_across_frame_rates_and_do_not_repeat() {
         let mut peak_vertical: f32 = 0.0;
         for _ in 0..hz {
             update(&mut car, dt, Controls::default());
-            peak_vertical = peak_vertical.max(car.velocity.y);
+            peak_vertical = peak_vertical.max(car.chassis.velocity.y);
         }
-        assert!(car.position.z > 1.5, "both axles should clear the kerb");
+        assert!(
+            car.chassis.position.z > 1.5,
+            "both axles should clear the kerb"
+        );
         assert!(peak_vertical > 0.5, "the step must generate physical heave");
         if let Some(speed) = reference {
             assert!(
-                (car.velocity.z - speed).abs() < 0.12,
+                (car.chassis.velocity.z - speed).abs() < 0.12,
                 "{hz} Hz: {} vs {speed}",
-                car.velocity.z
+                car.chassis.velocity.z
             );
         } else {
-            reference = Some(car.velocity.z);
+            reference = Some(car.chassis.velocity.z);
         }
-        let speed = car.velocity.z;
+        let speed = car.chassis.velocity.z;
         update(&mut car, Duration::from_millis(250), Controls::default());
         assert!(
-            (car.velocity.z - speed).abs() < 0.3,
+            (car.chassis.velocity.z - speed).abs() < 0.3,
             "no repeated kerb drag"
         );
-        assert!((car.position.y - suspension::ride_height(&car)).abs() < 0.15);
+        assert!((car.chassis.position.y - suspension::ride_height(&car)).abs() < 0.15);
     }
 }
 
@@ -1353,10 +1358,18 @@ fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
             track.clone(),
         );
         car.gearbox.gear = NEUTRAL_GEAR;
-        car.velocity =
-            util::geometry::at_height(util::geometry::xz_map(inward, |v| v * 10.0), car.velocity.y);
-        assert_eq!(physics::car::resolve_road(&mut (car)), 0.0);
-        assert_eq!([car.position.x, car.position.z], [position.x, position.z]);
+        car.chassis.velocity = util::geometry::at_height(
+            util::geometry::xz_map(inward, |v| v * 10.0),
+            car.chassis.velocity.y,
+        );
+        assert_eq!(
+            chassis::resolve_road(&mut car.chassis, &car.spec, &car.track),
+            0.0
+        );
+        assert_eq!(
+            [car.chassis.position.x, car.chassis.position.z],
+            [position.x, position.z]
+        );
         for _ in 0..288 {
             assert!(
                 physics::car::update(
@@ -1365,10 +1378,15 @@ fn offroad_driving_and_reentry_preserve_position_and_follow_terrain() {
                     Controls::default()
                 ) < 0.01
             );
-            assert!(util::geometry::iter(&(car.position)).all(|v| v.is_finite()));
+            assert!(util::geometry::iter(&(car.chassis.position)).all(|v| v.is_finite()));
         }
-        assert!(world::roads::project(&track, car.position).offset.abs() < road.width * 0.5);
-        assert!((car.position.y - suspension::ride_height(&(car))).abs() < 0.15);
+        assert!(
+            world::roads::project(&track, car.chassis.position)
+                .offset
+                .abs()
+                < road.width * 0.5
+        );
+        assert!((car.chassis.position.y - suspension::ride_height(&(car))).abs() < 0.15);
     }
 }
 
@@ -1396,18 +1414,18 @@ fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
     assert!(std::sync::Arc::ptr_eq(&car.track, &route));
     assert!(std::sync::Arc::ptr_eq(&car.spec, &model));
     assert_eq!(
-        car.position,
+        car.chassis.position,
         physics::vehicle_location::vehicle_position(road, 0.0)
     );
     assert_eq!(
-        car.orientation,
+        car.chassis.orientation,
         Orientation {
             yaw: model::world::heading(road),
             ..Orientation::default()
         }
     );
     assert_eq!(
-        car.velocity,
+        car.chassis.velocity,
         XYZ {
             y: 0.0,
             x: 0.0,
@@ -1415,13 +1433,13 @@ fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
         }
     );
     assert_eq!(car.gearbox.gear, 1);
-    assert_eq!(car.angular_velocity, Orientation::default());
-    assert_eq!(car.acceleration, XYZ::default());
+    assert_eq!(car.chassis.angular_velocity, Orientation::default());
+    assert_eq!(car.chassis.acceleration, XYZ::default());
     assert_eq!(longitudinal_speed(&car), 0.0);
     assert_eq!(lateral_speed(&car), 0.0);
     assert_eq!(car.engine.rpm, engine::IDLE_RPM);
     assert_eq!(car.engine.load, 0.0);
-    assert_eq!(car.tires.wheel_phase, [0.0; 2]);
+    assert_eq!(car.wheels.phase, [0.0; 2]);
     assert_eq!(car.steering.angle, 0.0);
     assert_eq!(car.tires.scrub, 0.0);
 }
@@ -1440,21 +1458,24 @@ fn outer_terrain_boundary_preserves_tangential_motion_and_ground_height() {
         test::support::car(),
         track.clone(),
     );
-    car.velocity = XYZ {
-        y: car.velocity.y,
+    car.chassis.velocity = XYZ {
+        y: car.chassis.velocity.y,
         x: -4.0,
         z: 8.0,
     };
-    assert!(physics::car::resolve_road(&mut (car)) > 0.0);
-    assert_eq!(car.position.x, bounds.min.x + world::locations::CAR_RADIUS);
-    assert!(car.velocity.z > 6.0);
+    assert!(chassis::resolve_road(&mut car.chassis, &car.spec, &car.track) > 0.0);
+    assert_eq!(
+        car.chassis.position.x,
+        bounds.min.x + world::locations::CAR_RADIUS
+    );
+    assert!(car.chassis.velocity.z > 6.0);
     assert!(
-        (car.position.y
+        (car.chassis.position.y
             - physics::vehicle_location::drive_height(
                 &track,
                 XZ {
-                    x: car.position.x,
-                    z: car.position.z
+                    x: car.chassis.position.x,
+                    z: car.chassis.position.z
                 }
             )
             - 0.48)
@@ -1469,12 +1490,12 @@ fn holding_brakes_at_rest_does_not_dive_and_settles_after_stopping() {
         for initial_speed in [0.0, 8.0, -8.0] {
             let mut v = car();
             let forward = XZ {
-                x: v.orientation.yaw.sin(),
-                z: v.orientation.yaw.cos(),
+                x: v.chassis.orientation.yaw.sin(),
+                z: v.chassis.orientation.yaw.cos(),
             };
-            v.velocity = util::geometry::at_height(
+            v.chassis.velocity = util::geometry::at_height(
                 util::geometry::xz_map(forward, |component| component * initial_speed),
-                v.velocity.y,
+                v.chassis.velocity.y,
             );
 
             for _ in 0..600 {
@@ -1488,49 +1509,13 @@ fn holding_brakes_at_rest_does_not_dive_and_settles_after_stopping() {
                     },
                 );
                 if initial_speed == 0.0 {
-                    assert!(v.orientation.pitch.abs() < 0.0001);
+                    assert!(v.chassis.orientation.pitch.abs() < 0.0001);
                 }
             }
             assert!(longitudinal_speed(&v).abs() < 0.001);
-            assert!(v.orientation.pitch.abs() < 0.0001);
+            assert!(v.chassis.orientation.pitch.abs() < 0.0001);
         }
     }
-}
-
-#[test]
-fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
-    let mut forward = car();
-    let mut reverse = car();
-    set_longitudinal_speed(&mut forward, 6.0);
-    set_longitudinal_speed(&mut reverse, -6.0);
-    set_longitudinal_acceleration(&mut forward, 3.0);
-    set_longitudinal_acceleration(&mut reverse, -3.0);
-    for _ in 0..240 {
-        suspension::update_body_motion(&mut forward, 1.0 / 240.0);
-        suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
-    }
-    assert!(forward.orientation.pitch > 0.005);
-    assert!((forward.orientation.pitch + reverse.orientation.pitch).abs() < 0.00001);
-    set_longitudinal_acceleration(&mut reverse, 4.0);
-    for _ in 0..240 {
-        suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
-    }
-    assert!(
-        reverse.orientation.pitch > 0.01,
-        "reverse braking should lift the nose"
-    );
-    forward.acceleration = XYZ::default();
-    reverse.acceleration = XYZ::default();
-    forward.orientation.pitch = 0.05;
-    reverse.orientation.pitch = 0.05;
-    for _ in 0..30 {
-        suspension::update_body_motion(&mut forward, 1.0 / 30.0);
-    }
-    for _ in 0..144 {
-        suspension::update_body_motion(&mut reverse, 1.0 / 144.0);
-    }
-    assert!((forward.orientation.pitch - reverse.orientation.pitch).abs() < 0.0002);
-    assert!(forward.orientation.pitch.abs() < 0.0005);
 }
 
 #[test]
@@ -1555,7 +1540,7 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
                     "throttle must not impose a launch RPM floor"
                 );
             }
-            let shaft_rpm = car.tires.driven_wheel_omega
+            let shaft_rpm = car.wheels.omega
                 * physics::powertrain::coupled_rpm(&model, 1.0, 1)
                 * model.chassis.rolling_radius;
             assert!(
@@ -1590,7 +1575,7 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
         car.engine.rpm < before,
         "engine coasts while the clutch is open"
     );
-    assert!(powertrain::drivetrain_step(&(car), 1.0 / 240.0, longitudinal_speed(&car)).is_none());
+    assert!(!powertrain::engaged(&car.gearbox));
     for _ in 0..240 {
         treadmill_tick(
             &mut car,
@@ -1630,7 +1615,7 @@ fn drivetrain_acceleration_and_rpm_are_consistent_across_frame_rates() {
     let run = |hz: u32| {
         let mut car = level_route_car(world::locations::LocationId::Compact, test::support::car());
         for _ in 0..hz * 4 {
-            car.position = physics::vehicle_location::vehicle_position(
+            car.chassis.position = physics::vehicle_location::vehicle_position(
                 world::locations::at_distance(&car.track, 50.0),
                 0.0,
             );
@@ -1712,7 +1697,7 @@ fn neutral_revs_build_progressively_cycle_limiter_and_fall_to_idle() {
             longitudinal_speed(&car).abs() < 0.01,
             "neutral must not propel the car"
         );
-        assert!(powertrain::drivetrain_step(&(car), 1.0 / 240.0, 0.0).is_none());
+        assert!(!powertrain::engaged(&car.gearbox));
         assert_eq!(car.engine.turbo_boost, 0.0);
     }
 }
@@ -1913,7 +1898,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     assert_eq!(car.engine.load, 0.0);
     let mut previous_speed = 0.0;
     for _ in 0..60 {
-        car.position = physics::vehicle_location::vehicle_position(road, 0.0);
+        car.chassis.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
             &mut car,
             Duration::from_secs_f64(1.0 / 60.0),
@@ -1928,7 +1913,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     assert!(car.engine.rpm > engine::IDLE_RPM);
     assert!(car.engine.rpm < car.spec.engine.redline_rpm);
     for _ in 0..30 {
-        car.position = physics::vehicle_location::vehicle_position(road, 0.0);
+        car.chassis.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
             &mut car,
             Duration::from_secs_f64(1.0 / 60.0),
@@ -1965,7 +1950,7 @@ fn engine_feedback_tracks_load_and_shift_unload() {
     );
     select_reverse(&mut car);
     for _ in 0..60 {
-        car.position = physics::vehicle_location::vehicle_position(road, 0.0);
+        car.chassis.position = physics::vehicle_location::vehicle_position(road, 0.0);
         physics::car::update(
             &mut car,
             Duration::from_secs_f64(1.0 / 60.0),

@@ -126,8 +126,9 @@ fn recover(session: &mut Session) -> bool {
     if session.state != GameState::Driving {
         return false;
     }
-    let road = physics::vehicle_location::recovery(session_track(session), session.car.position);
-    let backwards = (session.car.orientation.yaw - model::world::heading(road)).cos() < 0.0;
+    let road =
+        physics::vehicle_location::recovery(session_track(session), session.car.chassis.position);
+    let backwards = (session.car.chassis.orientation.yaw - model::world::heading(road)).cos() < 0.0;
     let heading = model::world::heading(road) + if backwards { std::f32::consts::PI } else { 0.0 };
     physics::car::reset(
         &mut session.car,
@@ -582,7 +583,10 @@ fn mouse_wheel(app: &mut App, y: f32, direction: sdl3::mouse::MouseWheelDirectio
 }
 
 fn copy_map_location(app: &mut App) {
-    let url = ui::hud::google_maps_url(session_track(&app.session), app.session.car.position);
+    let url = ui::hud::google_maps_url(
+        session_track(&app.session),
+        app.session.car.chassis.position,
+    );
     let status = if let Some(url) = url {
         match app
             .sdl_context
@@ -602,9 +606,9 @@ fn copy_map_location(app: &mut App) {
         &mut app.hud,
         ui::hud::Map {
             track: session_track(&app.session),
-            player: app.session.car.position,
+            player: app.session.car.chassis.position,
         },
-        app.session.car.orientation.yaw,
+        app.session.car.chassis.orientation.yaw,
         [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
         status,
     );
@@ -618,9 +622,9 @@ fn zoom_map(app: &mut App, steps: f32) {
         &mut app.hud,
         ui::hud::Map {
             track: session_track(&app.session),
-            player: app.session.car.position,
+            player: app.session.car.chassis.position,
         },
-        app.session.car.orientation.yaw,
+        app.session.car.chassis.orientation.yaw,
         [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
         steps,
     ) {
@@ -644,9 +648,9 @@ fn handle_key(app: &mut App, key: Keycode) {
                 &mut app.hud,
                 ui::hud::Map {
                     track: session_track(&app.session),
-                    player: app.session.car.position,
+                    player: app.session.car.chassis.position,
                 },
-                app.session.car.orientation.yaw,
+                app.session.car.chassis.orientation.yaw,
                 [WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32],
                 app::settings::map_zoom(&app.settings),
             );
@@ -746,8 +750,8 @@ fn render_scene(app: &mut App, frame_time: Duration) {
             (app.preview_angle + frame_time.as_secs_f32() * 0.22).rem_euclid(std::f32::consts::TAU);
         render::gl::garage_camera(
             aspect,
-            car.position,
-            car.orientation.yaw + app.preview_angle,
+            car.chassis.position,
+            car.chassis.orientation.yaw + app.preview_angle,
             world::street_surface::has_compiled_roads(session_track(&app.session))
                 .then_some(session_track(&app.session)),
         )
@@ -807,9 +811,9 @@ fn render_scene(app: &mut App, frame_time: Duration) {
             app.program,
             ui::hud::Map {
                 track: session_track(s),
-                player: car.position,
+                player: car.chassis.position,
             },
-            car.orientation.yaw,
+            car.chassis.orientation.yaw,
             ui::hud::Gauges {
                 rpm: car.engine.rpm,
                 redline_rpm: car.spec.engine.redline_rpm,

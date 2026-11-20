@@ -37,8 +37,8 @@ fn tires_use_ground_material_and_the_supporting_bridge_deck() {
         test::support::car(),
         Arc::new(location),
     );
-    car.position.y = physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
+    car.chassis.position.y = physics::vehicle_location::VEHICLE_ORIGIN_HEIGHT;
     assert_eq!(tire_material(&car), Material::Grass);
-    car.position.y += 5.;
+    car.chassis.position.y += 5.;
     assert_eq!(tire_material(&car), Material::BareGround);
 }

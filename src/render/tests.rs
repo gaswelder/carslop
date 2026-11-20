@@ -567,9 +567,9 @@ mod tire_particles {
             model::world::heading(road),
             test::support::car(),
         );
-        car.velocity = util::geometry::at_height(
+        car.chassis.velocity = util::geometry::at_height(
             util::geometry::xz_map(road.tangent, |v| v * 10.0),
-            car.velocity.y,
+            car.chassis.velocity.y,
         );
         car.tires.scrub = 0.9;
         car
@@ -612,7 +612,7 @@ mod tire_particles {
         emit(&mut b, &v, 60);
         assert_eq!(visible(&a), visible(&b));
         let mut moved = car(0.0);
-        moved.position.x += 20.0;
+        moved.chassis.position.x += 20.0;
         let count = visible(&a).len();
         render::tire_particles::record(&mut a, 0, &moved, Duration::from_millis(100));
         assert_eq!(visible(&a).len(), count);
@@ -705,9 +705,9 @@ mod camera {
             test::support::car(),
             track.clone(),
         );
-        scenic.velocity = util::geometry::at_height(
+        scenic.chassis.velocity = util::geometry::at_height(
             util::geometry::xz_map(road.tangent, |v| v * 30.0),
-            scenic.velocity.y,
+            scenic.chassis.velocity.y,
         );
         render::camera::update(&mut camera, &scenic, Duration::ZERO);
 
@@ -730,12 +730,12 @@ mod camera {
     fn smoothing_is_frame_rate_independent_for_a_constant_target() {
         let v = car();
         let mut moved = car();
-        moved.position.x += 4.0;
-        moved.orientation.yaw += 0.3;
-        moved.velocity = XYZ {
-            y: moved.velocity.y,
-            x: moved.orientation.yaw.sin() * 18.0,
-            z: moved.orientation.yaw.cos() * 18.0,
+        moved.chassis.position.x += 4.0;
+        moved.chassis.orientation.yaw += 0.3;
+        moved.chassis.velocity = XYZ {
+            y: moved.chassis.velocity.y,
+            x: moved.chassis.orientation.yaw.sin() * 18.0,
+            z: moved.chassis.orientation.yaw.cos() * 18.0,
         };
         let run = |fps: u32| {
             let mut c = render::camera::new(&v);
@@ -756,9 +756,9 @@ mod camera {
     #[test]
     fn heading_wrap_uses_short_path_and_zero_dt_is_frozen() {
         let mut v = car();
-        v.orientation.yaw = TAU - 0.02;
+        v.chassis.orientation.yaw = TAU - 0.02;
         let mut c = render::camera::new(&v);
-        v.orientation.yaw = 0.02;
+        v.chassis.orientation.yaw = 0.02;
         let previous = render::camera::pose(&c);
         render::camera::update(&mut c, &v, Duration::from_millis(16));
         let current = render::camera::pose(&c);
@@ -768,7 +768,7 @@ mod camera {
             "heading wrap must follow the short path: {moved}"
         );
         let before = render::camera::pose(&c);
-        v.position.x += 20.0;
+        v.chassis.position.x += 20.0;
         render::camera::update(&mut c, &v, Duration::ZERO);
         assert_eq!(before, render::camera::pose(&(c)));
     }
@@ -787,11 +787,11 @@ mod camera {
                     i as f32 * world::locations::sampling_length(&test::support::compact_track())
                         / 600.0,
                 );
-                v.position = physics::vehicle_location::vehicle_position(road, 1.4);
-                v.orientation.yaw = model::world::heading(road);
-                v.velocity = util::geometry::at_height(
+                v.chassis.position = physics::vehicle_location::vehicle_position(road, 1.4);
+                v.chassis.orientation.yaw = model::world::heading(road);
+                v.chassis.velocity = util::geometry::at_height(
                     util::geometry::xz_map(road.tangent, |x| x * 20.0),
-                    v.velocity.y,
+                    v.chassis.velocity.y,
                 );
                 render::camera::update(&mut c, &v, Duration::from_secs_f64(1.0 / 60.0));
                 let pose = render::camera::pose(&c);

@@ -35,7 +35,8 @@ fn moving_car(gear: u8) -> car::Vehicle {
     );
     vehicle.gearbox.gear = gear;
     vehicle.engine.rpm = 3000.0;
-    vehicle.velocity.z = vehicle.engine.rpm / powertrain::coupled_rpm(&vehicle.spec, 1.0, gear);
+    vehicle.chassis.velocity.z =
+        vehicle.engine.rpm / powertrain::coupled_rpm(&vehicle.spec, 1.0, gear);
     vehicle
 }
 
@@ -91,7 +92,7 @@ fn neutral_reverse_and_stationary_downshifts_do_not_request_a_blip() {
         assert_eq!(pedals.throttle, 0.0);
     }
     vehicle.gearbox.gear = 3;
-    vehicle.velocity = XYZ::default();
+    vehicle.chassis.velocity = XYZ::default();
     shift(&mut vehicle, false);
     let pedals = update(
         &mut vehicle.driver,
