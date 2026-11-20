@@ -23,9 +23,10 @@ fn visual_acceleration_does_not_affect_handling_or_tire_loads() {
         let (sin, cos) = vehicle.orientation.yaw.sin_cos();
         vehicle.velocity.x = sin * 15.0;
         vehicle.velocity.z = cos * 15.0;
-        vehicle.local_acceleration = LocalAcceleration {
-            longitudinal: -4.0,
-            lateral: 5.0,
+        vehicle.acceleration = XYZ {
+            x: sin * -4.0 + cos * 5.0,
+            y: 0.0,
+            z: cos * -4.0 - sin * 5.0,
         };
     }
     leaning.suspension.visual_acceleration = LocalAcceleration {
@@ -62,7 +63,12 @@ fn load_transfer_responds_to_raw_acceleration_without_waiting_for_body_lean() {
     vehicle.suspension.initialized = true;
     vehicle.position.y = ride_height(&vehicle);
     for acceleration in [4.0, -4.0, 0.0] {
-        vehicle.local_acceleration.longitudinal = acceleration;
+        let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+        vehicle.acceleration = XYZ {
+            x: sin * acceleration,
+            y: 0.0,
+            z: cos * acceleration,
+        };
         update_suspension(&mut vehicle, 1.0 / 240.0);
         let total = vehicle.suspension.axle_load.front + vehicle.suspension.axle_load.rear;
         let static_front = total * vehicle.spec.center_of_mass.longitudinal_fraction;

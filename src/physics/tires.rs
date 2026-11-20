@@ -2,7 +2,6 @@
 
 use super::car;
 use super::car::Axle;
-use super::steering;
 use crate::model;
 use crate::model::world::Material;
 use crate::physics;
@@ -18,7 +17,7 @@ const FRONT_LIMIT_GRIP: f32 = 0.86;
 
 /// Runtime wheel rotation and tire effects.
 #[derive(Default)]
-pub struct TireState {
+pub struct State {
     /// Effect intensity from zero to one for squeal, smoke, and skid marks.
     pub scrub: f32,
     /// Normalized driven wheel slip magnitude, from zero to one.
@@ -38,7 +37,7 @@ pub struct AxleGeometry {
 
 pub fn axle_geometry(vehicle: &car::Vehicle) -> AxleGeometry {
     let spec = &vehicle.spec;
-    let delta = steering::front_wheel_angle(vehicle);
+    let delta = vehicle.steering.angle;
     let (sin, cos) = delta.sin_cos();
     AxleGeometry {
         front_offset: spec.chassis.wheelbase * (1.0 - spec.center_of_mass.longitudinal_fraction),
@@ -84,7 +83,7 @@ pub fn tire_capacity(vehicle: &car::Vehicle, axle: Axle) -> f32 {
     };
 
     let transfer = spec.weight_kg
-        * vehicle.local_acceleration.lateral.abs()
+        * car::lateral_acceleration(vehicle).abs()
         * model::car::center_of_mass_height_m(spec)
         / spec.chassis.track_width
         * share;
@@ -163,7 +162,7 @@ fn tire_contact(
     } = axle_geometry(vehicle);
     let longitudinal = motion.longitudinal;
     let lateral = motion.lateral;
-    let front_speed = longitudinal * cos + (lateral + vehicle.orientation_rate.yaw * a) * sin;
+    let front_speed = longitudinal * cos + (lateral + vehicle.angular_velocity.yaw * a) * sin;
     let brake = vehicle.brake_pressure * spec.chassis.brake_force_n;
     let drive_share = if axle == Axle::Front {
         drive_bias

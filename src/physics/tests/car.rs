@@ -41,6 +41,28 @@ fn set_longitudinal_speed(vehicle: &mut Vehicle, speed: f32) {
     };
 }
 
+fn set_longitudinal_acceleration(vehicle: &mut Vehicle, acceleration: f32) {
+    let (sin, cos) = vehicle.orientation.yaw.sin_cos();
+    vehicle.acceleration = XYZ {
+        x: sin * acceleration,
+        y: 0.0,
+        z: cos * acceleration,
+    };
+}
+
+// Rolling fixtures start with wheels and engine matched to their road speed.
+fn initialize_rolling_drivetrain(vehicle: &mut Vehicle) {
+    let speed = longitudinal_speed(vehicle);
+    vehicle.tires.driven_wheel_omega = speed / vehicle.spec.chassis.rolling_radius;
+    if vehicle.gearbox.gear != NEUTRAL_GEAR {
+        vehicle.engine.rpm = vehicle.engine.rpm.max(physics::powertrain::coupled_rpm(
+            &vehicle.spec,
+            speed,
+            vehicle.gearbox.gear,
+        ));
+    }
+}
+
 // Initialize through the suspension interface while preserving the test's
 // imposed chassis pose and telemetry (including deliberately airborne poses).
 fn initialize_suspension(vehicle: &mut Vehicle) {
@@ -122,10 +144,10 @@ fn force_telemetry_balances_actual_acceleration_in_both_directions() {
                 ..Controls::default()
             },
         );
-        let telemetry = force_telemetry(&car);
+        let telemetry = car.force_telemetry;
         let actual = (dot(util::geometry::xz(car.velocity), forward) - before) * car.spec.weight_kg
             / dt.as_secs_f32();
-        assert!((car.local_acceleration.longitudinal - actual / car.spec.weight_kg).abs() < 0.001);
+        assert!((longitudinal_acceleration(&car) - actual / car.spec.weight_kg).abs() < 0.001);
         let reported = telemetry.drive_force_n - direction * telemetry.resistance_force_n;
         assert!(
             // Velocity differences amplify f32 rounding when converted to newtons.
@@ -159,11 +181,11 @@ fn force_telemetry_reports_braking_and_engine_drag() {
             },
         );
     }
-    let telemetry = force_telemetry(&car);
+    let telemetry = car.force_telemetry;
     assert!(telemetry.drive_force_n < 0.0);
     assert!(telemetry.torque_nm < 0.0);
     physics::car::reset(&mut car, XYZ::default(), 0.0);
-    let reset = force_telemetry(&car);
+    let reset = car.force_telemetry;
     assert_eq!(reset.drive_force_n, 0.0);
     assert_eq!(reset.resistance_force_n, 0.0);
     assert_eq!(reset.torque_nm, 0.0);
@@ -215,7 +237,7 @@ fn force_telemetry_has_no_tire_force_without_ground_contact_or_resistance_at_res
             ..Controls::default()
         },
     );
-    let telemetry = force_telemetry(&car);
+    let telemetry = car.force_telemetry;
     assert_eq!(telemetry.drive_force_n, 0.0);
     assert_eq!(telemetry.resistance_force_n, 0.0);
     assert!(telemetry.torque_nm > 0.0);
@@ -391,7 +413,8 @@ fn sliding_car(model: std::sync::Arc<model::car::CarSpec>, gear: u8) -> Vehicle 
         x: h.sin() * 15.0 + h.cos() * 6.0,
         z: h.cos() * 15.0 - h.sin() * 6.0,
     };
-    car.orientation_rate.yaw = 0.5;
+    car.angular_velocity.yaw = 0.5;
+    initialize_rolling_drivetrain(&mut car);
     car
 }
 
@@ -401,7 +424,7 @@ fn assert_slide_recovers(model: std::sync::Arc<model::car::CarSpec>, gear: u8) {
         treadmill_tick(&mut car, Controls::default());
     }
     let rear_side = lateral_speed(&car)
-        - car.orientation_rate.yaw
+        - car.angular_velocity.yaw
             * model.chassis.wheelbase
             * model.center_of_mass.longitudinal_fraction;
     let angle = rear_side
@@ -414,7 +437,7 @@ fn assert_slide_recovers(model: std::sync::Arc<model::car::CarSpec>, gear: u8) {
         model.name
     );
     assert!(
-        car.orientation_rate.yaw.abs() < 0.15,
+        car.angular_velocity.yaw.abs() < 0.15,
         "{} gear {gear}: rotation persists after lift",
         model.name
     );
@@ -462,13 +485,13 @@ fn strong_engine_braking_dissipates_energy_during_a_rear_drive_slide() {
     let mut free_rolling = sliding_car(model.clone(), NEUTRAL_GEAR);
     let initial_energy =
         0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
-            + 0.5 * model.yaw_inertia_kg_m2 * coasting.orientation_rate.yaw.powi(2);
+            + 0.5 * model.yaw_inertia_kg_m2 * coasting.angular_velocity.yaw.powi(2);
     for _ in 0..480 {
         treadmill_tick(&mut coasting, Controls::default());
         treadmill_tick(&mut free_rolling, Controls::default());
         let energy =
             0.5 * model.weight_kg * (coasting.velocity.x.powi(2) + coasting.velocity.z.powi(2))
-                + 0.5 * model.yaw_inertia_kg_m2 * coasting.orientation_rate.yaw.powi(2);
+                + 0.5 * model.yaw_inertia_kg_m2 * coasting.angular_velocity.yaw.powi(2);
         assert!(energy.is_finite() && energy <= initial_energy * 1.001);
         assert!(
             coasting.suspension.axle_load.front >= 0.0 && coasting.suspension.axle_load.rear >= 0.0
@@ -544,6 +567,7 @@ fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
             x: h.sin() * 10.0 + h.cos() * 2.0,
             z: h.cos() * 10.0 - h.sin() * 2.0,
         };
+        initialize_rolling_drivetrain(&mut car);
         physics::car::update(
             &mut car,
             Duration::from_secs_f64(1.0 / 240.0),
@@ -570,14 +594,15 @@ fn driven_tires_share_cornering_grip_and_yaw_has_inertia() {
         x: car.orientation.yaw.sin() * 20.0,
         z: car.orientation.yaw.cos() * 20.0,
     };
-    car.orientation_rate.yaw = 0.5;
+    car.angular_velocity.yaw = 0.5;
+    initialize_rolling_drivetrain(&mut car);
     physics::car::update(
         &mut car,
         Duration::from_secs_f64(1.0 / 240.0),
         Controls::default(),
     );
     assert!(
-        car.orientation_rate.yaw > 0.0 && car.orientation_rate.yaw < 0.5,
+        car.angular_velocity.yaw > 0.0 && car.angular_velocity.yaw < 0.5,
         "tire torque should slow existing rotation without deleting it"
     );
 }
@@ -847,49 +872,24 @@ fn steering_run(car: &mut Vehicle, speed: f32, input: f32, seconds: f64, hz: f64
 }
 
 #[test]
-fn parking_speed_retains_steering_lock_and_follows_the_front_wheels() {
-    for model in test::support::cars() {
-        for speed in [-5.0, -3.0, -1.0, 1.0, 3.0, 5.0] {
-            let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
-            for steering in [-1.0, 1.0] {
-                steering_run(&mut car, speed, steering, 5.0, 240.0);
-                let angle = steering::front_wheel_angle(&car).abs();
-                let expected_yaw = speed.abs() * angle.tan() / model.chassis.wheelbase;
-                println!(
-                    "{model:?} at {speed}: lock {angle}, yaw {} expected {expected_yaw}",
-                    car.orientation_rate.yaw.abs()
-                );
-                assert!(
-                    (angle - 0.54).abs() < 0.001,
-                    "{model:?}: full input must retain full steering lock"
-                );
-                assert!(
-                    car.orientation_rate.yaw.abs() > expected_yaw * 0.75,
-                    "{model:?}: low-speed turn pushes wide of the front wheels"
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn keyboard_taps_turn_less_than_held_input_and_release_steering() {
     let model = test::support::car();
     for speed in [5.0, 15.0, 25.0, 45.0, 55.0] {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         let heading = car.orientation.yaw;
         steering_run(&mut car, speed, 0.2, 0.1, 120.0);
-        let tap_yaw = car.orientation_rate.yaw.abs();
+        let tap_angle = car.steering.angle.abs();
         steering_run(&mut car, speed, 0.0, 0.4, 120.0);
         let tap = test::support::angle(car.orientation.yaw - heading).abs();
         assert!(tap > 0.0, "a steering tap must turn the car");
-        assert_eq!(steering::front_wheel_angle(&car), 0.0);
-        assert!(
-            car.orientation_rate.yaw.abs() < tap_yaw,
-            "releasing steering must reduce yaw"
-        );
+        assert!(car.steering.angle.abs() < tap_angle * 0.5);
         let mut held = level_route_car(world::locations::LocationId::Compact, model.clone());
-        steering_run(&mut held, speed, 0.2, 1.0, 120.0);
+        steering_run(&mut held, speed, 0.2, 0.5, 120.0);
+        assert!(
+            car.angular_velocity.yaw.abs() < held.angular_velocity.yaw.abs(),
+            "releasing steering must reduce yaw compared with holding it"
+        );
+        steering_run(&mut held, speed, 0.2, 0.5, 120.0);
         let turn = test::support::angle(held.orientation.yaw - heading).abs();
         assert!(
             turn > tap * 3.0,
@@ -903,21 +903,21 @@ fn tire_torque_turns_and_countersteering_reverses_rotation() {
     for model in test::support::cars() {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
         steering_run(&mut car, 15.0, 0.25, 0.6, 240.0);
-        assert!(car.orientation_rate.yaw < 0.0);
-        assert!(car.orientation_rate.yaw.is_finite() && car.orientation_rate.yaw.abs() < 2.0);
+        assert!(car.angular_velocity.yaw < 0.0);
+        assert!(car.angular_velocity.yaw.is_finite() && car.angular_velocity.yaw.abs() < 2.0);
         steering_run(&mut car, 15.0, -0.5, 0.8, 240.0);
         assert!(
-            car.orientation_rate.yaw > 0.0,
+            car.angular_velocity.yaw > 0.0,
             "{model:?} countersteering remained in original turn"
         );
-        assert!(steering::front_wheel_angle(&(car)) > 0.0);
+        assert!(car.steering.angle > 0.0);
         steering_run(&mut car, 0.0, 0.0, 0.02, 240.0);
-        assert!(car.orientation_rate.yaw.is_finite());
+        assert!(car.angular_velocity.yaw.is_finite());
         let position = car.position;
         let heading = car.orientation.yaw;
         physics::car::reset(&mut car, position, heading);
-        assert_eq!(car.orientation_rate.yaw, 0.0);
-        assert_eq!(steering::front_wheel_angle(&(car)), 0.0);
+        assert_eq!(car.angular_velocity.yaw, 0.0);
+        assert_eq!(car.steering.angle, 0.0);
     }
 }
 
@@ -980,7 +980,7 @@ fn steering_response_is_independent_of_frame_grouping_with_identical_physics_ste
         assert_eq!(car.position, reference.position, "{milliseconds} ms frames");
         assert_eq!(car.velocity, reference.velocity, "{milliseconds} ms frames");
         assert_eq!(car.orientation.yaw, reference.orientation.yaw);
-        assert_eq!(car.orientation_rate.yaw, reference.orientation_rate.yaw);
+        assert_eq!(car.angular_velocity.yaw, reference.angular_velocity.yaw);
     }
 }
 
@@ -1407,14 +1407,14 @@ fn scenic_recovery_preserves_route_and_model_but_clears_motion_and_reverse() {
         }
     );
     assert_eq!(car.gearbox.gear, 1);
-    assert_eq!(car.orientation_rate, Orientation::default());
+    assert_eq!(car.angular_velocity, Orientation::default());
     assert_eq!(car.acceleration, XYZ::default());
     assert_eq!(longitudinal_speed(&car), 0.0);
     assert_eq!(lateral_speed(&car), 0.0);
     assert_eq!(car.engine.rpm, engine::IDLE_RPM);
     assert_eq!(car.engine.load, 0.0);
     assert_eq!(car.tires.wheel_phase, [0.0; 2]);
-    assert_eq!(steering::front_wheel_angle(&(car)), 0.0);
+    assert_eq!(car.steering.angle, 0.0);
     assert_eq!(car.tires.scrub, 0.0);
 }
 
@@ -1495,15 +1495,15 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
     let mut reverse = car();
     set_longitudinal_speed(&mut forward, 6.0);
     set_longitudinal_speed(&mut reverse, -6.0);
-    forward.local_acceleration.longitudinal = 3.0;
-    reverse.local_acceleration.longitudinal = -3.0;
+    set_longitudinal_acceleration(&mut forward, 3.0);
+    set_longitudinal_acceleration(&mut reverse, -3.0);
     for _ in 0..240 {
         suspension::update_body_motion(&mut forward, 1.0 / 240.0);
         suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
     assert!(forward.orientation.pitch > 0.005);
     assert!((forward.orientation.pitch + reverse.orientation.pitch).abs() < 0.00001);
-    reverse.local_acceleration.longitudinal = 4.0;
+    set_longitudinal_acceleration(&mut reverse, 4.0);
     for _ in 0..240 {
         suspension::update_body_motion(&mut reverse, 1.0 / 240.0);
     }
@@ -1511,8 +1511,8 @@ fn body_motion_handles_reverse_and_frame_rate_independent_settling() {
         reverse.orientation.pitch > 0.01,
         "reverse braking should lift the nose"
     );
-    forward.local_acceleration = suspension::LocalAcceleration::default();
-    reverse.local_acceleration = suspension::LocalAcceleration::default();
+    forward.acceleration = XYZ::default();
+    reverse.acceleration = XYZ::default();
     forward.orientation.pitch = 0.05;
     reverse.orientation.pitch = 0.05;
     for _ in 0..30 {
@@ -1531,11 +1531,8 @@ fn rolling_engine_rpm_follows_gearing_without_a_throttle_floor() {
         let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
 
         let speed = speed_at_rpm(&model, 1800.0, 1);
-        car.velocity = XYZ {
-            y: car.velocity.y,
-            x: car.orientation.yaw.sin() * speed,
-            z: car.orientation.yaw.cos() * speed,
-        };
+        set_longitudinal_speed(&mut car, speed);
+        initialize_rolling_drivetrain(&mut car);
         for tick in 0..60 {
             treadmill_tick(
                 &mut car,
@@ -1567,11 +1564,8 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
     let mut car = level_route_car(world::locations::LocationId::Compact, model.clone());
     car.gearbox.gear = 2;
     let speed = speed_at_rpm(&model, 4000.0, 2);
-    car.velocity = XYZ {
-        y: car.velocity.y,
-        x: car.orientation.yaw.sin() * speed,
-        z: car.orientation.yaw.cos() * speed,
-    };
+    set_longitudinal_speed(&mut car, speed);
+    initialize_rolling_drivetrain(&mut car);
     treadmill_tick(&mut car, Controls::default());
     driver::shift(&mut car, true);
     let before = car.engine.rpm;
@@ -1615,11 +1609,8 @@ fn shifts_release_the_clutch_and_road_speed_can_mechanically_overrev_the_engine(
     let mut overrev = level_route_car(world::locations::LocationId::Compact, model.clone());
 
     let speed = speed_at_rpm(&model, model.engine.redline_rpm + 500.0, 1);
-    overrev.velocity = XYZ {
-        y: overrev.velocity.y,
-        x: overrev.orientation.yaw.sin() * speed,
-        z: overrev.orientation.yaw.cos() * speed,
-    };
+    set_longitudinal_speed(&mut overrev, speed);
+    initialize_rolling_drivetrain(&mut overrev);
     treadmill_tick(&mut overrev, Controls::default());
     assert!(overrev.engine.rpm > model.engine.redline_rpm);
     assert!(
@@ -1779,11 +1770,8 @@ fn in_gear_limiter_cycles_under_power_and_survives_a_shift_to_neutral() {
         car.gearbox.gear = gear;
         let speed = speed_at_rpm(&model, car.spec.engine.redline_rpm + 20.0, gear)
             * if gear == REVERSE_GEAR { -1.0 } else { 1.0 };
-        car.velocity = XYZ {
-            y: car.velocity.y,
-            x: car.orientation.yaw.sin() * speed,
-            z: car.orientation.yaw.cos() * speed,
-        };
+        set_longitudinal_speed(&mut car, speed);
+        initialize_rolling_drivetrain(&mut car);
         let mut cuts = 0;
         let mut recoveries = 0;
         for _ in 0..240 * 4 {

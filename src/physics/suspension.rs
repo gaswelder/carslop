@@ -17,7 +17,7 @@ pub struct AxleLoad {
 
 /// Terrain-following suspension motion and supported axle loads.
 #[derive(Default)]
-pub struct SuspensionState {
+pub struct State {
     pub pitch: f32,
     pub roll: f32,
     pub axle_load: AxleLoad,
@@ -29,9 +29,9 @@ pub struct SuspensionState {
 
 /// Acceleration along the car’s longitudinal and lateral axes, in m/s².
 #[derive(Default)]
-pub struct LocalAcceleration {
-    pub longitudinal: f32,
-    pub lateral: f32,
+struct LocalAcceleration {
+    longitudinal: f32,
+    lateral: f32,
 }
 
 pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
@@ -53,7 +53,7 @@ pub fn update_suspension(vehicle: &mut car::Vehicle, seconds: f32) {
     vehicle.velocity.y += vehicle.acceleration.y * seconds;
     vehicle.position.y += vehicle.velocity.y * seconds;
     let transfer = spec.weight_kg
-        * vehicle.local_acceleration.longitudinal
+        * car::longitudinal_acceleration(vehicle)
         * model::car::center_of_mass_height_m(spec)
         / spec.chassis.wheelbase;
     let total_load = spec.weight_kg * support;
@@ -145,10 +145,10 @@ pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
     // This filter only steadies rendered pitch and roll; tire loads use raw acceleration.
     let blend = 1.0 - (-dt * 12.0).exp();
     vehicle.suspension.visual_acceleration.longitudinal +=
-        (vehicle.local_acceleration.longitudinal
+        (car::longitudinal_acceleration(vehicle)
             - vehicle.suspension.visual_acceleration.longitudinal)
             * blend;
-    vehicle.suspension.visual_acceleration.lateral += (vehicle.local_acceleration.lateral
+    vehicle.suspension.visual_acceleration.lateral += (car::lateral_acceleration(vehicle)
         - vehicle.suspension.visual_acceleration.lateral)
         * blend;
     let spec = &vehicle.spec;
@@ -162,14 +162,14 @@ pub fn update_body_motion(vehicle: &mut car::Vehicle, dt: f32) {
         .clamp(-0.12, 0.12);
     let omega_squared = spec.chassis.suspension_stiffness_n_m / spec.weight_kg;
     let omega = omega_squared.sqrt();
-    vehicle.orientation_rate.pitch += (omega_squared * (target_pitch - vehicle.orientation.pitch)
-        - 1.4 * omega * vehicle.orientation_rate.pitch)
+    vehicle.angular_velocity.pitch += (omega_squared * (target_pitch - vehicle.orientation.pitch)
+        - 1.4 * omega * vehicle.angular_velocity.pitch)
         * dt;
-    vehicle.orientation_rate.roll += (omega_squared * (target_roll - vehicle.orientation.roll)
-        - 1.4 * omega * vehicle.orientation_rate.roll)
+    vehicle.angular_velocity.roll += (omega_squared * (target_roll - vehicle.orientation.roll)
+        - 1.4 * omega * vehicle.angular_velocity.roll)
         * dt;
-    vehicle.orientation.pitch += vehicle.orientation_rate.pitch * dt;
-    vehicle.orientation.roll += vehicle.orientation_rate.roll * dt;
+    vehicle.orientation.pitch += vehicle.angular_velocity.pitch * dt;
+    vehicle.orientation.roll += vehicle.angular_velocity.roll * dt;
     // The sprung body follows terrain through damped angular springs.
     // Wheels follow the contact surface independently in the renderer.
     let angles = if vehicle.suspension.axle_load.front + vehicle.suspension.axle_load.rear > 0.0 {

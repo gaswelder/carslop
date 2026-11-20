@@ -10,7 +10,7 @@ const DRIVETRAIN_EFFICIENCY: f32 = 0.90;
 pub const REVERSE_GEAR: u8 = 0;
 pub const NEUTRAL_GEAR: u8 = u8::MAX;
 
-pub struct GearboxState {
+pub struct State {
     pub gear: u8,
 }
 

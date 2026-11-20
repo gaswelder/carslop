@@ -1,10 +1,30 @@
 use super::shift;
+use super::steering_rate;
 use super::update;
 use crate::physics::car;
 use crate::physics::engine;
 use crate::physics::powertrain;
 use crate::test;
 use crate::util::geometry::XYZ;
+
+#[test]
+fn steering_effort_is_bounded_and_slows_with_road_speed() {
+    assert_eq!(steering_rate(0.0, 20.0), 0.0);
+    for input in [-1.0, 1.0] {
+        let stationary = steering_rate(input, 0.0);
+        assert_eq!(stationary.signum(), -input);
+        assert_eq!(steering_rate(input * 2.0, 0.0), stationary);
+        assert_eq!(steering_rate(input * 0.5, 0.0), stationary * 0.5);
+        let mut previous = stationary.abs();
+        for speed in [5.0, 15.0, 55.0] {
+            let rate = steering_rate(input, speed);
+            assert_eq!(rate.signum(), stationary.signum());
+            assert!(rate.abs() < previous);
+            assert_eq!(steering_rate(input, -speed), rate);
+            previous = rate.abs();
+        }
+    }
+}
 
 fn moving_car(gear: u8) -> car::Vehicle {
     let mut vehicle = car::on_track(

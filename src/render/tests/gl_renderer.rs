@@ -200,7 +200,7 @@ fn hud_renderer_profile() {
                 speed_kmh: 90.0,
                 gear: 3,
                 turbo_boost: Some(0.7),
-                forces: physics::car::force_telemetry(&app.session.car),
+                forces: app.session.car.force_telemetry,
             },
             None,
         );

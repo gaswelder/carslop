@@ -821,7 +821,7 @@ fn render_scene(app: &mut App, frame_time: Duration) {
                     .turbo
                     .as_ref()
                     .map(|_| car.engine.turbo_boost),
-                forces: physics::car::force_telemetry(car),
+                forces: car.force_telemetry,
             },
             (s.state == GameState::Paused).then_some(ui::hud::PauseMenu {
                 city: world::street_surface::has_compiled_roads(session_track(s)),

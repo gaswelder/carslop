@@ -1380,11 +1380,7 @@ fn vehicle_wheel_local_matrix(
             0.0,
         ),
         center,
-        if front {
-            physics::steering::front_wheel_angle(car)
-        } else {
-            0.0
-        },
+        if front { car.steering.angle } else { 0.0 },
         car.tires.wheel_phase[usize::from(front)],
     )
 }

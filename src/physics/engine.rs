@@ -3,7 +3,7 @@ use crate::model;
 pub const IDLE_RPM: f32 = 900.0;
 
 /// Runtime engine simulation and feedback state.
-pub struct EngineState {
+pub struct State {
     spec: model::car::Engine,
     pub rpm: f32,
     /// Output torque for the current step, before the gearbox reaction, in N m.
@@ -18,8 +18,8 @@ pub struct EngineState {
     throttle: f32,
 }
 
-pub fn new(spec: &model::car::Engine) -> EngineState {
-    let mut state = EngineState {
+pub fn new(spec: &model::car::Engine) -> State {
+    let mut state = State {
         spec: spec.clone(),
         rpm: IDLE_RPM,
         torque_nm: 0.0,
@@ -34,7 +34,7 @@ pub fn new(spec: &model::car::Engine) -> EngineState {
 }
 
 /// Publish output torque at the current RPM for the upcoming drivetrain solve.
-pub fn update(state: &mut EngineState, throttle: f32) {
+pub fn update(state: &mut State, throttle: f32) {
     state.throttle = throttle.clamp(0.0, 1.0);
     update_fuel_cut(state);
     state.torque_nm = net_torque(state);
@@ -44,7 +44,7 @@ pub fn update(state: &mut EngineState, throttle: f32) {
 /// Positive impulse drives the crankshaft; negative impulse loads it.
 /// An open clutch supplies zero impulse, including in neutral.
 /// Call after updating engine output and solving the drivetrain.
-pub fn advance(state: &mut EngineState, crankshaft_impulse: f32, dt: f32) {
+pub fn advance(state: &mut State, crankshaft_impulse: f32, dt: f32) {
     let throttle = state.throttle;
     // A resisting crankshaft reaction provides mechanical load. An open
     // clutch produces no reaction, regardless of the selected gear.
@@ -54,7 +54,7 @@ pub fn advance(state: &mut EngineState, crankshaft_impulse: f32, dt: f32) {
     update_feedback(state, loaded, throttle, dt);
 }
 
-fn update_fuel_cut(state: &mut EngineState) {
+fn update_fuel_cut(state: &mut State) {
     if state.rpm >= state.spec.redline_rpm {
         state.fuel_cut = true;
     } else if state.rpm <= state.spec.redline_rpm - 250.0 {
@@ -62,7 +62,7 @@ fn update_fuel_cut(state: &mut EngineState) {
     }
 }
 
-fn update_rpm(state: &mut EngineState, crankshaft_impulse: f32, dt: f32) {
+fn update_rpm(state: &mut State, crankshaft_impulse: f32, dt: f32) {
     let omega = state.rpm * std::f32::consts::TAU / 60.0;
     let omega = omega + state.torque_nm / state.spec.inertia_kg_m2 * dt;
     let omega = omega + crankshaft_impulse / state.spec.inertia_kg_m2;
@@ -74,7 +74,7 @@ fn engine_torque(spec: &model::car::Engine, rpm: f32) -> f32 {
         .min(spec.power_watts / (rpm.max(IDLE_RPM) * std::f32::consts::TAU / 60.0))
 }
 
-fn net_torque(state: &EngineState) -> f32 {
+fn net_torque(state: &State) -> f32 {
     let spec = &state.spec;
     let revs = ((state.rpm - IDLE_RPM) / (spec.redline_rpm - IDLE_RPM)).max(0.0);
     let drag = spec.max_torque_nm * (0.10 + 0.16 * revs + 0.24 * revs * revs);
@@ -86,7 +86,7 @@ fn net_torque(state: &EngineState) -> f32 {
     combustion - drag
 }
 
-fn update_turbo(state: &mut EngineState, loaded: bool, dt: f32, throttle: f32) {
+fn update_turbo(state: &mut State, loaded: bool, dt: f32, throttle: f32) {
     let Some(tune) = &state.spec.turbo else {
         state.turbo_spool = 0.0;
         state.turbo_boost = 0.0;
@@ -115,7 +115,7 @@ fn update_turbo(state: &mut EngineState, loaded: bool, dt: f32, throttle: f32) {
     state.turbo_boost += (boost_target - state.turbo_boost) * (1.0 - (-dt / 0.06).exp());
 }
 
-fn update_feedback(state: &mut EngineState, loaded: bool, throttle: f32, dt: f32) {
+fn update_feedback(state: &mut State, loaded: bool, throttle: f32, dt: f32) {
     // Sound follows actual throttle and crankshaft load, including an
     // unloaded throttle blip and the absence of combustion during fuel cut.
     let requested = if state.fuel_cut {

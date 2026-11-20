@@ -1,10 +1,11 @@
-//! Translate requested controls into pedal inputs before the physics solve.
-
 use crate::physics::car;
 use crate::physics::engine;
 use crate::physics::powertrain;
 
 const REV_MATCH_SECONDS: f32 = 0.22;
+
+// Front-wheel angular speed in rad/s at full driver effort and zero road speed.
+const STEERING_RATE: f32 = 1.0; // 2.187;
 
 #[derive(Clone, Copy)]
 pub struct Assistance {
@@ -12,22 +13,22 @@ pub struct Assistance {
     pub rev_matching: bool,
 }
 
-pub struct DriverState {
+pub struct State {
     pub assistance: Assistance,
     /// Remaining clutch release time after a gear change, in seconds.
     shift_timer: f32,
     rev_match_timer: f32,
 }
 
-pub fn new(assistance: Assistance) -> DriverState {
-    DriverState {
+pub fn new(assistance: Assistance) -> State {
+    State {
         assistance,
         shift_timer: 0.0,
         rev_match_timer: 0.0,
     }
 }
 
-pub fn is_shifting(state: &DriverState) -> bool {
+pub fn is_shifting(state: &State) -> bool {
     state.shift_timer > 0.0
 }
 
@@ -35,8 +36,8 @@ pub fn is_shifting(state: &DriverState) -> bool {
 /// before sampling and decay the blip afterward so every solver uses the same
 /// throttle and clutch state throughout the step.
 pub fn update(
-    state: &mut DriverState,
-    gearbox: &powertrain::GearboxState,
+    state: &mut State,
+    gearbox: &powertrain::State,
     requested: car::Controls,
     dt: f32,
 ) -> car::Controls {
@@ -55,6 +56,11 @@ pub fn update(
         throttle,
         ..requested
     }
+}
+
+/// Convert normalized steering input into a signed front-wheel drive rate, in rad/s.
+pub fn steering_rate(input: f32, longitudinal_speed: f32) -> f32 {
+    -input.clamp(-1.0, 1.0) * STEERING_RATE / (1.0 + longitudinal_speed.abs() * 0.008)
 }
 
 /// Request a gear change and prepare the driver's throttle blip if needed.
